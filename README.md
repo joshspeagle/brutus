@@ -1,5 +1,5 @@
 # brutus
-Et tu, Brute?
+#### _**Et tu, Brute?**_
 
 `brutus` is a Pure Python package that uses Bayesian inference
 to derive distances, reddening, and stellar properties from photometry.
