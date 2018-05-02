@@ -316,13 +316,14 @@ class SEDmaker(MISTtracks):
         if mini_grid is None:
             mini_grid = np.arange(0.5, 10. + 1e-5, 0.05)
         if eep_grid is None:
-            eep_grid = np.arange(202, 808 + 1e-5, 2)
+            eep_grid = np.arange(202, 808 + 1e-5, 5)
         if feh_grid is None:
             feh_grid = np.arange(-2., 0.5 + 1e-5, 0.25)
         if av_grid is None:
             av_grid = np.concatenate([np.arange(0., 1., 0.025),
-                                      np.arange(1., 2. + 1e-5, 0.05),
-                                      np.arange(2., 3. + 1e-5, 0.1)])
+                                      np.arange(1., 1.5 + 1e-5, 0.05),
+                                      np.arange(1.5, 2. + 1e-5, 0.1),
+                                      np.arange(2., 3. + 1e-5, 0.2)])
 
         grid = np.array(list(product(*[mini_grid, eep_grid, feh_grid,
                                        av_grid])), dtype=dtype)
@@ -337,11 +338,11 @@ class SEDmaker(MISTtracks):
         percentage = -99
         for i, (mini, eep, feh, av) in enumerate(grid):
             # Print progress.
-            new_percentage = int((i+1) / Ngrid * 1e5)
+            new_percentage = int((i+1) / Ngrid * 1e4)
             if verbose and new_percentage != percentage:
                 percentage = new_percentage
-                sys.stderr.write('\rConstructing grid {0}% '
-                                 .format(percentage / 100.))
+                sys.stderr.write('\rConstructing grid {0}% ({1}/{2}) '
+                                 .format(percentage / 100., i+1, Ngrid))
                 sys.stderr.flush()
 
             # Compute model and parameter predictions.
