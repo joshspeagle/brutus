@@ -305,8 +305,8 @@ class SEDmaker(MISTtracks):
         """
         Generate and return SED predictions over a grid in initial mass,
         EEP, metallicity, and reddening. Note that non-physical models are
-        automatically removed. Returns `sed_grid`, `input_grid`, and
-        `output_grid`.
+        automatically removed. Returns `grid_sed`, `grid_label`, and
+        `grid_param`.
 
         """
 
@@ -325,18 +325,19 @@ class SEDmaker(MISTtracks):
                                       np.arange(1.5, 2. + 1e-5, 0.1),
                                       np.arange(2., 3. + 1e-5, 0.2)])
 
-        grid = np.array(list(product(*[mini_grid, eep_grid, feh_grid,
-                                       av_grid])), dtype=dtype)
-        Ngrid = len(grid)
+        self.grid_label = np.array(list(product(*[mini_grid, eep_grid,
+                                                  feh_grid, av_grid])),
+                                   dtype=dtype)
+        Ngrid = len(self.grid_label)
 
         # Generate SEDs on the grid.
         rtype = np.dtype([(n, np.float) for n in self.predictions])
-        sed_grid = np.zeros((Ngrid, len(self.filters)))
-        param_grid = np.zeros(Ngrid, dtype=rtype)
-        sel = np.ones_like(Ngrid, dtype='bool')
+        self.grid_sed = np.zeros((Ngrid, len(self.filters)))
+        self.grid_param = np.zeros(Ngrid, dtype=rtype)
+        self.grid_sel = np.ones(Ngrid, dtype='bool')
 
         percentage = -99
-        for i, (mini, eep, feh, av) in enumerate(grid):
+        for i, (mini, eep, feh, av) in enumerate(self.grid_label):
             # Print progress.
             new_percentage = int((i+1) / Ngrid * 1e4)
             if verbose and new_percentage != percentage:
@@ -348,16 +349,17 @@ class SEDmaker(MISTtracks):
             # Compute model and parameter predictions.
             sed, params = self.get_sed(mini=mini, eep=eep, feh=feh, av=av,
                                        dist=dist, return_dict=False)
-            sed_grid[i], param_grid[i] = sed, params
+            self.grid_sed[i], self.grid_param[i] = sed, params
 
             # Flag bad results.
             if np.any(np.isnan(sed)) or np.any(np.isnan(params)):
-                sel[i] = False
+                self.grid_sel[i] = False
 
         if verbose:
             sys.stderr.write('\n')
 
-        return sed_grid[sel], grid[sel], param_grid[sel]
+        return (self.grid_sed[self.grid_sel], self.grid_label[self.grid_sel],
+                self.grid_param[self.grid_sel])
 
 
 class FastNN(object):
