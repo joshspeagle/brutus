@@ -314,16 +314,20 @@ class SEDmaker(MISTtracks):
         labels = ['mini', 'eep', 'feh', 'av']
         dtype = np.dtype([(n, np.float) for n in labels])
         if mini_grid is None:
-            mini_grid = np.arange(0.5, 10. + 1e-5, 0.05)
+            mini_grid = np.concatenate([np.arange(0.5, 0.9, 0.05),
+                                        np.arange(0.9, 2.8, 0.02),
+                                        np.arange(2.8, 8., 0.2),
+                                        np.arange(8., 10. + 1e-5, 1.)])
         if eep_grid is None:
-            eep_grid = np.arange(202, 808 + 1e-5, 5)
+            eep_grid = np.concatenate([np.arange(202, 454, 10),
+                                       np.arange(454, 808, 4)])
         if feh_grid is None:
             feh_grid = np.arange(-2., 0.5 + 1e-5, 0.25)
         if av_grid is None:
             av_grid = np.concatenate([np.arange(0., 1., 0.025),
-                                      np.arange(1., 1.5 + 1e-5, 0.05),
-                                      np.arange(1.5, 2. + 1e-5, 0.1),
-                                      np.arange(2., 3. + 1e-5, 0.2)])
+                                      np.arange(1., 1.5, 0.05),
+                                      np.arange(1.5, 2., 0.1),
+                                      np.arange(2., 3., 0.2)])
 
         self.grid_label = np.array(list(product(*[mini_grid, eep_grid,
                                                   feh_grid, av_grid])),
