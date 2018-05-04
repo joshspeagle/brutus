@@ -319,14 +319,13 @@ class SEDmaker(MISTtracks):
         """
         Generate and return SED predictions over a grid in initial mass,
         EEP, metallicity, and reddening. Note that non-physical models are
-        automatically removed. Returns `grid_sed`, `grid_label`, and
-        `grid_param`.
+        automatically removed.
 
         """
 
         # Initialize grid.
         labels = ['mini', 'eep', 'feh', 'av']
-        ltype = np.dtype([(n, np.float) for n in labels])
+        ltype = np.dtype([(n, np.float32) for n in labels])
         if mini_grid is None:
             mini_grid = np.concatenate([np.arange(0.5, 0.9, 0.05),
                                         np.arange(0.9, 2.8, 0.02),
@@ -349,9 +348,9 @@ class SEDmaker(MISTtracks):
         Ngrid = len(self.grid_label)
 
         # Generate SEDs on the grid.
-        ptype = np.dtype([(n, np.float) for n in self.predictions])
-        stype = np.dtype([(n, np.float) for n in self.filters])
-        self.grid_sed = np.zeros((Ngrid, len(self.filters)), dtype=stype)
+        ptype = np.dtype([(n, np.float32) for n in self.predictions])
+        stype = np.dtype([(n, np.float32) for n in self.filters])
+        self.grid_sed = np.zeros(Ngrid, dtype=stype)
         self.grid_param = np.zeros(Ngrid, dtype=ptype)
         self.grid_sel = np.ones(Ngrid, dtype='bool')
 
@@ -376,9 +375,6 @@ class SEDmaker(MISTtracks):
 
         if verbose:
             sys.stderr.write('\n')
-
-        return (self.grid_sed[self.grid_sel], self.grid_label[self.grid_sel],
-                self.grid_param[self.grid_sel])
 
 
 class FastNN(object):
@@ -524,7 +520,7 @@ class FastPaynePredictor(FastNN):
 
         # Compute apparent magnitudes.
         x = np.array([10.**logt, logg, feh_surf, av])
-        if np.any((x < self.xmin) & (x > self.xmax)):
+        if np.any((x < self.xmin) | (x > self.xmax)):
             # Check whether we're within the bounds of the neural net and
             # return `np.nan` values otherwise.
             m = np.full(self.NFILT, np.nan)
