@@ -5,5 +5,6 @@ from __future__ import (division, print_function)
 from six.moves import range
 
 from .seds import *
+from .fitting import *
 
 __version__ = "0.0.1"

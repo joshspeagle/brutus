@@ -47,10 +47,16 @@ decam = ["DECam_{}".format(b) for b in "ugrizY"]
 tycho = ["Tycho_B", "Tycho_V"]
 bessell = ["Bessell_{}".format(b) for b in "UBVRI"]
 tmass = ["2MASS_{}".format(b) for b in ["J", "H", "Ks"]]
+ukidss = ["UKIDSS_{}".format(b) for b in "ZYJHK"]
 wise = ["WISE_W{}".format(b) for b in "1234"]
 galex = ["GALEX_NUV", "GALEX_FUV"]
+hipp = ["Hipparcos_Hp"]
+kepler = ["Kepler_D51", "Kepler_Kp"]
+tess = ["TESS"]
 
-FILTERS = gaia + sdss + ps + tmass + wise + galex
+FILTERS = (gaia + sdss + ps + decam + tycho + bessell + tmass + ukidss + wise +
+           galex + hipp + kepler + tess)
+
 
 __all__ = ["MISTtracks", "SEDmaker", "FastNN", "FastPaynePredictor"]
 
@@ -226,8 +232,9 @@ class SEDmaker(MISTtracks):
 
     Parameters
     ----------
-    filters : list of strings
-        The names of filters that photometry should be computed for.
+    filters : list of strings, optional
+        The names of filters that photometry should be computed for. If not
+        provided, photometry will be computed for all available filters.
 
     nnpath : str, optional
         The path to the neural network files from The Payne used to generate
@@ -259,21 +266,28 @@ class SEDmaker(MISTtracks):
 
     """
 
-    def __init__(self, filters, nnpath=None, mistfile=None,
+    def __init__(self, filters=None, nnpath=None, mistfile=None,
                  labels=["mini", "eep", "feh"],
                  predictions=["loga", "logl", "logt", "logg", "feh_surf"],
                  ageweight=True, verbose=True):
+
+        # Initialize filters.
+        if filters is None:
+            filters = FILTERS
+        self.filters = filters
+        if verbose:
+            sys.stderr.write('Filters: {}\n'.format(filters))
 
         # Initialize underlying MIST tracks.
         super(SEDmaker, self).__init__(mistfile=mistfile, labels=labels,
                                        predictions=predictions,
                                        ageweight=ageweight, verbose=verbose)
 
-        self.filters = filters
+        # Initialize The Payne.
         self.payne = FastPaynePredictor(filters=filters, nnpath=nnpath,
                                         verbose=verbose)
 
-    def get_sed(self, mini=1.0, eep=350, feh=0., av=0., dist=1000.,
+    def get_sed(self, mini=1., eep=350, feh=0., av=0., dist=1000.,
                 return_dict=True, **kwargs):
         """
         Generate and return SED predictions for input initial mass (`mini`),
@@ -300,8 +314,8 @@ class SEDmaker(MISTtracks):
         else:
             return sed, params_arr
 
-    def get_grid(self, mini_grid=None, eep_grid=None, feh_grid=None,
-                 av_grid=None, dist=1000., verbose=True, **kwargs):
+    def make_grid(self, mini_grid=None, eep_grid=None, feh_grid=None,
+                  av_grid=None, dist=1000., verbose=True, **kwargs):
         """
         Generate and return SED predictions over a grid in initial mass,
         EEP, metallicity, and reddening. Note that non-physical models are
@@ -312,7 +326,7 @@ class SEDmaker(MISTtracks):
 
         # Initialize grid.
         labels = ['mini', 'eep', 'feh', 'av']
-        dtype = np.dtype([(n, np.float) for n in labels])
+        ltype = np.dtype([(n, np.float) for n in labels])
         if mini_grid is None:
             mini_grid = np.concatenate([np.arange(0.5, 0.9, 0.05),
                                         np.arange(0.9, 2.8, 0.02),
@@ -331,13 +345,14 @@ class SEDmaker(MISTtracks):
 
         self.grid_label = np.array(list(product(*[mini_grid, eep_grid,
                                                   feh_grid, av_grid])),
-                                   dtype=dtype)
+                                   dtype=ltype)
         Ngrid = len(self.grid_label)
 
         # Generate SEDs on the grid.
-        rtype = np.dtype([(n, np.float) for n in self.predictions])
-        self.grid_sed = np.zeros((Ngrid, len(self.filters)))
-        self.grid_param = np.zeros(Ngrid, dtype=rtype)
+        ptype = np.dtype([(n, np.float) for n in self.predictions])
+        stype = np.dtype([(n, np.float) for n in self.filters])
+        self.grid_sed = np.zeros((Ngrid, len(self.filters)), dtype=stype)
+        self.grid_param = np.zeros(Ngrid, dtype=ptype)
         self.grid_sel = np.ones(Ngrid, dtype='bool')
 
         percentage = -99
@@ -490,11 +505,12 @@ class FastPaynePredictor(FastNN):
 
         # Initialize values.
         self.filters = filters
+        self.NFILT = len(filters)
         nnlist = [ANN(f, nnpath=nnpath, verbose=False) for f in filters]
         super(FastPaynePredictor, self).__init__(nnlist, verbose=verbose)
 
-    def sed(self, logt=3.8, logg=4.4, feh_surf=0., logl=0.0, av=0.0,
-            dist=1000.0, filt_idxs=slice(None)):
+    def sed(self, logt=3.8, logg=4.4, feh_surf=0., logl=0., av=0.,
+            dist=1000., filt_idxs=slice(None)):
         """
         Returns the SED predicted by The Payne for the input set of
         physical parameters for a specified subset of bands. Predictions
@@ -506,10 +522,16 @@ class FastPaynePredictor(FastNN):
         # Compute distance modulus.
         mu = 5 * np.log10(dist) - 5
 
-        # Compute bolometric correction.
-        BC = self.nneval([10.**logt, logg, feh_surf, av])
-
         # Compute apparent magnitudes.
-        m = -2.5 * logl + 4.74 - BC + mu
+        x = np.array([10.**logt, logg, feh_surf, av])
+        if np.any((x < self.xmin) & (x > self.xmax)):
+            # Check whether we're within the bounds of the neural net and
+            # return `np.nan` values otherwise.
+            m = np.full(self.NFILT, np.nan)
+        else:
+            # If we're good, compute the bolometric correction and convert
+            # to apparent magnitudes.
+            BC = self.nneval(x)
+            m = -2.5 * logl + 4.74 - BC + mu
 
         return np.atleast_1d(m)[filt_idxs]
