@@ -331,7 +331,8 @@ class BruteForce():
             # Apply rough parallax prior for clipping.
             if parallax is not None:
                 p, pe = parallax[i], parallax_err[i]
-                lnprob = -0.5 * (np.sqrt(scale) - p)**2 / pe**2
+                sthresh = np.max(np.c_[scale, np.zeros_like(scale)], axis=1)
+                lnprob = -0.5 * (np.sqrt(sthresh) - p)**2 / pe**2
                 lnprob += lnpost
             else:
                 lnprob = lnpost
