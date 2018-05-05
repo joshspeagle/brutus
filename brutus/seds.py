@@ -325,7 +325,7 @@ class SEDmaker(MISTtracks):
 
         # Initialize grid.
         labels = ['mini', 'eep', 'feh', 'av']
-        ltype = np.dtype([(n, np.float32) for n in labels])
+        ltype = np.dtype([(n, np.float) for n in labels])
         if mini_grid is None:
             mini_grid = np.concatenate([np.arange(0.5, 0.9, 0.05),
                                         np.arange(0.9, 2.8, 0.02),
@@ -348,8 +348,8 @@ class SEDmaker(MISTtracks):
         Ngrid = len(self.grid_label)
 
         # Generate SEDs on the grid.
-        ptype = np.dtype([(n, np.float32) for n in self.predictions])
-        stype = np.dtype([(n, np.float32) for n in self.filters])
+        ptype = np.dtype([(n, np.float) for n in self.predictions])
+        stype = np.dtype([(n, np.float) for n in self.filters])
         self.grid_sed = np.zeros(Ngrid, dtype=stype)
         self.grid_param = np.zeros(Ngrid, dtype=ptype)
         self.grid_sel = np.ones(Ngrid, dtype='bool')
