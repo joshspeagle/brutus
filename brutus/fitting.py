@@ -376,6 +376,7 @@ class BruteForce():
 
             # Subsample.
             wt = np.exp(lnpost - levid)
+            wt /= wt.sum()
             idxs = rstate.choice(sel, size=Ndraws, p=wt)
             s, se = scale[idxs], scale_err[idxs]
 
