@@ -88,11 +88,11 @@ def _quantile(x, q, weights=None):
         return quantiles
 
 
-def cornerplot(idxs, scales, scales_err, params, weights=None, parallax=None,
-               parallax_err=None, Nr=500, applied_parallax=False,
-               pcolor='blue', parallax_kwargs=None,
+def cornerplot(idxs, scales, avs, covs_sa, params, avlim=(0., 6.),
+               weights=None, parallax=None, parallax_err=None, Nr=500,
+               applied_parallax=False, pcolor='blue', parallax_kwargs=None,
                span=None, quantiles=[0.16, 0.5, 0.84],
-               color='black', smooth=0.02, hist_kwargs=None,
+               color='black', smooth=0.035, hist_kwargs=None,
                hist2d_kwargs=None, labels=None, label_kwargs=None,
                show_titles=False, title_fmt=".2f", title_kwargs=None,
                truths=None, truth_color='red', truth_kwargs=None,
@@ -110,11 +110,17 @@ def cornerplot(idxs, scales, scales_err, params, weights=None, parallax=None,
     scales : `~numpy.ndarray` of shape (Nsamps)
         An array of scale factors derived between the model and the data.
 
-    scales_err : `~numpy.ndarray` of shape (Nsamps)
-        An array of errors corresponding to the elements in `scales`.
+    avs : `~numpy.ndarray` of shape (Nsamps)
+        An array of reddenings derived between the model and the data.
+
+    covs_sa : `~numpy.ndarray` of shape (Nsamps, 2, 2)
+        An array of covariance matrices corresponding to `scales` and `avs`.
 
     params : structured `~numpy.ndarray` of length (Nmodels)
         Set of parameters corresponding to the input set of models.
+
+    avlim : 2-tuple, optional
+        The Av limits used to truncate results. Default is `(0., 6.)`.
 
     weights : `~numpy.ndarray` of shape (Nsamps), optional
         An optional set of importance weights used to reweight the samples.
@@ -164,7 +170,7 @@ def cornerplot(idxs, scales, scales_err, params, weights=None, parallax=None,
         The standard deviation (either a single value or a different value for
         each subplot) for the Gaussian kernel used to smooth the 1-D and 2-D
         marginalized posteriors, expressed as a fraction of the span.
-        Default is `0.02` (2% smoothing). If an integer is provided instead,
+        Default is `0.05` (5% smoothing). If an integer is provided instead,
         this will instead default to a simple (weighted) histogram with
         `bins=smooth`.
 
@@ -285,12 +291,22 @@ def cornerplot(idxs, scales, scales_err, params, weights=None, parallax=None,
     assert samples.shape[0] <= samples.shape[1], "There are more " \
                                                  "dimensions than samples!"
 
-    # Add in parallax realizations.
+    # Add in parallax and Av realizations.
     nsamps = len(idxs)
-    sdraws = truncnorm.rvs((0. - scales) / scales_err, np.inf, scales,
-                           scales_err, size=(Nr, nsamps),
-                           random_state=rstate)
-    pdraws = np.sqrt(sdraws).T
+    sdraws, adraws = np.zeros((nsamps, Nr)) - 99, np.zeros((nsamps, Nr)) - 99
+    for i, (s, a, c) in enumerate(zip(scales, avs, covs_sa)):
+        s_temp, a_temp = [], []
+        while len(s_temp) < Nr:
+            s_mc, a_mc = rstate.multivariate_normal(np.array([s, a]), c,
+                                                    size=Nr*4).T
+            inbounds = ((s_mc >= 0.) & (a_mc >= avlim[0]) &
+                        (a_mc <= avlim[1]))
+            s_mc, a_mc = s_mc[inbounds], a_mc[inbounds]
+            s_temp, a_temp = np.append(s_temp, s_mc), np.append(a_temp, a_mc)
+        sdraws[i], adraws[i] = s_temp[:Nr], a_temp[:Nr]
+    pdraws = np.sqrt(sdraws)
+
+    # Check if we applied the parallax already.
     if applied_parallax:
         # Redraw samples proportional to the parallax prior.
         lnp_draws = -0.5 * ((pdraws - parallax)**2 / parallax_err**2 +
@@ -304,7 +320,8 @@ def cornerplot(idxs, scales, scales_err, params, weights=None, parallax=None,
         # parallax prior.
         ridx = rstate.choice(Nr, size=nsamps)
     pdraws = pdraws[np.arange(nsamps), ridx]
-    samples = np.c_[samples.T, pdraws].T  # append to samples
+    adraws = adraws[np.arange(nsamps), ridx]
+    samples = np.c_[samples.T, adraws, pdraws].T  # append to samples
 
     ndim, nsamps = samples.shape
 
@@ -330,6 +347,7 @@ def cornerplot(idxs, scales, scales_err, params, weights=None, parallax=None,
     # Set labels
     if labels is None:
         labels = list(params.dtype.names)
+    labels.append('Av')
     labels.append('Parallax')
 
     # Setting up smoothing.

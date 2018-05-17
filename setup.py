@@ -42,7 +42,7 @@ setup(
     long_description=long_description,
     package_data={"": ["README.md", "LICENSE", "AUTHORS.md"]},
     include_package_data=True,
-    install_requires=["numpy", "scipy", "matplotlib", "six", "frankenz",
+    install_requires=["numpy", "scipy", "matplotlib", "six",
                       "minesweeper", "h5py"],
     keywords=["brute force", "photometry", "bayesian", "stars", "dust",
               "template fitting"],

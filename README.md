@@ -3,8 +3,8 @@
 
 `brutus` is a Pure Python package that uses Bayesian inference
 to derive distances, reddening, and stellar properties from photometry. It
-is built on the `frankenz` photometric redshift package and implements
-MIST stellar models through `minesweeper`.
+runs over the MIST stellar models and SED prediction engine taken from
+`minesweeper` and was partially inspired by `frankenz`.
 
 ### Documentation
 **Currently nonexistent.**
@@ -17,4 +17,4 @@ python setup.py install
 from inside the repository.
 
 ### Demos
-**Currently nonexistent.**
+Several ipython notebooks currently outline very basic usage of the code.
