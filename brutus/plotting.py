@@ -24,6 +24,8 @@ from scipy.ndimage import gaussian_filter as norm_kde
 from scipy.stats import gaussian_kde
 from scipy.stats import truncnorm, norm
 
+from .pdf import gal_lnprior, parallax_lnprior
+
 try:
     from scipy.special import logsumexp
 except ImportError:
@@ -88,16 +90,17 @@ def _quantile(x, q, weights=None):
         return quantiles
 
 
-def cornerplot(idxs, scales, avs, covs_sa, params, avlim=(0., 6.),
-               weights=None, parallax=None, parallax_err=None, Nr=500,
-               applied_parallax=False, pcolor='blue', parallax_kwargs=None,
-               span=None, quantiles=[0.16, 0.5, 0.84],
-               color='black', smooth=0.035, hist_kwargs=None,
-               hist2d_kwargs=None, labels=None, label_kwargs=None,
-               show_titles=False, title_fmt=".2f", title_kwargs=None,
-               truths=None, truth_color='red', truth_kwargs=None,
-               max_n_ticks=5, top_ticks=False, use_math_text=False,
-               verbose=False, fig=None, rstate=None):
+def cornerplot(idxs, scales, avs, covs_sa, params, lndistprior=None,
+               coord=None, avlim=(0., 6.), weights=None, parallax=None,
+               parallax_err=None, Nr=500, applied_parallax=False,
+               pcolor='blue', parallax_kwargs=None,
+               dcolor='red', dist_kwargs=None, span=None,
+               quantiles=[0.16, 0.5, 0.84], color='black', smooth=0.035,
+               hist_kwargs=None, hist2d_kwargs=None, labels=None,
+               label_kwargs=None, show_titles=False, title_fmt=".2f",
+               title_kwargs=None, truths=None, truth_color='red',
+               truth_kwargs=None, max_n_ticks=5, top_ticks=False,
+               use_math_text=False, verbose=False, fig=None, rstate=None):
     """
     Generate a corner plot of the 1-D and 2-D marginalized posteriors.
 
@@ -118,6 +121,14 @@ def cornerplot(idxs, scales, avs, covs_sa, params, avlim=(0., 6.),
 
     params : structured `~numpy.ndarray` of length (Nmodels)
         Set of parameters corresponding to the input set of models.
+
+    lndistprior : func, optional
+        The log-distsance prior function used. If not provided, the galactic
+        model from Green et al. (2014) will be assumed.
+
+    coord : 2-tuple, optional
+        The galactic `(l, b)` coordinates for the object, which is passed to
+        `lndistprior`.
 
     avlim : 2-tuple, optional
         The Av limits used to truncate results. Default is `(0., 6.)`.
@@ -144,6 +155,13 @@ def cornerplot(idxs, scales, avs, covs_sa, params, avlim=(0., 6.),
 
     parallax_kwargs : kwargs, optional
         Keyword arguments used when plotting the parallax prior passed to
+        `fill_between`.
+
+    dcolor : str, optional
+        Color used when plotting the distance prior. Default is `'blue'`.
+
+    dist_kwargs : kwargs, optional
+        Keyword arguments used when plotting the distance prior passed to
         `fill_between`.
 
     span : iterable with shape (ndim,), optional
@@ -270,6 +288,13 @@ def cornerplot(idxs, scales, avs, covs_sa, params, avlim=(0., 6.),
                              "to apply the parallax prior to the samples.")
     if parallax_kwargs is None:
         parallax_kwargs = dict()
+    if lndistprior is None and coord is None:
+        raise ValueError("`coord` must be passed if the default distance "
+                         "prior was used.")
+    if lndistprior is None:
+        lndistprior = gal_lnprior
+    if dist_kwargs is None:
+        dist_kwargs = dict()
 
     # Set defaults.
     hist_kwargs['alpha'] = hist_kwargs.get('alpha', 0.6)
@@ -278,6 +303,7 @@ def cornerplot(idxs, scales, avs, covs_sa, params, avlim=(0., 6.),
     truth_kwargs['linewidth'] = truth_kwargs.get('linewidth', 2)
     truth_kwargs['alpha'] = truth_kwargs.get('alpha', 0.7)
     parallax_kwargs['alpha'] = parallax_kwargs.get('alpha', 0.5)
+    dist_kwargs['alpha'] = dist_kwargs.get('alpha', 0.5)
 
     # Deal with 1D results.
     samples = params[idxs]
@@ -305,24 +331,24 @@ def cornerplot(idxs, scales, avs, covs_sa, params, avlim=(0., 6.),
             s_temp, a_temp = np.append(s_temp, s_mc), np.append(a_temp, a_mc)
         sdraws[i], adraws[i] = s_temp[:Nr], a_temp[:Nr]
     pdraws = np.sqrt(sdraws)
+    ddraws = 1. / pdraws
 
-    # Check if we applied the parallax already.
+    # Re-apply distance and parallax priors to realizations.
+    lnp_draws = lndistprior(ddraws, coord)
     if applied_parallax:
-        # Redraw samples proportional to the parallax prior.
-        lnp_draws = -0.5 * ((pdraws - parallax)**2 / parallax_err**2 +
-                            np.sqrt(2. * np.pi) * parallax_err)
-        lnp = logsumexp(lnp_draws, axis=1)
-        pwt = np.exp(lnp_draws - lnp[:, None])
-        pwt /= pwt.sum(axis=1)[:, None]
-        ridx = [rstate.choice(Nr, p=pwt[i]) for i in range(nsamps)]
-    else:
-        # Sample uniformly among the realizations if we didn't apply the
-        # parallax prior.
-        ridx = rstate.choice(Nr, size=nsamps)
-    pdraws = pdraws[np.arange(nsamps), ridx]
-    adraws = adraws[np.arange(nsamps), ridx]
-    samples = np.c_[samples.T, adraws, pdraws].T  # append to samples
+        lnp_draws += parallax_lnprior(pdraws, parallax, parallax_err)
 
+    # Resample draws.
+    lnp = logsumexp(lnp_draws, axis=1)
+    pwt = np.exp(lnp_draws - lnp[:, None])
+    pwt /= pwt.sum(axis=1)[:, None]
+    ridx = [rstate.choice(Nr, p=pwt[i]) for i in range(nsamps)]
+    pdraws = pdraws[np.arange(nsamps), ridx]
+    ddraws = ddraws[np.arange(nsamps), ridx]
+    adraws = adraws[np.arange(nsamps), ridx]
+
+    # Append to samples.
+    samples = np.c_[samples.T, adraws, pdraws, ddraws].T
     ndim, nsamps = samples.shape
 
     # Check weights.
@@ -349,6 +375,7 @@ def cornerplot(idxs, scales, avs, covs_sa, params, avlim=(0., 6.),
         labels = list(params.dtype.names)
     labels.append('Av')
     labels.append('Parallax')
+    labels.append('Distance')
 
     # Setting up smoothing.
     if (isinstance(smooth, int_type) or isinstance(smooth, float_type)):
@@ -456,10 +483,17 @@ def cornerplot(idxs, scales, avs, covs_sa, params, avlim=(0., 6.),
                 title = "{0} = {1}".format(labels[i], title)
                 ax.set_title(title, **title_kwargs)
         # Add parallax prior.
-        if i == ndim - 1 and parallax is not None and parallax_err is not None:
-            parallax_pdf = np.exp(-0.5 * (b - parallax)**2 / parallax_err**2)
+        if i == ndim - 2 and parallax is not None and parallax_err is not None:
+            parallax_logpdf = parallax_lnprior(b, parallax, parallax_err)
+            parallax_pdf = np.exp(parallax_logpdf - max(parallax_logpdf))
             parallax_pdf *= max(n) / max(parallax_pdf)
             ax.fill_between(b, parallax_pdf, color=pcolor, **parallax_kwargs)
+        # Add distance prior.
+        if i == ndim - 1:
+            dist_logpdf = lndistprior(b, coord)
+            dist_pdf = np.exp(dist_logpdf - max(dist_logpdf))
+            dist_pdf *= max(n) / max(dist_pdf)
+            ax.fill_between(b, dist_pdf, color=dcolor, **dist_kwargs)
 
         for j, y in enumerate(samples):
             if np.shape(samples)[0] == 1:

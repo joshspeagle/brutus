@@ -16,12 +16,7 @@ import warnings
 import math
 import numpy as np
 import warnings
-from copy import deepcopy
-from itertools import product
 import h5py
-from scipy.interpolate import RegularGridInterpolator
-import h5py
-from scipy.stats import truncnorm
 from scipy.special import xlogy, gammaln
 
 try:
@@ -29,41 +24,9 @@ try:
 except ImportError:
     from scipy.misc import logsumexp
 
-__all__ = ["imf_lnprior", "get_seds", "loglike", "BruteForce"]
+from .pdf import *
 
-
-def imf_lnprior(mgrid):
-    """
-    Apply Kroupa IMF prior over the provided initial mass grid.
-
-    Parameters
-    ----------
-    mgrid : `~numpy.ndarray` of shape (Ngrid)
-        Grid of initial mass the Kroupa IMF will be evaluated over.
-
-    Returns
-    -------
-    lnprior : `~numpy.ndarray` of shape (Ngrid)
-        The corresponding unnormalized ln(prior).
-
-    """
-
-    # Initialize log-prior.
-    lnprior = np.zeros_like(mgrid)
-
-    # Low mass.
-    low_mass = mgrid <= 0.08
-    lnprior[low_mass] = -0.3 * np.log(mgrid[low_mass])
-
-    # Intermediate mass.
-    mid_mass = (mgrid <= 0.5) & (mgrid > 0.08)
-    lnprior[mid_mass] = -1.3 * np.log(mgrid[mid_mass]) + np.log(0.08)
-
-    # High mass.
-    high_mass = mgrid > 0.5
-    lnprior[high_mass] = -2.3 * np.log(mgrid[high_mass]) + np.log(0.5 * 0.08)
-
-    return lnprior
+__all__ = ["get_seds", "loglike", "BruteForce"]
 
 
 def get_seds(mag_coeffs, av, return_rvec=False, return_flux=False):
@@ -351,9 +314,10 @@ class BruteForce():
         self.avgrid = avgrid
 
     def fit(self, data, data_err, data_mask, data_labels, save_file,
-            parallax=None, parallax_err=None, Nmc_parallax=150,
+            parallax=None, parallax_err=None, Nmc_prior=150,
             lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4, Ndraws=2000,
-            apply_agewt=True, apply_grad=True, dim_prior=True, ltol=0.02,
+            apply_agewt=True, apply_grad=True, lndistprior=None,
+            data_coords=None, logl_dim_prior=True, ltol=0.02,
             ltol_subthresh=0.005, rstate=None, verbose=True):
         """
         Fit all input models to the input data to compute the associated
@@ -362,7 +326,7 @@ class BruteForce():
         Parameters
         ----------
         data : `~numpy.ndarray` of shape (Ndata, Nfilt)
-            Model values.
+            Observed data values.
 
         data_err : `~numpy.ndarray` of shape (Ndata, Nfilt)
             Associated errors on the data values.
@@ -383,13 +347,12 @@ class BruteForce():
             Errors on the parallax measurements. Must be provided along with
             `parallax`.
 
-        Nmc_parallax : int, optional
+        Nmc_prior : int, optional
             The number of Monte Carlo realizations used to estimate the
-            integral of the product of `P(parallax|given) * P(parallax|fix)`.
-            Default is `150`.
+            integral over the prior. Default is `150`.
 
         lnprior : `~numpy.ndarray` of shape (Ndata, Nfilt), optional
-            Log-prior grid to be used. If not provided, will default
+            Log-prior grid to be used. If not provided, this will default
             to a Kroupa IMF prior in initial mass (`'mini'`) and
             uniform priors in age, metallicity, and dust.
 
@@ -417,7 +380,16 @@ class BruteForce():
             Whether to account for the grid spacing using `np.gradient`.
             Default is `True`.
 
-        dim_prior : bool, optional
+        lndistprior : func, optional
+            The log-distsance prior function to be applied. If not provided,
+            this will default to the galactic model from Green et al. (2014).
+
+        data_coords : `~numpy.ndarray` of shape (Ndata, 2), optional
+            The galactic `(l, b)` coordinates for the objects that are being
+            fit. These are passed to `lndistprior` when constructing the
+            distance prior.
+
+        logl_dim_prior : bool, optional
             Whether to apply a dimensional-based correction (prior) to the
             log-likelihood. Transforms the likelihood to a chi2 distribution
             with `Nfilt - 2` degrees of freedom. Default is `True`.
@@ -468,6 +440,15 @@ class BruteForce():
                 lngrad_label = np.log(np.gradient(ulabel))  # compute gradient
                 lnprior += np.interp(label, ulabel, lngrad_label)  # add to lnp
 
+        # Initialize distance log(prior).
+        if lndistprior is None and data_coords is None:
+            raise ValueError("`data_coords` must be provided if using the "
+                             "default distance prior.")
+        if lndistprior is None:
+            lndistprior = gal_lnprior
+        if data_coords is None:
+            data_coords = np.zeros((Ndata, 2))
+
         # Initialize results file.
         out = h5py.File("{0}.h5".format(save_file), "w-")
         out.create_dataset("labels", data=data_labels)
@@ -491,13 +472,16 @@ class BruteForce():
         for i, results in enumerate(self._fit(data, data_err, data_mask,
                                               parallax=parallax,
                                               parallax_err=parallax_err,
-                                              Nmc_parallax=Nmc_parallax,
+                                              Nmc_prior=Nmc_prior,
                                               lnprior=lnprior,
                                               wt_thresh=wt_thresh,
                                               cdf_thresh=cdf_thresh,
                                               Ndraws=Ndraws, rstate=rstate,
+                                              lndistprior=lndistprior,
+                                              data_coords=data_coords,
                                               ltol_subthresh=ltol_subthresh,
-                                              dim_prior=dim_prior, ltol=ltol)):
+                                              logl_dim_prior=logl_dim_prior,
+                                              ltol=ltol)):
             # Print progress.
             if verbose and i < Ndata - 1:
                 sys.stderr.write('\rFitting object {0}/{1}'.format(i+2, Ndata))
@@ -520,9 +504,11 @@ class BruteForce():
         out.close()  # close output results file
 
     def _fit(self, data, data_err, data_mask,
-             parallax=None, parallax_err=None, Nmc_parallax=150,
+             parallax=None, parallax_err=None, Nmc_prior=150,
              lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4, Ndraws=2000,
-             dim_prior=True, ltol=0.02, ltol_subthresh=0.005, rstate=None):
+             lndistprior=None, data_coords=None,
+             logl_dim_prior=True, ltol=0.02, ltol_subthresh=0.005,
+             rstate=None):
         """
         Internal generator used to compute fits.
 
@@ -544,10 +530,9 @@ class BruteForce():
             Errors on the parallax measurements. Must be provided along with
             `parallax`.
 
-        Nmc_parallax : int, optional
-            The number of Monte Carlo realizations used to evaluate the
-            integral of the product of `P(parallax|given) * P(parallax|fix)`.
-            Default is `150`.
+        Nmc_prior : int, optional
+            The number of Monte Carlo realizations used to estimate the
+            integral over the prior. Default is `150`.
 
         lnprior : `~numpy.ndarray` of shape (Ndata, Nfilt), optional
             Log-prior grid to be used. If not provided, will default
@@ -569,7 +554,16 @@ class BruteForce():
             to disk. Indices, scales, and scale errors are saved.
             Default is `2000`.
 
-        dim_prior : bool, optional
+        lndistprior : func, optional
+            The log-distsance prior function to be applied. If not provided,
+            this will default to the galactic model from Green et al. (2014).
+
+        data_coords : `~numpy.ndarray` of shape (Ndata, 2), optional
+            The galactic `(l, b)` coordinates for the objects that are being
+            fit. These are passed to `lndistprior` when constructing the
+            distance prior.
+
+        logl_dim_prior : bool, optional
             Whether to apply a dimensional-based correction (prior) to the
             log-likelihood. Transforms the likelihood to a chi2 distribution
             with `Nfilt - 2` degrees of freedom. Default is `True`.
@@ -607,24 +601,36 @@ class BruteForce():
             lnprior = 0.
         self.lnprior = lnprior
 
+        # Initialize distance log(prior).
+        if lndistprior is None and data_coords is None:
+            raise ValueError("`data_coords` must be provided if using the "
+                             "default distance prior.")
+        if lndistprior is None:
+            lndistprior = gal_lnprior
+        if data_coords is None:
+            data_coords = np.zeros((Ndata, 2))
+
         # Fit data.
         for i, (x, xe, xm) in enumerate(zip(data, data_err, data_mask)):
             results = loglike(x, xe, xm, self.models, self.models_avgrid,
-                              self.avgrid, self.avlim, dim_prior=dim_prior,
+                              self.avgrid, self.avlim,
+                              logl_dim_prior=logl_dim_prior,
                               ltol=ltol, wt_thresh=ltol_subthresh,
                               return_vals=True)
 
             lnlike, Ndim, chi2, scales, avs, ds2, da2, dsda = results
             lnpost = lnlike + lnprior
+            pars = np.sqrt(scales)
+            dists = 1. / pars
+            coord = data_coords[i]
+
+            # Apply rough distance prior for clipping.
+            lnprob = lnpost + lndistprior(dists, coord)
 
             # Apply rough parallax prior for clipping.
             if parallax is not None:
                 p, pe = parallax[i], parallax_err[i]
-                sthresh = np.max(np.c_[scales, np.zeros_like(scales)], axis=1)
-                lnprob = -0.5 * (np.sqrt(sthresh) - p)**2 / pe**2
-                lnprob += lnpost
-            else:
-                lnprob = lnpost
+                lnprob += parallax_lnprior(pars, p, pe)
 
             # Apply thresholding.
             if wt_thresh is not None:
@@ -646,28 +652,34 @@ class BruteForce():
             cov_sa = np.array([np.linalg.inv(np.array([[s, sa], [sa, a]]))
                                for s, a, sa in zip(sinv2, ainv2, sainv)])
 
-            # Now apply actual parallax prior.
-            if parallax is not None:
-                if Nmc_parallax > 0:
-                    # Use Monte Carlo integration to get an estimate of the
-                    # overlap integral.
-                    s_mc, a_mc = np.array([mvn(np.array([s, a]), c,
-                                           size=Nmc_parallax)
-                                           for s, a, c in zip(scale, av,
-                                                              cov_sa)]).T
-                    inbounds = ((s_mc >= 0.) & (a_mc >= self.avlim[0]) &
-                                (a_mc <= self.avlim[1]))
-                    lnp_mc = -0.5 * ((np.sqrt(s_mc) - p)**2 / pe**2 +
-                                     np.log(2. * np.pi * pe**2))
-                    lnp_mc[~inbounds] = -1e300
-                    Nmc_parallax_eff = np.sum(inbounds, axis=0)
-                    lnp = logsumexp(lnp_mc, axis=0) - np.log(Nmc_parallax_eff)
-                    lnpost += lnp
-                else:
-                    # Just assume the maximum-likelihood estimate.
-                    lnp = -0.5 * ((np.sqrt(scale) - p)**2 / pe**2 +
-                                  np.log(2. * np.pi * pe**2))
-                    lnpost += lnp
+            # Now actually apply distance (and parallax) priors.
+            if Nmc_prior > 0:
+                # Use Monte Carlo integration to get an estimate of the
+                # overlap integral.
+                s_mc, a_mc = np.array([mvn(np.array([s, a]), c,
+                                       size=Nmc_prior)
+                                       for s, a, c in zip(scale, av,
+                                                          cov_sa)]).T
+                par_mc = np.sqrt(s_mc)
+                dist_mc = 1. / par_mc
+                lnp_mc = lndistprior(dist_mc, coord)
+                if parallax is not None:
+                    lnp_mc += parallax_lnprior(par_mc, p, pe)
+                # Ignore points that are out of bounds.
+                inbounds = ((s_mc >= 0.) & (a_mc >= self.avlim[0]) &
+                            (a_mc <= self.avlim[1]))
+                lnp_mc[~inbounds] = -1e300
+                Nmc_prior_eff = np.sum(inbounds, axis=0)
+                # Compute integral.
+                lnp = logsumexp(lnp_mc, axis=0) - np.log(Nmc_prior_eff)
+            else:
+                # Just assume the maximum-likelihood estimate.
+                par = np.sqrt(scale)
+                dist = 1. / par
+                lnp = lndistprior(dist, coord)
+                if parallax is not None:
+                    lnp += parallax_lnprior(par, p, pe)
+            lnpost += lnp
 
             # Compute GOF metrics.
             chi2min = np.min(chi2[sel])
