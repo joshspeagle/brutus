@@ -321,13 +321,8 @@ def gal_lnprior(dists, coord, R_solar=8., Z_solar=0.025,
 
     # Compute log-probability.
     lnprior = logsumexp([logp_thin, logp_thick, logp_halo], axis=0)
-    lnorm = logsumexp(lnprior)
-    lnprior -= lnorm
 
     if not return_components:
         return lnprior
     else:
-        logp_thin -= lnorm
-        logp_thick -= lnorm
-        logp_halo -= lnorm
         return lnprior, logp_thin, logp_thick, logp_halo
