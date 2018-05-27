@@ -193,29 +193,32 @@ def loglike(data, data_err, data_mask, mag_coeffs,
             av[sel] = av_val
             lnl_old[sel] = lnl[sel]
 
+    # (Re)compute models.
+    models, rvecs = get_seds(mag_coeffs, av=av, return_rvec=True,
+                             return_flux=True)
+
+    # Derive scale-factors (`scale`) between data and models.
+    s_num = np.sum(tot_mask * models * data[None, :] / tot_var, axis=1)
+    s_den = np.sum(tot_mask * np.square(models) / tot_var, axis=1)
+    scale = s_num / s_den  # ML scalefactor
+    scale[scale <= 0.] = 1e-20  # must be non-negative
+
+    # Rescale models and reddening vectors.
+    models *= scale[:, None]
+    rvecs *= scale[:, None]
+
+    # Compute residuals.
+    resid = data - models
+
     # Iterate until convergence.
     lnl_old, lerr = -1e300, 1e300
+    stepsize, rescaling = np.ones(Nmodels) * 5., 1.2
     while lerr > ltol:
-        # Recompute models.
-        models, rvecs = get_seds(mag_coeffs, av=av, return_rvec=True,
-                                 return_flux=True)
-
-        # Derive scale-factors (`scale`) between data and models.
-        s_num = np.sum(tot_mask * models * data[None, :] / tot_var, axis=1)
-        s_den = np.sum(tot_mask * np.square(models) / tot_var, axis=1)
-        scale = s_num / s_den  # ML scalefactor
-        scale[scale < 0.] = 0.  # must be non-negative
-
-        # Rescale models and reddening vectors.
-        models *= scale[:, None]
-        rvecs *= scale[:, None]
-
-        # Derive Delta_Av (`a`) between data and models.
-        resid = data - models
+        # Derive Delta_Av (`dav`) between data and models.
         a_num = np.sum(tot_mask * rvecs * resid / tot_var, axis=1)
         a_den = np.sum(tot_mask * np.square(rvecs) / tot_var, axis=1)
         dav = a_num / a_den  # ML Delta_Av
-        dav *= 5.  # take more aggressive steps
+        dav *= stepsize
 
         # Prevent Av from sliding off the provided bounds.
         dav_low, dav_high = avlim[0] - av, avlim[1] - av
@@ -223,9 +226,20 @@ def loglike(data, data_err, data_mask, mag_coeffs,
         dav[lsel] = dav_low[lsel]
         dav[hsel] = dav_high[hsel]
 
-        # Shift models.
+        # Recompute models with new Av.
         av += dav
-        models += dav[:, None] * rvecs
+        models, rvecs = get_seds(mag_coeffs, av=av, return_rvec=True,
+                                 return_flux=True)
+
+        # Derive scale-factors (`scale`) between data and models.
+        s_num = np.sum(tot_mask * models * data[None, :] / tot_var, axis=1)
+        s_den = np.sum(tot_mask * np.square(models) / tot_var, axis=1)
+        scale = s_num / s_den  # ML scalefactor
+        scale[scale <= 0.] = 1e-20  # must be non-negative
+
+        # Rescale models and reddening vectors.
+        models *= scale[:, None]
+        rvecs *= scale[:, None]
 
         # Compute chi2.
         resid = data - models
@@ -239,6 +253,9 @@ def loglike(data, data_err, data_mask, mag_coeffs,
         # Compute stopping criterion.
         lnl_sel = lnl > np.max(lnl) + np.log(wt_thresh)
         lerr = np.max(np.abs(lnl - lnl_old)[lnl_sel])
+
+        # Adjust stepsize.
+        stepsize[lnl < lnl_old] /= rescaling
         lnl_old = lnl
 
     # Apply dimensionality prior.
