@@ -19,13 +19,14 @@ import warnings
 from astropy import units
 from astropy.coordinates import SkyCoord
 from astropy.coordinates import CylindricalRepresentation as CylRep
+from scipy.interpolate import interp1d
 
 try:
     from scipy.special import logsumexp
 except ImportError:
     from scipy.misc import logsumexp
 
-__all__ = ["imf_lnprior", "parallax_lnprior",
+__all__ = ["imf_lnprior", "ps1_MrLF_lnprior", "parallax_lnprior",
            "logn_disk", "logn_halo", "gal_lnprior"]
 
 
@@ -59,6 +60,39 @@ def imf_lnprior(mgrid):
     # High mass.
     high_mass = mgrid > 0.5
     lnprior[high_mass] = -2.3 * np.log(mgrid[high_mass]) + np.log(0.5 * 0.08)
+
+    return lnprior
+
+
+def ps1_MrLF_lnprior(Mr):
+    """
+    Apply PanSTARRS r-band luminosity function-based prior over the provided
+    absolute r-band magnitude grid.
+
+    Parameters
+    ----------
+    Mr : `~numpy.ndarray` of shape (Ngrid)
+        Grid of PS1 absolute r-band magnitudes.
+
+    Returns
+    -------
+    lnprior : `~numpy.ndarray` of shape (Ngrid)
+        The corresponding unnormalized ln(prior).
+
+    """
+
+    global ps_lnprior
+    try:
+        # Evaluate prior from file.
+        lnprior = ps_lnprior(Mr)
+    except:
+        # Read in file.
+        path = os.path.dirname(os.path.realpath(__file__))
+        grid_Mr, grid_lnp = np.loadtxt(path+'/PSMrLF_lnprior.dat').T
+        # Construct prior.
+        ps_lnprior = interp1d(grid_Mr, grid_lnp, fill_value='extrapolate')
+        # Evaluate prior.
+        lnprior = ps_lnprior(Mr)
 
     return lnprior
 

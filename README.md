@@ -7,9 +7,10 @@ runs over the MIST stellar models and SED prediction engine taken from
 `minesweeper` and was partially inspired by `frankenz`.
 
 ### Data
-The MIST grid used in the analysis can be found
-[here](https://www.dropbox.com/s/mxx2m07am2tptc0/grid_v4.1.h5?dl=0) (v4.1).
-A previous version can be found [here](https://www.dropbox.com/s/0gttqnmfr1orp85/grid_v4.h5?dl=0) (v4).
+The current MIST grid (v4.1) can be found
+[here](https://www.dropbox.com/s/mxx2m07am2tptc0/grid_v4.1.h5?dl=0).
+The current Bayestar grid (v1) can be found
+[here](https://www.dropbox.com/s/hvivkp5ll0tyf5d/grid_bayestar_v1.h5?dl=0).
 
 ### Documentation
 **Currently nonexistent.**

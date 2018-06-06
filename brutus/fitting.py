@@ -455,8 +455,11 @@ class BruteForce():
 
         lnprior : `~numpy.ndarray` of shape `(Ndata, Nfilt)`, optional
             Log-prior grid to be used. If not provided, this will default
-            to a Kroupa IMF prior in initial mass (`'mini'`) and
-            uniform priors in age, metallicity, and dust.
+            to [1] a Kroupa IMF prior in initial mass (`'mini'`) and
+            uniform priors in age, metallicity, and dust if we are using the
+            MIST models and [2] a PanSTARRS r-band luminosity function-based
+            prior if we are using the Bayestar models.
+            **Be sure to check this behavior you are using custom models.**
 
         wt_thresh : float, optional
             The threshold `wt_thresh * max(y_wt)` used to ignore models
@@ -523,15 +526,19 @@ class BruteForce():
 
         # Initialize log(prior).
         if lnprior is None:
-            lnprior = imf_lnprior(self.models_labels['mini'])
+            try:
+                # Set IMF prior.
+                lnprior = imf_lnprior(self.models_labels['mini'])
+            except:
+                # Set PS1 r-band LF prior.
+                lnprior = ps1_MrLF_lnprior(self.models_labels['Mr'])
 
         # Apply age weights to reweight from EEP to age.
         if apply_agewt:
             try:
                 lnprior += np.log(self.models_params['agewt'])
             except:
-                warnings.warn("No age weights provided in `models_params`. "
-                              "Unable to apply age weights!")
+                warnings.warn("No age weights provided in `models_params`. ")
                 pass
 
         # Reweight based on spacing.
