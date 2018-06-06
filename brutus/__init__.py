@@ -7,4 +7,4 @@ from six.moves import range
 from .seds import *
 from .fitting import *
 
-__version__ = "0.0.2"
+__version__ = "0.0.5"

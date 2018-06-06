@@ -26,7 +26,7 @@ except ImportError:
 
 from .pdf import *
 
-__all__ = ["get_seds", "loglike", "BruteForce"]
+__all__ = ["get_seds", "loglike", "_optimize_fit", "BruteForce"]
 
 
 def get_seds(mag_coeffs, av, return_rvec=False, return_flux=False):
@@ -82,8 +82,7 @@ def get_seds(mag_coeffs, av, return_rvec=False, return_flux=False):
         return seds
 
 
-def loglike(data, data_err, data_mask, mag_coeffs,
-            models_avgrid=None, avgrid=None, avlim=(0., 6.),
+def loglike(data, data_err, data_mask, mag_coeffs, avlim=(0., 6.),
             dim_prior=True, ltol=0.02, wt_thresh=0.005, return_vals=False,
             *args, **kwargs):
     """
@@ -104,13 +103,6 @@ def loglike(data, data_err, data_mask, mag_coeffs,
     mag_coeffs : `~numpy.ndarray` of shape `(Nmodel, Nfilt, Ncoef)`
         Magnitude coefficients used to compute reddened photometry for a given
         model.
-
-    models_avgrid : `~numpy.ndarray` of shape `(Nav, Nmodel, Nfilt)`, optional
-        Precomputed SEDs (in flux densities) over a grid in Av. If provided,
-        will be used to initialize the initial Av guess.
-
-    avgrid : `~numpy.ndarray` of shape `(Nav)`, optional
-        The corresponding Av grid used to compute the SEDs in `models_avgrid`.
 
     avlim : 2-tuple, optional
         The lower and upper bound where the reddened photometry is reliable.
@@ -166,80 +158,42 @@ def loglike(data, data_err, data_mask, mag_coeffs,
 
     # Initialize values.
     Nmodels, Nfilt, Ncoef = mag_coeffs.shape
+
+    # Clean data (safety checks).
+    clean = np.isfinite(data) & np.isfinite(data_err) & (data_err > 0.)
+    data[~clean], data_err[~clean], data_mask[~clean] = 1., 1., False
+
     tot_var = np.square(data_err) + np.zeros((Nmodels, Nfilt))  # variance
     tot_mask = data_mask * np.ones((Nmodels, Nfilt))  # binary mask
     Ndim = sum(data_mask)  # number of dimensions
 
-    # Get a rough estimate of the Av by fitting pre-generated models over
-    # a coarse grid in Av.
+    # Get started by fitting in magnitudes.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        # Convert to magnitudes.
+        mags = -2.5 * np.log10(data)
+        mags_var = np.square(2.5 / np.log(10.)) * tot_var / np.square(data)
+        mclean = np.isfinite(mags)
+        mags[~mclean], mags_var[:, ~mclean] = 0., 1e50  # mask negative values
+    # Compute unreddened photometry.
     av = np.zeros(Nmodels)
-    if models_avgrid is not None and avgrid is not None:
-        lnl_old = np.full(Nmodels, -np.inf)
-        for i, av_val in enumerate(avgrid):
-            models = models_avgrid[i]
-            # Derive scale-factors (`scale`) between data and models.
-            s_num = np.sum(tot_mask * models * data[None, :] / tot_var, axis=1)
-            s_den = np.sum(tot_mask * np.square(models) / tot_var, axis=1)
-            scale = s_num / s_den  # ML scalefactor
-            # Compute chi2.
-            resid = data - scale[:, None] * models
-            chi2 = np.sum(tot_mask * np.square(resid) / tot_var, axis=1)
-            # Compute multivariate normal logpdf.
-            lnl = -0.5 * chi2
-            lnl += -0.5 * (Ndim * np.log(2. * np.pi) +
-                           np.sum(np.log(tot_var), axis=1))
-            # Assign next best guess.
-            sel = lnl > lnl_old
-            av[sel] = av_val
-            lnl_old[sel] = lnl[sel]
-
-    # (Re)compute models.
-    models, rvecs = get_seds(mag_coeffs, av=av, return_rvec=True,
-                             return_flux=True)
-
-    # Derive scale-factors (`scale`) between data and models.
-    s_num = np.sum(tot_mask * models * data[None, :] / tot_var, axis=1)
-    s_den = np.sum(tot_mask * np.square(models) / tot_var, axis=1)
-    scale = s_num / s_den  # ML scalefactor
-    scale[scale <= 0.] = 1e-20  # must be non-negative
-
-    # Rescale models and reddening vectors.
-    models *= scale[:, None]
-    rvecs *= scale[:, None]
-
-    # Compute residuals.
+    models, rvecs = get_seds(mag_coeffs, av=av, return_rvec=True)
+    results = _optimize_fit(data, tot_var, tot_mask, models, rvecs, av,
+                            mag_coeffs, resid=None, mags=mags,
+                            mags_var=mags_var, stepsize=1.)
+    models, rvecs, scale, av, ds2, da2, dsda = results
     resid = data - models
 
     # Iterate until convergence.
     lnl_old, lerr = -1e300, 1e300
-    stepsize, rescaling = np.ones(Nmodels) * 5., 1.2
+    stepsize, rescaling = np.ones(Nmodels) * 3., 1.2
     while lerr > ltol:
-        # Derive Delta_Av (`dav`) between data and models.
-        a_num = np.sum(tot_mask * rvecs * resid / tot_var, axis=1)
-        a_den = np.sum(tot_mask * np.square(rvecs) / tot_var, axis=1)
-        dav = a_num / a_den  # ML Delta_Av
-        dav *= stepsize
 
-        # Prevent Av from sliding off the provided bounds.
-        dav_low, dav_high = avlim[0] - av, avlim[1] - av
-        lsel, hsel = dav < dav_low, dav > dav_high
-        dav[lsel] = dav_low[lsel]
-        dav[hsel] = dav_high[hsel]
-
-        # Recompute models with new Av.
-        av += dav
-        models, rvecs = get_seds(mag_coeffs, av=av, return_rvec=True,
-                                 return_flux=True)
-
-        # Derive scale-factors (`scale`) between data and models.
-        s_num = np.sum(tot_mask * models * data[None, :] / tot_var, axis=1)
-        s_den = np.sum(tot_mask * np.square(models) / tot_var, axis=1)
-        scale = s_num / s_den  # ML scalefactor
-        scale[scale <= 0.] = 1e-20  # must be non-negative
-
-        # Rescale models and reddening vectors.
-        models *= scale[:, None]
-        rvecs *= scale[:, None]
+        # Re-compute models.
+        results = _optimize_fit(data, tot_var, tot_mask, models, rvecs, av,
+                                mag_coeffs, avlim=avlim, resid=resid,
+                                stepsize=stepsize)
+        models, rvecs, scale, av, ds2, da2, dsda = results
 
         # Compute chi2.
         resid = data - models
@@ -265,11 +219,157 @@ def loglike(data, data_err, data_mask, mag_coeffs,
         lnl = xlogy(a - 1., chi2) - (chi2 / 2.) - gammaln(a) - (np.log(2.) * a)
 
     if return_vals:
-        rvecs /= scale[:, None]  # remove normalization
-        sa_mix = np.sum(tot_mask * rvecs * (resid - models) / tot_var, axis=1)
-        return lnl, Ndim, chi2, scale, av, s_den, a_den, sa_mix
+        return lnl, Ndim, chi2, scale, av, ds2, da2, dsda
     else:
         return lnl, Ndim, chi2
+
+
+def _optimize_fit(data, tot_var, tot_mask, models, rvecs, av, mag_coeffs,
+                  avlim=(0., 6.), resid=None, mags=None, mags_var=None,
+                  stepsize=1.):
+    """
+    Optimize the distance and reddening between the models and the data using
+    the gradient.
+
+    Parameters
+    ----------
+    data : `~numpy.ndarray` of shape `(Nfilt)`
+        Observed data values.
+
+    tot_var : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        Associated (Normal) errors on the observed values compared to the
+        models.
+
+    tot_mask : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        Binary mask (0/1) indicating whether the data was observed compared
+        to the models.
+
+    models : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        Model predictions.
+
+    rvecs : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        Associated model reddening vectors.
+
+    av : `~numpy.ndarray` of shape `(Nmodel,)`
+        Av values of the models.
+
+    mag_coeffs : `~numpy.ndarray` of shape `(Nmodel, Nfilt, Ncoef)`
+        Magnitude coefficients used to compute reddened photometry for a given
+        model.
+
+    avlim : 2-tuple, optional
+        The lower and upper bound where the reddened photometry is reliable.
+        Default is `(0., 6.)`.
+
+    resid : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        Residuals between the data and models.
+        If not provided, this will be computed.
+
+    mags : `~numpy.ndarray` of shape `(Nfilt)`, optional
+        Observed data values in magnitudes.
+
+    mags_var : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`, optional
+        Associated (Normal) errors on the observed values compared to the
+        models in magnitudes.
+
+    stepsize : float or `~numpy.ndarray`, optional
+        The stepsize (in units of the computed gradient). Default is `1.`.
+
+    Returns
+    -------
+    models_new : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        New model predictions. Always returned in flux densities.
+
+    rvecs_new : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        New reddening vectors. Always returned in flux densities.
+
+    scale : `~numpy.ndarray` of shape `(Nmodel)`, optional
+        The best-fit scale factor.
+
+    Av : `~numpy.ndarray` of shape `(Nmodel)`, optional
+        The best-fit reddening.
+
+    ds2 : `~numpy.ndarray` of shape `(Nmodel)`, optional
+        The second-derivative of the log-likelihood with respect to `s`
+        around `s_ML` and `Av_ML`.
+
+    da2 : `~numpy.ndarray` of shape `(Nmodel)`, optional
+        The second-derivative of the log-likelihood with respect to `Delta_Av`
+        around `s_ML` and `Av_ML`.
+
+    dsda : `~numpy.ndarray` of shape `(Nmodel)`, optional
+        The mixed-derivative of the log-likelihood with respect to `s` and
+        `Delta_Av` around `s_ML` and `Av_ML`.
+
+    """
+
+    # Compute residuals.
+    if resid is None:
+        if mags is not None and mags_var is not None:
+            resid = mags - models
+        else:
+            resid = data - models
+
+    # First fit dAv.
+    if mags is not None and mags_var is not None:
+        # If our data is in magnitudes, our model is `M + dAv*R + s`.
+        # The solution can be solved explicitly as linear system for (s, dAv).
+
+        # Derive partial derivatives.
+        s_den = np.sum(tot_mask / mags_var, axis=1)
+        a_den = np.sum(tot_mask * np.square(rvecs) / mags_var, axis=1)
+        sa_mix = np.sum(tot_mask * rvecs / mags_var, axis=1)
+
+        # Compute residual terms.
+        resid_s = np.sum(tot_mask * resid / mags_var, axis=1)
+        resid_a = np.sum(tot_mask * resid * rvecs / mags_var, axis=1)
+
+        # Compute determinants (normalization terms).
+        sa_idet = 1. / (s_den * a_den - sa_mix**2)
+
+        # Compute ML solution for dAv.
+        dav = sa_idet * (s_den * resid_a - sa_mix * resid_s)
+    else:
+        # If our data is in flux densities, our model is `s*F - dAv*s*R`.
+        # The solution can be solved explicitly as linear system for (s, s*dAv)
+        # and converted back to dAv from s_ML. However, given a good guess
+        # for s and Av it is fine to instead just iterate between the two.
+
+        # Derive ML Delta_Av (`dav`) between data and models.
+        a_num = np.sum(tot_mask * rvecs * resid / tot_var, axis=1)
+        a_den = np.sum(tot_mask * np.square(rvecs) / tot_var, axis=1)
+        dav = a_num / a_den
+
+    # Adjust dAv based on the provided stepsize.
+    dav *= stepsize
+
+    # Prevent Av from sliding off the provided bounds.
+    dav_low, dav_high = avlim[0] - av, avlim[1] - av
+    lsel, hsel = dav < dav_low, dav > dav_high
+    dav[lsel] = dav_low[lsel]
+    dav[hsel] = dav_high[hsel]
+
+    # Recompute models with new Av.
+    av += dav
+    models, rvecs = get_seds(mag_coeffs, av=av, return_rvec=True,
+                             return_flux=True)
+
+    # Derive scale-factors (`scale`) between data and models.
+    s_num = np.sum(tot_mask * models * data[None, :] / tot_var, axis=1)
+    s_den = np.sum(tot_mask * np.square(models) / tot_var, axis=1)
+    scale = s_num / s_den  # ML scalefactor
+    scale[scale <= 0.] = 1e-20  # must be non-negative
+
+    # Rescale models.
+    models *= scale[:, None]
+
+    # Derive cross-term.
+    sa_mix = np.sum(tot_mask * rvecs * (resid - models) / tot_var, axis=1)
+
+    # Rescale reddening vector.
+    rvecs *= scale[:, None]
+
+    return models, rvecs, scale, av, s_den, a_den, sa_mix
 
 
 class BruteForce():
@@ -280,7 +380,7 @@ class BruteForce():
     """
 
     def __init__(self, models, models_labels, models_params=None,
-                 avgrid=None, avlim=(0., 6.)):
+                 avlim=(0., 6.)):
         """
         Load the model data into memory.
 
@@ -296,10 +396,6 @@ class BruteForce():
         models_params : `~numpy.ndarray` of shape `(Nmodel, Nparams)`, optional
             Output parameters for the models. These were output while
             constructing the grid based on the input labels.
-
-        avgrid : `~numpy.ndarray` of shape `(Nav)`, optional
-            A grid of Av values. If provided, these will be used to precompute
-            a grid of SEDS used to initialize the Av values used when fitting.
 
         avlim : 2-tuple, optional
             The bounds where Av predictions are reliable.
@@ -318,17 +414,6 @@ class BruteForce():
             self.NPARAMS = 0
         self.models_params = models_params
         self.avlim = avlim
-
-        # Create rough SED grid in Av.
-        if avgrid is not None:
-            self.models_avgrid = np.array([get_seds(models,
-                                                    np.full(self.NMODEL, a),
-                                                    return_rvec=False,
-                                                    return_flux=True)
-                                           for a in avgrid])
-        else:
-            self.models_avgrid = None
-        self.avgrid = avgrid
 
     def fit(self, data, data_err, data_mask, data_labels, save_file,
             parallax=None, parallax_err=None, Nmc_prior=150,
@@ -629,8 +714,7 @@ class BruteForce():
 
         # Fit data.
         for i, (x, xe, xm) in enumerate(zip(data, data_err, data_mask)):
-            results = loglike(x, xe, xm, self.models, self.models_avgrid,
-                              self.avgrid, self.avlim,
+            results = loglike(x, xe, xm, self.models, self.avlim,
                               logl_dim_prior=logl_dim_prior,
                               ltol=ltol, wt_thresh=ltol_subthresh,
                               return_vals=True)
