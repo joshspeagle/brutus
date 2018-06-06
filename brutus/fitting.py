@@ -35,11 +35,11 @@ def get_seds(mag_coeffs, av, return_rvec=False, return_flux=False):
 
     Parameters
     ----------
-    mag_coeffs : `~numpy.ndarray` of shape (Nmodels, Nbands, Ncoeffs)
+    mag_coeffs : `~numpy.ndarray` of shape `(Nmodels, Nbands, Ncoeffs)`
         Array of magnitude polynomial coefficients used to generate
         reddened photometry.
 
-    av : `~numpy.ndarray` of shape (Nmodels)
+    av : `~numpy.ndarray` of shape `(Nmodels)`
         Array of dust attenuation values photometry should be predicted for.
 
     return_rvec : bool, optional
@@ -52,10 +52,10 @@ def get_seds(mag_coeffs, av, return_rvec=False, return_flux=False):
 
     Returns
     -------
-    seds : `~numpy.ndarray` of shape (Nmodels, Nbands)
+    seds : `~numpy.ndarray` of shape `(Nmodels, Nbands)`
         Reddened SEDs.
 
-    rvecs : `~numpy.ndarray` of shape (Nmodels, Nbands), optional
+    rvecs : `~numpy.ndarray` of shape `(Nmodels, Nbands)`, optional
         Differential reddening vectors.
 
     """
@@ -92,24 +92,24 @@ def loglike(data, data_err, data_mask, mag_coeffs,
 
     Parameters
     ----------
-    data : `~numpy.ndarray` of shape (Nfilt)
+    data : `~numpy.ndarray` of shape `(Nfilt)`
         Observed data values.
 
-    data_err : `~numpy.ndarray` of shape (Nfilt)
+    data_err : `~numpy.ndarray` of shape `(Nfilt)`
         Associated (Normal) errors on the observed values.
 
-    data_mask : `~numpy.ndarray` of shape (Nfilt)
+    data_mask : `~numpy.ndarray` of shape `(Nfilt)`
         Binary mask (0/1) indicating whether the data was observed.
 
-    mag_coeffs : `~numpy.ndarray` of shape (Nmodel, Nfilt, Ncoef)
+    mag_coeffs : `~numpy.ndarray` of shape `(Nmodel, Nfilt, Ncoef)`
         Magnitude coefficients used to compute reddened photometry for a given
         model.
 
-    models_avgrid : `~numpy.ndarray` of shape (Nav, Nmodel, Nfilt), optional
+    models_avgrid : `~numpy.ndarray` of shape `(Nav, Nmodel, Nfilt)`, optional
         Precomputed SEDs (in flux densities) over a grid in Av. If provided,
         will be used to initialize the initial Av guess.
 
-    avgrid : `~numpy.ndarray` of shape (Nav), optional
+    avgrid : `~numpy.ndarray` of shape `(Nav)`, optional
         The corresponding Av grid used to compute the SEDs in `models_avgrid`.
 
     avlim : 2-tuple, optional
@@ -135,30 +135,30 @@ def loglike(data, data_err, data_mask, mag_coeffs,
 
     Returns
     -------
-    lnlike : `~numpy.ndarray` of shape (Nmodel)
+    lnlike : `~numpy.ndarray` of shape `(Nmodel)`
         Log-likelihood values.
 
-    Ndim : `~numpy.ndarray` of shape (Nmodel)
+    Ndim : `~numpy.ndarray` of shape `(Nmodel)`
         Number of observations used in the fit (dimensionality).
 
-    chi2 : `~numpy.ndarray` of shape (Nmodel)
+    chi2 : `~numpy.ndarray` of shape `(Nmodel)`
         Chi-square values used to compute the log-likelihood.
 
-    scale : `~numpy.ndarray` of shape (Nmodel), optional
+    scale : `~numpy.ndarray` of shape `(Nmodel)`, optional
         The best-fit scale factor.
 
-    Av : `~numpy.ndarray` of shape (Nmodel), optional
+    Av : `~numpy.ndarray` of shape `(Nmodel)`, optional
         The best-fit reddening.
 
-    ds2 : `~numpy.ndarray` of shape (Nmodel), optional
+    ds2 : `~numpy.ndarray` of shape `(Nmodel)`, optional
         The second-derivative of the log-likelihood with respect to `s`
         around `s_ML` and `Av_ML`.
 
-    da2 : `~numpy.ndarray` of shape (Nmodel), optional
+    da2 : `~numpy.ndarray` of shape `(Nmodel)`, optional
         The second-derivative of the log-likelihood with respect to `Delta_Av`
         around `s_ML` and `Av_ML`.
 
-    dsda : `~numpy.ndarray` of shape (Nmodel), optional
+    dsda : `~numpy.ndarray` of shape `(Nmodel)`, optional
         The mixed-derivative of the log-likelihood with respect to `s` and
         `Delta_Av` around `s_ML` and `Av_ML`.
 
@@ -286,18 +286,18 @@ class BruteForce():
 
         Parameters
         ----------
-        models : `~numpy.ndarray` of shape (Nmodel, Nfilt, Ncoef)
+        models : `~numpy.ndarray` of shape `(Nmodel, Nfilt, Ncoef)`
             Magnitude coefficients used to compute reddened photometry over
             the desired bands for all models on the grid.
 
-        models_labels : `~numpy.ndarray` of shape (Nmodel, Nlabels)
+        models_labels : `~numpy.ndarray` of shape `(Nmodel, Nlabels)`
             Labels corresponding to each model on the grid.
 
-        models_params : `~numpy.ndarray` of shape (Nmodel, Nparams), optional
+        models_params : `~numpy.ndarray` of shape `(Nmodel, Nparams)`, optional
             Output parameters for the models. These were output while
             constructing the grid based on the input labels.
 
-        avgrid : `~numpy.ndarray` of shape (Nav), optional
+        avgrid : `~numpy.ndarray` of shape `(Nav)`, optional
             A grid of Av values. If provided, these will be used to precompute
             a grid of SEDS used to initialize the Av values used when fitting.
 
@@ -342,25 +342,25 @@ class BruteForce():
 
         Parameters
         ----------
-        data : `~numpy.ndarray` of shape (Ndata, Nfilt)
+        data : `~numpy.ndarray` of shape `(Ndata, Nfilt)`
             Observed data values.
 
-        data_err : `~numpy.ndarray` of shape (Ndata, Nfilt)
+        data_err : `~numpy.ndarray` of shape `(Ndata, Nfilt)`
             Associated errors on the data values.
 
-        data_mask : `~numpy.ndarray` of shape (Ndata, Nfilt)
+        data_mask : `~numpy.ndarray` of shape `(Ndata, Nfilt)`
             Binary mask (0/1) indicating whether the data value was observed.
 
-        data_labels : `~numpy.ndarray` of shape (Ndata, Nlabels)
+        data_labels : `~numpy.ndarray` of shape `(Ndata, Nlabels)`
             Labels for the data to be stored during runtime.
 
         save_file : str, optional
             File where results will be written out in HDF5 format.
 
-        parallax : `~numpy.ndarray` of shape (Ndata), optional
+        parallax : `~numpy.ndarray` of shape `(Ndata)`, optional
             Parallax measurements to be used as a prior.
 
-        parallax_err : `~numpy.ndarray` of shape (Ndata), optional
+        parallax_err : `~numpy.ndarray` of shape `(Ndata)`, optional
             Errors on the parallax measurements. Must be provided along with
             `parallax`.
 
@@ -368,7 +368,7 @@ class BruteForce():
             The number of Monte Carlo realizations used to estimate the
             integral over the prior. Default is `150`.
 
-        lnprior : `~numpy.ndarray` of shape (Ndata, Nfilt), optional
+        lnprior : `~numpy.ndarray` of shape `(Ndata, Nfilt)`, optional
             Log-prior grid to be used. If not provided, this will default
             to a Kroupa IMF prior in initial mass (`'mini'`) and
             uniform priors in age, metallicity, and dust.
@@ -401,7 +401,7 @@ class BruteForce():
             The log-distsance prior function to be applied. If not provided,
             this will default to the galactic model from Green et al. (2014).
 
-        data_coords : `~numpy.ndarray` of shape (Ndata, 2), optional
+        data_coords : `~numpy.ndarray` of shape `(Ndata, 2)`, optional
             The galactic `(l, b)` coordinates for the objects that are being
             fit. These are passed to `lndistprior` when constructing the
             distance prior.
@@ -531,19 +531,19 @@ class BruteForce():
 
         Parameters
         ----------
-        data : `~numpy.ndarray` of shape (Ndata, Nfilt)
+        data : `~numpy.ndarray` of shape `(Ndata, Nfilt)`
             Model values.
 
-        data_err : `~numpy.ndarray` of shape (Ndata, Nfilt)
+        data_err : `~numpy.ndarray` of shape `(Ndata, Nfilt)`
             Associated errors on the data values.
 
-        data_mask : `~numpy.ndarray` of shape (Ndata, Nfilt)
+        data_mask : `~numpy.ndarray` of shape `(Ndata, Nfilt)`
             Binary mask (0/1) indicating whether the data value was observed.
 
-        parallax : `~numpy.ndarray` of shape (Ndata), optional
+        parallax : `~numpy.ndarray` of shape `(Ndata)`, optional
             Parallax measurements to be used as a prior.
 
-        parallax_err : `~numpy.ndarray` of shape (Ndata), optional
+        parallax_err : `~numpy.ndarray` of shape `(Ndata)`, optional
             Errors on the parallax measurements. Must be provided along with
             `parallax`.
 
@@ -551,7 +551,7 @@ class BruteForce():
             The number of Monte Carlo realizations used to estimate the
             integral over the prior. Default is `150`.
 
-        lnprior : `~numpy.ndarray` of shape (Ndata, Nfilt), optional
+        lnprior : `~numpy.ndarray` of shape `(Ndata, Nfilt)`, optional
             Log-prior grid to be used. If not provided, will default
             to `0.`.
 
@@ -575,7 +575,7 @@ class BruteForce():
             The log-distsance prior function to be applied. If not provided,
             this will default to the galactic model from Green et al. (2014).
 
-        data_coords : `~numpy.ndarray` of shape (Ndata, 2), optional
+        data_coords : `~numpy.ndarray` of shape `(Ndata, 2)`, optional
             The galactic `(l, b)` coordinates for the objects that are being
             fit. These are passed to `lndistprior` when constructing the
             distance prior.

@@ -49,18 +49,18 @@ def _quantile(x, q, weights=None):
 
     Parameters
     ----------
-    x : `~numpy.ndarray` with shape (nsamps,)
+    x : `~numpy.ndarray` with shape `(nsamps,)`
         Input samples.
 
-    q : `~numpy.ndarray` with shape (nquantiles,)
+    q : `~numpy.ndarray` with shape `(nquantiles,)`
        The list of quantiles to compute from `[0., 1.]`.
 
-    weights : `~numpy.ndarray` with shape (nsamps,), optional
+    weights : `~numpy.ndarray` with shape `(nsamps,)`, optional
         The associated weight from each sample.
 
     Returns
     -------
-    quantiles : `~numpy.ndarray` with shape (nquantiles,)
+    quantiles : `~numpy.ndarray` with shape `(nquantiles,)`
         The weighted sample quantiles computed at `q`.
 
     """
@@ -106,20 +106,20 @@ def cornerplot(idxs, scales, avs, covs_sa, params, lndistprior=None,
 
     Parameters
     ----------
-    idxs : `~numpy.ndarray` of shape (Nsamps)
+    idxs : `~numpy.ndarray` of shape `(Nsamps)`
         An array of resampled indices corresponding to the set of models used
         to fit the data.
 
-    scales : `~numpy.ndarray` of shape (Nsamps)
+    scales : `~numpy.ndarray` of shape `(Nsamps)`
         An array of scale factors derived between the model and the data.
 
-    avs : `~numpy.ndarray` of shape (Nsamps)
+    avs : `~numpy.ndarray` of shape `(Nsamps)`
         An array of reddenings derived between the model and the data.
 
-    covs_sa : `~numpy.ndarray` of shape (Nsamps, 2, 2)
+    covs_sa : `~numpy.ndarray` of shape `(Nsamps, 2, 2)`
         An array of covariance matrices corresponding to `scales` and `avs`.
 
-    params : structured `~numpy.ndarray` of length (Nmodels)
+    params : structured `~numpy.ndarray` with shape `(Nmodels,)`
         Set of parameters corresponding to the input set of models.
 
     lndistprior : func, optional
@@ -133,7 +133,7 @@ def cornerplot(idxs, scales, avs, covs_sa, params, lndistprior=None,
     avlim : 2-tuple, optional
         The Av limits used to truncate results. Default is `(0., 6.)`.
 
-    weights : `~numpy.ndarray` of shape (Nsamps), optional
+    weights : `~numpy.ndarray` of shape `(Nsamps)`, optional
         An optional set of importance weights used to reweight the samples.
 
     parallax : float, optional
@@ -164,7 +164,7 @@ def cornerplot(idxs, scales, avs, covs_sa, params, lndistprior=None,
         Keyword arguments used when plotting the distance prior passed to
         `fill_between`.
 
-    span : iterable with shape (ndim,), optional
+    span : iterable with shape `(ndim,)`, optional
         A list where each element is either a length-2 tuple containing
         lower and upper bounds or a float from `(0., 1.]` giving the
         fraction of (weighted) samples to include. If a fraction is provided,
@@ -179,12 +179,12 @@ def cornerplot(idxs, scales, avs, covs_sa, params, lndistprior=None,
         posteriors as vertical dashed lines. Default is `[0.16, 0.5, 0.84]`
         (spanning the 68%/1-sigma credible interval).
 
-    color : str or iterable with shape (ndim,), optional
+    color : str or iterable with shape `(ndim,)`, optional
         A `~matplotlib`-style color (either a single color or a different
         value for each subplot) used when plotting the histograms.
         Default is `'black'`.
 
-    smooth : float or iterable with shape (ndim,), optional
+    smooth : float or iterable with shape `(ndim,)`, optional
         The standard deviation (either a single value or a different value for
         each subplot) for the Gaussian kernel used to smooth the 1-D and 2-D
         marginalized posteriors, expressed as a fraction of the span.
@@ -198,7 +198,7 @@ def cornerplot(idxs, scales, avs, covs_sa, params, lndistprior=None,
     hist2d_kwargs : dict, optional
         Extra keyword arguments to send to the 2-D (smoothed) histograms.
 
-    labels : iterable with shape (ndim,), optional
+    labels : iterable with shape `(ndim,)`, optional
         A list of names for each parameter. If not provided, the names will
         be taken from `params.dtype.names`.
 
@@ -221,12 +221,12 @@ def cornerplot(idxs, scales, avs, covs_sa, params, lndistprior=None,
         Extra keyword arguments that will be sent to the
         `~matplotlib.axes.Axes.set_title` command.
 
-    truths : iterable with shape (ndim,), optional
+    truths : iterable with shape `(ndim,)`, optional
         A list of reference values that will be overplotted on the traces and
         marginalized 1-D posteriors as solid horizontal/vertical lines.
         Individual values can be exempt using `None`. Default is `None`.
 
-    truth_color : str or iterable with shape (ndim,), optional
+    truth_color : str or iterable with shape `(ndim,)`, optional
         A `~matplotlib`-style color (either a single color or a different
         value for each subplot) used when plotting `truths`.
         Default is `'red'`.
@@ -585,13 +585,13 @@ def _hist2d(x, y, smooth=0.02, span=None, weights=None, levels=None,
 
     Parameters
     ----------
-    x : interable with shape (nsamps,)
+    x : interable with shape `(nsamps,)`
        Sample positions in the first dimension.
 
-    y : iterable with shape (nsamps,)
+    y : iterable with shape `(nsamps,)`
        Sample positions in the second dimension.
 
-    span : iterable with shape (ndim,), optional
+    span : iterable with shape `(ndim,)`, optional
         A list where each element is either a length-2 tuple containing
         lower and upper bounds or a float from `(0., 1.]` giving the
         fraction of (weighted) samples to include. If a fraction is provided,
@@ -601,7 +601,7 @@ def _hist2d(x, y, smooth=0.02, span=None, weights=None, levels=None,
 
         Default is `0.999999426697` (5-sigma credible interval).
 
-    weights : iterable with shape (nsamps,)
+    weights : iterable with shape `(nsamps,)`
         Weights associated with the samples. Default is `None` (no weights).
 
     levels : iterable, optional
