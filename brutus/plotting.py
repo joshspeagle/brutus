@@ -40,7 +40,7 @@ except:
     float_type = float
     int_type = int
 
-__all__ = ["_quantile", "cornerplot", "_hist2d"]
+__all__ = ["_quantile", "_draw_sav", "cornerplot", "dist_vs_red", "_hist2d"]
 
 
 def _quantile(x, q, weights=None):
@@ -88,6 +88,55 @@ def _quantile(x, q, weights=None):
         cdf = np.append(0, cdf)  # ensure proper span
         quantiles = np.interp(q, cdf, x[idx]).tolist()
         return quantiles
+
+
+def _draw_sav(scales, avs, covs_sa, ndraws=500, avlim=(0., 6.), rstate=None):
+    """
+    Generate random draws from the joint scale and Av posterior for a
+    given object.
+
+    Parameters
+    ----------
+    scales : `~numpy.ndarray` of shape `(Nsamps)`
+        An array of scale factors derived between the model and the data.
+
+    avs : `~numpy.ndarray` of shape `(Nsamps)`
+        An array of reddenings derived between the model and the data.
+
+    covs_sa : `~numpy.ndarray` of shape `(Nsamps, 2, 2)`
+        An array of covariance matrices corresponding to `scales` and `avs`.
+
+    ndraws : int, optional
+        The number of desired random draws. Default is `500`.
+
+    avlim : 2-tuple, optional
+        The Av limits used to truncate results. Default is `(0., 6.)`.
+
+    rstate : `~numpy.random.RandomState`, optional
+        `~numpy.random.RandomState` instance.
+
+    """
+
+    if rstate is None:
+        rstate = np.random
+
+    # Generate realizations for each (scale, av, cov_sa) set.
+    nsamps = len(scales)
+    sdraws, adraws = np.zeros((nsamps, ndraws)), np.zeros((nsamps, ndraws))
+    for i, (s, a, c) in enumerate(zip(scales, avs, covs_sa)):
+        s_temp, a_temp = [], []
+        # Loop is just in case a significant chunk of the distribution
+        # falls outside of the bounds.
+        while len(s_temp) < ndraws:
+            s_mc, a_mc = rstate.multivariate_normal(np.array([s, a]), c,
+                                                    size=ndraws*4).T
+            inbounds = ((s_mc >= 0.) & (a_mc >= avlim[0]) &
+                        (a_mc <= avlim[1]))  # flag out-of-bounds draws
+            s_mc, a_mc = s_mc[inbounds], a_mc[inbounds]
+            s_temp, a_temp = np.append(s_temp, s_mc), np.append(a_temp, a_mc)
+        sdraws[i], adraws[i] = s_temp[:ndraws], a_temp[:ndraws]
+
+    return sdraws, adraws
 
 
 def cornerplot(idxs, scales, avs, covs_sa, params, lndistprior=None,
@@ -188,7 +237,7 @@ def cornerplot(idxs, scales, avs, covs_sa, params, lndistprior=None,
         The standard deviation (either a single value or a different value for
         each subplot) for the Gaussian kernel used to smooth the 1-D and 2-D
         marginalized posteriors, expressed as a fraction of the span.
-        Default is `0.05` (5% smoothing). If an integer is provided instead,
+        Default is `0.035` (3.5% smoothing). If an integer is provided instead,
         this will instead default to a simple (weighted) histogram with
         `bins=smooth`.
 
@@ -319,17 +368,8 @@ def cornerplot(idxs, scales, avs, covs_sa, params, lndistprior=None,
 
     # Add in parallax and Av realizations.
     nsamps = len(idxs)
-    sdraws, adraws = np.zeros((nsamps, Nr)) - 99, np.zeros((nsamps, Nr)) - 99
-    for i, (s, a, c) in enumerate(zip(scales, avs, covs_sa)):
-        s_temp, a_temp = [], []
-        while len(s_temp) < Nr:
-            s_mc, a_mc = rstate.multivariate_normal(np.array([s, a]), c,
-                                                    size=Nr*4).T
-            inbounds = ((s_mc >= 0.) & (a_mc >= avlim[0]) &
-                        (a_mc <= avlim[1]))
-            s_mc, a_mc = s_mc[inbounds], a_mc[inbounds]
-            s_temp, a_temp = np.append(s_temp, s_mc), np.append(a_temp, a_mc)
-        sdraws[i], adraws[i] = s_temp[:Nr], a_temp[:Nr]
+    sdraws, adraws = _draw_sav(scales, avs, covs_sa, ndraws=Nr, avlim=avlim,
+                               rstate=rstate)
     pdraws = np.sqrt(sdraws)
     ddraws = 1. / pdraws
 
@@ -572,6 +612,206 @@ def cornerplot(idxs, scales, avs, covs_sa, params, lndistprior=None,
                                    **truth_kwargs)
 
     return (fig, axes)
+
+
+def dist_vs_red(scales, avs, covs_sa, Rv=3.3, dist_type='distance_modulus',
+                lndistprior=None, coord=None, avlim=(0., 6.), weights=None,
+                parallax=None, parallax_err=None, Nr=300,
+                cmap='Blues', bins=300, span=None, smooth=0.01,
+                plot_kwargs=None, truths=None, truth_color='red',
+                truth_kwargs=None, rstate=None):
+    """
+    Generate a 2-D plot
+
+    Parameters
+    ----------
+    scales : `~numpy.ndarray` of shape `(Nsamps)`
+        An array of scale factors derived between the model and the data.
+
+    avs : `~numpy.ndarray` of shape `(Nsamps)`
+        An array of reddenings derived between the model and the data.
+
+    covs_sa : `~numpy.ndarray` of shape `(Nsamps, 2, 2)`
+        An array of covariance matrices corresponding to `scales` and `avs`.
+
+    Rv : float, optional
+        If provided, will convert from Av to E(B-V) when plotting. Default
+        is `3.3`.
+
+    dist_type : str, optional
+        The distance format to be plotted. Options include `'parallax'`,
+        `'scale'`, `'distance'`, and `'distance_modulus'`.
+        Default is `'distance_modulus`.
+
+    lndistprior : func, optional
+        The log-distsance prior function used. If not provided, the galactic
+        model from Green et al. (2014) will be assumed.
+
+    coord : 2-tuple, optional
+        The galactic `(l, b)` coordinates for the object, which is passed to
+        `lndistprior`.
+
+    avlim : 2-tuple, optional
+        The Av limits used to truncate results. Default is `(0., 6.)`.
+
+    weights : `~numpy.ndarray` of shape `(Nsamps)`, optional
+        An optional set of importance weights used to reweight the samples.
+
+    parallax : float, optional
+        The parallax estimate for the source.
+
+    parallax_err : float, optional
+        The parallax error.
+
+    Nr : int, optional
+        The number of Monte Carlo realizations used when sampling using the
+        provided parallax prior. Default is `300`.
+
+    cmap : str, optional
+        The colormap used when plotting. Default is `'Blues'`.
+
+    bins : int or list of ints with length `(ndim,)`, optional
+        The number of bins to be used in each dimension. Default is `300`.
+
+    span : iterable with shape `(ndim, 2)`, optional
+        A list where each element is a length-2 tuple containing
+        lower and upper bounds. If not provided, the x-axis will use the
+        provided Av bounds while the y-axis will span `(4., 18.)` in
+        distance modulus (both appropriately transformed).
+
+    smooth : float or list of floats with shape `(ndim,)`, optional
+        The standard deviation (either a single value or a different value for
+        each subplot) for the Gaussian kernel used to smooth the 1-D and 2-D
+        marginalized posteriors, expressed as a fraction of the span.
+        Default is `0.01` (1% smoothing).
+
+    plot_kwargs : dict, optional
+        Extra keyword arguments to be used when plotting the smoothed
+        2-D histograms.
+
+    truths : iterable with shape `(ndim,)`, optional
+        A list of reference values that will be overplotted on the traces and
+        marginalized 1-D posteriors as solid horizontal/vertical lines.
+        Individual values can be exempt using `None`. Default is `None`.
+
+    truth_color : str or iterable with shape `(ndim,)`, optional
+        A `~matplotlib`-style color (either a single color or a different
+        value for each subplot) used when plotting `truths`.
+        Default is `'red'`.
+
+    truth_kwargs : dict, optional
+        Extra keyword arguments that will be used for plotting the vertical
+        and horizontal lines with `truths`.
+
+    rstate : `~numpy.random.RandomState`, optional
+        `~numpy.random.RandomState` instance.
+
+    Returns
+    -------
+    hist2d : (counts, xedges, yedges, `~matplotlib.figure.Image`)
+        Output 2-D histogram.
+
+    """
+
+    # Initialize values.
+    if truth_kwargs is None:
+        truth_kwargs = dict()
+    if plot_kwargs is None:
+        plot_kwargs = dict()
+    if weights is None:
+        weights = np.ones_like(scales, dtype='float')
+    weights = np.repeat(weights, Nr)
+    if rstate is None:
+        rstate = np.random
+    if lndistprior is None and coord is None:
+        raise ValueError("`coord` must be passed if the default distance "
+                         "prior was used.")
+    if lndistprior is None:
+        lndistprior = gal_lnprior
+
+    # Set up axes and labels.
+    if dist_type not in ['parallax', 'scale', 'distance', 'distance_modulus']:
+        raise ValueError("The provided `dist_type` is not valid.")
+    if span is None:
+        avlims = np.array([0., 6.])
+        dlims = 10**(np.array([4., 20.]) / 5. - 2.)
+    try:
+        xbin, ybin = bins
+    except:
+        xbin = ybin = bins
+    if Rv is not None:
+        xlabel = r'$E(B-V)$ [mag]'
+        xlims = np.array(avlim) / Rv
+    else:
+        xlabel = r'$A_v$ [mag]'
+        xlims = avlim
+    if dist_type == 'scale':
+        ylabel = r'$s$'
+        ylims = (1. / dlims[::-1])**2
+    elif dist_type == 'parallax':
+        ylabel = r'$\pi$ [mas]'
+        ylims = 1. / dlims[::-1]
+    elif dist_type == 'distance':
+        ylabel = r'$d$ [kpc]'
+        ylims = dlims
+    elif dist_type == 'distance_modulus':
+        ylabel = r'$\mu$'
+        ylims = 5. * np.log10(dlims) + 10.
+    xbins = np.linspace(xlims[0], xlims[1], xbin+1)
+    ybins = np.linspace(ylims[0], ylims[1], ybin+1)
+    dx, dy = xbins[1] - xbins[0], ybins[1] - ybins[0]
+
+    # Set smoothing.
+    try:
+        xsmooth = smooth[0] * (xlims[1] - xlims[0])
+        ysmooth = smooth[1] * (ylims[1] - ylims[0])
+    except:
+        xsmooth = smooth * (xlims[1] - xlims[0])
+        ysmooth = smooth * (ylims[1] - ylims[0])
+
+    # Set defaults.
+    truth_kwargs['linestyle'] = truth_kwargs.get('linestyle', 'solid')
+    truth_kwargs['linewidth'] = truth_kwargs.get('linewidth', 2)
+    truth_kwargs['alpha'] = truth_kwargs.get('alpha', 0.7)
+
+    # Generate parallax and Av realizations.
+    nsamps = len(scales)
+    covs_sa_smooth = np.array(covs_sa)
+    covs_sa_smooth[:, 0, 0] += ysmooth**2
+    covs_sa_smooth[:, 1, 1] += xsmooth**2
+    sdraws, adraws = _draw_sav(scales, avs, covs_sa_smooth, ndraws=Nr,
+                               avlim=avlim, rstate=rstate)
+    pdraws = np.sqrt(sdraws)
+    ddraws = 1. / pdraws
+    dmdraws = 5. * np.log10(ddraws) + 10.
+
+    # Re-apply distance and parallax priors to realizations.
+    lnp_draws = lndistprior(ddraws, coord)
+    if parallax is not None and parallax_err is not None:
+        lnp_draws += parallax_lnprior(pdraws, parallax, parallax_err)
+    lnp = logsumexp(lnp_draws, axis=1)
+    pwt = np.exp(lnp_draws - lnp[:, None])
+    pwt /= pwt.sum(axis=1)[:, None]
+    weights *= pwt.flatten()
+
+    # Grab draws.
+    xdraws = adraws.flatten()
+    if Rv is not None:
+        xdraws /= Rv
+    if dist_type == 'scale':
+        ydraws = sdraws.flatten()
+    elif dist_type == 'parallax':
+        ydraws = pdraws.flatten()
+    elif dist_type == 'distance':
+        ydraws = ddraws.flatten()
+    elif dist_type == 'distance_modulus':
+        ydraws = dmdraws.flatten()
+
+    # Generate 2-D histogram.
+    out = plt.hist2d(xdraws, ydraws, bins=(xbins, ybins), weights=weights,
+                     cmap=cmap, **plot_kwargs)
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
 
 
 def _hist2d(x, y, smooth=0.02, span=None, weights=None, levels=None,
