@@ -740,23 +740,23 @@ def dist_vs_red(scales, avs, covs_sa, Rv=3.3, dist_type='distance_modulus',
     except:
         xbin = ybin = bins
     if Rv is not None:
-        xlabel = r'$E(B-V)$ [mag]'
-        xlims = np.array(avlim) / Rv
+        ylabel = r'$E(B-V)$ [mag]'
+        ylims = np.array(avlim) / Rv
     else:
-        xlabel = r'$A_v$ [mag]'
-        xlims = avlim
+        ylabel = r'$A_v$ [mag]'
+        ylims = avlim
     if dist_type == 'scale':
-        ylabel = r'$s$'
-        ylims = (1. / dlims[::-1])**2
+        xlabel = r'$s$'
+        xlims = (1. / dlims[::-1])**2
     elif dist_type == 'parallax':
-        ylabel = r'$\pi$ [mas]'
-        ylims = 1. / dlims[::-1]
+        xlabel = r'$\pi$ [mas]'
+        xlims = 1. / dlims[::-1]
     elif dist_type == 'distance':
-        ylabel = r'$d$ [kpc]'
-        ylims = dlims
+        xlabel = r'$d$ [kpc]'
+        xlims = dlims
     elif dist_type == 'distance_modulus':
-        ylabel = r'$\mu$'
-        ylims = 5. * np.log10(dlims) + 10.
+        xlabel = r'$\mu$'
+        xlims = 5. * np.log10(dlims) + 10.
     xbins = np.linspace(xlims[0], xlims[1], xbin+1)
     ybins = np.linspace(ylims[0], ylims[1], ybin+1)
     dx, dy = xbins[1] - xbins[0], ybins[1] - ybins[0]
@@ -795,17 +795,17 @@ def dist_vs_red(scales, avs, covs_sa, Rv=3.3, dist_type='distance_modulus',
     weights *= pwt.flatten()
 
     # Grab draws.
-    xdraws = adraws.flatten()
+    ydraws = adraws.flatten()
     if Rv is not None:
-        xdraws /= Rv
+        ydraws /= Rv
     if dist_type == 'scale':
-        ydraws = sdraws.flatten()
+        xdraws = sdraws.flatten()
     elif dist_type == 'parallax':
-        ydraws = pdraws.flatten()
+        xdraws = pdraws.flatten()
     elif dist_type == 'distance':
-        ydraws = ddraws.flatten()
+        xdraws = ddraws.flatten()
     elif dist_type == 'distance_modulus':
-        ydraws = dmdraws.flatten()
+        xdraws = dmdraws.flatten()
 
     # Generate 2-D histogram.
     out = plt.hist2d(xdraws, ydraws, bins=(xbins, ybins), weights=weights,

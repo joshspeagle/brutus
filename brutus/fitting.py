@@ -768,9 +768,11 @@ class BruteForce():
                                        size=Nmc_prior)
                                        for s, a, c in zip(scale, av,
                                                           cov_sa)]).T
-                par_mc = np.sqrt(s_mc)
-                dist_mc = 1. / par_mc
-                lnp_mc = lndistprior(dist_mc, coord)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    par_mc = np.sqrt(s_mc)
+                    dist_mc = 1. / par_mc
+                    lnp_mc = lndistprior(dist_mc, coord)
                 if parallax is not None:
                     lnp_mc += parallax_lnprior(par_mc, p, pe)
                 # Ignore points that are out of bounds.
