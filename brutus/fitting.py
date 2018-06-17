@@ -18,6 +18,8 @@ import numpy as np
 import warnings
 import h5py
 from scipy.special import xlogy, gammaln
+from functools import partial
+import copy
 
 try:
     from scipy.special import logsumexp
@@ -26,7 +28,8 @@ except ImportError:
 
 from .pdf import *
 
-__all__ = ["get_seds", "loglike", "_optimize_fit", "BruteForce"]
+__all__ = ["get_seds", "loglike", "_optimize_fit", "BruteForce",
+           "_lnpost", "_function_wrapper"]
 
 
 def get_seds(mag_coeffs, av, return_rvec=False, return_flux=False):
@@ -379,8 +382,7 @@ class BruteForce():
 
     """
 
-    def __init__(self, models, models_labels, models_params=None,
-                 avlim=(0., 6.)):
+    def __init__(self, models, models_labels, models_params=None, pool=None):
         """
         Load the model data into memory.
 
@@ -397,9 +399,9 @@ class BruteForce():
             Output parameters for the models. These were output while
             constructing the grid based on the input labels.
 
-        avlim : 2-tuple, optional
-            The bounds where Av predictions are reliable.
-            Default is `(0., 6.)`.
+        pool : user-provided pool, optional
+            Use this pool of workers to execute operations in parallel when
+            fitting each object.
 
         """
 
@@ -413,10 +415,18 @@ class BruteForce():
         else:
             self.NPARAMS = 0
         self.models_params = models_params
-        self.avlim = avlim
+        self.pool = pool
+        if pool is None:
+            # Single core
+            self.M = map
+            self.nprocs = 1
+        else:
+            # Multiple cores
+            self.M = pool.map
+            self.nprocs = pool.size
 
     def fit(self, data, data_err, data_mask, data_labels, save_file,
-            parallax=None, parallax_err=None, Nmc_prior=150,
+            parallax=None, parallax_err=None, Nmc_prior=150, avlim=(0., 6.),
             lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4, Ndraws=2000,
             apply_agewt=True, apply_grad=True, lndistprior=None,
             data_coords=None, logl_dim_prior=True, ltol=0.02,
@@ -452,6 +462,10 @@ class BruteForce():
         Nmc_prior : int, optional
             The number of Monte Carlo realizations used to estimate the
             integral over the prior. Default is `150`.
+
+        avlim : 2-tuple, optional
+            The bounds where Av predictions are reliable.
+            Default is `(0., 6.)`.
 
         lnprior : `~numpy.ndarray` of shape `(Ndata, Nfilt)`, optional
             Log-prior grid to be used. If not provided, this will default
@@ -581,6 +595,7 @@ class BruteForce():
         for i, results in enumerate(self._fit(data, data_err, data_mask,
                                               parallax=parallax,
                                               parallax_err=parallax_err,
+                                              avlim=avlim,
                                               Nmc_prior=Nmc_prior,
                                               lnprior=lnprior,
                                               wt_thresh=wt_thresh,
@@ -613,7 +628,7 @@ class BruteForce():
         out.close()  # close output results file
 
     def _fit(self, data, data_err, data_mask,
-             parallax=None, parallax_err=None, Nmc_prior=150,
+             parallax=None, parallax_err=None, Nmc_prior=150, avlim=(0., 6.),
              lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4, Ndraws=2000,
              lndistprior=None, data_coords=None,
              logl_dim_prior=True, ltol=0.02, ltol_subthresh=0.005,
@@ -643,13 +658,17 @@ class BruteForce():
             The number of Monte Carlo realizations used to estimate the
             integral over the prior. Default is `150`.
 
+        avlim : 2-tuple, optional
+            The bounds where Av predictions are reliable.
+            Default is `(0., 6.)`.
+
         lnprior : `~numpy.ndarray` of shape `(Ndata, Nfilt)`, optional
             Log-prior grid to be used. If not provided, will default
             to `0.`.
 
         wt_thresh : float, optional
             The threshold `wt_thresh * max(y_wt)` used to ignore models
-            with (relatively) negligible weights when resampling.
+            with (relatively) negligible weights.
             Default is `1e-3`.
 
         cdf_thresh : float, optional
@@ -696,6 +715,7 @@ class BruteForce():
         """
 
         Ndata, Nmodels = len(data), self.NMODEL
+        models = np.array(self.models)
         if wt_thresh is None and cdf_thresh is None:
             wt_thresh = -np.inf  # default to no clipping/thresholding
         if rstate is None:
@@ -704,6 +724,10 @@ class BruteForce():
         if parallax is not None and parallax_err is None:
             raise ValueError("Must provide both `parallax` and "
                              "`parallax_err`.")
+        if parallax is None:
+            parallax = np.full(Ndata, np.nan)
+        if parallax_err is None:
+            parallax_err = np.full(Ndata, np.nan)
 
         # Initialize log(prior).
         if lnprior is None:
@@ -719,87 +743,272 @@ class BruteForce():
         if data_coords is None:
             data_coords = np.zeros((Ndata, 2))
 
+        # Modifications to support parallelism.
+
+        # Split up data products into `nprocs` chunks.
+        counter = 0
+        data_list = []
+        data_err_list = []
+        data_mask_list = []
+        counter_list = []
+        while counter < Ndata:
+            data_list.append(data[counter:counter+self.nprocs])
+            data_err_list.append(data_err[counter:counter+self.nprocs])
+            data_mask_list.append(data_mask[counter:counter+self.nprocs])
+            counter_list.append(np.arange(counter,
+                                          min(counter+self.nprocs, Ndata)))
+            counter += self.nprocs
+
+        # Re-define log-likelihood to deal with zipped values.
+        def _loglike_zip(z, *args, **kwargs):
+            d, e, m = z  # grab data, error, mask
+            return loglike(d, e, m, models, *args, **kwargs)
+
+        # Wrap log-likelihood with fixed kwargs.
+        loglike_kwargs = {'avlim': avlim, 'ltol': ltol,
+                          'logl_dim_prior': logl_dim_prior,
+                          'wt_thresh': ltol_subthresh,
+                          'return_vals': True}
+        _loglike = _function_wrapper(_loglike_zip, [], loglike_kwargs,
+                                     name='loglike')
+
+        # Re-define log-posterior to deal with zipped values.
+        def _logpost_zip(z, *args, **kwargs):
+            res, p, pe, c = z  # grab results, parallax/error, coord
+            return _lnpost(res, parallax=p, parallax_err=pe, coord=c,
+                           *args, **kwargs)
+
+        # Wrap log-posterior with fixed kwargs.
+        logpost_kwargs = {'Nmc_prior': Nmc_prior, 'lnprior': lnprior,
+                          'lnprior': lnprior, 'wt_thresh': wt_thresh,
+                          'cdf_thresh': cdf_thresh, 'rstate': rstate,
+                          'lndistprior': lndistprior, 'avlim': avlim}
+        _logpost = _function_wrapper(_logpost_zip, [], logpost_kwargs,
+                                     name='logpost')
+
         # Fit data.
-        for i, (x, xe, xm) in enumerate(zip(data, data_err, data_mask)):
-            results = loglike(x, xe, xm, self.models, self.avlim,
-                              logl_dim_prior=logl_dim_prior,
-                              ltol=ltol, wt_thresh=ltol_subthresh,
-                              return_vals=True)
+        for x, xe, xm, chunk in zip(data_list, data_err_list,
+                                    data_mask_list, counter_list):
 
-            lnlike, Ndim, chi2, scales, avs, ds2, da2, dsda = results
-            lnpost = lnlike + lnprior
-            pars = np.sqrt(scales)
-            dists = 1. / pars
-            coord = data_coords[i]
+            # Compute log-likelihoods optimizing over s and Av.
+            results_map = list(self.M(_loglike, zip(x, xe, xm)))
 
-            # Apply rough distance prior for clipping.
-            lnprob = lnpost + lndistprior(dists, coord)
+            # Compute posteriors.
+            lnpost_map = list(self.M(_logpost,
+                                     zip(results_map, parallax[chunk],
+                                         parallax_err[chunk],
+                                         data_coords[chunk])))
 
-            # Apply rough parallax prior for clipping.
-            if parallax is not None:
-                p, pe = parallax[i], parallax_err[i]
-                lnprob += parallax_lnprior(pars, p, pe)
+            # Extract `map`-ed results.
+            for results, (sel, lnpost) in zip(results_map, lnpost_map):
+                lnlike, Ndim, chi2, scales, avs, ds2, da2, dsda = results
 
-            # Apply thresholding.
-            if wt_thresh is not None:
-                # Use relative amplitude to threshold.
-                lwt_min = np.log(wt_thresh) + np.max(lnprob)
-                sel = np.arange(Nmodels)[lnprob > lwt_min]
-            else:
-                # Use CDF to threshold.
-                idx_sort = np.argsort(lnprob)
-                prob = np.exp(lnprob - logsumexp(lnprob))
-                cdf = np.cumsum(prob[idx_sort])
-                sel = idx_sort[cdf <= (1. - cdf_thresh)]
-            lnpost = lnpost[sel]
-            Nsel = len(sel)
+                # Compute GOF metrics.
+                chi2min = np.min(chi2[sel])
+                levid = logsumexp(lnpost)
 
-            # Generate covariance matrices for the selected fits.
-            scale, av, sinv2, ainv2, sainv = (scales[sel], avs[sel], ds2[sel],
-                                              da2[sel], dsda[sel])
-            cov_sa = np.array([np.linalg.inv(np.array([[s, sa], [sa, a]]))
-                               for s, a, sa in zip(sinv2, ainv2, sainv)])
+                # Resample.
+                wt = np.exp(lnpost - levid)
+                wt /= wt.sum()
+                sidxs = rstate.choice(sel, size=Ndraws, p=wt)
 
-            # Now actually apply distance (and parallax) priors.
-            if Nmc_prior > 0:
-                # Use Monte Carlo integration to get an estimate of the
-                # overlap integral.
-                s_mc, a_mc = np.array([mvn(np.array([s, a]), c,
-                                       size=Nmc_prior)
-                                       for s, a, c in zip(scale, av,
-                                                          cov_sa)]).T
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    par_mc = np.sqrt(s_mc)
-                    dist_mc = 1. / par_mc
-                    lnp_mc = lndistprior(dist_mc, coord)
-                if parallax is not None:
-                    lnp_mc += parallax_lnprior(par_mc, p, pe)
-                # Ignore points that are out of bounds.
-                inbounds = ((s_mc >= 0.) & (a_mc >= self.avlim[0]) &
-                            (a_mc <= self.avlim[1]))
-                lnp_mc[~inbounds] = -1e300
-                Nmc_prior_eff = np.sum(inbounds, axis=0)
-                # Compute integral.
-                lnp = logsumexp(lnp_mc, axis=0) - np.log(Nmc_prior_eff)
-            else:
-                # Just assume the maximum-likelihood estimate.
-                par = np.sqrt(scale)
-                dist = 1. / par
-                lnp = lndistprior(dist, coord)
-                if parallax is not None:
-                    lnp += parallax_lnprior(par, p, pe)
-            lnpost += lnp
+                # Grab/compute corresponding values.
+                scales, avs, ds2, da2, dsda = (scales[sidxs], avs[sidxs],
+                                               ds2[sidxs], da2[sidxs],
+                                               dsda[sidxs])
+                cov_sa = np.array([np.linalg.inv(np.array([[s, sa], [sa, a]]))
+                                   for s, a, sa in zip(ds2, da2, dsda)])
 
-            # Compute GOF metrics.
-            chi2min = np.min(chi2[sel])
-            levid = logsumexp(lnpost)
+                yield sidxs, scales, avs, cov_sa, Ndim, levid, chi2min
 
-            # Subsample.
-            wt = np.exp(lnpost - levid)
-            wt /= wt.sum()
-            idxs = rstate.choice(Nsel, size=Ndraws, p=wt)
-            sidxs = sel[idxs]
-            scale, av, cov_sa = scales[sidxs], avs[sidxs], cov_sa[idxs]
 
-            yield sidxs, scale, av, cov_sa, Ndim, levid, chi2min
+def _lnpost(results, parallax=None, parallax_err=None, coord=None,
+            Nmc_prior=150, lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4,
+            lndistprior=None, avlim=(0., 6.), rstate=None,
+            *args, **kwargs):
+    """
+    Internal function used to estimate posteriors from fits using the
+    provided priors via Monte Carlo integration.
+
+    Parameters
+    ----------
+    results : tuple of `(lnlike, Ndim, chi2, scales, avs, ds2, da2, dsda)`
+        Fits returned from `loglike` with `return_vals=True`. Ndim is
+        an integer, while the rest of the results are `~numpy.ndarray`s
+        with shape `(Nmodels,)`.
+
+    parallax : float, optional
+        Parallax measurement to be used as a prior.
+
+    parallax_err : float, optional
+        Errors on the parallax measurement. Must be provided along with
+        `parallax`.
+
+    coord : tuple of shape `(2,)`, optional
+        The galactic `(l, b)` coordinates for the object being
+        fit. These are passed to `lndistprior` when constructing the
+        distance prior.
+
+    Nmc_prior : int, optional
+        The number of Monte Carlo realizations used to estimate the
+        integral over the prior. Default is `150`.
+
+    lnprior : `~numpy.ndarray` of shape `(Ndata, Nfilt)`, optional
+        Log-prior grid to be used. If not provided, will default
+        to `0.`.
+
+    wt_thresh : float, optional
+        The threshold `wt_thresh * max(y_wt)` used to ignore models
+        with (relatively) negligible weights.
+        Default is `1e-3`.
+
+    cdf_thresh : float, optional
+        The `1 - cdf_thresh` threshold of the (sorted) CDF used to ignore
+        models with (relatively) negligible weights when resampling.
+        This option is only used when `wt_thresh=None`.
+        Default is `2e-4`.
+
+    lndistprior : func, optional
+        The log-distsance prior function to be applied. If not provided,
+        this will default to the galactic model from Green et al. (2014).
+
+    avlim : 2-tuple, optional
+        The bounds where Av predictions are reliable.
+        Default is `(0., 6.)`.
+
+    rstate : `~numpy.random.RandomState`, optional
+        `~numpy.random.RandomState` instance.
+
+    Returns
+    -------
+    sel : `~numpy.ndarray` of shape `(Nsel,)`
+        Array of indices selecting out the subset of models with reasonable
+        fits.
+
+    lnpost : `~numpy.ndarray` of shape `(Nsel,)`
+        The modified log-posteriors for the subset of models with
+        reasonable fits.
+
+    """
+
+    # Initialize values.
+    if wt_thresh is None and cdf_thresh is None:
+        wt_thresh = -np.inf  # default to no clipping/thresholding
+    if rstate is None:
+        rstate = np.random
+    mvn = rstate.multivariate_normal
+    if parallax is not None and parallax_err is None:
+        raise ValueError("Must provide both `parallax` and "
+                         "`parallax_err`.")
+    if parallax is None:
+        np.nan
+    if parallax_err is None:
+        np.nan
+
+    # Initialize log(prior).
+    if lnprior is None:
+        lnprior = 0.
+
+    # Initialize distance log(prior).
+    if lndistprior is None and coord is None:
+        raise ValueError("`coord` must be provided if using the "
+                         "default distance prior.")
+    if lndistprior is None:
+        lndistprior = gal_lnprior
+    if coord is None:
+        coord = np.zeros(2)
+
+    # Grab results.
+    lnlike, Ndim, chi2, scales, avs, ds2, da2, dsda = results
+    Nmodels = len(lnlike)
+
+    # Compute initial log-posteriors.
+    lnpost = lnlike + lnprior
+
+    # Compute naive MAP parallaxes and distances.
+    pars = np.sqrt(scales)
+    dists = 1. / pars
+
+    # Apply rough distance prior for clipping.
+    lnprob = lnpost + lndistprior(dists, coord)
+
+    # Apply rough parallax prior for clipping.
+    if parallax is not None and parallax_err is not None:
+        lnprob += parallax_lnprior(pars, parallax, parallax_err)
+
+    # Apply thresholding.
+    if wt_thresh is not None:
+        # Use relative amplitude to threshold.
+        lwt_min = np.log(wt_thresh) + np.max(lnprob)
+        sel = np.arange(Nmodels)[lnprob > lwt_min]
+    else:
+        # Use CDF to threshold.
+        idx_sort = np.argsort(lnprob)
+        prob = np.exp(lnprob - logsumexp(lnprob))
+        cdf = np.cumsum(prob[idx_sort])
+        sel = idx_sort[cdf <= (1. - cdf_thresh)]
+    lnpost = lnpost[sel]
+    Nsel = len(sel)
+
+    # Generate covariance matrices for the selected fits.
+    scale, av, sinv2, ainv2, sainv = (scales[sel], avs[sel],
+                                      ds2[sel], da2[sel],
+                                      dsda[sel])
+    cov_sa = np.array([np.linalg.inv(np.array([[s, sa], [sa, a]]))
+                       for s, a, sa in zip(sinv2, ainv2, sainv)])
+
+    # Now actually apply distance (and parallax) priors.
+    if Nmc_prior > 0:
+        # Use Monte Carlo integration to get an estimate of the
+        # overlap integral.
+        s_mc, a_mc = np.array([mvn(np.array([s, a]), c,
+                               size=Nmc_prior)
+                               for s, a, c in zip(scale, av,
+                                                  cov_sa)]).T
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            par_mc = np.sqrt(s_mc)
+            dist_mc = 1. / par_mc
+            lnp_mc = lndistprior(dist_mc, coord)
+        if parallax is not None:
+            lnp_mc += parallax_lnprior(par_mc, parallax, parallax_err)
+        # Ignore points that are out of bounds.
+        inbounds = ((s_mc >= 0.) & (a_mc >= avlim[0]) &
+                    (a_mc <= avlim[1]))
+        lnp_mc[~inbounds] = -1e300
+        Nmc_prior_eff = np.sum(inbounds, axis=0)
+        # Compute integral.
+        lnp = logsumexp(lnp_mc, axis=0) - np.log(Nmc_prior_eff)
+        lnpost += lnp
+    else:
+        # Just assume the maximum-likelihood estimate.
+        lnpost = lnprob[sel]
+
+    return sel, lnpost
+
+
+class _function_wrapper(object):
+    """
+    A hack to make functions pickleable when `args` or `kwargs` are
+    also included. Based on the implementation in
+    `emcee <http://dan.iel.fm/emcee/>`_.
+    """
+
+    def __init__(self, func, args, kwargs, name='input'):
+        self.func = func
+        self.args = args
+        self.kwargs = kwargs
+        self.name = name
+
+    def __call__(self, x):
+        try:
+            return self.func(x, *self.args, **self.kwargs)
+        except:
+            import traceback
+            print("Exception while calling {0} function:".format(self.name))
+            print("  params:", x)
+            print("  args:", self.args)
+            print("  kwargs:", self.kwargs)
+            print("  exception:")
+            traceback.print_exc()
+            raise
