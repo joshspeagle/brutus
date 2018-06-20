@@ -25,6 +25,7 @@ from scipy.stats import gaussian_kde
 from scipy.stats import truncnorm, norm
 
 from .pdf import gal_lnprior, parallax_lnprior
+from .utils import quantile, draw_sav
 
 try:
     from scipy.special import logsumexp
@@ -40,103 +41,7 @@ except:
     float_type = float
     int_type = int
 
-__all__ = ["_quantile", "_draw_sav", "cornerplot", "dist_vs_red", "_hist2d"]
-
-
-def _quantile(x, q, weights=None):
-    """
-    Compute (weighted) quantiles from an input set of samples.
-
-    Parameters
-    ----------
-    x : `~numpy.ndarray` with shape `(nsamps,)`
-        Input samples.
-
-    q : `~numpy.ndarray` with shape `(nquantiles,)`
-       The list of quantiles to compute from `[0., 1.]`.
-
-    weights : `~numpy.ndarray` with shape `(nsamps,)`, optional
-        The associated weight from each sample.
-
-    Returns
-    -------
-    quantiles : `~numpy.ndarray` with shape `(nquantiles,)`
-        The weighted sample quantiles computed at `q`.
-
-    """
-
-    # Initial check.
-    x = np.atleast_1d(x)
-    q = np.atleast_1d(q)
-
-    # Quantile check.
-    if np.any(q < 0.0) or np.any(q > 1.0):
-        raise ValueError("Quantiles must be between 0. and 1.")
-
-    if weights is None:
-        # If no weights provided, this simply calls `np.percentile`.
-        return np.percentile(x, list(100.0 * q))
-    else:
-        # If weights are provided, compute the weighted quantiles.
-        weights = np.atleast_1d(weights)
-        if len(x) != len(weights):
-            raise ValueError("Dimension mismatch: len(weights) != len(x).")
-        idx = np.argsort(x)  # sort samples
-        sw = weights[idx]  # sort weights
-        cdf = np.cumsum(sw)[:-1]  # compute CDF
-        cdf /= cdf[-1]  # normalize CDF
-        cdf = np.append(0, cdf)  # ensure proper span
-        quantiles = np.interp(q, cdf, x[idx]).tolist()
-        return quantiles
-
-
-def _draw_sav(scales, avs, covs_sa, ndraws=500, avlim=(0., 6.), rstate=None):
-    """
-    Generate random draws from the joint scale and Av posterior for a
-    given object.
-
-    Parameters
-    ----------
-    scales : `~numpy.ndarray` of shape `(Nsamps)`
-        An array of scale factors derived between the model and the data.
-
-    avs : `~numpy.ndarray` of shape `(Nsamps)`
-        An array of reddenings derived between the model and the data.
-
-    covs_sa : `~numpy.ndarray` of shape `(Nsamps, 2, 2)`
-        An array of covariance matrices corresponding to `scales` and `avs`.
-
-    ndraws : int, optional
-        The number of desired random draws. Default is `500`.
-
-    avlim : 2-tuple, optional
-        The Av limits used to truncate results. Default is `(0., 6.)`.
-
-    rstate : `~numpy.random.RandomState`, optional
-        `~numpy.random.RandomState` instance.
-
-    """
-
-    if rstate is None:
-        rstate = np.random
-
-    # Generate realizations for each (scale, av, cov_sa) set.
-    nsamps = len(scales)
-    sdraws, adraws = np.zeros((nsamps, ndraws)), np.zeros((nsamps, ndraws))
-    for i, (s, a, c) in enumerate(zip(scales, avs, covs_sa)):
-        s_temp, a_temp = [], []
-        # Loop is just in case a significant chunk of the distribution
-        # falls outside of the bounds.
-        while len(s_temp) < ndraws:
-            s_mc, a_mc = rstate.multivariate_normal(np.array([s, a]), c,
-                                                    size=ndraws*4).T
-            inbounds = ((s_mc >= 0.) & (a_mc >= avlim[0]) &
-                        (a_mc <= avlim[1]))  # flag out-of-bounds draws
-            s_mc, a_mc = s_mc[inbounds], a_mc[inbounds]
-            s_temp, a_temp = np.append(s_temp, s_mc), np.append(a_temp, a_mc)
-        sdraws[i], adraws[i] = s_temp[:ndraws], a_temp[:ndraws]
-
-    return sdraws, adraws
+__all__ = ["cornerplot", "dist_vs_red", "_hist2d"]
 
 
 def cornerplot(idxs, scales, avs, covs_sa, params, lndistprior=None,
@@ -368,8 +273,8 @@ def cornerplot(idxs, scales, avs, covs_sa, params, lndistprior=None,
 
     # Add in parallax and Av realizations.
     nsamps = len(idxs)
-    sdraws, adraws = _draw_sav(scales, avs, covs_sa, ndraws=Nr, avlim=avlim,
-                               rstate=rstate)
+    sdraws, adraws = draw_sav(scales, avs, covs_sa, ndraws=Nr, avlim=avlim,
+                              rstate=rstate)
     pdraws = np.sqrt(sdraws)
     ddraws = 1. / pdraws
 
@@ -408,7 +313,7 @@ def cornerplot(idxs, scales, avs, covs_sa, params, lndistprior=None,
             xmin, xmax = span[i]
         except:
             q = [0.5 - 0.5 * span[i], 0.5 + 0.5 * span[i]]
-            span[i] = _quantile(samples[i], q, weights=weights)
+            span[i] = quantile(samples[i], q, weights=weights)
 
     # Set labels
     if labels is None:
@@ -498,7 +403,7 @@ def cornerplot(idxs, scales, avs, covs_sa, params, lndistprior=None,
         ax.set_ylim([0., max(n) * 1.05])
         # Plot quantiles.
         if quantiles is not None and len(quantiles) > 0:
-            qs = _quantile(x, quantiles, weights=weights)
+            qs = quantile(x, quantiles, weights=weights)
             for q in qs:
                 ax.axvline(q, lw=2, ls="dashed", color=color)
             if verbose:
@@ -515,7 +420,7 @@ def cornerplot(idxs, scales, avs, covs_sa, params, lndistprior=None,
         if show_titles:
             title = None
             if title_fmt is not None:
-                ql, qm, qh = _quantile(x, [0.16, 0.5, 0.84], weights=weights)
+                ql, qm, qh = quantile(x, [0.16, 0.5, 0.84], weights=weights)
                 q_minus, q_plus = qm - ql, qh - qm
                 fmt = "{{0:{0}}}".format(title_fmt).format
                 title = r"${{{0}}}_{{-{1}}}^{{+{2}}}$"
@@ -779,8 +684,8 @@ def dist_vs_red(scales, avs, covs_sa, Rv=3.3, dist_type='distance_modulus',
     covs_sa_smooth = np.array(covs_sa)
     covs_sa_smooth[:, 0, 0] += ysmooth**2
     covs_sa_smooth[:, 1, 1] += xsmooth**2
-    sdraws, adraws = _draw_sav(scales, avs, covs_sa_smooth, ndraws=Nr,
-                               avlim=avlim, rstate=rstate)
+    sdraws, adraws = draw_sav(scales, avs, covs_sa_smooth, ndraws=Nr,
+                              avlim=avlim, rstate=rstate)
     pdraws = np.sqrt(sdraws)
     ddraws = 1. / pdraws
     dmdraws = 5. * np.log10(ddraws) + 10.
@@ -899,7 +804,7 @@ def _hist2d(x, y, smooth=0.02, span=None, weights=None, levels=None,
             xmin, xmax = span[i]
         except:
             q = [0.5 - 0.5 * span[i], 0.5 + 0.5 * span[i]]
-            span[i] = _quantile(data[i], q, weights=weights)
+            span[i] = quantile(data[i], q, weights=weights)
 
     # The default "sigma" contour levels.
     if levels is None:
