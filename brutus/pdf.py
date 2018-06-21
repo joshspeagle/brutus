@@ -21,13 +21,15 @@ from astropy.coordinates import SkyCoord
 from astropy.coordinates import CylindricalRepresentation as CylRep
 from scipy.interpolate import interp1d
 
+from .utils import draw_sav
+
 try:
     from scipy.special import logsumexp
 except ImportError:
     from scipy.misc import logsumexp
 
 __all__ = ["imf_lnprior", "ps1_MrLF_lnprior", "parallax_lnprior",
-           "logn_disk", "logn_halo", "gal_lnprior"]
+           "logn_disk", "logn_halo", "gal_lnprior", "bin_pdfs_distred"]
 
 
 def imf_lnprior(mgrid):
@@ -360,3 +362,244 @@ def gal_lnprior(dists, coord, R_solar=8., Z_solar=0.025,
         return lnprior
     else:
         return lnprior, logp_thin, logp_thick, logp_halo
+
+
+def bin_pdfs_distred(scales, avs, covs_sa, cdf=False,
+                     Rv=3.3, dist_type='distance_modulus',
+                     lndistprior=None, coords=None, avlim=(0., 6.),
+                     parallaxes=None, parallax_errors=None, Nr=100,
+                     bins=(750, 300), span=None, smooth=0.01, rstate=None,
+                     wt_thresh=1e-3, cdf_thresh=2e-4,
+                     verbose=True):
+    """
+    Generate binned versions of the 2-D posteriors for the distance and
+    reddening.
+
+    Parameters
+    ----------
+    scales : `~numpy.ndarray` of shape `(Nobj, Nsamps)`
+        An array of scale factors derived between the model and the data.
+
+    avs : `~numpy.ndarray` of shape `(Nobj, Nsamps)`
+        An array of reddenings derived between the model and the data.
+
+    covs_sa : `~numpy.ndarray` of shape `(Nobj, Nsamps, 2, 2)`
+        An array of covariance matrices corresponding to `scales` and `avs`.
+
+    cdf : bool, optional
+        Whether to compute the CDF along the reddening axis instead of the
+        PDF. Useful when evaluating the MAP LOS fit. Default is `False`.
+
+    Rv : float, optional
+        If provided, will convert from Av to E(B-V) when plotting. Default
+        is `3.3`.
+
+    dist_type : str, optional
+        The distance format to be plotted. Options include `'parallax'`,
+        `'scale'`, `'distance'`, and `'distance_modulus'`.
+        Default is `'distance_modulus`.
+
+    lndistprior : func, optional
+        The log-distsance prior function used. If not provided, the galactic
+        model from Green et al. (2014) will be assumed.
+
+    coord : iterable of 2-tuples with len `Nobj`, optional
+        The galactic `(l, b)` coordinates for the object, which is passed to
+        `lndistprior`.
+
+    avlim : 2-tuple, optional
+        The Av limits used to truncate results. Default is `(0., 6.)`.
+
+    parallaxes : `~numpy.ndarray` of shape `(Nobj,)`, optional
+        The parallax estimates for the sources.
+
+    parallax_errors : `~numpy.ndarray` of shape `(Nobj,)`, optional
+        The parallax errors for the sources.
+
+    Nr : int, optional
+        The number of Monte Carlo realizations used when sampling using the
+        provided parallax prior. Default is `100`.
+
+    bins : int or list of ints with length `(ndim,)`, optional
+        The number of bins to be used in each dimension. Default is `300`.
+
+    span : iterable with shape `(ndim, 2)`, optional
+        A list where each element is a length-2 tuple containing
+        lower and upper bounds. If not provided, the x-axis will use the
+        provided Av bounds while the y-axis will span `(4., 19.)` in
+        distance modulus (both appropriately transformed).
+
+    smooth : float or list of floats with shape `(ndim,)`, optional
+        The standard deviation (either a single value or a different value for
+        each subplot) for the Gaussian kernel used to smooth the 1-D and 2-D
+        marginalized posteriors, expressed as a fraction of the span.
+        Default is `0.01` (1% smoothing).
+
+    rstate : `~numpy.random.RandomState`, optional
+        `~numpy.random.RandomState` instance.
+
+    wt_thresh : float, optional
+        The threshold `wt_thresh * max(y_wt)` used to clip bins
+        with (relatively) negligible weights.
+        Default is `1e-3`.
+
+    cdf_thresh : float, optional
+        The `1 - cdf_thresh` threshold of the (sorted) CDF used to clip
+        bins with (relatively) negligible weights.
+        This option is only used when `wt_thresh=None`.
+        Default is `2e-4`.
+
+    verbose : bool, optional
+        Whether to print progress to `~sys.stderr`. Default is `True`.
+
+    Returns
+    -------
+    binned_vals : list of len `Nobj` with 2-D `~numpy.ndarray` elements
+        Collection of `~numpy.ndarray`s representing binned versions of the
+        PDFs or CDFs.
+
+    bounds : `~numpy.ndarray` of shape `(Nobj, 4)`
+        Collection of bounds `(left, right, bottom, top)` defining the
+        edges of each element in `binned_pdfs`.
+
+    xedges : `~numpy.ndarray` of shape `(Nxbin+1,)`
+        The edges defining the bins in distance.
+
+    yedges : `~numpy.ndarray` of shape `(Nybin+1,)`
+        The edges defining the bins in reddening.
+
+    """
+
+    # Initialize values.
+    nobjs, nsamps = scales.shape
+    if rstate is None:
+        rstate = np.random
+    if lndistprior is None and coords is None:
+        raise ValueError("`coord` must be passed if the default distance "
+                         "prior was used.")
+    if lndistprior is None:
+        lndistprior = gal_lnprior
+    if parallaxes is None:
+        parallaxes = np.full(nobjs, np.nan)
+    if parallax_errors is None:
+        parallax_errors = np.full(nobjs, np.nan)
+    if wt_thresh is None and cdf_thresh is None:
+        wt_thresh = -np.inf  # default to no clipping/thresholding
+
+    # Set up bins.
+    if dist_type not in ['parallax', 'scale', 'distance', 'distance_modulus']:
+        raise ValueError("The provided `dist_type` is not valid.")
+    if span is None:
+        avlims = avlim
+        dlims = 10**(np.array([4., 19.]) / 5. - 2.)
+    else:
+        avlims, dlims = span
+    try:
+        xbin, ybin = bins
+    except:
+        xbin = ybin = bins
+    if Rv is not None:
+        ylims = np.array(avlim) / Rv
+    else:
+        ylims = avlim
+    if dist_type == 'scale':
+        xlims = (1. / dlims[::-1])**2
+    elif dist_type == 'parallax':
+        xlims = 1. / dlims[::-1]
+    elif dist_type == 'distance':
+        xlims = dlims
+    elif dist_type == 'distance_modulus':
+        xlims = 5. * np.log10(dlims) + 10.
+    xbins = np.linspace(xlims[0], xlims[1], xbin+1)
+    ybins = np.linspace(ylims[0], ylims[1], ybin+1)
+    dx, dy = xbins[1] - xbins[0], ybins[1] - ybins[0]
+    xspan, yspan = xlims[1] - xlims[0], ylims[1] - ylims[0]
+
+    # Set smoothing.
+    try:
+        if smooth[0] < 1:
+            xsmooth = smooth[0] * xspan
+        else:
+            xsmooth = smooth[0] * dx
+        if smooth[1] < 1:
+            ysmooth = smooth[1] * yspan
+        else:
+            ysmooth = smooth[1] * dy
+    except:
+        if smooth < 1:
+            xsmooth, ysmooth = smooth * xspan, smooth * yspan
+        else:
+            xsmooth, ysmooth = smooth * dx, smooth * dy
+
+    # Generate parallax and Av realizations.
+    covs_sa_smooth = np.array(covs_sa)
+    covs_sa_smooth[:, :, 0, 0] += ysmooth**2
+    covs_sa_smooth[:, :, 1, 1] += xsmooth**2
+
+    binned_vals = []
+    bounds = []
+    for i, stuff in enumerate(zip(scales, avs, covs_sa_smooth,
+                                  parallaxes, parallax_errors, coords)):
+        (scales_obj, avs_obj, covs_sa_smooth_obj,
+         parallax, parallax_err, coord) = stuff
+
+        # Print progress.
+        if verbose:
+            sys.stderr.write('\rBinning object {0}/{1}'.format(i+1, nobjs))
+
+        # Draw random samples.
+        sdraws, adraws = draw_sav(scales_obj, avs_obj, covs_sa_smooth_obj,
+                                  ndraws=Nr, avlim=avlim, rstate=rstate)
+        pdraws = np.sqrt(sdraws)
+        ddraws = 1. / pdraws
+        dmdraws = 5. * np.log10(ddraws) + 10.
+
+        # Re-apply distance and parallax priors to realizations.
+        lnp_draws = lndistprior(ddraws, coord)
+        if parallax is not None and parallax_err is not None:
+            lnp_draws += parallax_lnprior(pdraws, parallax, parallax_err)
+        lnp = logsumexp(lnp_draws, axis=1)
+        weights = np.exp(lnp_draws - lnp[:, None])
+        weights /= weights.sum(axis=1)[:, None]
+        weights = weights.flatten()
+
+        # Grab draws.
+        ydraws = adraws.flatten()
+        if Rv is not None:
+            ydraws /= Rv
+        if dist_type == 'scale':
+            xdraws = sdraws.flatten()
+        elif dist_type == 'parallax':
+            xdraws = pdraws.flatten()
+        elif dist_type == 'distance':
+            xdraws = ddraws.flatten()
+        elif dist_type == 'distance_modulus':
+            xdraws = dmdraws.flatten()
+
+        # Generate 2-D histogram.
+        H, xedges, yedges = np.histogram2d(xdraws, ydraws, bins=(xbins, ybins),
+                                           weights=weights/nsamps)
+
+        # Truncate histogram to only the region with positive values.
+        if wt_thresh is not None:
+            # Use relative amplitude to threshold.
+            wt_min = wt_thresh * np.max(H)
+            xpos_idxs, ypos_idxs = np.where(H > wt_min)
+        else:
+            # Use CDF to threshold.
+            Hflat = H.flatten()
+            idx_sort = np.argsort(Hflat)
+            Hcdf = np.cumsum(Hflat[idx_sort]).reshape(xbin, ybin)
+            xpos_idxs, ypos_idxs = np.where(Hcdf < (1. - cdf_thresh))
+        # Select out effective bounds of the PDF.
+        xlow, xhigh = np.min(xpos_idxs), np.max(xpos_idxs)
+        ylow, yhigh = np.min(ypos_idxs), np.max(ypos_idxs)
+        H = H[xlow:xhigh+1, ylow:yhigh+1]
+
+        # Add results to collection of PDFs.
+        if cdf:
+            H = H.cumsum(axis=0)
+        binned_vals.append(H)
+        bounds.append([xlow, xhigh, ylow, yhigh])
+
+    return binned_vals, np.array(bounds), xedges, yedges

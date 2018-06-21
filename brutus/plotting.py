@@ -526,7 +526,7 @@ def dist_vs_red(scales, avs, covs_sa, Rv=3.3, dist_type='distance_modulus',
                 plot_kwargs=None, truths=None, truth_color='red',
                 truth_kwargs=None, rstate=None):
     """
-    Generate a 2-D plot
+    Generate a 2-D plot of distance vs reddening.
 
     Parameters
     ----------
@@ -581,13 +581,15 @@ def dist_vs_red(scales, avs, covs_sa, Rv=3.3, dist_type='distance_modulus',
     span : iterable with shape `(ndim, 2)`, optional
         A list where each element is a length-2 tuple containing
         lower and upper bounds. If not provided, the x-axis will use the
-        provided Av bounds while the y-axis will span `(4., 18.)` in
+        provided Av bounds while the y-axis will span `(4., 19.)` in
         distance modulus (both appropriately transformed).
 
-    smooth : float or list of floats with shape `(ndim,)`, optional
+    smooth : int/float or list of ints/floats with shape `(ndim,)`, optional
         The standard deviation (either a single value or a different value for
-        each subplot) for the Gaussian kernel used to smooth the 1-D and 2-D
-        marginalized posteriors, expressed as a fraction of the span.
+        each axis) for the Gaussian kernel used to smooth the 2-D
+        marginalized posteriors. If an int is passed, the smoothing will
+        be applied in units of the binning in that dimension. If a float
+        is passed, it is expressed as a fraction of the span.
         Default is `0.01` (1% smoothing).
 
     plot_kwargs : dict, optional
@@ -638,8 +640,10 @@ def dist_vs_red(scales, avs, covs_sa, Rv=3.3, dist_type='distance_modulus',
     if dist_type not in ['parallax', 'scale', 'distance', 'distance_modulus']:
         raise ValueError("The provided `dist_type` is not valid.")
     if span is None:
-        avlims = np.array([0., 6.])
-        dlims = 10**(np.array([4., 20.]) / 5. - 2.)
+        avlims = avlim
+        dlims = 10**(np.array([4., 19.]) / 5. - 2.)
+    else:
+        avlims, dlims = span
     try:
         xbin, ybin = bins
     except:
@@ -665,14 +669,23 @@ def dist_vs_red(scales, avs, covs_sa, Rv=3.3, dist_type='distance_modulus',
     xbins = np.linspace(xlims[0], xlims[1], xbin+1)
     ybins = np.linspace(ylims[0], ylims[1], ybin+1)
     dx, dy = xbins[1] - xbins[0], ybins[1] - ybins[0]
+    xspan, yspan = xlims[1] - xlims[0], ylims[1] - ylims[0]
 
     # Set smoothing.
     try:
-        xsmooth = smooth[0] * (xlims[1] - xlims[0])
-        ysmooth = smooth[1] * (ylims[1] - ylims[0])
+        if smooth[0] < 1:
+            xsmooth = smooth[0] * xspan
+        else:
+            xsmooth = smooth[0] * dx
+        if smooth[1] < 1:
+            ysmooth = smooth[1] * yspan
+        else:
+            ysmooth = smooth[1] * dy
     except:
-        xsmooth = smooth * (xlims[1] - xlims[0])
-        ysmooth = smooth * (ylims[1] - ylims[0])
+        if smooth < 1:
+            xsmooth, ysmooth = smooth * xspan, smooth * yspan
+        else:
+            xsmooth, ysmooth = smooth * dx, smooth * dy
 
     # Set defaults.
     truth_kwargs['linestyle'] = truth_kwargs.get('linestyle', 'solid')
@@ -717,6 +730,8 @@ def dist_vs_red(scales, avs, covs_sa, Rv=3.3, dist_type='distance_modulus',
                      cmap=cmap, **plot_kwargs)
     plt.xlabel(xlabel)
     plt.ylabel(ylabel)
+
+    return out
 
 
 def _hist2d(x, y, smooth=0.02, span=None, weights=None, levels=None,
