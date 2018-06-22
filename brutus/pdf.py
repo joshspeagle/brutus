@@ -369,7 +369,6 @@ def bin_pdfs_distred(scales, avs, covs_sa, cdf=False,
                      lndistprior=None, coords=None, avlim=(0., 6.),
                      parallaxes=None, parallax_errors=None, Nr=100,
                      bins=(750, 300), span=None, smooth=0.01, rstate=None,
-                     wt_thresh=1e-3, cdf_thresh=2e-4,
                      verbose=True):
     """
     Generate binned versions of the 2-D posteriors for the distance and
@@ -438,29 +437,13 @@ def bin_pdfs_distred(scales, avs, covs_sa, cdf=False,
     rstate : `~numpy.random.RandomState`, optional
         `~numpy.random.RandomState` instance.
 
-    wt_thresh : float, optional
-        The threshold `wt_thresh * max(y_wt)` used to clip bins
-        with (relatively) negligible weights.
-        Default is `1e-3`.
-
-    cdf_thresh : float, optional
-        The `1 - cdf_thresh` threshold of the (sorted) CDF used to clip
-        bins with (relatively) negligible weights.
-        This option is only used when `wt_thresh=None`.
-        Default is `2e-4`.
-
     verbose : bool, optional
         Whether to print progress to `~sys.stderr`. Default is `True`.
 
     Returns
     -------
-    binned_vals : list of len `Nobj` with 2-D `~numpy.ndarray` elements
-        Collection of `~numpy.ndarray`s representing binned versions of the
-        PDFs or CDFs.
-
-    bounds : `~numpy.ndarray` of shape `(Nobj, 4)`
-        Collection of bounds `(left, right, bottom, top)` defining the
-        edges of each element in `binned_pdfs`.
+    binned_vals : `~numpy.ndarray` of shape `(Nobj, Nxbin, Nybin)`
+        Binned versions of the PDFs or CDFs.
 
     xedges : `~numpy.ndarray` of shape `(Nxbin+1,)`
         The edges defining the bins in distance.
@@ -483,8 +466,6 @@ def bin_pdfs_distred(scales, avs, covs_sa, cdf=False,
         parallaxes = np.full(nobjs, np.nan)
     if parallax_errors is None:
         parallax_errors = np.full(nobjs, np.nan)
-    if wt_thresh is None and cdf_thresh is None:
-        wt_thresh = -np.inf  # default to no clipping/thresholding
 
     # Set up bins.
     if dist_type not in ['parallax', 'scale', 'distance', 'distance_modulus']:
@@ -536,7 +517,7 @@ def bin_pdfs_distred(scales, avs, covs_sa, cdf=False,
     covs_sa_smooth[:, :, 0, 0] += ysmooth**2
     covs_sa_smooth[:, :, 1, 1] += xsmooth**2
 
-    binned_vals = []
+    binned_vals = np.zeros((nobjs, xbin, ybin), dtype='float32')
     bounds = []
     for i, stuff in enumerate(zip(scales, avs, covs_sa_smooth,
                                   parallaxes, parallax_errors, coords)):
@@ -580,26 +561,9 @@ def bin_pdfs_distred(scales, avs, covs_sa, cdf=False,
         H, xedges, yedges = np.histogram2d(xdraws, ydraws, bins=(xbins, ybins),
                                            weights=weights/nsamps)
 
-        # Truncate histogram to only the region with positive values.
-        if wt_thresh is not None:
-            # Use relative amplitude to threshold.
-            wt_min = wt_thresh * np.max(H)
-            xpos_idxs, ypos_idxs = np.where(H > wt_min)
-        else:
-            # Use CDF to threshold.
-            Hflat = H.flatten()
-            idx_sort = np.argsort(Hflat)
-            Hcdf = np.cumsum(Hflat[idx_sort]).reshape(xbin, ybin)
-            xpos_idxs, ypos_idxs = np.where(Hcdf < (1. - cdf_thresh))
-        # Select out effective bounds of the PDF.
-        xlow, xhigh = np.min(xpos_idxs), np.max(xpos_idxs)
-        ylow, yhigh = np.min(ypos_idxs), np.max(ypos_idxs)
-        H = H[xlow:xhigh+1, ylow:yhigh+1]
-
         # Add results to collection of PDFs.
         if cdf:
             H = H.cumsum(axis=0)
-        binned_vals.append(H)
-        bounds.append([xlow, xhigh, ylow, yhigh])
+        binned_vals[i] = np.array(H, dtype='float32')
 
-    return binned_vals, np.array(bounds), xedges, yedges
+    return binned_vals, xedges, yedges
