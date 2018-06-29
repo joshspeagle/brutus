@@ -26,6 +26,8 @@ from scipy import polyfit
 import minesweeper
 from minesweeper.photANN import ANN
 
+from .filters import FILTERS
+
 # Rename parameters from what is in the MIST HDF5 file.
 # This makes it easier to use parameter names as keyword arguments.
 rename = {"mini": "initial_mass",  # input parameters
@@ -39,25 +41,6 @@ rename = {"mini": "initial_mass",  # input parameters
           "logg": "log_g",
           "logl": "log_L",
           "logr": "log_R"}
-
-# Define the set of filters available in MINESweeper.
-gaia = ["Gaia_G_DR2Rev", "Gaia_BP_DR2Rev", "Gaia_RP_DR2Rev"]
-sdss = ["SDSS_{}".format(b) for b in "ugriz"]
-ps = ["PS_{}".format(b) for b in "grizy"]
-decam = ["DECam_{}".format(b) for b in "ugrizY"]
-tycho = ["Tycho_B", "Tycho_V"]
-bessell = ["Bessell_{}".format(b) for b in "UBVRI"]
-tmass = ["2MASS_{}".format(b) for b in ["J", "H", "Ks"]]
-ukidss = ["UKIDSS_{}".format(b) for b in "ZYJHK"]
-wise = ["WISE_W{}".format(b) for b in "1234"]
-galex = ["GALEX_NUV", "GALEX_FUV"]
-hipp = ["Hipparcos_Hp"]
-kepler = ["Kepler_D51", "Kepler_Kp"]
-tess = ["TESS"]
-
-FILTERS = (gaia + sdss + ps + decam + tycho + bessell + tmass + ukidss + wise +
-           galex + hipp + kepler + tess)
-
 
 __all__ = ["MISTtracks", "SEDmaker", "FastNN", "FastPaynePredictor"]
 

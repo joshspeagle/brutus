@@ -21,8 +21,7 @@ from matplotlib.ticker import MaxNLocator, NullLocator
 from matplotlib.colors import LinearSegmentedColormap, colorConverter
 from matplotlib.ticker import ScalarFormatter
 from scipy.ndimage import gaussian_filter as norm_kde
-from scipy.stats import gaussian_kde
-from scipy.stats import truncnorm, norm
+import copy
 
 from .pdf import gal_lnprior, parallax_lnprior
 from .utils import quantile, draw_sav
@@ -44,9 +43,9 @@ except:
 __all__ = ["cornerplot", "dist_vs_red", "_hist2d"]
 
 
-def cornerplot(idxs, scales, avs, covs_sa, params, lndistprior=None,
+def cornerplot(idxs, data, params, lndistprior=None,
                coord=None, avlim=(0., 6.), weights=None, parallax=None,
-               parallax_err=None, Nr=500, applied_parallax=False,
+               parallax_err=None, Nr=500, applied_parallax=True,
                pcolor='blue', parallax_kwargs=None,
                dcolor='red', dist_kwargs=None, span=None,
                quantiles=[0.16, 0.5, 0.84], color='black', smooth=0.035,
@@ -64,17 +63,15 @@ def cornerplot(idxs, scales, avs, covs_sa, params, lndistprior=None,
         An array of resampled indices corresponding to the set of models used
         to fit the data.
 
-    scales : `~numpy.ndarray` of shape `(Nsamps)`
-        An array of scale factors derived between the model and the data.
-
-    avs : `~numpy.ndarray` of shape `(Nsamps)`
-        An array of reddenings derived between the model and the data.
-
-    covs_sa : `~numpy.ndarray` of shape `(Nsamps, 2, 2)`
-        An array of covariance matrices corresponding to `scales` and `avs`.
+    data : 2-tuple or 3-tuple containing `~numpy.ndarray`s of shape `(Nsamps)`
+        The data that will be plotted. Either a collection of `(dists, reds)`
+        that were saved, or a collection of `(scales, avs, covs_sa)` that
+        will be used to regenerate `(dists, reds)` in conjunction with
+        any applied ditsance and/or parallax priors.
 
     params : structured `~numpy.ndarray` with shape `(Nmodels,)`
-        Set of parameters corresponding to the input set of models.
+        Set of parameters corresponding to the input set of models. Note that
+        `'agewt'` will always be ignored.
 
     lndistprior : func, optional
         The log-distsance prior function used. If not provided, the galactic
@@ -102,7 +99,7 @@ def cornerplot(idxs, scales, avs, covs_sa, params, lndistprior=None,
 
     applied_parallax : bool, optional
         Whether the parallax was applied when initially computing the fits.
-        Default is `False`.
+        Default is `True`.
 
     pcolor : str, optional
         Color used when plotting the parallax prior. Default is `'blue'`.
@@ -239,12 +236,9 @@ def cornerplot(idxs, scales, avs, covs_sa, params, lndistprior=None,
     if applied_parallax:
         if parallax is None or parallax_err is None:
             raise ValueError("`parallax` and `parallax_err` must be provided "
-                             "to apply the parallax prior to the samples.")
+                             "together.")
     if parallax_kwargs is None:
         parallax_kwargs = dict()
-    if lndistprior is None and coord is None:
-        raise ValueError("`coord` must be passed if the default distance "
-                         "prior was used.")
     if lndistprior is None:
         lndistprior = gal_lnprior
     if dist_kwargs is None:
@@ -259,8 +253,11 @@ def cornerplot(idxs, scales, avs, covs_sa, params, lndistprior=None,
     parallax_kwargs['alpha'] = parallax_kwargs.get('alpha', 0.5)
     dist_kwargs['alpha'] = dist_kwargs.get('alpha', 0.5)
 
+    # Ignore age weights.
+    labels = [l for l in params.dtype.names if l != 'agewt']
+
     # Deal with 1D results.
-    samples = params[idxs]
+    samples = params[idxs][labels]
     samples = samples.view(np.float64).reshape(samples.shape + (-1,))
     samples = np.atleast_1d(samples)
     if len(samples.shape) == 1:
@@ -271,26 +268,38 @@ def cornerplot(idxs, scales, avs, covs_sa, params, lndistprior=None,
     assert samples.shape[0] <= samples.shape[1], "There are more " \
                                                  "dimensions than samples!"
 
-    # Add in parallax and Av realizations.
-    nsamps = len(idxs)
-    sdraws, adraws = draw_sav(scales, avs, covs_sa, ndraws=Nr, avlim=avlim,
-                              rstate=rstate)
-    pdraws = np.sqrt(sdraws)
-    ddraws = 1. / pdraws
+    try:
+        # Grab distance and reddening samples.
+        ddraws, adraws = copy.deepcopy(data)
+        pdraws = 1. / ddraws
+    except:
+        # Regenerate distance and reddening samples from inputs.
+        scales, avs, covs_sa = copy.deepcopy(data)
 
-    # Re-apply distance and parallax priors to realizations.
-    lnp_draws = lndistprior(ddraws, coord)
-    if applied_parallax:
-        lnp_draws += parallax_lnprior(pdraws, parallax, parallax_err)
+        if lndistprior is None and coord is None:
+            raise ValueError("`coord` must be passed if the default distance "
+                             "prior was used.")
 
-    # Resample draws.
-    lnp = logsumexp(lnp_draws, axis=1)
-    pwt = np.exp(lnp_draws - lnp[:, None])
-    pwt /= pwt.sum(axis=1)[:, None]
-    ridx = [rstate.choice(Nr, p=pwt[i]) for i in range(nsamps)]
-    pdraws = pdraws[np.arange(nsamps), ridx]
-    ddraws = ddraws[np.arange(nsamps), ridx]
-    adraws = adraws[np.arange(nsamps), ridx]
+        # Add in parallax and Av realizations.
+        nsamps = len(idxs)
+        sdraws, adraws = draw_sav(scales, avs, covs_sa, ndraws=Nr, avlim=avlim,
+                                  rstate=rstate)
+        pdraws = np.sqrt(sdraws)
+        ddraws = 1. / pdraws
+
+        # Re-apply distance and parallax priors to realizations.
+        lnp_draws = lndistprior(ddraws, coord)
+        if applied_parallax:
+            lnp_draws += parallax_lnprior(pdraws, parallax, parallax_err)
+
+        # Resample draws.
+        lnp = logsumexp(lnp_draws, axis=1)
+        pwt = np.exp(lnp_draws - lnp[:, None])
+        pwt /= pwt.sum(axis=1)[:, None]
+        ridx = [rstate.choice(Nr, p=pwt[i]) for i in range(nsamps)]
+        pdraws = pdraws[np.arange(nsamps), ridx]
+        ddraws = ddraws[np.arange(nsamps), ridx]
+        adraws = adraws[np.arange(nsamps), ridx]
 
     # Append to samples.
     samples = np.c_[samples.T, adraws, pdraws, ddraws].T
@@ -434,7 +443,7 @@ def cornerplot(idxs, scales, avs, covs_sa, params, lndistprior=None,
             parallax_pdf *= max(n) / max(parallax_pdf)
             ax.fill_between(b, parallax_pdf, color=pcolor, **parallax_kwargs)
         # Add distance prior.
-        if i == ndim - 1:
+        if i == ndim - 1 and coord is not None:
             dist_logpdf = lndistprior(b, coord)
             dist_pdf = np.exp(dist_logpdf - max(dist_logpdf))
             dist_pdf *= max(n) / max(dist_pdf)
@@ -519,7 +528,7 @@ def cornerplot(idxs, scales, avs, covs_sa, params, lndistprior=None,
     return (fig, axes)
 
 
-def dist_vs_red(scales, avs, covs_sa, Rv=3.3, dist_type='distance_modulus',
+def dist_vs_red(data, Rv=3.3, dist_type='distance_modulus',
                 lndistprior=None, coord=None, avlim=(0., 6.), weights=None,
                 parallax=None, parallax_err=None, Nr=300,
                 cmap='Blues', bins=300, span=None, smooth=0.01,
@@ -530,14 +539,11 @@ def dist_vs_red(scales, avs, covs_sa, Rv=3.3, dist_type='distance_modulus',
 
     Parameters
     ----------
-    scales : `~numpy.ndarray` of shape `(Nsamps)`
-        An array of scale factors derived between the model and the data.
-
-    avs : `~numpy.ndarray` of shape `(Nsamps)`
-        An array of reddenings derived between the model and the data.
-
-    covs_sa : `~numpy.ndarray` of shape `(Nsamps, 2, 2)`
-        An array of covariance matrices corresponding to `scales` and `avs`.
+    data : 2-tuple or 3-tuple containing `~numpy.ndarray`s of shape `(Nsamps)`
+        The data that will be plotted. Either a collection of `(dists, reds)`
+        that were saved, or a collection of `(scales, avs, covs_sa)` that
+        will be used to regenerate `(dists, reds)` in conjunction with
+        any applied ditsance and/or parallax priors.
 
     Rv : float, optional
         If provided, will convert from Av to E(B-V) when plotting. Default
@@ -591,6 +597,7 @@ def dist_vs_red(scales, avs, covs_sa, Rv=3.3, dist_type='distance_modulus',
         be applied in units of the binning in that dimension. If a float
         is passed, it is expressed as a fraction of the span.
         Default is `0.01` (1% smoothing).
+        **Cannot smooth by more than the provided parallax will allow.**
 
     plot_kwargs : dict, optional
         Extra keyword arguments to be used when plotting the smoothed
@@ -626,15 +633,21 @@ def dist_vs_red(scales, avs, covs_sa, Rv=3.3, dist_type='distance_modulus',
     if plot_kwargs is None:
         plot_kwargs = dict()
     if weights is None:
-        weights = np.ones_like(scales, dtype='float')
-    weights = np.repeat(weights, Nr)
+        weights = np.ones_like(data[0], dtype='float')
     if rstate is None:
         rstate = np.random
-    if lndistprior is None and coord is None:
-        raise ValueError("`coord` must be passed if the default distance "
-                         "prior was used.")
     if lndistprior is None:
         lndistprior = gal_lnprior
+    if parallax is None or parallax_err is None:
+        parallax, parallax_err = np.nan, np.nan
+
+    # Establish minimum smoothing in distance.
+    p1sig = np.array([parallax + parallax_err,
+                      max(parallax - parallax_err, 1e-10)])
+    p_min_smooth = abs(np.diff(p1sig)) / 2.
+    s_min_smooth = abs(np.diff(p1sig**2)) / 2.
+    d_min_smooth = abs(np.diff(1. / p1sig)) / 2.
+    dm_min_smooth = abs(np.diff(5. * np.log10(1. / p1sig) + 10.)) / 2.
 
     # Set up axes and labels.
     if dist_type not in ['parallax', 'scale', 'distance', 'distance_modulus']:
@@ -657,15 +670,19 @@ def dist_vs_red(scales, avs, covs_sa, Rv=3.3, dist_type='distance_modulus',
     if dist_type == 'scale':
         xlabel = r'$s$'
         xlims = (1. / dlims[::-1])**2
+        x_min_smooth = s_min_smooth
     elif dist_type == 'parallax':
         xlabel = r'$\pi$ [mas]'
         xlims = 1. / dlims[::-1]
+        x_min_smooth = p_min_smooth
     elif dist_type == 'distance':
         xlabel = r'$d$ [kpc]'
         xlims = dlims
+        x_min_smooth = d_min_smooth
     elif dist_type == 'distance_modulus':
         xlabel = r'$\mu$'
         xlims = 5. * np.log10(dlims) + 10.
+        x_min_smooth = dm_min_smooth
     xbins = np.linspace(xlims[0], xlims[1], xbin+1)
     ybins = np.linspace(ylims[0], ylims[1], ybin+1)
     dx, dy = xbins[1] - xbins[0], ybins[1] - ybins[0]
@@ -686,31 +703,44 @@ def dist_vs_red(scales, avs, covs_sa, Rv=3.3, dist_type='distance_modulus',
             xsmooth, ysmooth = smooth * xspan, smooth * yspan
         else:
             xsmooth, ysmooth = smooth * dx, smooth * dy
+    if np.isfinite(x_min_smooth):
+        xsmooth = min(x_min_smooth, xsmooth)
 
     # Set defaults.
     truth_kwargs['linestyle'] = truth_kwargs.get('linestyle', 'solid')
     truth_kwargs['linewidth'] = truth_kwargs.get('linewidth', 2)
     truth_kwargs['alpha'] = truth_kwargs.get('alpha', 0.7)
 
-    # Generate parallax and Av realizations.
-    nsamps = len(scales)
-    covs_sa_smooth = np.array(covs_sa)
-    covs_sa_smooth[:, 0, 0] += ysmooth**2
-    covs_sa_smooth[:, 1, 1] += xsmooth**2
-    sdraws, adraws = draw_sav(scales, avs, covs_sa_smooth, ndraws=Nr,
-                              avlim=avlim, rstate=rstate)
-    pdraws = np.sqrt(sdraws)
-    ddraws = 1. / pdraws
-    dmdraws = 5. * np.log10(ddraws) + 10.
+    try:
+        # Grab distance and reddening samples.
+        ddraws, adraws = copy.deepcopy(data)
+        pdraws = 1. / ddraws
+        sdraws = pdraws**2
+        dmdraws = 5. * np.log10(ddraws) + 10.
+    except:
+        # Regenerate distance and reddening samples from inputs.
+        scales, avs, covs_sa = copy.deepcopy(data)
 
-    # Re-apply distance and parallax priors to realizations.
-    lnp_draws = lndistprior(ddraws, coord)
-    if parallax is not None and parallax_err is not None:
-        lnp_draws += parallax_lnprior(pdraws, parallax, parallax_err)
-    lnp = logsumexp(lnp_draws, axis=1)
-    pwt = np.exp(lnp_draws - lnp[:, None])
-    pwt /= pwt.sum(axis=1)[:, None]
-    weights *= pwt.flatten()
+        if lndistprior is None and coord is None:
+            raise ValueError("`coord` must be passed if the default distance "
+                             "prior was used.")
+
+        # Generate parallax and Av realizations.
+        sdraws, adraws = draw_sav(scales, avs, covs_sa, ndraws=Nr,
+                                  avlim=avlim, rstate=rstate)
+        pdraws = np.sqrt(sdraws)
+        ddraws = 1. / pdraws
+        dmdraws = 5. * np.log10(ddraws) + 10.
+
+        # Re-apply distance and parallax priors to realizations.
+        lnp_draws = lndistprior(ddraws, coord)
+        if parallax is not None and parallax_err is not None:
+            lnp_draws += parallax_lnprior(pdraws, parallax, parallax_err)
+        lnp = logsumexp(lnp_draws, axis=1)
+        pwt = np.exp(lnp_draws - lnp[:, None])
+        pwt /= pwt.sum(axis=1)[:, None]
+        weights = np.repeat(weights, Nr)
+        weights *= pwt.flatten()
 
     # Grab draws.
     ydraws = adraws.flatten()
@@ -726,12 +756,21 @@ def dist_vs_red(scales, avs, covs_sa, Rv=3.3, dist_type='distance_modulus',
         xdraws = dmdraws.flatten()
 
     # Generate 2-D histogram.
-    out = plt.hist2d(xdraws, ydraws, bins=(xbins, ybins), weights=weights,
-                     cmap=cmap, **plot_kwargs)
+    H, xedges, yedges = np.histogram2d(xdraws, ydraws, bins=(xbins, ybins),
+                                       weights=weights)
+
+    # Apply smoothing.
+    H = norm_kde(H, (xsmooth / dx, ysmooth / dy))
+
+    # Generate 2-D histogram.
+    img = plt.imshow(H.T, cmap=cmap, aspect='auto',
+                     interpolation=None, origin='lower',
+                     extent=[xlims[0], xlims[1], ylims[0], ylims[1]],
+                     **plot_kwargs)
     plt.xlabel(xlabel)
     plt.ylabel(ylabel)
 
-    return out
+    return H, xedges, yedges, img
 
 
 def _hist2d(x, y, smooth=0.02, span=None, weights=None, levels=None,

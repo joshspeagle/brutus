@@ -20,6 +20,8 @@ from astropy import units
 from astropy.coordinates import SkyCoord
 from astropy.coordinates import CylindricalRepresentation as CylRep
 from scipy.interpolate import interp1d
+from scipy.ndimage import gaussian_filter as norm_kde
+import copy
 
 from .utils import draw_sav
 
@@ -364,26 +366,22 @@ def gal_lnprior(dists, coord, R_solar=8., Z_solar=0.025,
         return lnprior, logp_thin, logp_thick, logp_halo
 
 
-def bin_pdfs_distred(scales, avs, covs_sa, cdf=False,
-                     Rv=3.3, dist_type='distance_modulus',
+def bin_pdfs_distred(data, cdf=False, Rv=3.3, dist_type='distance_modulus',
                      lndistprior=None, coords=None, avlim=(0., 6.),
                      parallaxes=None, parallax_errors=None, Nr=100,
                      bins=(750, 300), span=None, smooth=0.01, rstate=None,
-                     verbose=True):
+                     verbose=False):
     """
     Generate binned versions of the 2-D posteriors for the distance and
     reddening.
 
     Parameters
     ----------
-    scales : `~numpy.ndarray` of shape `(Nobj, Nsamps)`
-        An array of scale factors derived between the model and the data.
-
-    avs : `~numpy.ndarray` of shape `(Nobj, Nsamps)`
-        An array of reddenings derived between the model and the data.
-
-    covs_sa : `~numpy.ndarray` of shape `(Nobj, Nsamps, 2, 2)`
-        An array of covariance matrices corresponding to `scales` and `avs`.
+    data : 2-tuple or 3-tuple containing `~numpy.ndarray`s of shape `(Nsamps)`
+        The data that will be plotted. Either a collection of `(dists, reds)`
+        that were saved, or a collection of `(scales, avs, covs_sa)` that
+        will be used to regenerate `(dists, reds)` in conjunction with
+        any applied ditsance and/or parallax priors.
 
     cdf : bool, optional
         Whether to compute the CDF along the reddening axis instead of the
@@ -438,7 +436,7 @@ def bin_pdfs_distred(scales, avs, covs_sa, cdf=False,
         `~numpy.random.RandomState` instance.
 
     verbose : bool, optional
-        Whether to print progress to `~sys.stderr`. Default is `True`.
+        Whether to print progress to `~sys.stderr`. Default is `False`.
 
     Returns
     -------
@@ -454,12 +452,9 @@ def bin_pdfs_distred(scales, avs, covs_sa, cdf=False,
     """
 
     # Initialize values.
-    nobjs, nsamps = scales.shape
+    nobjs, nsamps = data[0].shape
     if rstate is None:
         rstate = np.random
-    if lndistprior is None and coords is None:
-        raise ValueError("`coord` must be passed if the default distance "
-                         "prior was used.")
     if lndistprior is None:
         lndistprior = gal_lnprior
     if parallaxes is None:
@@ -512,58 +507,114 @@ def bin_pdfs_distred(scales, avs, covs_sa, cdf=False,
         else:
             xsmooth, ysmooth = smooth * dx, smooth * dy
 
-    # Generate parallax and Av realizations.
-    covs_sa_smooth = np.array(covs_sa)
-    covs_sa_smooth[:, :, 0, 0] += ysmooth**2
-    covs_sa_smooth[:, :, 1, 1] += xsmooth**2
-
+    # Compute binned PDFs.
     binned_vals = np.zeros((nobjs, xbin, ybin), dtype='float32')
-    bounds = []
-    for i, stuff in enumerate(zip(scales, avs, covs_sa_smooth,
-                                  parallaxes, parallax_errors, coords)):
-        (scales_obj, avs_obj, covs_sa_smooth_obj,
-         parallax, parallax_err, coord) = stuff
-
-        # Print progress.
-        if verbose:
-            sys.stderr.write('\rBinning object {0}/{1}'.format(i+1, nobjs))
-
-        # Draw random samples.
-        sdraws, adraws = draw_sav(scales_obj, avs_obj, covs_sa_smooth_obj,
-                                  ndraws=Nr, avlim=avlim, rstate=rstate)
-        pdraws = np.sqrt(sdraws)
-        ddraws = 1. / pdraws
+    try:
+        # Grab distance and reddening samples.
+        ddraws, adraws = copy.deepcopy(data)
+        pdraws = 1. / ddraws
+        sdraws = pdraws**2
         dmdraws = 5. * np.log10(ddraws) + 10.
 
-        # Re-apply distance and parallax priors to realizations.
-        lnp_draws = lndistprior(ddraws, coord)
-        if parallax is not None and parallax_err is not None:
-            lnp_draws += parallax_lnprior(pdraws, parallax, parallax_err)
-        lnp = logsumexp(lnp_draws, axis=1)
-        weights = np.exp(lnp_draws - lnp[:, None])
-        weights /= weights.sum(axis=1)[:, None]
-        weights = weights.flatten()
-
-        # Grab draws.
-        ydraws = adraws.flatten()
+        # Grab relevant draws.
+        ydraws = adraws
         if Rv is not None:
             ydraws /= Rv
         if dist_type == 'scale':
-            xdraws = sdraws.flatten()
+            xdraws = sdraws
         elif dist_type == 'parallax':
-            xdraws = pdraws.flatten()
+            xdraws = pdraws
         elif dist_type == 'distance':
-            xdraws = ddraws.flatten()
+            xdraws = ddraws
         elif dist_type == 'distance_modulus':
-            xdraws = dmdraws.flatten()
+            xdraws = dmdraws
 
-        # Generate 2-D histogram.
-        H, xedges, yedges = np.histogram2d(xdraws, ydraws, bins=(xbins, ybins),
-                                           weights=weights/nsamps)
+        # Bin draws.
+        for i, (xs, ys) in enumerate(zip(xdraws, ydraws)):
+            # Print progress.
+            if verbose:
+                sys.stderr.write('\rBinning object {0}/{1}'.format(i+1, nobjs))
+            H, xedges, yedges = np.histogram2d(xs, ys, bins=(xbins, ybins))
+            binned_vals[i] = H / nsamps
+    except:
+        # Regenerate distance and reddening samples from inputs.
+        scales, avs, covs_sa = copy.deepcopy(data)
 
-        # Add results to collection of PDFs.
-        if cdf:
-            H = H.cumsum(axis=0)
-        binned_vals[i] = np.array(H, dtype='float32')
+        if lndistprior is None and coord is None:
+            raise ValueError("`coord` must be passed if the default distance "
+                             "prior was used.")
+
+        # Generate parallax and Av realizations.
+        for i, stuff in enumerate(zip(scales, avs, covs_sa,
+                                      parallaxes, parallax_errors,
+                                      coords)):
+            (scales_obj, avs_obj, covs_sa_obj,
+             parallax, parallax_err, coord) = stuff
+
+            # Print progress.
+            if verbose:
+                sys.stderr.write('\rBinning object {0}/{1}'.format(i+1, nobjs))
+
+            # Draw random samples.
+            sdraws, adraws = draw_sav(scales_obj, avs_obj, covs_sa_smooth_obj,
+                                      ndraws=Nr, avlim=avlim, rstate=rstate)
+            pdraws = np.sqrt(sdraws)
+            ddraws = 1. / pdraws
+            dmdraws = 5. * np.log10(ddraws) + 10.
+
+            # Re-apply distance and parallax priors to realizations.
+            lnp_draws = lndistprior(ddraws, coord)
+            if parallax is not None and parallax_err is not None:
+                lnp_draws += parallax_lnprior(pdraws, parallax, parallax_err)
+            lnp = logsumexp(lnp_draws, axis=1)
+            weights = np.exp(lnp_draws - lnp[:, None])
+            weights /= weights.sum(axis=1)[:, None]
+            weights = weights.flatten()
+
+            # Grab draws.
+            ydraws = adraws.flatten()
+            if Rv is not None:
+                ydraws /= Rv
+            if dist_type == 'scale':
+                xdraws = sdraws.flatten()
+            elif dist_type == 'parallax':
+                xdraws = pdraws.flatten()
+            elif dist_type == 'distance':
+                xdraws = ddraws.flatten()
+            elif dist_type == 'distance_modulus':
+                xdraws = dmdraws.flatten()
+
+            # Generate 2-D histogram.
+            H, xedges, yedges = np.histogram2d(xdraws, ydraws,
+                                               bins=(xbins, ybins),
+                                               weights=weights)
+            binned_vals[i] = H / nsamps
+
+    # Apply smoothing.
+    for i, (H, parallax, parallax_err) in enumerate(zip(binned_vals,
+                                                        parallaxes,
+                                                        parallax_errors)):
+        # Establish minimum smoothing in distance.
+        p1sig = np.array([parallax + parallax_err,
+                          max(parallax - parallax_err, 1e-10)])
+        if dist_type == 'scale':
+            x_min_smooth = abs(np.diff(p1sig**2)) / 2.
+        elif dist_type == 'parallax':
+            x_min_smooth = abs(np.diff(p1sig)) / 2.
+        elif dist_type == 'distance':
+            x_min_smooth = abs(np.diff(1. / p1sig)) / 2.
+        elif dist_type == 'distance_modulus':
+            x_min_smooth = abs(np.diff(5. * np.log10(1. / p1sig))) / 2.
+        if np.isfinite(x_min_smooth):
+            xsmooth_t = min(x_min_smooth, xsmooth)
+        else:
+            xsmooth_t = xsmooth
+        # Smooth 2-D PDF.
+        binned_vals[i] = norm_kde(H, (xsmooth_t / dx, ysmooth / dy))
+
+    # Compute CDFs.
+    if cdf:
+        for i, H in enumerate(binned_vals):
+            binned_vals[i] = H.cumsum(axis=0)
 
     return binned_vals, xedges, yedges

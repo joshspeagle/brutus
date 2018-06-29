@@ -27,6 +27,7 @@ except ImportError:
     from scipy.misc import logsumexp
 
 from .pdf import *
+from .utils import *
 
 __all__ = ["get_seds", "loglike", "_optimize_fit", "BruteForce", "_lnpost",
            "LOSloglike", "LOSpriortransform", "_function_wrapper"]
@@ -382,7 +383,7 @@ class BruteForce():
 
     """
 
-    def __init__(self, models, models_labels, models_params=None, pool=None):
+    def __init__(self, models, models_labels, labels_mask, pool=None):
         """
         Load the model data into memory.
 
@@ -392,12 +393,13 @@ class BruteForce():
             Magnitude coefficients used to compute reddened photometry over
             the desired bands for all models on the grid.
 
-        models_labels : `~numpy.ndarray` of shape `(Nmodel, Nlabels)`
+        models_labels : structured `~numpy.ndarray` of shape `(Nmodel, Nlabel)`
             Labels corresponding to each model on the grid.
 
-        models_params : `~numpy.ndarray` of shape `(Nmodel, Nparams)`, optional
-            Output parameters for the models. These were output while
-            constructing the grid based on the input labels.
+        labels_mask : structured `~numpy.ndarray` of shape `(1, Nlabel)`
+            Masks corresponding to each label to indicate whether it is
+            an ancillary prediction (e.g., `logt`) or was used to compute
+            the model grid (e.g., `mini`).
 
         pool : user-provided pool, optional
             Use this pool of workers to execute operations in parallel when
@@ -409,12 +411,8 @@ class BruteForce():
         self.NMODEL, self.NDIM, self.NCOEF = models.shape
         self.models = models
         self.models_labels = models_labels
+        self.labels_mask = labels_mask
         self.NLABELS = len(models_labels[0])
-        if models_params is not None:
-            self.NPARAMS = len(models_params[0])
-        else:
-            self.NPARAMS = 0
-        self.models_params = models_params
         self.pool = pool
         if pool is None:
             # Single core
@@ -430,7 +428,8 @@ class BruteForce():
             lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4, Ndraws=2000,
             apply_agewt=True, apply_grad=True, lndistprior=None,
             data_coords=None, logl_dim_prior=True, ltol=0.02,
-            ltol_subthresh=0.005, rstate=None, verbose=True):
+            ltol_subthresh=0.005, rstate=None, save_dist_draws=True,
+            save_red_draws=True, verbose=True):
         """
         Fit all input models to the input data to compute the associated
         log-posteriors.
@@ -524,6 +523,14 @@ class BruteForce():
         rstate : `~numpy.random.RandomState`, optional
             `~numpy.random.RandomState` instance.
 
+        save_dist_draws : bool, optional
+            Whether to save distance draws (in units of kpc).
+            Default is `True`.
+
+        save_red_draws : bool, optional
+            Whether to save reddening draws (in units of Av).
+            Default is `True`.
+
         verbose : bool, optional
             Whether to print progress to `~sys.stderr`. Default is `True`.
 
@@ -537,6 +544,7 @@ class BruteForce():
         if parallax is not None and parallax_err is None:
             raise ValueError("Must provide both `parallax` and "
                              "`parallax_err`.")
+        return_distreds = save_dist_draws or save_red_draws
 
         # Initialize log(prior).
         if lnprior is None:
@@ -550,18 +558,19 @@ class BruteForce():
         # Apply age weights to reweight from EEP to age.
         if apply_agewt:
             try:
-                lnprior += np.log(self.models_params['agewt'])
+                lnprior += np.log(self.models_labels['agewt'])
             except:
-                warnings.warn("No age weights provided in `models_params`. ")
+                warnings.warn("No age weights provided in `labels`. ")
                 pass
 
         # Reweight based on spacing.
         if apply_grad:
             for l in self.models_labels.dtype.names:
                 label = self.models_labels[l]
-                ulabel = np.unique(label)  # grab underlying grid
-                lngrad_label = np.log(np.gradient(ulabel))  # compute gradient
-                lnprior += np.interp(label, ulabel, lngrad_label)  # add to lnp
+                if self.labels_mask[l][0]:
+                    ulabel = np.unique(label)  # grab underlying grid
+                    lngrad_label = np.log(np.gradient(ulabel))  # compute grad
+                    lnprior += np.interp(label, ulabel, lngrad_label)  # add
 
         # Initialize distance log(prior).
         if lndistprior is None and data_coords is None:
@@ -587,6 +596,12 @@ class BruteForce():
                                                          dtype='float32'))
         out.create_dataset("best_chi2", data=np.zeros(Ndata, dtype='float32'))
         out.create_dataset("Nbands", data=np.zeros(Ndata, dtype='int16'))
+        if save_dist_draws:
+            out.create_dataset("dists", data=np.ones((Ndata, Ndraws),
+                                                     dtype='float32'))
+        if save_red_draws:
+            out.create_dataset("reds", data=np.ones((Ndata, Ndraws),
+                                                    dtype='float32'))
 
         # Fit data.
         if verbose:
@@ -603,6 +618,7 @@ class BruteForce():
                                               Ndraws=Ndraws, rstate=rstate,
                                               lndistprior=lndistprior,
                                               data_coords=data_coords,
+                                              return_distreds=return_distreds,
                                               ltol_subthresh=ltol_subthresh,
                                               logl_dim_prior=logl_dim_prior,
                                               ltol=ltol)):
@@ -612,7 +628,11 @@ class BruteForce():
                 sys.stderr.flush()
 
             # Save results.
-            idxs, scales, avs, covs_sa, Ndim, levid, chi2min = results
+            if return_distreds:
+                (idxs, scales, avs, covs_sa, Ndim,
+                 levid, chi2min, dists, reds) = results
+            else:
+                idxs, scales, avs, covs_sa, Ndim, levid, chi2min = results
             out['idxs'][i] = idxs
             out['scales'][i] = scales
             out['avs'][i] = avs
@@ -620,6 +640,10 @@ class BruteForce():
             out['Nbands'][i] = Ndim
             out['log_evidence'][i] = levid
             out['best_chi2'][i] = chi2min
+            if save_dist_draws:
+                out['dists'][i] = dists
+            if save_red_draws:
+                out['reds'][i] = reds
 
         if verbose:
             sys.stderr.write('\n')
@@ -630,7 +654,7 @@ class BruteForce():
     def _fit(self, data, data_err, data_mask,
              parallax=None, parallax_err=None, Nmc_prior=150, avlim=(0., 6.),
              lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4, Ndraws=2000,
-             lndistprior=None, data_coords=None,
+             lndistprior=None, data_coords=None, return_distreds=True,
              logl_dim_prior=True, ltol=0.02, ltol_subthresh=0.005,
              rstate=None):
         """
@@ -691,6 +715,10 @@ class BruteForce():
             fit. These are passed to `lndistprior` when constructing the
             distance prior.
 
+        return_distreds : bool, optional
+            Whether to return distance and reddening draws (in units of kpc
+            and Av, respectively). Default is `True`.
+
         logl_dim_prior : bool, optional
             Whether to apply a dimensional-based correction (prior) to the
             log-likelihood. Transforms the likelihood to a chi2 distribution
@@ -710,7 +738,7 @@ class BruteForce():
         Returns
         -------
         results : tuple
-            Output of `lprob_func` yielded from the generator.
+            Outputs yielded from the generator.
 
         """
 
@@ -782,7 +810,8 @@ class BruteForce():
         logpost_kwargs = {'Nmc_prior': Nmc_prior, 'lnprior': lnprior,
                           'lnprior': lnprior, 'wt_thresh': wt_thresh,
                           'cdf_thresh': cdf_thresh, 'rstate': rstate,
-                          'lndistprior': lndistprior, 'avlim': avlim}
+                          'lndistprior': lndistprior, 'avlim': avlim,
+                          'return_distreds': return_distreds}
         _logpost = _function_wrapper(_logpost_zip, [], logpost_kwargs,
                                      name='logpost')
 
@@ -800,8 +829,12 @@ class BruteForce():
                                          data_coords[chunk])))
 
             # Extract `map`-ed results.
-            for results, (sel, lnpost) in zip(results_map, lnpost_map):
+            for results, blob in zip(results_map, lnpost_map):
                 lnlike, Ndim, chi2, scales, avs, ds2, da2, dsda = results
+                if return_distreds:
+                    sel, lnpost, dists, reds, logwts = blob
+                else:
+                    sel, lnpost = blob
 
                 # Compute GOF metrics.
                 chi2min = np.min(chi2[sel])
@@ -810,7 +843,8 @@ class BruteForce():
                 # Resample.
                 wt = np.exp(lnpost - levid)
                 wt /= wt.sum()
-                sidxs = rstate.choice(sel, size=Ndraws, p=wt)
+                idxs = rstate.choice(len(sel), size=Ndraws, p=wt)
+                sidxs = sel[idxs]
 
                 # Grab/compute corresponding values.
                 scales, avs, ds2, da2, dsda = (scales[sidxs], avs[sidxs],
@@ -819,13 +853,24 @@ class BruteForce():
                 cov_sa = np.array([np.linalg.inv(np.array([[s, sa], [sa, a]]))
                                    for s, a, sa in zip(ds2, da2, dsda)])
 
-                yield sidxs, scales, avs, cov_sa, Ndim, levid, chi2min
+                # Draw distances and reddenings.
+                if return_distreds:
+                    imc = np.zeros(Ndraws, dtype='int')
+                    for i, idx in enumerate(idxs):
+                        wt = np.exp(logwts[idx] - logsumexp(logwts[idx]))
+                        wt /= wt.sum()
+                        imc[i] = rstate.choice(Nmc_prior, p=wt)
+                    dists, reds = dists[idxs, imc], reds[idxs, imc]
+                    yield (sidxs, scales, avs, cov_sa, Ndim, levid, chi2min,
+                           dists, reds)
+                else:
+                    yield sidxs, scales, avs, cov_sa, Ndim, levid, chi2min
 
 
 def _lnpost(results, parallax=None, parallax_err=None, coord=None,
             Nmc_prior=150, lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4,
             lndistprior=None, avlim=(0., 6.), rstate=None,
-            *args, **kwargs):
+            return_distreds=True, *args, **kwargs):
     """
     Internal function used to estimate posteriors from fits using the
     provided priors via Monte Carlo integration.
@@ -879,6 +924,10 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
     rstate : `~numpy.random.RandomState`, optional
         `~numpy.random.RandomState` instance.
 
+    return_distreds : bool, optional
+        Whether to return weighted distance and reddening draws (in units of
+        kpc and Av, respectively). Default is `True`.
+
     Returns
     -------
     sel : `~numpy.ndarray` of shape `(Nsel,)`
@@ -888,6 +937,15 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
     lnpost : `~numpy.ndarray` of shape `(Nsel,)`
         The modified log-posteriors for the subset of models with
         reasonable fits.
+
+    dists : `~numpy.ndarray` of shape `(Nsel, Nmc_prior)`, optional
+        The dist draws for each selected model.
+
+    reds : `~numpy.ndarray` of shape `(Nsel, Nmc_prior)`, optional
+       The reddening draws for each selected model.
+
+    logwts : `~numpy.ndarray` of shape `(Nsel, Nmc_prior)`, optional
+        The ln(weights) for each selected model.
 
     """
 
@@ -984,7 +1042,10 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
         # Just assume the maximum-likelihood estimate.
         lnpost = lnprob[sel]
 
-    return sel, lnpost
+    if return_distreds:
+        return sel, lnpost, dist_mc.T, a_mc.T, lnp_mc.T
+    else:
+        return sel, lnpost
 
 
 def LOSloglike(theta, cdfs, xedges, yedges, interpolate=True):

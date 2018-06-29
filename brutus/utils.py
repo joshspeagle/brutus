@@ -16,13 +16,113 @@ import warnings
 import math
 import numpy as np
 import warnings
+import h5py
 
 try:
     from scipy.special import logsumexp
 except ImportError:
     from scipy.misc import logsumexp
 
-__all__ = ["quantile", "draw_sav"]
+from .filters import FILTERS
+
+__all__ = ["load_models", "quantile", "draw_sav"]
+
+
+def load_models(filepath, filters=None, labels=None, verbose=True):
+    """
+
+    Parameters
+    ----------
+    filepath : string, optional
+        The filepath to where the models are located.
+
+    filters : iterable of strings with length `Nfilt`, optional
+        List of filters that will be loaded. If not provided, will default
+        to all available filters. See the internally-defined `FILTERS` variable
+        for more details on filter names. Any filters that are not available
+        will be skipped over.
+
+    labels : iterable of strings with length `Nlabel`, optional
+        List of labels associated with the set of imported stellar models.
+        Any labels that are not available will be skipped over.
+        The default set is
+        `['mini', 'feh', 'eep', 'loga', 'logl', 'logt', 'logg', 'Mr', 'agewt']`
+
+    verbose : bool, optional
+        Whether to print progress. Default is `True`.
+
+    Returns
+    -------
+    models : `~numpy.ndarray` of shape `(Nmodel, Nfilt, Ncoef)`
+        Array of models comprised of coefficients in each band used to
+        describe the photometry as a function of reddening, parameterized
+        in terms of Av.
+
+    labels : structured `~numpy.ndarray` with dimensions `(Nmodel, Nlabel)`
+        A structured array with the labels corresponding to each model.
+
+    label_mask : structured `~numpy.ndarray` with dimensions `(1, Nlabel)`
+        A structured array that masks ancillary labels associated with
+        predictions (rather than those used to compute the model grid).
+
+    """
+
+    # Initialize values.
+    if filters is None:
+        filters = FILTERS
+    if labels is None:
+        labels = ['mini', 'feh', 'eep',
+                  'loga', 'logl', 'logt', 'logg',
+                  'Mr', 'agewt']
+
+    # Read in models.
+    f = h5py.File(filepath)
+    mag_coeffs = f['mag_coeffs']
+    models = np.zeros((len(mag_coeffs), len(filters), len(mag_coeffs[0][0])),
+                      dtype='float32')
+    for i, filt in enumerate(filters):
+        try:
+            models[:, i] = mag_coeffs[filt]  # fitted magnitude coefficients
+            if verbose:
+                sys.stderr.write('\rReading filter {}           '.format(filt))
+                sys.stderr.flush()
+        except:
+            pass
+    if verbose:
+        sys.stderr.write('\n')
+
+    # Remove extraneous/undefined filters.
+    sel = np.all(models == 0., axis=(0, 2))
+    models = models[:, ~sel, :]
+
+    # Read in labels.
+    combined_labels = np.full(len(models), np.nan,
+                              dtype=np.dtype([(n, np.float) for n in labels]))
+    label_mask = np.zeros(1, dtype=np.dtype([(n, np.bool) for n in labels]))
+    try:
+        # Grab "labels" (inputs).
+        flabels = f['labels'][:]
+        for n in flabels.dtype.names:
+            if n in labels:
+                combined_labels[n] = flabels[n]
+                label_mask[n] = True
+    except:
+        pass
+    try:
+        # Grab "parameters" (predictions from labels).
+        fparams = f['parameters'][:]
+        for n in fparams.dtype.names:
+            if n in labels:
+                combined_labels[n] = fparams[n]
+    except:
+        pass
+
+    # Remove extraneous/undefined labels.
+    labels2 = [l for i, l in zip(combined_labels[0], labels) if ~np.isnan(i)]
+    combined_labels = combined_labels[labels2]
+    label_mask = label_mask[labels2]
+
+    return models, combined_labels, label_mask
 
 
 def quantile(x, q, weights=None):

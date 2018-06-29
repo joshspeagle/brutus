@@ -4,7 +4,7 @@
 from __future__ import (division, print_function)
 from six.moves import range
 
-from .seds import *
 from .fitting import *
+from .utils import *
 
-__version__ = "0.0.5"
+__version__ = "0.2.0"
