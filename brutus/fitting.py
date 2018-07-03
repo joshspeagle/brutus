@@ -30,7 +30,8 @@ from .pdf import *
 from .utils import *
 
 __all__ = ["get_seds", "loglike", "_optimize_fit", "BruteForce", "_lnpost",
-           "LOSloglike", "LOSpriortransform", "_function_wrapper"]
+           "LOS_clouds_loglike_bin", "LOS_clouds_priortransform",
+           "_function_wrapper"]
 
 
 def get_seds(mag_coeffs, av, return_rvec=False, return_flux=False):
@@ -1048,7 +1049,8 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
         return sel, lnpost
 
 
-def LOSloglike(theta, cdfs, xedges, yedges, interpolate=True):
+def LOS_clouds_loglike_bin(theta, cdfs, xedges, yedges, interpolate=True,
+                           diffuse=0.01):
     """
     Compute the log-likelihood for the cumulative reddening along the
     line of sight (LOS) parameterized by `theta`, given input binned
@@ -1077,6 +1079,12 @@ def LOSloglike(theta, cdfs, xedges, yedges, interpolate=True):
         Whether to linearly interpolate between bins (defined by their central
         positions). Default is `True`.
 
+    diffuse : float, optional
+        A number between `[0., 1.]` that informs how "diffuse" the posteriors
+        are for our outlier model relative to our allowed distance/reddening.
+        `0.` implies a delta function, while `1.` is flat across the prior.
+        Default is `0.01`.
+
     """
 
     # Grab parameters.
@@ -1087,8 +1095,8 @@ def LOSloglike(theta, cdfs, xedges, yedges, interpolate=True):
     dx, dy = xedges[1] - xedges[0], yedges[1] - yedges[0]
     Nxedges, Nyedges = len(xedges), len(yedges)
     Nxbin, Nybin = Nxedges - 1, Nyedges - 1
-    x_ctrs = np.arange(0.5, Nxedges, 1.)
-    y_ctrs = np.arange(0.5, Nyedges, 1.)
+    x_ctrs = np.arange(0.5, Nxbin, 1.)
+    y_ctrs = np.arange(0.5, Nybin, 1.)
     x = np.concatenate(([0], (dists - xedges[0]) / dx, [Nxbin]))
     y = (reds - yedges[0]) / dy
 
@@ -1110,9 +1118,9 @@ def LOSloglike(theta, cdfs, xedges, yedges, interpolate=True):
 
     # Threshold (x,y) to edges (and shift to deal with centers).
     x[np.where(x < 0.5)] = 0.5
-    x[np.where(x > Nxbin + 0.5)] = Nxbin + 0.5
+    x[np.where(x > Nxbin - 0.5)] = Nxbin - 0.5
     y[np.where(y < 0.5)] = 0.5
-    y[np.where(y > Nybin + 0.5)] = Nybin + 0.5
+    y[np.where(y > Nybin - 0.5)] = Nybin - 0.5
 
     # Define "left" and "right" versions for xs.
     x1l, x1r = x1[:-1], x1[1:]
@@ -1131,7 +1139,7 @@ def LOSloglike(theta, cdfs, xedges, yedges, interpolate=True):
         # Interpolate in x.
         qp1, qp2 = (q11 * dx2 + q21 * dx1), (q12 * dx2 + q22 * dx1)
         xsel = np.where(~((dx1 > 0.) & (dx2 > 0.)))  # deal with edges
-        qp1[xsel], qp2[xsel] = q11[xsel], q12[xsel]  # replace edges
+        qp1[:, xsel], qp2[:, xsel] = q11[:, xsel], q12[:, xsel]  # replace
         # Interpolate in y.
         cdf_left = qp1 * dy2 + qp2 * dy1
         ysel = np.where(~((dy1 > 0.) & (dy2 > 0.)))  # deal with edges
@@ -1142,12 +1150,12 @@ def LOSloglike(theta, cdfs, xedges, yedges, interpolate=True):
         q11, q12, q21, q22 = (cdfs[:, x1r, y1], cdfs[:, x1r, y2],
                               cdfs[:, x2r, y1], cdfs[:, x2r, y2])
         # Compute areas.
-        dx1, dx2 = np.abs(xr - x_ctrs[x1r]), np.abs(x_ctrs[x2r] - xr)
-        dy1, dy2 = np.abs(y - y_ctrs[y1]), np.abs(y_ctrs[y2] - y)
+        dx1, dx2 = (xr - x_ctrs[x1r]), (x_ctrs[x2r] - xr)
+        dy1, dy2 = (y - y_ctrs[y1]), (y_ctrs[y2] - y)
         # Interpolate in x.
         qp1, qp2 = (q11 * dx2 + q21 * dx1), (q12 * dx2 + q22 * dx1)
         xsel = np.where(~((dx1 > 0.) & (dx2 > 0.)))  # deal with edges
-        qp1[xsel], qp2[xsel] = q11[xsel], q12[xsel]  # replace edges
+        qp1[:, xsel], qp2[:, xsel] = q11[:, xsel], q12[:, xsel]  # replace
         # Interpolate in y.
         cdf_right = qp1 * dy2 + qp2 * dy1
         ysel = np.where(~((dy1 > 0.) & (dy2 > 0.)))  # deal with edges
@@ -1160,7 +1168,8 @@ def LOSloglike(theta, cdfs, xedges, yedges, interpolate=True):
     likes = np.sum(cdf_right - cdf_left, axis=1)
 
     # Add in outlier mixture model. Assume uniform in (x, y) with `pb` weight.
-    likes = (pb / (Nxbin * Nybin)) + (1. - pb) * likes
+    pb_norm = (1. - diffuse) * (Nxbin - 1.) * Nybin + Nybin
+    likes = pb * (1. / pb_norm) + (1. - pb) * likes
 
     # Compute total log-likelihood.
     loglike = np.sum(np.log(likes))
@@ -1168,28 +1177,37 @@ def LOSloglike(theta, cdfs, xedges, yedges, interpolate=True):
     return loglike
 
 
-def LOSpriortransform(u, rlim=(0., 6.), dlim=(4., 19.)):
+def LOS_clouds_priortransform(u, rlims=(0., 6.), dlims=(4., 19.),
+                              pb_params=(-3., 0.7, -np.inf, 0.)):
     """
     The "prior transform" for the LOS fit that converts from draws on the
     N-dimensional unit cube to samples from the prior. Used in nested sampling
-    methods. Assumes uniform priors for distance and reddening.
+    methods. Assumes uniform priors for distance and reddening
+    and a (truncated) log-normal in outlier fraction.
 
     Parameters
     ----------
     u : `~numpy.ndarray` of shape `(Nparams)`
-        The `Nparams` values drawn from the unit cube. Contains the fraction
-        of outliers `P_b` followed by the foreground reddening `fred`
-        followed by a series of `(dist, red)` pairs for each "cloud" along
-        the LOS.
+        The `2 + 2 * Nclouds` values drawn from the unit cube.
+        Contains the portion of outliers `P_b`, followed by the foreground
+        reddening `fred`, followed by a series of `(dist, red)` pairs for
+        each "cloud" along the LOS.
 
-    rlim : 2-tuple, optional
+    rlims : 2-tuple, optional
         The reddening bounds within which we'd like to sample. Default is
         `(0., 6.)`, which also assumes reddening is in units of Av.
 
-    dlim : 2-tuple, optional
+    dlims : 2-tuple, optional
         The distance bounds within which we'd like to sample. Default is
         `(4., 19.)`, which also assumes distance is in units of distance
         modulus.
+
+    pb_params : 4-tuple, optional
+        Mean, standard deviation, lower bound, and upper bound for a
+        truncated log-normal distribution. The default is
+        `(-3., 0.7, -np.inf, 0.)`, which corresponds to a mean of 0.05, a
+        standard deviation of a factor of 2, a lower bound of 0, and an
+        upper bound of 1.
 
     Returns
     -------
@@ -1198,21 +1216,20 @@ def LOSpriortransform(u, rlim=(0., 6.), dlim=(4., 19.)):
 
     """
 
+    # Initialize values.
     x = u[:]
 
-    # pb
-    my_mean = -3.
-    my_std = np.log(2.)
-    myclip_a = -np.inf
-    myclip_b = 0.
-    a, b = (myclip_a - my_mean) / my_std, (myclip_b - my_mean) / my_std
-    x[0] = np.exp(truncnorm.ppf(u[0], a, b, loc=my_mean, scale=my_std))
+    # pb (outlier fraction)
+    pb_mean, pb_std, pb_low, pb_high = pb_params
+    a = (pb_low - pb_mean) / pb_std  # set normalized lower bound
+    b = (pb_high - pb_mean) / pb_std  # set normalized upper bound
+    x[0] = np.exp(truncnorm.ppf(u[0], a, b, loc=pb_mean, scale=pb_std))
 
     # reddening
-    x[1::2] = np.sort(u[1::2] * 6.)
+    x[1::2] = np.sort(u[1::2]) * (rlims[1] - rlims[0]) + rlims[0]
 
     # distances
-    x[2::2] = np.sort(u[2::2] * (14. - 4.) + 4.)
+    x[2::2] = np.sort(u[2::2]) * (dlims[1] - dlims[0]) + dlims[0]
 
     return x
 

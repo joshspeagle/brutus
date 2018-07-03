@@ -528,7 +528,7 @@ def cornerplot(idxs, data, params, lndistprior=None,
     return (fig, axes)
 
 
-def dist_vs_red(data, Rv=3.3, dist_type='distance_modulus',
+def dist_vs_red(data, Rv=None, dist_type='distance_modulus',
                 lndistprior=None, coord=None, avlim=(0., 6.), weights=None,
                 parallax=None, parallax_err=None, Nr=300,
                 cmap='Blues', bins=300, span=None, smooth=0.01,
@@ -547,7 +547,7 @@ def dist_vs_red(data, Rv=3.3, dist_type='distance_modulus',
 
     Rv : float, optional
         If provided, will convert from Av to E(B-V) when plotting. Default
-        is `3.3`.
+        is `None`.
 
     dist_type : str, optional
         The distance format to be plotted. Options include `'parallax'`,

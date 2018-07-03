@@ -366,7 +366,7 @@ def gal_lnprior(dists, coord, R_solar=8., Z_solar=0.025,
         return lnprior, logp_thin, logp_thick, logp_halo
 
 
-def bin_pdfs_distred(data, cdf=False, Rv=3.3, dist_type='distance_modulus',
+def bin_pdfs_distred(data, cdf=False, Rv=None, dist_type='distance_modulus',
                      lndistprior=None, coords=None, avlim=(0., 6.),
                      parallaxes=None, parallax_errors=None, Nr=100,
                      bins=(750, 300), span=None, smooth=0.01, rstate=None,
@@ -388,8 +388,7 @@ def bin_pdfs_distred(data, cdf=False, Rv=3.3, dist_type='distance_modulus',
         PDF. Useful when evaluating the MAP LOS fit. Default is `False`.
 
     Rv : float, optional
-        If provided, will convert from Av to E(B-V) when plotting. Default
-        is `3.3`.
+        If provided, will convert from Av to E(B-V). Default is `None`.
 
     dist_type : str, optional
         The distance format to be plotted. Options include `'parallax'`,
