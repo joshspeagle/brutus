@@ -31,7 +31,8 @@ except ImportError:
     from scipy.misc import logsumexp
 
 __all__ = ["imf_lnprior", "ps1_MrLF_lnprior", "parallax_lnprior",
-           "logn_disk", "logn_halo", "gal_lnprior", "bin_pdfs_distred"]
+           "logn_disk", "logn_halo", "logp_feh_disk", "logp_feh_halo",
+           "gal_lnprior", "bin_pdfs_distred"]
 
 
 def imf_lnprior(mgrid):
@@ -237,29 +238,112 @@ def logn_halo(R, Z, R_solar=8., R_break=27.8, R_smooth=0.5, q_h=0.7,
     return logn
 
 
-def gal_lnprior(dists, coord, R_solar=8., Z_solar=0.025,
-                R_thin=2.15, Z_thin=0.245, R_thick=3.26, Z_thick=0.745,
-                f_thick=0.13, Rb_halo=27.8, Rs_halo=0.5, q_halo=0.7,
-                eta_halo_inner=2.62, eta_halo_outer=3.80, f_halo=0.003,
-                return_components=False):
+def logp_feh_disk(feh, Z, feh_mean=-0.89, feh_sigma=0.2,
+                  exp_amp=0.55, exp_scale=0.5):
     """
-    Log-prior in distance for a galactic model containing a thin disk,
-    thick disk, and halo. Parameters taken from Green et al. (2014).
+    Log-prior for the metallicity in the disk component of the galaxy.
 
     Parameters
     ----------
-    dists : `~numpy.ndarray` of shape (N)
+    feh : `~numpy.ndarray` of shape (N)
+        The metallicities of the corresponding models whose `Z` has been
+        provided.
+
+    Z : `~numpy.ndarray` of shape (N)
+        The height above the galactic midplane.
+
+    feh_mean : float, optional
+        The mean metallicity of the disk in the midplane. Default is `-0.89`.
+
+    feh_sigma : float, optional
+        The standard deviation in the metallicity of the disk.
+        Default is `0.2`.
+
+    exp_amp : float, optional
+        The amplitude of the exponential dependence of the metallicity prior
+        on `Z`. Default is `0.55`.
+
+    exp_scale : float, optional
+        The scale height for the exponential dependence of the metallicity
+        prior on `Z` (in units of kpc). Default is `0.5`.
+
+    Returns
+    -------
+    logn : `~numpy.ndarray` of shape (N)
+        The corresponding normalized ln(number density).
+
+    """
+
+    # Compute mean metallicity.
+    feh_mean_pred = feh_mean + exp_amp * np.exp(-np.abs(Z) / exp_scale)
+
+    # Compute log-probability.
+    chi2 = (feh_mean_pred - feh)**2 / feh_sigma**2  # chi2
+    lnorm = np.log(2. * np.pi * feh_sigma**2)  # normalization
+    lnprior = -0.5 * (chi2 + lnorm)
+
+    return lnprior
+
+
+def logp_feh_halo(feh, feh_mean=-1.46, feh_sigma=0.3):
+    """
+    Log-prior for the metallicity in the halo component of the galaxy.
+
+    Parameters
+    ----------
+    feh : `~numpy.ndarray` of shape (N)
+        The metallicities of the corresponding models whose `Z` has been
+        provided.
+
+    feh_mean : float, optional
+        The mean metallicity of the halo. Default is `-1.46`.
+
+    feh_sigma : float, optional
+        The standard deviation in the metallicity of the halo.
+        Default is `0.3`.
+
+    Returns
+    -------
+    logn : `~numpy.ndarray` of shape (N)
+        The corresponding normalized ln(number density).
+
+    """
+
+    # Compute log-probability.
+    chi2 = (feh_mean - feh)**2 / feh_sigma**2  # chi2
+    lnorm = np.log(2. * np.pi * feh_sigma**2)  # normalization
+    lnprior = -0.5 * (chi2 + lnorm)
+
+    return lnprior
+
+
+def gal_lnprior(dists, coord, labels=None, R_solar=8., Z_solar=0.025,
+                R_thin=2.15, Z_thin=0.245, R_thick=3.26, Z_thick=0.745,
+                f_thick=0.13, Rb_halo=27.8, Rs_halo=0.5, q_halo=0.7,
+                eta_halo_inner=2.62, eta_halo_outer=3.80, f_halo=0.003,
+                feh_thin=-0.89, feh_thick=-0.75, feh_disk_sigma=0.2,
+                feh_disk_exp_amp=0.55, feh_disk_exp_scale=0.5, feh_f_thin=0.63,
+                feh_halo=-1.46, feh_halo_sigma=0.3,
+                return_components=False):
+    """
+    Log-prior for a galactic model containing a thin disk, thick disk, and
+    halo. The default behavior imposes a prior based on the total
+    number density from all three components. If the metallicity is
+    provided, then an associated galactic metallicity model is also imposed.
+    Parameters taken from Green et al. (2014, 2015, 2018).
+
+    Parameters
+    ----------
+    dists : `~numpy.ndarray` of shape `(N,)`
         Distance from the observer in kpc.
 
     coord : 2-tuple
         The `(l, b)` galaxy coordinates of the object.
 
-    R_solar : float, optional
-        The solar distance from the center of the galaxy in kpc.
-        Default is `8.`.
-
-    Z : `~numpy.ndarray` of shape (N)
-        The height above the galactic midplane.
+    labels : structured `~numpy.ndarray` of shape `(N, Nlabels)`
+        Collection of labels associated with the models whose distance
+        estimates are provided. Must contain the label `'feh'` to apply
+        the metallicity prior.
 
     R_solar : float, optional
         The solar distance from the center of the galaxy in kpc.
@@ -311,6 +395,33 @@ def gal_lnprior(dists, coord, R_solar=8., Z_solar=0.025,
         The fractional weight applied to the halo number density.
         Default is `0.003`.
 
+    feh_thin : float, optional
+        The mean metallicity of the thin disk in the midplane.
+        Default is `-0.89`.
+
+    feh_thick : float, optional
+        The mean metallicity of the thick disk in the midplane.
+        Default is `-0.75`.
+
+    feh_disk_sigma : float, optional
+        The standard deviation in the metallicity of the disk.
+        Default is `0.2`.
+
+    feh_disk_exp_amp : float, optional
+        The amplitude of the exponential dependence of the metallicity prior
+        on `Z` in the disk. Default is `0.55`.
+
+    feh_disk_exp_scale : float, optional
+        The scale height for the exponential dependence of the metallicity
+        prior on `Z` in the disk (in units of kpc). Default is `0.5`.
+
+    feh_halo : float, optional
+        The mean metallicity of the halo. Default is `-1.46`.
+
+    feh_halo_sigma : float, optional
+        The standard deviation in the metallicity of the halo.
+        Default is `0.3`.
+
     return_components : bool, optional
         Whether to also return the separate components. Default is `False`.
 
@@ -360,10 +471,54 @@ def gal_lnprior(dists, coord, R_solar=8., Z_solar=0.025,
     # Compute log-probability.
     lnprior = logsumexp([logp_thin, logp_thick, logp_halo], axis=0)
 
+    # Collect components.
+    components = [logp_thin, logp_thick, logp_halo]
+
+    # Apply the galactic metallicity prior.
+    if labels is not None:
+        try:
+            # Grab metallicities.
+            feh = labels['feh']
+
+            # Compute membership probabilities.
+            logp_disk = logsumexp([logp_thin, logp_thick], axis=0)
+            lnprior_disk = logp_disk - lnprior
+            lnprior_halo = logp_halo - lnprior
+
+            # Compute think disk metallicity prior.
+            feh_lnp_thin = logp_feh_disk(feh, Z, feh_mean=feh_thin,
+                                         feh_sigma=feh_disk_sigma,
+                                         exp_amp=feh_disk_exp_amp,
+                                         exp_scale=feh_disk_exp_scale)
+            feh_lnp_thin += np.log(feh_f_thin) + lnprior_disk
+
+            # Compute thick disk metallicity prior.
+            feh_lnp_thick = logp_feh_disk(feh, Z, feh_mean=feh_thick,
+                                          feh_sigma=feh_disk_sigma,
+                                          exp_amp=feh_disk_exp_amp,
+                                          exp_scale=feh_disk_exp_scale)
+            feh_lnp_thick += np.log(1. - feh_f_thin) + lnprior_disk
+
+            # Compute halo metallicity prior.
+            feh_lnp_halo = logp_feh_halo(feh, feh_mean=feh_halo,
+                                         feh_sigma=feh_halo_sigma)
+            feh_lnp_halo += lnprior_halo
+
+            # Compute total metallicity prior.
+            feh_lnp = logsumexp([feh_lnp_thin, feh_lnp_thick, feh_lnp_halo],
+                                axis=0)
+
+            # Add to computed log-prior components.
+            lnprior += feh_lnp
+            components += [feh_lnp_thin, feh_lnp_thick, feh_lnp_halo]
+        except:
+            raise ValueError("No `'feh'` provided -- cannot compute "
+                             "galactic metallicity prior.")
+
     if not return_components:
         return lnprior
     else:
-        return lnprior, logp_thin, logp_thick, logp_halo
+        return lnprior, components
 
 
 def bin_pdfs_distred(data, cdf=False, Rv=None, dist_type='distance_modulus',

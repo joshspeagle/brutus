@@ -428,8 +428,8 @@ class BruteForce():
             parallax=None, parallax_err=None, Nmc_prior=150, avlim=(0., 6.),
             lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4, Ndraws=2000,
             apply_agewt=True, apply_grad=True, lndistprior=None,
-            data_coords=None, logl_dim_prior=True, ltol=0.02,
-            ltol_subthresh=0.005, rstate=None, save_dist_draws=True,
+            apply_dlabels=True, data_coords=None, logl_dim_prior=True,
+            ltol=0.02, ltol_subthresh=0.005, rstate=None, save_dist_draws=True,
             save_red_draws=True, verbose=True):
         """
         Fit all input models to the input data to compute the associated
@@ -502,6 +502,11 @@ class BruteForce():
         lndistprior : func, optional
             The log-distsance prior function to be applied. If not provided,
             this will default to the galactic model from Green et al. (2014).
+
+        apply_dlabels : bool, optional
+            Whether to pass the model labels to the distance prior to
+            apply any additional distance-based prior on the parameters.
+            Default is `True`.
 
         data_coords : `~numpy.ndarray` of shape `(Ndata, 2)`, optional
             The galactic `(l, b)` coordinates for the objects that are being
@@ -618,6 +623,7 @@ class BruteForce():
                                               cdf_thresh=cdf_thresh,
                                               Ndraws=Ndraws, rstate=rstate,
                                               lndistprior=lndistprior,
+                                              apply_dlabels=apply_dlabels,
                                               data_coords=data_coords,
                                               return_distreds=return_distreds,
                                               ltol_subthresh=ltol_subthresh,
@@ -655,9 +661,9 @@ class BruteForce():
     def _fit(self, data, data_err, data_mask,
              parallax=None, parallax_err=None, Nmc_prior=150, avlim=(0., 6.),
              lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4, Ndraws=2000,
-             lndistprior=None, data_coords=None, return_distreds=True,
-             logl_dim_prior=True, ltol=0.02, ltol_subthresh=0.005,
-             rstate=None):
+             lndistprior=None, apply_dlabels=True, data_coords=None,
+             return_distreds=True, logl_dim_prior=True, ltol=0.02,
+             ltol_subthresh=0.005, rstate=None):
         """
         Internal generator used to compute fits.
 
@@ -710,6 +716,11 @@ class BruteForce():
         lndistprior : func, optional
             The log-distsance prior function to be applied. If not provided,
             this will default to the galactic model from Green et al. (2014).
+
+        apply_dlabels : bool, optional
+            Whether to pass the model labels to the distance prior to
+            apply any additional distance-based prior on the parameters.
+            Default is `True`.
 
         data_coords : `~numpy.ndarray` of shape `(Ndata, 2)`, optional
             The galactic `(l, b)` coordinates for the objects that are being
@@ -771,6 +782,10 @@ class BruteForce():
             lndistprior = gal_lnprior
         if data_coords is None:
             data_coords = np.zeros((Ndata, 2))
+        if apply_dlabels:
+            dlabels = self.models_labels
+        else:
+            dlabels = None
 
         # Modifications to support parallelism.
 
@@ -812,6 +827,7 @@ class BruteForce():
                           'lnprior': lnprior, 'wt_thresh': wt_thresh,
                           'cdf_thresh': cdf_thresh, 'rstate': rstate,
                           'lndistprior': lndistprior, 'avlim': avlim,
+                          'dlabels': dlabels,
                           'return_distreds': return_distreds}
         _logpost = _function_wrapper(_logpost_zip, [], logpost_kwargs,
                                      name='logpost')
@@ -870,7 +886,7 @@ class BruteForce():
 
 def _lnpost(results, parallax=None, parallax_err=None, coord=None,
             Nmc_prior=150, lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4,
-            lndistprior=None, avlim=(0., 6.), rstate=None,
+            lndistprior=None, dlabels=None, avlim=(0., 6.), rstate=None,
             return_distreds=True, *args, **kwargs):
     """
     Internal function used to estimate posteriors from fits using the
@@ -917,6 +933,10 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
     lndistprior : func, optional
         The log-distsance prior function to be applied. If not provided,
         this will default to the galactic model from Green et al. (2014).
+
+    dlabels : bool, optional
+        The model labels to be passed the distance prior to
+        apply any additional distance-based prior on the parameters.
 
     avlim : 2-tuple, optional
         The bounds where Av predictions are reliable.
@@ -989,7 +1009,7 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
     dists = 1. / pars
 
     # Apply rough distance prior for clipping.
-    lnprob = lnpost + lndistprior(dists, coord)
+    lnprob = lnpost + lndistprior(dists, coord, labels=dlabels)
 
     # Apply rough parallax prior for clipping.
     if parallax is not None and parallax_err is not None:
@@ -1024,11 +1044,15 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
                                size=Nmc_prior)
                                for s, a, c in zip(scale, av,
                                                   cov_sa)]).T
+        if dlabels is not None:
+            dlabels_mc = np.tile(dlabels[sel], Nmc_prior).reshape(-1, Nsel)
+        else:
+            dlabels_mc = None
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             par_mc = np.sqrt(s_mc)
             dist_mc = 1. / par_mc
-            lnp_mc = lndistprior(dist_mc, coord)
+            lnp_mc = lndistprior(dist_mc, coord, labels=dlabels_mc)
         if parallax is not None:
             lnp_mc += parallax_lnprior(par_mc, parallax, parallax_err)
         # Ignore points that are out of bounds.
