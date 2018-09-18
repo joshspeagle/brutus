@@ -20,9 +20,9 @@ The current Bayestar grid (v1) can be found
 ### Generating SEDs
 `brutus` contains built-in SED generation utilities that run over the MIST
 stellar models and utilize the SED prediction engine taken from `minesweeper`.
-This capability is not necessary to apply to code to data given
-the pre-computed grids defined above, but can be useful if you'd like to
-generate your own grid of MIST models.
+**`brutus` can be installed and run without setting up this capability** using
+the pre-computed grids defined above. This functionality is provided so that
+users can generate their own grid of MIST models if desired.
 
 ### Installation
 `brutus` can be installed by running
@@ -33,3 +33,4 @@ from inside the repository.
 
 ### Demos
 Several ipython notebooks currently outline very basic usage of the code.
+Please contact jspeagle@cfa.harvard.edu if you have any questions.

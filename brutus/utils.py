@@ -25,8 +25,36 @@ except ImportError:
 
 from .filters import FILTERS
 
-__all__ = ["load_models", "quantile", "draw_sav",
+__all__ = ["_function_wrapper", "load_models", "quantile", "draw_sav",
            "magnitude", "inv_magnitude", "luptitude", "inv_luptitude"]
+
+
+class _function_wrapper(object):
+    """
+    A hack to make functions pickleable when `args` or `kwargs` are
+    also included. Based on the implementation in
+    `emcee <http://dan.iel.fm/emcee/>`_.
+
+    """
+
+    def __init__(self, func, args, kwargs, name='input'):
+        self.func = func
+        self.args = args
+        self.kwargs = kwargs
+        self.name = name
+
+    def __call__(self, x):
+        try:
+            return self.func(x, *self.args, **self.kwargs)
+        except:
+            import traceback
+            print("Exception while calling {0} function:".format(self.name))
+            print("  params:", x)
+            print("  args:", self.args)
+            print("  kwargs:", self.kwargs)
+            print("  exception:")
+            traceback.print_exc()
+            raise
 
 
 def load_models(filepath, filters=None, labels=None, verbose=True):
