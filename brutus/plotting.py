@@ -15,7 +15,6 @@ import os
 import warnings
 import math
 import numpy as np
-import warnings
 from matplotlib import pyplot as plt
 from matplotlib.ticker import MaxNLocator, NullLocator
 from matplotlib.colors import LinearSegmentedColormap, colorConverter
@@ -257,8 +256,10 @@ def cornerplot(idxs, data, params, lndistprior=None,
     labels = [l for l in params.dtype.names if l != 'agewt']
 
     # Deal with 1D results.
-    samples = params[idxs][labels]
-    samples = samples.view(np.float64).reshape(samples.shape + (-1,))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        samples = params[idxs][labels]
+        samples = samples.view((np.float64, len(samples.dtype.names)))
     samples = np.atleast_1d(samples)
     if len(samples.shape) == 1:
         samples = np.atleast_2d(samples)
@@ -647,7 +648,9 @@ def dist_vs_red(data, Rv=None, dist_type='distance_modulus',
     p_min_smooth = abs(np.diff(p1sig)) / 2.
     s_min_smooth = abs(np.diff(p1sig**2)) / 2.
     d_min_smooth = abs(np.diff(1. / p1sig)) / 2.
-    dm_min_smooth = abs(np.diff(5. * np.log10(1. / p1sig) + 10.)) / 2.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        dm_min_smooth = abs(np.diff(5. * np.log10(1. / p1sig) + 10.)) / 2.
 
     # Set up axes and labels.
     if dist_type not in ['parallax', 'scale', 'distance', 'distance_modulus']:

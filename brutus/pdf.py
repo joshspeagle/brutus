@@ -582,7 +582,7 @@ def bin_pdfs_distred(data, cdf=False, Rv=None, dist_type='distance_modulus',
 
     smooth : float or list of floats with shape `(ndim,)`, optional
         The standard deviation (either a single value or a different value for
-        each subplot) for the Gaussian kernel used to smooth the 1-D and 2-D
+        each subplot) for the Gaussian kernel used to smooth the 2-D
         marginalized posteriors, expressed as a fraction of the span.
         Default is `0.01` (1% smoothing).
 
@@ -758,7 +758,9 @@ def bin_pdfs_distred(data, cdf=False, Rv=None, dist_type='distance_modulus',
         elif dist_type == 'distance':
             x_min_smooth = abs(np.diff(1. / p1sig)) / 2.
         elif dist_type == 'distance_modulus':
-            x_min_smooth = abs(np.diff(5. * np.log10(1. / p1sig))) / 2.
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                x_min_smooth = abs(np.diff(5. * np.log10(1. / p1sig))) / 2.
         if np.isfinite(x_min_smooth):
             xsmooth_t = min(x_min_smooth, xsmooth)
         else:

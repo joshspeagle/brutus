@@ -44,7 +44,7 @@ setup(
     include_package_data=True,
     install_requires=["numpy", "scipy", "matplotlib", "six", "h5py"],
     keywords=["brute force", "photometry", "bayesian", "stars", "dust",
-              "template fitting"],
+              "parallax", "distance", "template fitting"],
     classifiers=["Development Status :: 4 - Beta",
                  "License :: OSI Approved :: MIT License",
                  "Natural Language :: English",
