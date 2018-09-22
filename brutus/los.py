@@ -28,7 +28,7 @@ __all__ = ["LOS_clouds_priortransform", "LOS_clouds_loglike_bin",
            "kernel_tophat", "kernel_gauss", "kernel_lorentz"]
 
 
-def LOS_clouds_priortransform(u, rlims=(0., 6.), dlims=(4., 19.),
+def LOS_clouds_priortransform(u, rlims=(0., 6.), dlims=(4., 19.), smooth=False,
                               pb_params=(-3., 0.7, -np.inf, 0.),
                               s_params=(-3., 0.3, -np.inf, 0.)):
     """
@@ -53,6 +53,10 @@ def LOS_clouds_priortransform(u, rlims=(0., 6.), dlims=(4., 19.),
         The distance bounds within which we'd like to sample. Default is
         `(4., 19.)`, which also assumes distance is in units of distance
         modulus.
+
+    smooth : bool, optional
+        Whether or not to sample additional smoothing parameters.
+        Default is `False`.
 
     pb_params : 4-tuple, optional
         Mean, standard deviation, lower bound, and upper bound for a
@@ -85,17 +89,22 @@ def LOS_clouds_priortransform(u, rlims=(0., 6.), dlims=(4., 19.),
     b = (pb_high - pb_mean) / pb_std  # set normalized upper bound
     x[0] = np.exp(truncnorm.ppf(u[0], a, b, loc=pb_mean, scale=pb_std))
 
-    # s (fractional smoothing)
-    s_mean, s_std, s_low, s_high = s_params
-    a = (s_low - s_mean) / s_std  # set normalized lower bound
-    b = (s_high - s_mean) / s_std  # set normalized upper bound
-    x[1] = np.exp(truncnorm.ppf(u[1], a, b, loc=s_mean, scale=s_std))
+    if smooth:
+        # s (fractional smoothing)
+        s_mean, s_std, s_low, s_high = s_params
+        a = (s_low - s_mean) / s_std  # set normalized lower bound
+        b = (s_high - s_mean) / s_std  # set normalized upper bound
+        x[1] = np.exp(truncnorm.ppf(u[1], a, b, loc=s_mean, scale=s_std))
+        x[2] = np.exp(truncnorm.ppf(u[2], a, b, loc=s_mean, scale=s_std))
+        s = 2
+    else:
+        s = 0
 
     # reddening
-    x[2::2] = np.sort(u[2::2]) * (rlims[1] - rlims[0]) + rlims[0]
+    x[s+1::2] = np.sort(u[s+1::2]) * (rlims[1] - rlims[0]) + rlims[0]
 
     # distances
-    x[3::2] = np.sort(u[3::2]) * (dlims[1] - dlims[0]) + dlims[0]
+    x[s+2::2] = np.sort(u[s+2::2]) * (dlims[1] - dlims[0]) + dlims[0]
 
     return x
 
@@ -113,8 +122,7 @@ def LOS_clouds_loglike_bin(theta, cdfs, xedges, yedges, interpolate=True):
     theta : `~numpy.ndarray` of shape `(Nparams,)`
         A collection of parameters that characterizes the cumulative
         reddening along the LOS. Contains the fraction of outliers `P_b`
-        followed by fractional reddening smoothing `s`,
-        the foreground reddening `fred`, and a series of
+        followed by the foreground reddening `fred` and a series of
         `(dist, red)` pairs for each "cloud" along the LOS.
 
     cdfs : `~numpy.ndarray` of shape `(Nobj, Nxbin, Nybin)`
@@ -138,8 +146,8 @@ def LOS_clouds_loglike_bin(theta, cdfs, xedges, yedges, interpolate=True):
     """
 
     # Grab parameters.
-    pb, s = theta[0], theta[1]
-    reds, dists = np.atleast_1d(theta[2::2]), np.atleast_1d(theta[3::2])
+    pb = theta[0]
+    reds, dists = np.atleast_1d(theta[1::2]), np.atleast_1d(theta[2::2])
 
     # Convert to bin coordinates.
     dx, dy = xedges[1] - xedges[0], yedges[1] - yedges[0]
@@ -239,8 +247,10 @@ def LOS_clouds_loglike_samples(theta, dsamps, rsamps, kernel='gauss',
     theta : `~numpy.ndarray` of shape `(Nparams,)`
         A collection of parameters that characterizes the cumulative
         reddening along the LOS. Contains the fraction of outliers `P_b`
-        followed by the foreground reddening `fred` followed by a series of
-        `(dist, red)` pairs for each "cloud" along the LOS.
+        followed by the fractional reddening smoothing for the foreground `s0`
+        and background `s` followed by the foreground reddening `fred`
+        followed by a series of `(dist, red)` pairs for each
+        "cloud" along the LOS.
 
     dsamps : `~numpy.ndarray` of shape `(Nobj, Nsamps)`
         Distance samples for each object. Follows the units used in `theta`.
@@ -280,16 +290,18 @@ def LOS_clouds_loglike_samples(theta, dsamps, rsamps, kernel='gauss',
                          "valid kernel.")
 
     # Grab parameters.
-    pb, s = theta[0], theta[1]
-    reds, dists = np.atleast_1d(theta[2::2]), np.atleast_1d(theta[3::2])
+    pb, s0, s = theta[0], theta[1], theta[2]
+    reds, dists = np.atleast_1d(theta[3::2]), np.atleast_1d(theta[4::2])
     area = (rlims[1] - rlims[0])
     rsmooth = s * area
+    rsmooth0 = s0 * area
 
     # Define cloud edges ("distance bounds").
     xedges = np.concatenate(([0], dists, [1e10]))
 
     # Define kernel parameters (mean, sigma) per LOS chunk.
     kparams = np.array([(r, rsmooth) for r in reds])
+    kparams[0][1] = rsmooth0
 
     # Sub-sample distance and reddening samples.
     ds, rs = dsamps[:, :Ndraws], rsamps[:, :Ndraws]
