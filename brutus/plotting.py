@@ -47,7 +47,7 @@ def cornerplot(idxs, data, params, lndistprior=None,
                parallax_err=None, Nr=500, applied_parallax=True,
                pcolor='blue', parallax_kwargs=None,
                dcolor='red', dist_kwargs=None, span=None,
-               quantiles=[0.16, 0.5, 0.84], color='black', smooth=0.035,
+               quantiles=[0.025, 0.5, 0.975], color='black', smooth=0.035,
                hist_kwargs=None, hist2d_kwargs=None, labels=None,
                label_kwargs=None, show_titles=False, title_fmt=".2f",
                title_kwargs=None, truths=None, truth_color='red',
@@ -126,8 +126,8 @@ def cornerplot(idxs, data, params, lndistprior=None,
 
     quantiles : iterable, optional
         A list of fractional quantiles to overplot on the 1-D marginalized
-        posteriors as vertical dashed lines. Default is `[0.16, 0.5, 0.84]`
-        (spanning the 68%/1-sigma credible interval).
+        posteriors as vertical dashed lines. Default is `[0.025, 0.5, 0.975]`
+        (spanning the 95%/2-sigma credible interval).
 
     color : str or iterable with shape `(ndim,)`, optional
         A `~matplotlib`-style color (either a single color or a different
