@@ -160,7 +160,7 @@ def cornerplot(idxs, data, params, lndistprior=None,
     show_titles : bool, optional
         Whether to display a title above each 1-D marginalized posterior
         showing the 0.5 quantile along with the upper/lower bounds associated
-        with the 0.16 and 0.84 (68%/1-sigma credible interval) quantiles.
+        with the 0.025 and 0.975 (95%/2-sigma credible interval) quantiles.
         Default is `True`.
 
     title_fmt : str, optional
@@ -249,8 +249,8 @@ def cornerplot(idxs, data, params, lndistprior=None,
     truth_kwargs['linestyle'] = truth_kwargs.get('linestyle', 'solid')
     truth_kwargs['linewidth'] = truth_kwargs.get('linewidth', 2)
     truth_kwargs['alpha'] = truth_kwargs.get('alpha', 0.7)
-    parallax_kwargs['alpha'] = parallax_kwargs.get('alpha', 0.5)
-    dist_kwargs['alpha'] = dist_kwargs.get('alpha', 0.5)
+    parallax_kwargs['alpha'] = parallax_kwargs.get('alpha', 0.3)
+    dist_kwargs['alpha'] = dist_kwargs.get('alpha', 0.3)
 
     # Ignore age weights.
     labels = [l for l in params.dtype.names if l != 'agewt']
@@ -430,7 +430,7 @@ def cornerplot(idxs, data, params, lndistprior=None,
         if show_titles:
             title = None
             if title_fmt is not None:
-                ql, qm, qh = quantile(x, [0.16, 0.5, 0.84], weights=weights)
+                ql, qm, qh = quantile(x, [0.025, 0.5, 0.975], weights=weights)
                 q_minus, q_plus = qm - ql, qh - qm
                 fmt = "{{0:{0}}}".format(title_fmt).format
                 title = r"${{{0}}}_{{-{1}}}^{{+{2}}}$"

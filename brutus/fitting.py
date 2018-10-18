@@ -83,8 +83,8 @@ def get_seds(mag_coeffs, av, return_rvec=False, return_flux=False):
 
 
 def loglike(data, data_err, data_mask, mag_coeffs, avlim=(0., 6.),
-            dim_prior=True, ltol=0.02, wt_thresh=0.005, return_vals=False,
-            *args, **kwargs):
+            dim_prior=True, ltol=0.02, wt_thresh=0.005, init_thresh=1e-3,
+            return_vals=False, *args, **kwargs):
     """
     Computes the log-likelihood between noisy data and noiseless models
     optimizing over the scale-factor and dust attenuation.
@@ -120,6 +120,11 @@ def loglike(data, data_err, data_mask, mag_coeffs, avlim=(0., 6.),
     wt_thresh : float, optional
         The threshold used to sub-select the best-fit log-likelihoods used
         to determine convergence. Default is `0.005`.
+
+    init_thresh : bool, optional
+        The weight threshold used to mask out fits after the initial
+        magnitude-based fit before transforming the results back to
+        flux density (and iterating until convergence). Default is `1e-3`.
 
     return_vals : bool, optional
         Whether to return the best-fit scale-factor and reddening along with
@@ -184,33 +189,59 @@ def loglike(data, data_err, data_mask, mag_coeffs, avlim=(0., 6.),
     models, rvecs, scale, av, ds2, da2, dsda = results
     resid = data - models
 
-    # Iterate until convergence.
-    lnl_old, lerr = -1e300, 1e300
-    stepsize, rescaling = np.ones(Nmodels) * 3., 1.2
-    while lerr > ltol:
-
-        # Re-compute models.
-        results = _optimize_fit(data, tot_var, tot_mask, models, rvecs, av,
-                                mag_coeffs, avlim=avlim, resid=resid,
-                                stepsize=stepsize)
-        models, rvecs, scale, av, ds2, da2, dsda = results
-
-        # Compute chi2.
-        resid = data - models
+    if init_thresh is not None:
+        # Cull initial bad fits before moving on.
         chi2 = np.sum(tot_mask * np.square(resid) / tot_var, axis=1)
-
         # Compute multivariate normal logpdf.
         lnl = -0.5 * chi2
         lnl += -0.5 * (Ndim * np.log(2. * np.pi) +
                        np.sum(np.log(tot_var), axis=1))
+        # Subselect models.
+        init_sel = np.where(lnl > np.max(lnl) + np.log(init_thresh))[0]
+        tot_var, tot_mask = tot_var[init_sel], tot_mask[init_sel]
+        models, rvecs = models[init_sel], rvecs[init_sel]
+        av_new = av[init_sel]
+        mag_coeffs = mag_coeffs[init_sel]
+        resid = resid[init_sel]
+    else:
+        # Keep all models.
+        init_sel = np.arange(Nmodels)
+        chi2 = np.ones(Nmodels) + 1e300
+        lnl = np.ones(Nmodels) - 1e300
+        av_new = np.array(av)
+
+    # Iterate until convergence.
+    lnl_old, lerr = -1e300, 1e300
+    stepsize, rescaling = np.ones(Nmodels)[init_sel] * 3., 1.2
+    while lerr > ltol:
+
+        # Re-compute models.
+        results = _optimize_fit(data, tot_var, tot_mask, models, rvecs,
+                                av_new, mag_coeffs, avlim=avlim, resid=resid,
+                                stepsize=stepsize)
+        models, rvecs, scale_new, av_new, ds2_new, da2_new, dsda_new = results
+
+        # Compute chi2.
+        resid = data - models
+        chi2_new = np.sum(tot_mask * np.square(resid) / tot_var, axis=1)
+
+        # Compute multivariate normal logpdf.
+        lnl_new = -0.5 * chi2_new
+        lnl_new += -0.5 * (Ndim * np.log(2. * np.pi) +
+                           np.sum(np.log(tot_var), axis=1))
 
         # Compute stopping criterion.
-        lnl_sel = lnl > np.max(lnl) + np.log(wt_thresh)
-        lerr = np.max(np.abs(lnl - lnl_old)[lnl_sel])
+        lnl_sel = np.where(lnl_new > np.max(lnl_new) + np.log(wt_thresh))[0]
+        lerr = np.max(np.abs(lnl_new - lnl_old)[lnl_sel])
 
         # Adjust stepsize.
-        stepsize[lnl < lnl_old] /= rescaling
-        lnl_old = lnl
+        stepsize[lnl_new < lnl_old] /= rescaling
+        lnl_old = lnl_new
+
+    # Insert optimized models into initial array of results.
+    lnl[init_sel], chi2[init_sel] = lnl_new, chi2_new
+    scale[init_sel], av[init_sel] = scale_new, av_new
+    ds2[init_sel], da2[init_sel], dsda[init_sel] = ds2_new, da2_new, dsda_new
 
     # Apply dimensionality prior.
     if dim_prior:
@@ -424,8 +455,9 @@ class BruteForce():
             lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4, Ndraws=2000,
             apply_agewt=True, apply_grad=True, lndistprior=None,
             apply_dlabels=True, data_coords=None, logl_dim_prior=True,
-            ltol=0.02, ltol_subthresh=0.005, rstate=None, save_dist_draws=True,
-            save_red_draws=True, verbose=True):
+            ltol=0.02, ltol_subthresh=0.005, logl_initthresh=1e-3,
+            rstate=None, save_dist_draws=True, save_red_draws=True,
+            verbose=True):
         """
         Fit all input models to the input data to compute the associated
         log-posteriors.
@@ -520,6 +552,11 @@ class BruteForce():
         ltol_subthresh : float, optional
             The threshold used to sub-select the best-fit log-likelihoods used
             to determine convergence. Default is `0.005`.
+
+        logl_initthresh : float, optional
+            The threshold `logl_initthresh * max(y_wt)` used to ignore models
+            with (relatively) negligible weights after computing the initial
+            set of fits but before optimizing them. Default is `1e-3`.
 
         rstate : `~numpy.random.RandomState`, optional
             `~numpy.random.RandomState` instance.
@@ -623,6 +660,7 @@ class BruteForce():
                                               return_distreds=return_distreds,
                                               ltol_subthresh=ltol_subthresh,
                                               logl_dim_prior=logl_dim_prior,
+                                              logl_initthresh=logl_initthresh,
                                               ltol=ltol)):
             # Print progress.
             if verbose and i < Ndata - 1:
@@ -658,7 +696,7 @@ class BruteForce():
              lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4, Ndraws=2000,
              lndistprior=None, apply_dlabels=True, data_coords=None,
              return_distreds=True, logl_dim_prior=True, ltol=0.02,
-             ltol_subthresh=0.005, rstate=None):
+             ltol_subthresh=0.005, logl_initthresh=1e-3, rstate=None):
         """
         Internal generator used to compute fits.
 
@@ -739,6 +777,11 @@ class BruteForce():
             The threshold used to sub-select the best-fit log-likelihoods used
             to determine convergence. Default is `0.005`.
 
+        logl_initthresh : float, optional
+            The threshold `logl_initthresh * max(y_wt)` used to ignore models
+            with (relatively) negligible weights after computing the initial
+            set of fits but before optimizing them. Default is `1e-3`.
+
         rstate : `~numpy.random.RandomState`, optional
             `~numpy.random.RandomState` instance.
 
@@ -807,6 +850,7 @@ class BruteForce():
         loglike_kwargs = {'avlim': avlim, 'ltol': ltol,
                           'logl_dim_prior': logl_dim_prior,
                           'wt_thresh': ltol_subthresh,
+                          'init_thresh': logl_initthresh,
                           'return_vals': True}
         _loglike = _function_wrapper(_loglike_zip, [], loglike_kwargs,
                                      name='loglike')
@@ -1035,10 +1079,12 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
     if Nmc_prior > 0:
         # Use Monte Carlo integration to get an estimate of the
         # overlap integral.
-        s_mc, a_mc = np.array([mvn(np.array([s, a]), c,
-                               size=Nmc_prior)
-                               for s, a, c in zip(scale, av,
-                                                  cov_sa)]).T
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            s_mc, a_mc = np.array([mvn(np.array([s, a]), c,
+                                   size=Nmc_prior)
+                                   for s, a, c in zip(scale, av,
+                                                      cov_sa)]).T
         if dlabels is not None:
             dlabels_mc = np.tile(dlabels[sel], Nmc_prior).reshape(-1, Nsel)
         else:
