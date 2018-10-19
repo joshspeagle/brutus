@@ -168,40 +168,45 @@ def loglike(data, data_err, data_mask, mag_coeffs, avlim=(0., 6.),
     clean = np.isfinite(data) & np.isfinite(data_err) & (data_err > 0.)
     data[~clean], data_err[~clean], data_mask[~clean] = 1., 1., False
 
-    tot_var = np.square(data_err) + np.zeros((Nmodels, Nfilt))  # variance
-    tot_mask = data_mask * np.ones((Nmodels, Nfilt))  # binary mask
+    # Subselect only clean observations.
     Ndim = sum(data_mask)  # number of dimensions
+    flux, fluxerr = data[data_mask], data_err[data_mask]  # mean, error
+    mcoeffs = mag_coeffs[:, data_mask, :]  # model magnitude coefficients
+    tot_var = np.square(fluxerr) + np.zeros((Nmodels, Ndim))  # total variance
 
     # Get started by fitting in magnitudes.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         # Convert to magnitudes.
-        mags = -2.5 * np.log10(data)
-        mags_var = np.square(2.5 / np.log(10.)) * tot_var / np.square(data)
+        mags = -2.5 * np.log10(flux)
+        mags_var = np.square(2.5 / np.log(10.)) * tot_var / np.square(flux)
         mclean = np.isfinite(mags)
         mags[~mclean], mags_var[:, ~mclean] = 0., 1e50  # mask negative values
+
     # Compute unreddened photometry.
     av = np.zeros(Nmodels)
-    models, rvecs = get_seds(mag_coeffs, av=av, return_rvec=True)
-    results = _optimize_fit(data, tot_var, tot_mask, models, rvecs, av,
-                            mag_coeffs, resid=None, mags=mags,
+    models, rvecs = get_seds(mcoeffs, av=av, return_rvec=True)
+
+    # Compute initial magnitude fit.
+    results = _optimize_fit(flux, tot_var, models, rvecs, av,
+                            mcoeffs, resid=None, mags=mags,
                             mags_var=mags_var, stepsize=1.)
     models, rvecs, scale, av, ds2, da2, dsda = results
-    resid = data - models
+    resid = flux - models
 
     if init_thresh is not None:
         # Cull initial bad fits before moving on.
-        chi2 = np.sum(tot_mask * np.square(resid) / tot_var, axis=1)
+        chi2 = np.sum(np.square(resid) / tot_var, axis=1)
         # Compute multivariate normal logpdf.
         lnl = -0.5 * chi2
         lnl += -0.5 * (Ndim * np.log(2. * np.pi) +
                        np.sum(np.log(tot_var), axis=1))
         # Subselect models.
         init_sel = np.where(lnl > np.max(lnl) + np.log(init_thresh))[0]
-        tot_var, tot_mask = tot_var[init_sel], tot_mask[init_sel]
+        tot_var = tot_var[init_sel]
         models, rvecs = models[init_sel], rvecs[init_sel]
         av_new = av[init_sel]
-        mag_coeffs = mag_coeffs[init_sel]
+        mcoeffs = mcoeffs[init_sel]
         resid = resid[init_sel]
     else:
         # Keep all models.
@@ -216,14 +221,14 @@ def loglike(data, data_err, data_mask, mag_coeffs, avlim=(0., 6.),
     while lerr > ltol:
 
         # Re-compute models.
-        results = _optimize_fit(data, tot_var, tot_mask, models, rvecs,
-                                av_new, mag_coeffs, avlim=avlim, resid=resid,
+        results = _optimize_fit(flux, tot_var, models, rvecs,
+                                av_new, mcoeffs, avlim=avlim, resid=resid,
                                 stepsize=stepsize)
         models, rvecs, scale_new, av_new, ds2_new, da2_new, dsda_new = results
 
         # Compute chi2.
-        resid = data - models
-        chi2_new = np.sum(tot_mask * np.square(resid) / tot_var, axis=1)
+        resid = flux - models
+        chi2_new = np.sum(np.square(resid) / tot_var, axis=1)
 
         # Compute multivariate normal logpdf.
         lnl_new = -0.5 * chi2_new
@@ -255,7 +260,7 @@ def loglike(data, data_err, data_mask, mag_coeffs, avlim=(0., 6.),
         return lnl, Ndim, chi2
 
 
-def _optimize_fit(data, tot_var, tot_mask, models, rvecs, av, mag_coeffs,
+def _optimize_fit(data, tot_var, models, rvecs, av, mag_coeffs,
                   avlim=(0., 6.), resid=None, mags=None, mags_var=None,
                   stepsize=1.):
     """
@@ -270,10 +275,6 @@ def _optimize_fit(data, tot_var, tot_mask, models, rvecs, av, mag_coeffs,
     tot_var : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
         Associated (Normal) errors on the observed values compared to the
         models.
-
-    tot_mask : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        Binary mask (0/1) indicating whether the data was observed compared
-        to the models.
 
     models : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
         Model predictions.
@@ -347,13 +348,13 @@ def _optimize_fit(data, tot_var, tot_mask, models, rvecs, av, mag_coeffs,
         # The solution can be solved explicitly as linear system for (s, dAv).
 
         # Derive partial derivatives.
-        s_den = np.sum(tot_mask / mags_var, axis=1)
-        a_den = np.sum(tot_mask * np.square(rvecs) / mags_var, axis=1)
-        sa_mix = np.sum(tot_mask * rvecs / mags_var, axis=1)
+        s_den = np.sum(1. / mags_var, axis=1)
+        a_den = np.sum(np.square(rvecs) / mags_var, axis=1)
+        sa_mix = np.sum(rvecs / mags_var, axis=1)
 
         # Compute residual terms.
-        resid_s = np.sum(tot_mask * resid / mags_var, axis=1)
-        resid_a = np.sum(tot_mask * resid * rvecs / mags_var, axis=1)
+        resid_s = np.sum(resid / mags_var, axis=1)
+        resid_a = np.sum(resid * rvecs / mags_var, axis=1)
 
         # Compute determinants (normalization terms).
         sa_idet = 1. / (s_den * a_den - sa_mix**2)
@@ -367,8 +368,8 @@ def _optimize_fit(data, tot_var, tot_mask, models, rvecs, av, mag_coeffs,
         # for s and Av it is fine to instead just iterate between the two.
 
         # Derive ML Delta_Av (`dav`) between data and models.
-        a_num = np.sum(tot_mask * rvecs * resid / tot_var, axis=1)
-        a_den = np.sum(tot_mask * np.square(rvecs) / tot_var, axis=1)
+        a_num = np.sum(rvecs * resid / tot_var, axis=1)
+        a_den = np.sum(np.square(rvecs) / tot_var, axis=1)
         dav = a_num / a_den
 
     # Adjust dAv based on the provided stepsize.
@@ -386,8 +387,8 @@ def _optimize_fit(data, tot_var, tot_mask, models, rvecs, av, mag_coeffs,
                              return_flux=True)
 
     # Derive scale-factors (`scale`) between data and models.
-    s_num = np.sum(tot_mask * models * data[None, :] / tot_var, axis=1)
-    s_den = np.sum(tot_mask * np.square(models) / tot_var, axis=1)
+    s_num = np.sum(models * data[None, :] / tot_var, axis=1)
+    s_den = np.sum(np.square(models) / tot_var, axis=1)
     scale = s_num / s_den  # ML scalefactor
     scale[scale <= 0.] = 1e-20  # must be non-negative
 
@@ -395,7 +396,7 @@ def _optimize_fit(data, tot_var, tot_mask, models, rvecs, av, mag_coeffs,
     models *= scale[:, None]
 
     # Derive cross-term.
-    sa_mix = np.sum(tot_mask * rvecs * (resid - models) / tot_var, axis=1)
+    sa_mix = np.sum(rvecs * (resid - models) / tot_var, axis=1)
 
     # Rescale reddening vector.
     rvecs *= scale[:, None]
