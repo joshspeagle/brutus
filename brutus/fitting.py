@@ -165,8 +165,10 @@ def loglike(data, data_err, data_mask, mag_coeffs, avlim=(0., 6.),
     Nmodels, Nfilt, Ncoef = mag_coeffs.shape
 
     # Clean data (safety checks).
-    clean = np.isfinite(data) & np.isfinite(data_err) & (data_err > 0.)
-    data[~clean], data_err[~clean], data_mask[~clean] = 1., 1., False
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        clean = np.isfinite(data) & np.isfinite(data_err) & (data_err > 0.)
+        data[~clean], data_err[~clean], data_mask[~clean] = 1., 1., False
 
     # Subselect only clean observations.
     Ndim = sum(data_mask)  # number of dimensions
