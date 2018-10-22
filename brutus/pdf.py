@@ -31,7 +31,9 @@ except ImportError:
     from scipy.misc import logsumexp
 
 __all__ = ["imf_lnprior", "ps1_MrLF_lnprior", "parallax_lnprior",
-           "logn_disk", "logn_halo", "logp_feh_disk", "logp_feh_halo",
+           "scale_parallax_lnprior", "parallax_to_scale",
+           "logn_disk", "logn_halo",
+           "logp_feh_disk", "logp_feh_halo",
            "gal_lnprior", "bin_pdfs_distred"]
 
 
@@ -111,15 +113,15 @@ def parallax_lnprior(parallaxes, p_meas, p_err):
     parallaxes : `~numpy.ndarray` of shape (N)
         Parallaxes.
 
-    p_meas : float, optional
-        Measured parallax. Default is `0.`.
+    p_meas : float
+        Measured parallax.
 
-    p_std : float, optional
-        Measured parallax error. Default is `1e10`.
+    p_std : float
+        Measured parallax error.
 
     Returns
     -------
-    lnprior : `~numpy.ndarray` of shape (Ngrid)
+    lnprior : `~numpy.ndarray` of shape (N)
         The corresponding ln(prior).
 
     """
@@ -131,9 +133,94 @@ def parallax_lnprior(parallaxes, p_meas, p_err):
         lnprior = -0.5 * (chi2 + lnorm)
     else:
         # If no measurement, assume a uniform prior everywhere.
-        lnprior = np.zeros_like(parallaxes) - np.log(len(parallaxes))
+        lnprior = np.zeros_like(parallaxes)
 
     return lnprior
+
+
+def scale_parallax_lnprior(scales, scale_errs, p_meas, p_err, snr_lim=4.):
+    """
+    Apply parallax prior to a set of flux density scalefactors
+    `s ~ p**2` using a measured parallax.
+
+    Parameters
+    ----------
+    scales : `~numpy.ndarray` of shape (N)
+        Scale-factors (`s = p**2`).
+
+    scale_errs : `~numpy.ndarray` of shape (N)
+        Scale-factor errors.
+
+    p_meas : float
+        Measured parallax.
+
+    p_std : float
+        Measured parallax error.
+
+    snr_lim : float, optional
+        The signal-to-noise ratio limit used to apply the approximation.
+        If `snr < snr_lim`, then a uniform prior will be returned instead.
+        Default is `4.`.
+
+    Returns
+    -------
+    lnprior : `~numpy.ndarray` of shape (N)
+        The corresponding ln(prior).
+
+    """
+
+    if np.isfinite(p_meas) and np.isfinite(p_err) and p_meas/p_err >= snr_lim:
+        # Convert from `p` to `s=p**2` space assuming roughly Normal.
+        s_mean, s_std = parallax_to_scale(p_meas, p_err)
+
+        # Compute log-prior.
+        svar_tot = s_std**2 + scale_errs**2
+        chi2 = (scales - s_mean)**2 / svar_tot  # chi2
+        lnorm = np.log(2. * np.pi * svar_tot)  # normalization
+        lnprior = -0.5 * (chi2 + lnorm)
+    else:
+        # If no measurement, assume a uniform prior everywhere.
+        lnprior = np.zeros_like(scales)
+
+    return lnprior
+
+
+def parallax_to_scale(p_meas, p_err, snr_lim=4.):
+    """
+    Convert parallax flux density scalefactor `s ~ p**2`.
+
+    Parameters
+    ----------
+    p_meas : float
+        Measured parallax.
+
+    p_std : float
+        Measured parallax error.
+
+    snr_lim : float, optional
+        The signal-to-noise ratio limit used to apply the approximation.
+        If `snr < snr_lim`, then `s_std = 1e20` will be returned.
+        Default is `4.`.
+
+    Returns
+    -------
+    s_mean : float
+        Corresponding mean of the scale-factor.
+
+    s_std : float
+        Corresponding standard deviation of the scale-factor.
+
+    """
+
+    if p_meas/p_err >= snr_lim:
+        # Convert from `p` to `s=p**2` space assuming roughly Normal.
+        pm, pe = max(0., p_meas), p_err  # floor to 0
+        s_mean = pm**2 + pe**2  # scale mean
+        s_std = np.sqrt(2 * pe**4 + 4 * pm**2 * pe**2)  # scale stddev
+    else:
+        s_mean, s_std = 1e-20, 1e20
+
+    return s_mean, s_std
 
 
 def logn_disk(R, Z, R_solar=8., Z_solar=0.025, R_scale=2.15, Z_scale=0.245):

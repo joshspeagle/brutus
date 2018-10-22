@@ -83,7 +83,7 @@ def get_seds(mag_coeffs, av, return_rvec=False, return_flux=False):
 
 
 def loglike(data, data_err, data_mask, mag_coeffs, avlim=(0., 6.),
-            dim_prior=True, ltol=0.02, wt_thresh=0.005, init_thresh=1e-3,
+            dim_prior=True, ltol=0.02, wt_thresh=0.005, init_thresh=1e-4,
             return_vals=False, *args, **kwargs):
     """
     Computes the log-likelihood between noisy data and noiseless models
@@ -124,7 +124,7 @@ def loglike(data, data_err, data_mask, mag_coeffs, avlim=(0., 6.),
     init_thresh : bool, optional
         The weight threshold used to mask out fits after the initial
         magnitude-based fit before transforming the results back to
-        flux density (and iterating until convergence). Default is `1e-3`.
+        flux density (and iterating until convergence). Default is `1e-4`.
 
     return_vals : bool, optional
         Whether to return the best-fit scale-factor and reddening along with
@@ -374,8 +374,8 @@ def _optimize_fit(data, tot_var, models, rvecs, av, mag_coeffs,
         a_den = np.sum(np.square(rvecs) / tot_var, axis=1)
         dav = a_num / a_den
 
-    # Adjust dAv based on the provided stepsize.
-    dav *= stepsize
+        # Adjust dAv based on the provided stepsize.
+        dav *= stepsize
 
     # Prevent Av from sliding off the provided bounds.
     dav_low, dav_high = avlim[0] - av, avlim[1] - av
@@ -454,11 +454,11 @@ class BruteForce():
             self.nprocs = pool.size
 
     def fit(self, data, data_err, data_mask, data_labels, save_file,
-            parallax=None, parallax_err=None, Nmc_prior=150, avlim=(0., 6.),
+            parallax=None, parallax_err=None, Nmc_prior=250, avlim=(0., 6.),
             lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4, Ndraws=2000,
             apply_agewt=True, apply_grad=True, lndistprior=None,
             apply_dlabels=True, data_coords=None, logl_dim_prior=True,
-            ltol=0.02, ltol_subthresh=0.005, logl_initthresh=1e-3,
+            ltol=0.02, ltol_subthresh=0.005, logl_initthresh=1e-4,
             rstate=None, save_dist_draws=True, save_red_draws=True,
             verbose=True):
         """
@@ -491,7 +491,7 @@ class BruteForce():
 
         Nmc_prior : int, optional
             The number of Monte Carlo realizations used to estimate the
-            integral over the prior. Default is `150`.
+            integral over the prior. Default is `250`.
 
         avlim : 2-tuple, optional
             The bounds where Av predictions are reliable.
@@ -559,7 +559,7 @@ class BruteForce():
         logl_initthresh : float, optional
             The threshold `logl_initthresh * max(y_wt)` used to ignore models
             with (relatively) negligible weights after computing the initial
-            set of fits but before optimizing them. Default is `1e-3`.
+            set of fits but before optimizing them. Default is `1e-4`.
 
         rstate : `~numpy.random.RandomState`, optional
             `~numpy.random.RandomState` instance.
@@ -695,11 +695,11 @@ class BruteForce():
         out.close()  # close output results file
 
     def _fit(self, data, data_err, data_mask,
-             parallax=None, parallax_err=None, Nmc_prior=150, avlim=(0., 6.),
+             parallax=None, parallax_err=None, Nmc_prior=250, avlim=(0., 6.),
              lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4, Ndraws=2000,
              lndistprior=None, apply_dlabels=True, data_coords=None,
              return_distreds=True, logl_dim_prior=True, ltol=0.02,
-             ltol_subthresh=0.005, logl_initthresh=1e-3, rstate=None):
+             ltol_subthresh=0.005, logl_initthresh=1e-4, rstate=None):
         """
         Internal generator used to compute fits.
 
@@ -723,7 +723,7 @@ class BruteForce():
 
         Nmc_prior : int, optional
             The number of Monte Carlo realizations used to estimate the
-            integral over the prior. Default is `150`.
+            integral over the prior. Default is `250`.
 
         avlim : 2-tuple, optional
             The bounds where Av predictions are reliable.
@@ -783,7 +783,7 @@ class BruteForce():
         logl_initthresh : float, optional
             The threshold `logl_initthresh * max(y_wt)` used to ignore models
             with (relatively) negligible weights after computing the initial
-            set of fits but before optimizing them. Default is `1e-3`.
+            set of fits but before optimizing them. Default is `1e-4`.
 
         rstate : `~numpy.random.RandomState`, optional
             `~numpy.random.RandomState` instance.
@@ -927,7 +927,7 @@ class BruteForce():
 
 
 def _lnpost(results, parallax=None, parallax_err=None, coord=None,
-            Nmc_prior=150, lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4,
+            Nmc_prior=250, lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4,
             lndistprior=None, dlabels=None, avlim=(0., 6.), rstate=None,
             return_distreds=True, *args, **kwargs):
     """
@@ -955,7 +955,7 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
 
     Nmc_prior : int, optional
         The number of Monte Carlo realizations used to estimate the
-        integral over the prior. Default is `150`.
+        integral over the prior. Default is `250`.
 
     lnprior : `~numpy.ndarray` of shape `(Ndata, Nfilt)`, optional
         Log-prior grid to be used. If not provided, will default
@@ -1046,16 +1046,13 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
     # Compute initial log-posteriors.
     lnpost = lnlike + lnprior
 
-    # Compute naive MAP parallaxes and distances.
-    pars = np.sqrt(scales)
-    dists = 1. / pars
-
-    # Apply rough distance prior for clipping.
-    lnprob = lnpost + lndistprior(dists, coord, labels=dlabels)
-
     # Apply rough parallax prior for clipping.
     if parallax is not None and parallax_err is not None:
-        lnprob += parallax_lnprior(pars, parallax, parallax_err)
+        scales_err = 1./np.sqrt(np.abs(ds2))  # approximate scale errors
+        lnprob = lnpost + scale_parallax_lnprior(scales, scales_err,
+                                                 parallax, parallax_err)
+    else:
+        lnprob = lnpost
 
     # Apply thresholding.
     if wt_thresh is not None:
@@ -1075,8 +1072,9 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
     scale, av, sinv2, ainv2, sainv = (scales[sel], avs[sel],
                                       ds2[sel], da2[sel],
                                       dsda[sel])
-    cov_sa = np.array([np.linalg.inv(np.array([[s, sa], [sa, a]]))
+    cinv_sa = np.array([np.array([[s, sa], [sa, a]])
                        for s, a, sa in zip(sinv2, ainv2, sainv)])
+    cov_sa = np.array([np.linalg.inv(ci) for ci in cinv_sa])
 
     # Now actually apply distance (and parallax) priors.
     if Nmc_prior > 0:
@@ -1096,8 +1094,10 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
             warnings.simplefilter("ignore")
             par_mc = np.sqrt(s_mc)
             dist_mc = 1. / par_mc
+            # Evaluate distance prior.
             lnp_mc = lndistprior(dist_mc, coord, labels=dlabels_mc)
-        if parallax is not None:
+        if parallax is not None and parallax_err is not None:
+            # Evaluate parallax prior.
             lnp_mc += parallax_lnprior(par_mc, parallax, parallax_err)
         # Ignore points that are out of bounds.
         inbounds = ((s_mc >= 0.) & (a_mc >= avlim[0]) &
