@@ -919,6 +919,7 @@ def posterior_predictive(models, idxs, reds, dists, weights=None, flux=False,
         ax.set_ylabel('Flux')
     else:
         ax.set_ylabel('Magnitude')
+        ax.set_ylim(ax.get_ylim()[::-1])  # flip axis
     plt.tight_layout()
 
     return fig, ax, parts
