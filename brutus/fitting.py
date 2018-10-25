@@ -26,60 +26,7 @@ except ImportError:
 from .pdf import *
 from .utils import *
 
-__all__ = ["get_seds", "loglike", "_optimize_fit", "BruteForce", "_lnpost"]
-
-
-def get_seds(mag_coeffs, av, return_rvec=False, return_flux=False):
-    """
-    Compute reddened SEDs from the provided magnitude coefficients.
-
-    Parameters
-    ----------
-    mag_coeffs : `~numpy.ndarray` of shape `(Nmodels, Nbands, Ncoeffs)`
-        Array of magnitude polynomial coefficients used to generate
-        reddened photometry.
-
-    av : `~numpy.ndarray` of shape `(Nmodels)`
-        Array of dust attenuation values photometry should be predicted for.
-
-    return_rvec : bool, optional
-        Whether to return the differential reddening vectors at the provided
-        `av`. Default is `False`.
-
-    return_flux : bool, optional
-        Whether to return SEDs as flux densities instead of magnitudes.
-        Default is `False`.
-
-    Returns
-    -------
-    seds : `~numpy.ndarray` of shape `(Nmodels, Nbands)`
-        Reddened SEDs.
-
-    rvecs : `~numpy.ndarray` of shape `(Nmodels, Nbands)`, optional
-        Differential reddening vectors.
-
-    """
-
-    Nmodels, Nbands, Ncoef = mag_coeffs.shape
-
-    # Turn provided Av values into polynomial features.
-    av_poly = np.array([av**(Ncoef-j-1) if j < Ncoef - 1 else np.ones_like(av)
-                        for j in range(Ncoef)]).T
-
-    # Compute SEDs.
-    seds = np.sum(mag_coeffs * av_poly[:, None, :], axis=-1)
-    if return_flux:
-        seds = 10**(-0.4 * seds)
-
-    if return_rvec:
-        # Compute reddening vectors.
-        rvecs = np.sum(np.arange(1, Ncoef)[::-1] * mag_coeffs[:, :, :-1] *
-                       av_poly[:, None, 1:], axis=-1)
-        if return_flux:
-            rvecs *= -0.4 * np.log(10.) * seds
-        return seds, rvecs
-    else:
-        return seds
+__all__ = ["loglike", "_optimize_fit", "BruteForce", "_lnpost"]
 
 
 def loglike(data, data_err, data_mask, mag_coeffs, avlim=(0., 6.),
@@ -168,10 +115,10 @@ def loglike(data, data_err, data_mask, mag_coeffs, avlim=(0., 6.),
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         clean = np.isfinite(data) & np.isfinite(data_err) & (data_err > 0.)
-        data[~clean], data_err[~clean], data_mask[~clean] = 1., 1., False
+        data_mask[~clean] = False
+    Ndim = sum(data_mask)  # number of dimensions
 
     # Subselect only clean observations.
-    Ndim = sum(data_mask)  # number of dimensions
     flux, fluxerr = data[data_mask], data_err[data_mask]  # mean, error
     mcoeffs = mag_coeffs[:, data_mask, :]  # model magnitude coefficients
     tot_var = np.square(fluxerr) + np.zeros((Nmodels, Ndim))  # total variance
@@ -454,7 +401,8 @@ class BruteForce():
             self.nprocs = pool.size
 
     def fit(self, data, data_err, data_mask, data_labels, save_file,
-            parallax=None, parallax_err=None, Nmc_prior=250, avlim=(0., 6.),
+            phot_offsets=None, parallax=None, parallax_err=None,
+            Nmc_prior=100, avlim=(0., 6.),
             lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4, Ndraws=2000,
             apply_agewt=True, apply_grad=True, lndistprior=None,
             apply_dlabels=True, data_coords=None, logl_dim_prior=True,
@@ -482,6 +430,11 @@ class BruteForce():
         save_file : str, optional
             File where results will be written out in HDF5 format.
 
+        phot_offsets : `~numpy.ndarray` of shape `(Nfilt)`, optional
+            Multiplicative photometric offsets that will be applied to
+            the data (i.e. `data_new = data * phot_offsets`) and errors
+            when provided.
+
         parallax : `~numpy.ndarray` of shape `(Ndata)`, optional
             Parallax measurements to be used as a prior.
 
@@ -491,7 +444,7 @@ class BruteForce():
 
         Nmc_prior : int, optional
             The number of Monte Carlo realizations used to estimate the
-            integral over the prior. Default is `250`.
+            integral over the prior. Default is `100`.
 
         avlim : 2-tuple, optional
             The bounds where Av predictions are reliable.
@@ -577,7 +530,7 @@ class BruteForce():
 
         """
 
-        Ndata = len(data)
+        Ndata, Nfilt = data.shape
         if wt_thresh is None and cdf_thresh is None:
             wt_thresh = -np.inf  # default to no clipping/thresholding
         if rstate is None:
@@ -585,6 +538,8 @@ class BruteForce():
         if parallax is not None and parallax_err is None:
             raise ValueError("Must provide both `parallax` and "
                              "`parallax_err`.")
+        if phot_offsets is None:
+            phot_offsets = np.ones(Nfilt)
         return_distreds = save_dist_draws or save_red_draws
 
         # Initialize log(prior).
@@ -622,6 +577,21 @@ class BruteForce():
         if data_coords is None:
             data_coords = np.zeros((Ndata, 2))
 
+        # Clean data to remove bad photometry user may not have masked.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            clean = np.isfinite(data) & np.isfinite(data_err) & (data_err > 0.)
+            data_mask *= clean
+
+        # Check there are enough bands to fit.
+        Nbmin = 3  # minimum number of bands needed
+        if np.any(np.sum(data_mask, axis=1) < Nbmin):
+            raise ValueError("Objects with fewer than {0} bands of "
+                             "photometry are currently included in the "
+                             "data. These objects give degenerate fits and "
+                             "cannot be properly modeled. Please remove these "
+                             "objects.".format(Nbmin))
+
         # Initialize results file.
         out = h5py.File("{0}.h5".format(save_file), "w-")
         out.create_dataset("labels", data=data_labels)
@@ -648,7 +618,9 @@ class BruteForce():
         if verbose:
             sys.stderr.write('\rFitting object {0}/{1}'.format(1, Ndata))
             sys.stderr.flush()
-        for i, results in enumerate(self._fit(data, data_err, data_mask,
+        for i, results in enumerate(self._fit(data * phot_offsets,
+                                              data_err * phot_offsets,
+                                              data_mask,
                                               parallax=parallax,
                                               parallax_err=parallax_err,
                                               avlim=avlim,
@@ -695,7 +667,7 @@ class BruteForce():
         out.close()  # close output results file
 
     def _fit(self, data, data_err, data_mask,
-             parallax=None, parallax_err=None, Nmc_prior=250, avlim=(0., 6.),
+             parallax=None, parallax_err=None, Nmc_prior=100, avlim=(0., 6.),
              lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4, Ndraws=2000,
              lndistprior=None, apply_dlabels=True, data_coords=None,
              return_distreds=True, logl_dim_prior=True, ltol=0.02,
@@ -723,7 +695,7 @@ class BruteForce():
 
         Nmc_prior : int, optional
             The number of Monte Carlo realizations used to estimate the
-            integral over the prior. Default is `250`.
+            integral over the prior. Default is `100`.
 
         avlim : 2-tuple, optional
             The bounds where Av predictions are reliable.
@@ -927,7 +899,7 @@ class BruteForce():
 
 
 def _lnpost(results, parallax=None, parallax_err=None, coord=None,
-            Nmc_prior=250, lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4,
+            Nmc_prior=100, lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4,
             lndistprior=None, dlabels=None, avlim=(0., 6.), rstate=None,
             return_distreds=True, *args, **kwargs):
     """
@@ -955,7 +927,7 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
 
     Nmc_prior : int, optional
         The number of Monte Carlo realizations used to estimate the
-        integral over the prior. Default is `250`.
+        integral over the prior. Default is `100`.
 
     lnprior : `~numpy.ndarray` of shape `(Ndata, Nfilt)`, optional
         Log-prior grid to be used. If not provided, will default

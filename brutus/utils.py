@@ -26,7 +26,8 @@ except ImportError:
 from .filters import FILTERS
 
 __all__ = ["_function_wrapper", "load_models", "quantile", "draw_sav",
-           "magnitude", "inv_magnitude", "luptitude", "inv_luptitude"]
+           "magnitude", "inv_magnitude", "luptitude", "inv_luptitude",
+           "get_seds", "photometric_offsets"]
 
 
 class _function_wrapper(object):
@@ -401,3 +402,142 @@ def inv_luptitude(mag, err, skynoise=1., zeropoints=1.):
                        np.square(err)) / (2.5 * np.log10(np.e))
 
     return phot, phot_err
+
+
+def get_seds(mag_coeffs, av, return_rvec=False, return_flux=False):
+    """
+    Compute reddened SEDs from the provided magnitude coefficients.
+
+    Parameters
+    ----------
+    mag_coeffs : `~numpy.ndarray` of shape `(Nmodels, Nbands, Ncoeffs)`
+        Array of magnitude polynomial coefficients used to generate
+        reddened photometry.
+
+    av : `~numpy.ndarray` of shape `(Nmodels)`
+        Array of dust attenuation values photometry should be predicted for.
+
+    return_rvec : bool, optional
+        Whether to return the differential reddening vectors at the provided
+        `av`. Default is `False`.
+
+    return_flux : bool, optional
+        Whether to return SEDs as flux densities instead of magnitudes.
+        Default is `False`.
+
+    Returns
+    -------
+    seds : `~numpy.ndarray` of shape `(Nmodels, Nbands)`
+        Reddened SEDs.
+
+    rvecs : `~numpy.ndarray` of shape `(Nmodels, Nbands)`, optional
+        Differential reddening vectors.
+
+    """
+
+    Nmodels, Nbands, Ncoef = mag_coeffs.shape
+
+    # Turn provided Av values into polynomial features.
+    av_poly = np.array([av**(Ncoef-j-1) if j < Ncoef - 1 else np.ones_like(av)
+                        for j in range(Ncoef)]).T
+
+    # Compute SEDs.
+    seds = np.sum(mag_coeffs * av_poly[:, None, :], axis=-1)
+    if return_flux:
+        seds = 10**(-0.4 * seds)
+
+    if return_rvec:
+        # Compute reddening vectors.
+        rvecs = np.sum(np.arange(1, Ncoef)[::-1] * mag_coeffs[:, :, :-1] *
+                       av_poly[:, None, 1:], axis=-1)
+        if return_flux:
+            rvecs *= -0.4 * np.log(10.) * seds
+        return seds, rvecs
+    else:
+        return seds
+
+
+def photometric_offsets(phot, err, mask, models, idxs, reds, dists,
+                        sel=None, Nmc=500, rstate=None):
+    """
+    Compute (multiplicative) photometric offsets between data and model.
+
+    Parameters
+    ----------
+    phot : `~numpy.ndarray` of shape `(Nobj, Nfilt)`
+        The observed fluxes for all our objects.
+
+    err : `~numpy.ndarray` of shape `(Nobj, Nfilt)`
+        The associated flux errors for all our objects.
+
+    mask : `~numpy.ndarray` of shape `(Nobj, Nfilt)`
+        The associated band mask for all our objects.
+
+    models : `~numpy.ndarray` of shape `(Nmodels, Nfilt, Ncoeffs)`
+        Array of magnitude polynomial coefficients used to generate
+        reddened photometry.
+
+    idxs : `~numpy.ndarray` of shape `(Nobj, Nsamps)`
+        Set of models fit to each object.
+
+    reds : `~numpy.ndarray` of shape `(Nobj, Nsamps)`
+        Associated set of reddenings (Av values) derived for each object.
+
+    dists : `~numpy.ndarray` of shape `(Nobj, Nsamps)`
+        Associated set of distances (kpc) derived for each object.
+
+    sel : `~numpy.ndarray` of shape `(Nobj)`, optional
+        Boolean selection array of objects that should be used when
+        computing offsets. If not provided, all objects will be used.
+
+    Nmc : float, optional
+        Number of realizations used to bootstrap the sample and
+        average over the model realizations. Default is `500`.
+
+    rstate : `~numpy.random.RandomState`, optional
+        `~numpy.random.RandomState` instance.
+
+    Returns
+    -------
+    ratios : `~numpy.ndarray` of shape `(Nfilt)`
+        Median ratios of model / data.
+
+    nratio : `~numpy.ndarray` of shape `(Nfilt)`
+        The number of objects used to compute `ratios`.
+
+    """
+
+    # Initialize values.
+    Nobj, Nfilt = phot.shape
+    Nmodels = len(models)
+    Nsamps = idxs.shape[1]
+    if sel is None:
+        sel = np.ones(Nobj, dtype='bool')
+    if rstate is None:
+        rstate = np.random
+
+    # Generate SEDs.
+    seds = get_seds(models[idxs.flatten()], reds.flatten(), return_flux=True)
+    seds /= dists.flatten()[:, None]**2  # scale based on distance
+    seds = seds.reshape(Nobj, Nsamps, Nfilt)  # reshape back
+
+    # Compute photometric ratios.
+    ratios, nratio = np.ones(Nfilt), np.zeros(Nfilt, dtype='int')
+    for i in range(Nfilt):
+        # Subselect objects with reliable data.
+        s = mask[:, i] & sel
+        n = sum(s)
+        nratio[i] = n
+        if n > 0:
+            # Compute photometric ratio.
+            ratio = seds[s, :, i] / phot[s, None, i]
+            # Bootstrap results.
+            offsets = []
+            for j in range(Nmc):
+                ridx = rstate.choice(n, size=n)  # resample objects
+                midx = rstate.choice(Nsamps, size=n)  # select random models
+                offsets.append(np.median(ratio[ridx, midx]))  # compute median
+            # Compute median (of median).
+            ratios[i] = np.median(offsets)
+
+    return ratios / np.median(ratios), nratio

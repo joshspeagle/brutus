@@ -23,7 +23,7 @@ from scipy.ndimage import gaussian_filter as norm_kde
 import copy
 
 from .pdf import gal_lnprior, parallax_lnprior
-from .utils import quantile, draw_sav
+from .utils import quantile, draw_sav, get_seds, magnitude
 
 try:
     from scipy.special import logsumexp
@@ -39,7 +39,7 @@ except:
     float_type = float
     int_type = int
 
-__all__ = ["cornerplot", "dist_vs_red", "_hist2d"]
+__all__ = ["cornerplot", "dist_vs_red", "posterior_predictive", "_hist2d"]
 
 
 def cornerplot(idxs, data, params, lndistprior=None,
@@ -122,7 +122,7 @@ def cornerplot(idxs, data, params, lndistprior=None,
 
             span = [(0., 10.), 0.95, (5., 6.)]
 
-        Default is `0.999999426697` (5-sigma credible interval).
+        Default is `0.997` (3-sigma credible interval).
 
     quantiles : iterable, optional
         A list of fractional quantiles to overplot on the 1-D marginalized
@@ -314,7 +314,7 @@ def cornerplot(idxs, data, params, lndistprior=None,
 
     # Determine plotting bounds.
     if span is None:
-        span = [0.999999426697 for i in range(ndim)]
+        span = [0.997 for i in range(ndim)]
     span = list(span)
     if len(span) != ndim:
         raise ValueError("Dimension mismatch between samples and span.")
@@ -666,10 +666,10 @@ def dist_vs_red(data, Rv=None, dist_type='distance_modulus',
         xbin = ybin = bins
     if Rv is not None:
         ylabel = r'$E(B-V)$ [mag]'
-        ylims = np.array(avlim) / Rv
+        ylims = np.array(avlims) / Rv
     else:
         ylabel = r'$A_v$ [mag]'
-        ylims = avlim
+        ylims = avlims
     if dist_type == 'scale':
         xlabel = r'$s$'
         xlims = (1. / dlims[::-1])**2
@@ -776,6 +776,154 @@ def dist_vs_red(data, Rv=None, dist_type='distance_modulus',
     return H, xedges, yedges, img
 
 
+def posterior_predictive(models, idxs, reds, dists, weights=None, flux=False,
+                         data=None, data_err=None, data_mask=None, offset=None,
+                         vcolor='blue', pcolor='red', labels=None,
+                         rstate=None, fig=None):
+    """
+    Plot the posterior predictive SED.
+
+    Parameters
+    ----------
+    models : `~numpy.ndarray` of shape `(Nmodels, Nfilts, Ncoeffs)`
+        Array of magnitude polynomial coefficients used to generate
+        reddened photometry.
+
+    idxs : `~numpy.ndarray` of shape `(Nsamps)`
+        An array of resampled indices corresponding to the set of models used
+        to fit the data.
+
+    reds : `~numpy.ndarray` of shape `(Nsamps)`
+        Reddening samples (in Av) associated with the model indices.
+
+    dists : `~numpy.ndarray` of shape `(Nsamps)`
+        Distance samples (in kpc) associated with the model indices.
+
+    weights : `~numpy.ndarray` of shape `(Nsamps)`, optional
+        An optional set of importance weights used to reweight the samples.
+
+    flux : bool, optional
+        Whether to plot the SEDs in flux space rather than magniude space.
+        Default is `False`.
+
+    data : `~numpy.ndarray` of shape `(Nfilt)`, optional
+        Observed data values (fluxes). If provided, these will be overplotted.
+
+    data_err : `~numpy.ndarray` of shape `(Nfilt)`
+        Associated errors on the data values. If provided, these will be
+        overplotted as error bars.
+
+    data_mask : `~numpy.ndarray` of shape `(Nfilt)`
+        Binary mask (0/1) indicating whether the data value was observed.
+        If provided, these will be used to mask missing/bad data values.
+
+    offset : `~numpy.ndarray` of shape `(Nfilt)`, optional
+        Multiplicative photometric offsets that will be applied to
+        the data (i.e. `data_new = data * phot_offsets`) and errors
+        when provided.
+
+    vcolor : str, optional
+        Color used when plotting the violin plots that comprise the
+        SED posterior predictive distribution. Default is `'blue'`.
+
+    pcolor : str, optional
+        Color used when plotting the provided data values. Default is `'red'`.
+
+    labels : iterable with shape `(ndim,)`, optional
+        A list of names corresponding to each filter. If not provided,
+        an ascending set of integers `(0, 1, 2, ...)` will be used.
+
+    max_n_ticks : int, optional
+        Maximum number of ticks allowed. Default is `5`.
+
+    top_ticks : bool, optional
+        Whether to label the top (rather than bottom) ticks. Default is
+        `False`.
+
+    fig : (`~matplotlib.figure.Figure`, `~matplotlib.axes.Axes`), optional
+        If provided, overplot the traces and marginalized 1-D posteriors
+        onto the provided figure. Otherwise, by default an
+        internal figure is generated.
+
+    rstate : `~numpy.random.RandomState`, optional
+        `~numpy.random.RandomState` instance.
+
+    Returns
+    -------
+    postpredplot : (`~matplotlib.figure.Figure`, `~matplotlib.axes.Axes`, dict)
+        The associated figure, axes, and violinplot dictionary for the
+        posterior predictive distribution.
+
+    """
+
+    # Initialize values.
+    nmodels, nfilt, ncoeff = models.shape
+    nsamps = len(idxs)
+    if rstate is None:
+        rstate = np.random
+    if weights is None:
+        weights = np.ones_like(idxs, dtype='float')
+    if weights.ndim != 1:
+        raise ValueError("Weights must be 1-D.")
+    if nsamps != weights.shape[0]:
+        raise ValueError("The number of weights and samples disagree!")
+    if data_err is None:
+        data_err = np.zeros(nfilt)
+    if data_mask is None:
+        data_mask = np.ones(nfilt, dtype='bool')
+    if offset is None:
+        offset = np.ones(nfilt)
+
+    # Generate SEDs.
+    seds = get_seds(models[idxs], reds, return_flux=flux)
+    if flux:
+        # SEDs are in flux space.
+        seds /= dists[:, None]**2
+    else:
+        # SEDs are in magnitude space.
+        seds += 5. * np.log10(dists)[:, None]
+
+    # Generate figure.
+    if fig is None:
+        fig, ax = fig, axes = plt.subplots(1, 1, figsize=(nfilt * 1.5, 10))
+    else:
+        fig, ax = fig
+
+    # Plot posterior predictive SED distribution.
+    if np.any(weights != weights[0]):
+        # If weights are non-uniform, sample indices proportional to weights.
+        idxs = rstate.choice(nsamps, p=weights/weights.sum(), size=nsamps*50)
+    else:
+        idxs = np.arange(nsamps)
+    parts = ax.violinplot(seds, positions=np.arange(nfilt),
+                          showextrema=False)
+    for pc in parts['bodies']:
+        pc.set_facecolor(vcolor)
+        pc.set_edgecolor('none')
+        pc.set_alpha(0.4)
+    # Plot photometry.
+    if data is not None:
+        if flux:
+            m, e = data[data_mask] * offset, data_err[data_mask] * offset
+        else:
+            m, e = magnitude(data[data_mask] * offset,
+                             data_err[data_mask] * offset)
+        ax.errorbar(np.arange(nfilt)[data_mask], m, yerr=e,
+                    marker='o', color=pcolor, linestyle='none',
+                    ms=7, lw=3)
+    # Label axes.
+    ax.set_xticks(np.arange(nfilt))
+    if labels is not None:
+        ax.set_xticklabels(labels, rotation='vertical')
+    if flux:
+        ax.set_ylabel('Flux')
+    else:
+        ax.set_ylabel('Magnitude')
+    plt.tight_layout()
+
+    return fig, ax, parts
+
+
 def _hist2d(x, y, smooth=0.02, span=None, weights=None, levels=None,
             ax=None, color='gray', plot_datapoints=False, plot_density=True,
             plot_contours=True, no_fill_contours=False, fill_contours=True,
@@ -801,7 +949,7 @@ def _hist2d(x, y, smooth=0.02, span=None, weights=None, levels=None,
 
             span = [(0., 10.), 0.95, (5., 6.)]
 
-        Default is `0.999999426697` (5-sigma credible interval).
+        Default is `0.997` (3-sigma credible interval).
 
     weights : iterable with shape `(nsamps,)`
         Weights associated with the samples. Default is `None` (no weights).
@@ -852,7 +1000,7 @@ def _hist2d(x, y, smooth=0.02, span=None, weights=None, levels=None,
     # Determine plotting bounds.
     data = [x, y]
     if span is None:
-        span = [0.999999426697 for i in range(2)]
+        span = [0.997 for i in range(2)]
     span = list(span)
     if len(span) != 2:
         raise ValueError("Dimension mismatch between samples and span.")
