@@ -39,7 +39,8 @@ except:
     float_type = float
     int_type = int
 
-__all__ = ["cornerplot", "dist_vs_red", "posterior_predictive", "_hist2d"]
+__all__ = ["cornerplot", "dist_vs_red", "posterior_predictive",
+           "photometric_offsets", "_hist2d"]
 
 
 def cornerplot(idxs, data, params, lndistprior=None,
@@ -923,6 +924,168 @@ def posterior_predictive(models, idxs, reds, dists, weights=None, flux=False,
     plt.tight_layout()
 
     return fig, ax, parts
+
+
+def photometric_offsets(phot, err, mask, models, idxs, reds, dists, x=None,
+                        flux=True, weights=None, bins=100, offset=None,
+                        plot_thresh=0., cmap='viridis',
+                        titles=None, xlabel=None, plot_kwargs=None, fig=None):
+    """
+    Plot photometric offsets (`mag_pred - mag_obs`).
+
+    Parameters
+    ----------
+    phot : `~numpy.ndarray` of shape `(Nobj, Nfilt)`, optional
+        Observed data values (fluxes). If provided, these will be overplotted.
+
+    err : `~numpy.ndarray` of shape `(Nobj, Nfilt)`
+        Associated errors on the data values. If provided, these will be
+        overplotted as error bars.
+
+    mask : `~numpy.ndarray` of shape `(Nobj, Nfilt)`
+        Binary mask (0/1) indicating whether the data value was observed.
+        If provided, these will be used to mask missing/bad data values.
+
+    models : `~numpy.ndarray` of shape `(Nmodels, Nfilts, Ncoeffs)`
+        Array of magnitude polynomial coefficients used to generate
+        reddened photometry.
+
+    idxs : `~numpy.ndarray` of shape `(Nobj, Nsamps)`
+        An array of resampled indices corresponding to the set of models used
+        to fit the data.
+
+    reds : `~numpy.ndarray` of shape `(Nobj, Nsamps)`
+        Reddening samples (in Av) associated with the model indices.
+
+    dists : `~numpy.ndarray` of shape `(Nobj, Nsamps)`
+        Distance samples (in kpc) associated with the model indices.
+
+    x : `~numpy.ndarray` with shape `(Nobj)` or `(Nobj, Nsamps)`, optional
+        Corresponding values to be plotted on the `x` axis. In not provided,
+        the default behavior is to plot as a function of observed magnitude.
+
+    flux : bool, optional
+        Whether the photometry provided is in fluxes (instead of magnitudes).
+        Default is `True`.
+
+    weights : `~numpy.ndarray` of shape `(Nobj)` or `(Nobj, Nsamps)`, optional
+        An optional set of importance weights used to reweight the samples.
+
+    bins : single value or iterable of length `Nfilt`, optional
+        The number of bins to use. Passed to `~matplotlib.pyplot.hist2d`.
+        Default is `100`.
+
+    offset : `~numpy.ndarray` of shape `(Nfilt)`, optional
+        Multiplicative photometric offsets that will be applied to
+        the data (i.e. `data_new = data * phot_offsets`) and errors
+        when provided.
+
+    plot_thresh : float, optional
+        The threshold used to threshold the colormap when plotting.
+        Default is `0.`.
+
+    cmap : colormap, optional
+        The colormap used when plotting results. Default is `'viridis'`.
+
+    titles : iterable of str of length `Nfilt`, optional
+        Titles for each of the subplots corresponding to each band.
+        If not provided `Band #` will be used.
+
+    xlabel : str, optional
+        Labels for the x-axis of each subplot. If not provided,
+        these will default to the titles.
+
+    plot_kwargs : kwargs, optional
+        Keyword arguments to be passed to `~matplotlib.pyplot.imshow`.
+
+    fig : (`~matplotlib.figure.Figure`, `~matplotlib.axes.Axes`), optional
+        If provided, overplot the traces and marginalized 1-D posteriors
+        onto the provided figure. Otherwise, by default an
+        internal figure is generated.
+
+    Returns
+    -------
+    postpredplot : (`~matplotlib.figure.Figure`, `~matplotlib.axes.Axes`)
+        The associated figure and axes for the photometric offsets.
+
+    """
+
+    # Initialize values.
+    nmodels, nfilt, ncoeff = models.shape
+    nobj, nsamps = idxs.shape
+    if plot_kwargs is None:
+        plot_kwargs = dict()
+    if weights is None:
+        weights = np.ones((nobj, nsamps))
+    elif weights.shape != (nobj, nsamps):
+        weights = np.repeat(weights, nsamps)
+    try:
+        nbins = len(bins)
+        if nbins != 2:
+            bins = [b for b in bins]
+        else:
+            bins = [bins for i in range(nfilt)]
+    except:
+        bins = [bins for i in range(nfilt)]
+        pass
+    if titles is None:
+        titles = ['Band {0}'.format(i) for i in range(nfilt)]
+    if xlabel is None:
+        if x is None:
+            xlabel = titles
+        else:
+            xlabel = ['Label' for i in range(nfilt)]
+    else:
+        xlabel = [xlabel for i in range(nfilt)]
+
+    # Compute posterior predictive SED magnitudes.
+    mpred = get_seds(models[idxs.flatten()], reds.flatten())
+    mpred += 5. * np.log10(dists.flatten())[:, None]
+    mpred = mpred.reshape(nobj, nsamps, nfilt)
+
+    # Generate figure.
+    if fig is None:
+        ncols = 5
+        nrows = (nfilt - 1) // ncols + 1
+        fig, axes = fig, axes = plt.subplots(nrows, ncols,
+                                             figsize=(ncols * 6, nrows * 5))
+    else:
+        fig, axes = fig
+        nrows, ncols = axes.shape
+    ax = axes.flatten()
+    # Plot offsets.
+    for i in range(nfilt):
+        # Convert to magnitudes.
+        if flux:
+            mobs, meobs = magnitude(phot[mask[:, i], i] * offset[i],
+                                    err[mask[:, i], i] * offset[i])
+        else:
+            mobs = phot[mask[:, i], i] * offset[i]
+            meobs = err[mask[:, i], i] * offset[i]
+        # Repeat to match up with `nsamps`.
+        mobs = np.repeat(mobs, nsamps)
+        if x is None:
+            xp = mobs
+        else:
+            if x.shape == (nobj, nsamps):
+                xp = x[mask[:, i]].flatten()
+            else:
+                xp = np.repeat(x[mask[:, i]], nsamps)
+        # Plot 2-D histogram.
+        mp = mpred[mask[:, i], :, i].flatten()
+        w = weights[mask[:, i]].flatten()
+        ax[i].hist2d(xp, mp - mobs, bins=bins[i], weights=w,
+                     cmin=plot_thresh, cmap=cmap, **plot_kwargs)
+        ax[i].set_xlabel(xlabel[i])
+        ax[i].set_title(titles[i])
+        ax[i].set_ylabel(r'$\Delta\,$mag')
+    for i in range(nfilt, nrows*ncols):
+        ax[i].set_frame_on(False)
+        ax[i].set_xticks([])
+        ax[i].set_yticks([])
+    plt.tight_layout()
+
+    return fig, axes
 
 
 def _hist2d(x, y, smooth=0.02, span=None, weights=None, levels=None,
