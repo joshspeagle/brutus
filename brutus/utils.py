@@ -25,7 +25,8 @@ except ImportError:
 
 from .filters import FILTERS
 
-__all__ = ["_function_wrapper", "load_models", "quantile", "draw_sav",
+__all__ = ["_function_wrapper", "_adjoint3", "_inverse_transpose3",
+           "_inverse3", "_dot3", "load_models", "quantile", "draw_sar",
            "magnitude", "inv_magnitude", "luptitude", "inv_luptitude",
            "get_seds", "photometric_offsets"]
 
@@ -56,6 +57,52 @@ class _function_wrapper(object):
             print("  exception:")
             traceback.print_exc()
             raise
+
+
+def _adjoint3(A):
+    """
+    Compute the inverse of a series of 3x3 matrices without division
+    by the determinant.
+
+    """
+
+    AI = np.empty_like(A)
+
+    for i in range(3):
+        AI[..., i, :] = np.cross(A[..., i-2, :], A[..., i-1, :])
+
+    return AI
+
+
+def _dot3(A, B):
+    """
+    Take the dot product of arrays of vectors, contracting over the
+    last indices.
+
+    """
+
+    return np.einsum('...i,...i->...', A, B)
+
+
+def _inverse_transpose3(A):
+    """
+    Compute the inverse-transpose of a series of 3x3 matrices.
+
+    """
+
+    I = _adjoint3(A)
+    det = _dot3(I, A).mean(axis=-1)
+
+    return I / det[..., None, None]
+
+
+def _inverse3(A):
+    """
+    Compute the inverse of a series of 3x3 matrices using adjoints.
+
+    """
+
+    return np.swapaxes(_inverse_transpose3(A), -1, -2)
 
 
 def load_models(filepath, filters=None, labels=None, verbose=True):
@@ -202,7 +249,8 @@ def quantile(x, q, weights=None):
         return quantiles
 
 
-def draw_sav(scales, avs, covs_sa, ndraws=500, avlim=(0., 6.), rstate=None):
+def draw_sar(scales, avs, rvs, covs_sar, ndraws=500, avlim=(0., 6.),
+             rvlim=(1., 8.), rstate=None):
     """
     Generate random draws from the joint scale and Av posterior for a
     given object.
@@ -210,13 +258,16 @@ def draw_sav(scales, avs, covs_sa, ndraws=500, avlim=(0., 6.), rstate=None):
     Parameters
     ----------
     scales : `~numpy.ndarray` of shape `(Nsamps)`
-        An array of scale factors derived between the model and the data.
+        An array of scale factors `s` derived between the models and the data.
 
     avs : `~numpy.ndarray` of shape `(Nsamps)`
-        An array of reddenings derived between the model and the data.
+        An array of reddenings `A(V)` derived for the models.
 
-    covs_sa : `~numpy.ndarray` of shape `(Nsamps, 2, 2)`
-        An array of covariance matrices corresponding to `scales` and `avs`.
+    rvs : `~numpy.ndarray` of shape `(Nsamps)`
+        An array of reddening shapes `R(V)` derived for the models.
+
+    covs_sar : `~numpy.ndarray` of shape `(Nsamps, 3, 3)`
+        An array of covariance matrices corresponding to `(scales, avs, rvs)`.
 
     ndraws : int, optional
         The number of desired random draws. Default is `500`.
@@ -224,8 +275,22 @@ def draw_sav(scales, avs, covs_sa, ndraws=500, avlim=(0., 6.), rstate=None):
     avlim : 2-tuple, optional
         The Av limits used to truncate results. Default is `(0., 6.)`.
 
+    rvlim : 2-tuple, optional
+        The Rv limits used to truncate results. Default is `(1., 8.)`.
+
     rstate : `~numpy.random.RandomState`, optional
         `~numpy.random.RandomState` instance.
+
+    Returns
+    -------
+    sdraws : `~numpy.ndarray` of shape `(Nsamps, Ndraws)`
+        Scale-factor samples.
+
+    adraws : `~numpy.ndarray` of shape `(Nsamps, Ndraws)`
+        Reddening (A(V)) samples.
+
+    rdraws : `~numpy.ndarray` of shape `(Nsamps, Ndraws)`
+        Reddening shape (R(V)) samples.
 
     """
 
@@ -234,21 +299,31 @@ def draw_sav(scales, avs, covs_sa, ndraws=500, avlim=(0., 6.), rstate=None):
 
     # Generate realizations for each (scale, av, cov_sa) set.
     nsamps = len(scales)
-    sdraws, adraws = np.zeros((nsamps, ndraws)), np.zeros((nsamps, ndraws))
-    for i, (s, a, c) in enumerate(zip(scales, avs, covs_sa)):
-        s_temp, a_temp = [], []
-        # Loop is just in case a significant chunk of the distribution
-        # falls outside of the bounds.
+    sdraws, adraws, rdraws = np.zeros((3, nsamps, ndraws))
+    for i, (s, a, r, c) in enumerate(zip(scales, avs, rvs, covs_sar)):
+        s_temp, a_temp, r_temp = [], [], []
+        # Loop in case a significant chunk of draws are out-of-boudns.
         while len(s_temp) < ndraws:
-            s_mc, a_mc = rstate.multivariate_normal(np.array([s, a]), c,
-                                                    size=ndraws*4).T
-            inbounds = ((s_mc >= 0.) & (a_mc >= avlim[0]) &
-                        (a_mc <= avlim[1]))  # flag out-of-bounds draws
-            s_mc, a_mc = s_mc[inbounds], a_mc[inbounds]
-            s_temp, a_temp = np.append(s_temp, s_mc), np.append(a_temp, a_mc)
-        sdraws[i], adraws[i] = s_temp[:ndraws], a_temp[:ndraws]
+            # Draw samples.
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                s_mc, a_mc, r_mc = rstate.multivariate_normal([s, a, r],
+                                                              c, size=ndraws).T
+            # Flag draws that are out of bounds.
+            inbounds = ((s_mc >= 0.) &
+                        (a_mc >= avlim[0]) & (a_mc <= avlim[1]) &
+                        (r_mc >= rvlim[0]) & (r_mc <= rvlim[1]))
+            s_mc, a_mc, r_mc = s_mc[inbounds], a_mc[inbounds], r_mc[inbounds]
+            # Add to pre-existing samples.
+            s_temp = np.append(s_temp, s_mc)
+            a_temp = np.append(a_temp, a_mc)
+            r_temp = np.append(r_temp, r_mc)
+        # Cull any extra points.
+        sdraws[i] = s_temp[:ndraws]
+        adraws[i] = a_temp[:ndraws]
+        rdraws[i] = r_temp[:ndraws]
 
-    return sdraws, adraws
+    return sdraws, adraws, rdraws
 
 
 def magnitude(phot, err, zeropoints=1.):
@@ -404,26 +479,39 @@ def inv_luptitude(mag, err, skynoise=1., zeropoints=1.):
     return phot, phot_err
 
 
-def get_seds(mag_coeffs, av, return_rvec=False, return_flux=False):
+def get_seds(mag_coeffs, av=None, rv=None, return_flux=False,
+             return_rvec=False, return_drvec=False):
     """
     Compute reddened SEDs from the provided magnitude coefficients.
 
     Parameters
     ----------
-    mag_coeffs : `~numpy.ndarray` of shape `(Nmodels, Nbands, Ncoeffs)`
-        Array of magnitude polynomial coefficients used to generate
-        reddened photometry.
+    mag_coeffs : `~numpy.ndarray` of shape `(Nmodels, Nbands, 3)`
+        Array of `(mag, R, dR/dRv)` coefficients used to generate
+        reddened photometry in all bands. The first coefficient is the
+        unreddened photometry, the second is the A(V) reddening vector for
+        R(V)=0, and the third is the change in the reddening vector
+        as a function of R(V).
 
-    av : `~numpy.ndarray` of shape `(Nmodels)`
-        Array of dust attenuation values photometry should be predicted for.
+    av : float or `~numpy.ndarray` of shape `(Nmodels)`, optional
+        Array of A(V) dust attenuation values.
+        If not provided, defaults to `av=0.`.
 
-    return_rvec : bool, optional
-        Whether to return the differential reddening vectors at the provided
-        `av`. Default is `False`.
+    rv : float or `~numpy.ndarray` of shape `(Nmodels)`, optional
+        Array of R(V) dust attenuation curve "shape" values.
+        If not provided, defaults to `rv=3.3`.
 
     return_flux : bool, optional
         Whether to return SEDs as flux densities instead of magnitudes.
         Default is `False`.
+
+    return_rvec : bool, optional
+        Whether to return the reddening vectors at the provided
+        `av` and `rv`. Default is `False`.
+
+    return_drvec : bool, optional
+        Whether to return the differential reddening vectors at the provided
+        `av` and `rv`. Default is `False`.
 
     Returns
     -------
@@ -431,33 +519,48 @@ def get_seds(mag_coeffs, av, return_rvec=False, return_flux=False):
         Reddened SEDs.
 
     rvecs : `~numpy.ndarray` of shape `(Nmodels, Nbands)`, optional
+        Reddening vectors.
+
+    drvecs : `~numpy.ndarray` of shape `(Nmodels, Nbands)`, optional
         Differential reddening vectors.
 
     """
 
     Nmodels, Nbands, Ncoef = mag_coeffs.shape
+    if av is None:
+        av = np.zeros(Nmodels)
+    if rv is None:
+        rv = np.zeros(Nmodels) + 3.3
 
     # Turn provided Av values into polynomial features.
-    av_poly = np.array([av**(Ncoef-j-1) if j < Ncoef - 1 else np.ones_like(av)
-                        for j in range(Ncoef)]).T
+    mags = mag_coeffs[:, :, 0]
+    r0 = mag_coeffs[:, :, 1]
+    dr = mag_coeffs[:, :, 2]
 
     # Compute SEDs.
-    seds = np.sum(mag_coeffs * av_poly[:, None, :], axis=-1)
+    drvecs = np.array(dr)
+    rvecs = r0 + rv[:, None] * drvecs
+    seds = mags + av[:, None] * rvecs
+
+    # Convert to flux.
     if return_flux:
         seds = 10**(-0.4 * seds)
-
-    if return_rvec:
-        # Compute reddening vectors.
-        rvecs = np.sum(np.arange(1, Ncoef)[::-1] * mag_coeffs[:, :, :-1] *
-                       av_poly[:, None, 1:], axis=-1)
-        if return_flux:
+        if return_rvec:
             rvecs *= -0.4 * np.log(10.) * seds
+        if return_drvec:
+            drvecs *= -0.4 * np.log(10.) * seds
+
+    if return_rvec and return_drvec:
+        return seds, rvecs, drvecs
+    elif return_rvec:
         return seds, rvecs
+    elif return_drvec:
+        return seds, drvecs
     else:
         return seds
 
 
-def photometric_offsets(phot, err, mask, models, idxs, reds, dists,
+def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
                         sel=None, Nmc=500, rstate=None):
     """
     Compute (multiplicative) photometric offsets between data and model.
@@ -482,6 +585,10 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dists,
 
     reds : `~numpy.ndarray` of shape `(Nobj, Nsamps)`
         Associated set of reddenings (Av values) derived for each object.
+
+    dreds : `~numpy.ndarray` of shape `(Nobj, Nsamps)`
+        Associated set of reddening curve shapes (Rv values) derived
+        for each object.
 
     dists : `~numpy.ndarray` of shape `(Nobj, Nsamps)`
         Associated set of distances (kpc) derived for each object.
@@ -517,7 +624,8 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dists,
         rstate = np.random
 
     # Generate SEDs.
-    seds = get_seds(models[idxs.flatten()], reds.flatten(), return_flux=True)
+    seds = get_seds(models[idxs.flatten()], av=reds.flatten(),
+                    rv=dreds.flatten(), return_flux=True)
     seds /= dists.flatten()[:, None]**2  # scale based on distance
     seds = seds.reshape(Nobj, Nsamps, Nfilt)  # reshape back
 

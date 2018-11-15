@@ -489,6 +489,7 @@ class SEDmaker(MISTtracks):
                                                  np.nan))
             else:
                 # Compute polynomial fit.
+                # TODO: MODIFY TO MATCH [m, R0, dRdRv] framework for Bayestar
                 seds = np.array([self.get_sed(mini=mini, eep=eep, feh=feh,
                                               av=av, dist=dist,
                                               loga_max=loga_max,

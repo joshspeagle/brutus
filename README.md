@@ -13,10 +13,13 @@ While `brutus` can be run over an arbitrary set of stellar models,
 it is configured for two by default: [MIST](http://waps.cfa.harvard.edu/MIST/)
 and [Bayestar](https://arxiv.org/pdf/1401.1508.pdf).
 
-The current MIST grid (v5) can be found
-[here](https://www.dropbox.com/s/v2wfuisjaapi4qb/grid_v5.h5?dl=0).
-The current Bayestar grid (v1) can be found
-[here](https://www.dropbox.com/s/hvivkp5ll0tyf5d/grid_bayestar_v1.h5?dl=0).
+The current MIST grid (v6) can be found
+[here]https://www.dropbox.com/s/qgbk1twlz0mh0ym/grid_mist_v6.h5?dl=0).
+The current Bayestar grid (v2) can be found
+[here](https://www.dropbox.com/s/mxi8qvlupnxbni7/grid_bayestar_v2.h5?dl=0).
+
+**Warning: The current MIST grid will soon be replaced.**
+**Warning: `brutus` v>=0.5.0 is incompatible with earlier grids.**
 
 ### Generating SEDs
 `brutus` contains built-in SED generation utilities that run over the MIST
@@ -26,6 +29,8 @@ stellar models and utilize the SED prediction engine taken from
 the pre-computed grids defined above. This functionality is provided so that
 users can generate their own grid of MIST models if desired. Please contact
 Phil Cargile (pcargile@cfa.harvard.edu) for the relevant data files.
+
+**Warning: This currently is incompatible with `brutus` v>=0.5.0.**
 
 ### Installation
 `brutus` can be installed by running

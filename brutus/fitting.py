@@ -29,7 +29,9 @@ from .utils import *
 __all__ = ["loglike", "_optimize_fit", "BruteForce", "_lnpost"]
 
 
-def loglike(data, data_err, data_mask, mag_coeffs, avlim=(0., 6.),
+def loglike(data, data_err, data_mask, mag_coeffs,
+            avlim=(0., 6.), rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
+            av_init=None, rv_init=None,
             dim_prior=True, ltol=0.02, wt_thresh=0.005, init_thresh=1e-4,
             return_vals=False, *args, **kwargs):
     """
@@ -47,13 +49,30 @@ def loglike(data, data_err, data_mask, mag_coeffs, avlim=(0., 6.),
     data_mask : `~numpy.ndarray` of shape `(Nfilt)`
         Binary mask (0/1) indicating whether the data was observed.
 
-    mag_coeffs : `~numpy.ndarray` of shape `(Nmodel, Nfilt, Ncoef)`
+    mag_coeffs : `~numpy.ndarray` of shape `(Nmodel, Nfilt, 3)`
         Magnitude coefficients used to compute reddened photometry for a given
-        model.
+        model. Contains `(mag, r0, dr)` pairs referencing the unreddening
+        magnitudes, the reddening vector as a function of A(V),
+        and the change in the reddening vector as a function of R(V).
 
     avlim : 2-tuple, optional
         The lower and upper bound where the reddened photometry is reliable.
         Default is `(0., 6.)`.
+
+    rvlim : 2-tuple, optional
+        The lower and upper bound where the reddening vector shape changes
+        are reliable. Default is `(1., 8.)`.
+
+    rv_gauss : 2-tuple, optional
+        The mean and standard deviation of the Gaussian prior that is placed
+        on R(V). The default is `(3.32, 0.18)` based on the results from
+        Schlafly et al. (2016).
+
+    av_init : `~numpy.ndarray` of shape `(Nmodel)`, optional
+        The initial A(V) guess. Default is `0.`.
+
+    rv_init : `~numpy.ndarray` of shape `(Nmodel)`, optional
+        The initial R(V) guess. Default is `3.3`.
 
     dim_prior : bool, optional
         Whether to apply a dimensional-based correction (prior) to the
@@ -74,8 +93,9 @@ def loglike(data, data_err, data_mask, mag_coeffs, avlim=(0., 6.),
         flux density (and iterating until convergence). Default is `1e-4`.
 
     return_vals : bool, optional
-        Whether to return the best-fit scale-factor and reddening along with
-        the associated precision matrix entries. Default is `False`.
+        Whether to return the best-fit scale-factor, reddening, and shape
+        along with the associated precision matrix (inverse covariance).
+        Default is `False`.
 
     Returns
     -------
@@ -89,27 +109,26 @@ def loglike(data, data_err, data_mask, mag_coeffs, avlim=(0., 6.),
         Chi-square values used to compute the log-likelihood.
 
     scale : `~numpy.ndarray` of shape `(Nmodel)`, optional
-        The best-fit scale factor.
+        The best-fit scale factors.
 
     Av : `~numpy.ndarray` of shape `(Nmodel)`, optional
-        The best-fit reddening.
+        The best-fit reddenings.
 
-    ds2 : `~numpy.ndarray` of shape `(Nmodel)`, optional
-        The second-derivative of the log-likelihood with respect to `s`
-        around `s_ML` and `Av_ML`.
+    Rv : `~numpy.ndarray` of shape `(Nmodel)`, optional
+        The best-fit reddening shapes.
 
-    da2 : `~numpy.ndarray` of shape `(Nmodel)`, optional
-        The second-derivative of the log-likelihood with respect to `Delta_Av`
-        around `s_ML` and `Av_ML`.
-
-    dsda : `~numpy.ndarray` of shape `(Nmodel)`, optional
-        The mixed-derivative of the log-likelihood with respect to `s` and
-        `Delta_Av` around `s_ML` and `Av_ML`.
+    icov_sar : `~numpy.ndarray` of shape `(Nmodel, 3, 3)`, optional
+        The precision (inverse covariance) matrices expanded around
+        `(s_ML, Av_ML, Rv_ML)`.
 
     """
 
     # Initialize values.
     Nmodels, Nfilt, Ncoef = mag_coeffs.shape
+    if av_init is None:
+        av_init = np.zeros(Nmodels)
+    if rv_init is None:
+        rv_init = np.zeros(Nmodels) + 3.3
 
     # Clean data (safety checks).
     with warnings.catch_warnings():
@@ -133,15 +152,15 @@ def loglike(data, data_err, data_mask, mag_coeffs, avlim=(0., 6.),
         mags[~mclean], mags_var[:, ~mclean] = 0., 1e50  # mask negative values
 
     # Compute unreddened photometry.
-    av = np.zeros(Nmodels)
-    models, rvecs = get_seds(mcoeffs, av=av, return_rvec=True)
+    models, rvecs, drvecs = get_seds(mcoeffs, av=av_init, rv=rv_init,
+                                     return_rvec=True, return_drvec=True)
 
     # Compute initial magnitude fit.
-    results = _optimize_fit(flux, tot_var, models, rvecs, av,
-                            mcoeffs, resid=None, mags=mags,
-                            mags_var=mags_var, stepsize=1.)
-    models, rvecs, scale, av, ds2, da2, dsda = results
-    resid = flux - models
+    results = _optimize_fit(flux, tot_var, models, rvecs, drvecs,
+                            av_init, rv_init, mcoeffs, tol=ltol,
+                            resid=None, mags=mags, mags_var=mags_var,
+                            avlim=avlim, rvlim=rvlim, rv_gauss=rv_gauss)
+    models, rvecs, drvecs, scale, av, rv, icov_sar, resid = results
 
     if init_thresh is not None:
         # Cull initial bad fits before moving on.
@@ -153,8 +172,11 @@ def loglike(data, data_err, data_mask, mag_coeffs, avlim=(0., 6.),
         # Subselect models.
         init_sel = np.where(lnl > np.max(lnl) + np.log(init_thresh))[0]
         tot_var = tot_var[init_sel]
-        models, rvecs = models[init_sel], rvecs[init_sel]
+        models = models[init_sel]
+        rvecs = rvecs[init_sel]
+        drvecs = drvecs[init_sel]
         av_new = av[init_sel]
+        rv_new = rv[init_sel]
         mcoeffs = mcoeffs[init_sel]
         resid = resid[init_sel]
     else:
@@ -163,20 +185,22 @@ def loglike(data, data_err, data_mask, mag_coeffs, avlim=(0., 6.),
         chi2 = np.ones(Nmodels) + 1e300
         lnl = np.ones(Nmodels) - 1e300
         av_new = np.array(av)
+        rv_new = np.array(rv)
 
     # Iterate until convergence.
     lnl_old, lerr = -1e300, 1e300
-    stepsize, rescaling = np.ones(Nmodels)[init_sel] * 3., 1.2
+    stepsize, rescaling = np.ones(Nmodels)[init_sel], 1.2
     while lerr > ltol:
 
         # Re-compute models.
-        results = _optimize_fit(flux, tot_var, models, rvecs,
-                                av_new, mcoeffs, avlim=avlim, resid=resid,
-                                stepsize=stepsize)
-        models, rvecs, scale_new, av_new, ds2_new, da2_new, dsda_new = results
+        results = _optimize_fit(flux, tot_var, models, rvecs, drvecs,
+                                av_new, rv_new, mcoeffs, avlim=avlim,
+                                rvlim=rvlim, rv_gauss=rv_gauss,
+                                resid=resid, stepsize=stepsize)
+        (models, rvecs, drvecs,
+         scale_new, av_new, rv_new, icov_sar_new, resid) = results
 
         # Compute chi2.
-        resid = flux - models
         chi2_new = np.sum(np.square(resid) / tot_var, axis=1)
 
         # Compute multivariate normal logpdf.
@@ -194,8 +218,8 @@ def loglike(data, data_err, data_mask, mag_coeffs, avlim=(0., 6.),
 
     # Insert optimized models into initial array of results.
     lnl[init_sel], chi2[init_sel] = lnl_new, chi2_new
-    scale[init_sel], av[init_sel] = scale_new, av_new
-    ds2[init_sel], da2[init_sel], dsda[init_sel] = ds2_new, da2_new, dsda_new
+    scale[init_sel], av[init_sel], rv[init_sel] = scale_new, av_new, rv_new
+    icov_sar[init_sel] = icov_sar_new
 
     # Apply dimensionality prior.
     if dim_prior:
@@ -204,14 +228,14 @@ def loglike(data, data_err, data_mask, mag_coeffs, avlim=(0., 6.),
         lnl = xlogy(a - 1., chi2) - (chi2 / 2.) - gammaln(a) - (np.log(2.) * a)
 
     if return_vals:
-        return lnl, Ndim, chi2, scale, av, ds2, da2, dsda
+        return lnl, Ndim, chi2, scale, av, rv, icov_sar
     else:
         return lnl, Ndim, chi2
 
 
-def _optimize_fit(data, tot_var, models, rvecs, av, mag_coeffs,
-                  avlim=(0., 6.), resid=None, mags=None, mags_var=None,
-                  stepsize=1.):
+def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
+                  avlim=(0., 6.), rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
+                  resid=None, tol=0.02, mags=None, mags_var=None, stepsize=1.):
     """
     Optimize the distance and reddening between the models and the data using
     the gradient.
@@ -231,16 +255,31 @@ def _optimize_fit(data, tot_var, models, rvecs, av, mag_coeffs,
     rvecs : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
         Associated model reddening vectors.
 
+    drvecs : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        Associated differential model reddening vectors.
+
     av : `~numpy.ndarray` of shape `(Nmodel,)`
         Av values of the models.
 
-    mag_coeffs : `~numpy.ndarray` of shape `(Nmodel, Nfilt, Ncoef)`
+    av : `~numpy.ndarray` of shape `(Nmodel,)`
+        Rv values of the models.
+
+    mag_coeffs : `~numpy.ndarray` of shape `(Nmodel, Nfilt, 3)`
         Magnitude coefficients used to compute reddened photometry for a given
         model.
 
     avlim : 2-tuple, optional
         The lower and upper bound where the reddened photometry is reliable.
         Default is `(0., 6.)`.
+
+    rvlim : 2-tuple, optional
+        The lower and upper bound where the reddening vector shape changes
+        are reliable. Default is `(1., 8.)`.
+
+    rv_gauss : 2-tuple, optional
+        The mean and standard deviation of the Gaussian prior that is placed
+        on R(V). The default is `(3.32, 0.18)` based on the results from
+        Schlafly et al. (2016).
 
     resid : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
         Residuals between the data and models.
@@ -264,23 +303,24 @@ def _optimize_fit(data, tot_var, models, rvecs, av, mag_coeffs,
     rvecs_new : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
         New reddening vectors. Always returned in flux densities.
 
+    drvecs_new : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        New differential reddening vectors. Always returned in flux densities.
+
     scale : `~numpy.ndarray` of shape `(Nmodel)`, optional
         The best-fit scale factor.
 
     Av : `~numpy.ndarray` of shape `(Nmodel)`, optional
         The best-fit reddening.
 
-    ds2 : `~numpy.ndarray` of shape `(Nmodel)`, optional
-        The second-derivative of the log-likelihood with respect to `s`
-        around `s_ML` and `Av_ML`.
+    Rv : `~numpy.ndarray` of shape `(Nmodel)`, optional
+        The best-fit reddening shapes.
 
-    da2 : `~numpy.ndarray` of shape `(Nmodel)`, optional
-        The second-derivative of the log-likelihood with respect to `Delta_Av`
-        around `s_ML` and `Av_ML`.
+    icov_sar : `~numpy.ndarray` of shape `(Nmodel, 3, 3)`, optional
+        The precision (inverse covariance) matrices expanded around
+        `(s_ML, Av_ML, Rv_ML)`.
 
-    dsda : `~numpy.ndarray` of shape `(Nmodel)`, optional
-        The mixed-derivative of the log-likelihood with respect to `s` and
-        `Delta_Av` around `s_ML` and `Av_ML`.
+    resid : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        Residuals between the data and models.
 
     """
 
@@ -291,66 +331,157 @@ def _optimize_fit(data, tot_var, models, rvecs, av, mag_coeffs,
         else:
             resid = data - models
 
-    # First fit dAv.
+    Rv_mean, Rv_std = rv_gauss
+
     if mags is not None and mags_var is not None:
-        # If our data is in magnitudes, our model is `M + dAv*R + s`.
-        # The solution can be solved explicitly as linear system for (s, dAv).
+        # If magnitudes are provided, we can solve the linear system
+        # explicitly for `(s_ML, Av_ML, r_ML=Av_ML*Rv_ML)`. We opt to
+        # solve for Av and Rv in turn to so we can impose priors and bounds
+        # on both quantities.
 
-        # Derive partial derivatives.
-        s_den = np.sum(1. / mags_var, axis=1)
-        a_den = np.sum(np.square(rvecs) / mags_var, axis=1)
-        sa_mix = np.sum(rvecs / mags_var, axis=1)
+        err = 1e300
+        while err > tol:
+            # Solve for Av.
+            # Derive partial derivatives.
+            s_den = np.sum(1. / mags_var, axis=1)
+            a_den = np.sum(np.square(rvecs) / mags_var, axis=1)
+            sa_mix = np.sum(rvecs / mags_var, axis=1)
+            # Compute residual terms.
+            resid_s = np.sum(resid / mags_var, axis=1)
+            resid_a = np.sum(resid * rvecs / mags_var, axis=1)
+            # Compute determinants (normalization terms).
+            sa_idet = 1. / (s_den * a_den - sa_mix**2)
+            # Compute ML solution for Delta_Av.
+            dav = sa_idet * (s_den * resid_a - sa_mix * resid_s)
 
-        # Compute residual terms.
-        resid_s = np.sum(resid / mags_var, axis=1)
-        resid_a = np.sum(resid * rvecs / mags_var, axis=1)
+            # Prevent Av from sliding off the provided bounds.
+            dav_low, dav_high = avlim[0] - av, avlim[1] - av
+            lsel, hsel = dav < dav_low, dav > dav_high
+            dav[lsel] = dav_low[lsel]
+            dav[hsel] = dav_high[hsel]
+            # Increment to new Av.
+            av += dav
 
-        # Compute determinants (normalization terms).
-        sa_idet = 1. / (s_den * a_den - sa_mix**2)
+            # Update residuals.
+            resid -= dav[:, None] * rvecs  # update residuals
 
-        # Compute ML solution for dAv.
-        dav = sa_idet * (s_den * resid_a - sa_mix * resid_s)
+            # Solve for Rv.
+            # Derive partial derivatives.
+            s_den = np.sum(1. / mags_var, axis=1)
+            r_den = np.sum(np.square(drvecs) / mags_var, axis=1) * av**2
+            sr_mix = np.sum(drvecs / mags_var, axis=1) * av
+            # Compute residual terms.
+            resid_s = np.sum(resid / mags_var, axis=1)
+            resid_r = np.sum(resid * drvecs / mags_var, axis=1) * av
+            # Add in Gaussian Rv prior.
+            resid_r += (Rv_mean - rv) / Rv_std**2
+            r_den += 1. / Rv_std**2
+            # Compute determinants (normalization terms).
+            sr_idet = 1. / (s_den * r_den - sr_mix**2)
+            # Compute ML solution for Delta_Rv.
+            drv = sr_idet * (s_den * resid_r - sr_mix * resid_s)
+
+            # Prevent Rv from sliding off the provided bounds.
+            drv_low, drv_high = rvlim[0] - rv, rvlim[1] - rv
+            lsel, hsel = drv < drv_low, drv > drv_high
+            drv[lsel] = drv_low[lsel]
+            drv[hsel] = drv_high[hsel]
+            # Increment to new Rv.
+            rv += drv
+
+            # Update residuals.
+            resid -= (av * drv)[:, None] * drvecs
+            # Update reddening vector.
+            rvecs += drv[:, None] * drvecs
+            # Compute error.
+            err = np.max([dav, drv])
     else:
-        # If our data is in flux densities, our model is `s*F - dAv*s*R`.
-        # The solution can be solved explicitly as linear system for (s, s*dAv)
-        # and converted back to dAv from s_ML. However, given a good guess
-        # for s and Av it is fine to instead just iterate between the two.
+        # If our data is in flux densities, we can solve the linear system
+        # implicitly for `(s_ML, Av_ML, Rv_ML)`. However, the solution
+        # is not necessarily as numerically stable as one might hope
+        # due to the nature of our Taylor expansion in flux.
+        # Instead, it is easier to iterate in `(dAv, dRv)` from
+        # a good guess for `(s_ML, Av_ML, Rv_ML)`. We opt to solve both
+        # independently at fixed `(Av, Rv)` to avoid recomputing models.
 
         # Derive ML Delta_Av (`dav`) between data and models.
         a_num = np.sum(rvecs * resid / tot_var, axis=1)
         a_den = np.sum(np.square(rvecs) / tot_var, axis=1)
         dav = a_num / a_den
-
         # Adjust dAv based on the provided stepsize.
         dav *= stepsize
 
-    # Prevent Av from sliding off the provided bounds.
-    dav_low, dav_high = avlim[0] - av, avlim[1] - av
-    lsel, hsel = dav < dav_low, dav > dav_high
-    dav[lsel] = dav_low[lsel]
-    dav[hsel] = dav_high[hsel]
+        # Derive ML Delta_Rv (`drv`) between data and models.
+        r_num = np.sum(drvecs * resid / tot_var, axis=1)
+        r_den = np.sum(np.square(drvecs) / tot_var, axis=1)
+        r_num += (Rv_mean - rv) / Rv_std**2  # add Rv gaussian prior
+        r_den += 1. / Rv_std**2  # add Rv gaussian prior
+        drv = r_num / r_den
+        # Adjust dRv based on the provided stepsize.
+        drv *= stepsize
 
-    # Recompute models with new Av.
-    av += dav
-    models, rvecs = get_seds(mag_coeffs, av=av, return_rvec=True,
-                             return_flux=True)
+        # Prevent Av from sliding off the provided bounds.
+        dav_low, dav_high = avlim[0] - av, avlim[1] - av
+        lsel, hsel = dav < dav_low, dav > dav_high
+        dav[lsel] = dav_low[lsel]
+        dav[hsel] = dav_high[hsel]
+        # Increment to new Av.
+        av += dav
+
+        # Prevent Rv from sliding off the provided bounds.
+        drv_low, drv_high = rvlim[0] - rv, rvlim[1] - rv
+        lsel, hsel = drv < drv_low, drv > drv_high
+        drv[lsel] = drv_low[lsel]
+        drv[hsel] = drv_high[hsel]
+        # Increment to new Rv.
+        rv += drv
+
+    # Recompute models with new Rv.
+    models, rvecs, drvecs = get_seds(mag_coeffs, av=av, rv=rv,
+                                     return_flux=True,
+                                     return_rvec=True, return_drvec=True)
 
     # Derive scale-factors (`scale`) between data and models.
     s_num = np.sum(models * data[None, :] / tot_var, axis=1)
     s_den = np.sum(np.square(models) / tot_var, axis=1)
     scale = s_num / s_den  # ML scalefactor
-    scale[scale <= 0.] = 1e-20  # must be non-negative
+    scale[scale <= 1e-20] = 1e-20  # must be non-negative
+
+    # Compute reddening effect.
+    models_int = 10**(-0.4 * mag_coeffs[:, :, 0])
+    reddening = models - models_int
 
     # Rescale models.
     models *= scale[:, None]
 
-    # Derive cross-term.
+    # Compute residuals.
+    resid = data - models
+
+    # Derive scale cross-terms.
+    sr_mix = np.sum(drvecs * (resid - models) / tot_var, axis=1)
     sa_mix = np.sum(rvecs * (resid - models) / tot_var, axis=1)
 
-    # Rescale reddening vector.
+    # Rescale reddening quantities.
     rvecs *= scale[:, None]
+    drvecs *= scale[:, None]
+    reddening *= scale[:, None]
 
-    return models, rvecs, scale, av, s_den, a_den, sa_mix
+    # Deriving reddening (cross-)terms.
+    ar_mix = np.sum(drvecs * (resid - reddening) / tot_var, axis=1)
+    a_den = np.sum(np.square(rvecs) / tot_var, axis=1)
+    r_den = np.sum(np.square(drvecs) / tot_var, axis=1)
+    r_den += 1. / Rv_std**2  # add Rv gaussian prior
+
+    # Construct precision matrices (inverse covariances).
+    icov_sar = np.array([[[dsds, dsda, dsdr],
+                          [dsda, dada, dadr],
+                          [dsdr, dadr, drdr]]
+                         for (dsds, dada, drdr,
+                              dsda, dsdr, dadr) in zip(s_den, a_den, r_den,
+                                                       sa_mix, sr_mix,
+                                                       ar_mix)])
+
+    return models, rvecs, drvecs, scale, av, rv, icov_sar, resid
 
 
 class BruteForce():
@@ -366,7 +497,7 @@ class BruteForce():
 
         Parameters
         ----------
-        models : `~numpy.ndarray` of shape `(Nmodel, Nfilt, Ncoef)`
+        models : `~numpy.ndarray` of shape `(Nmodel, Nfilt, 3)`
             Magnitude coefficients used to compute reddened photometry over
             the desired bands for all models on the grid.
 
@@ -403,12 +534,12 @@ class BruteForce():
     def fit(self, data, data_err, data_mask, data_labels, save_file,
             phot_offsets=None, parallax=None, parallax_err=None,
             Nmc_prior=100, avlim=(0., 6.),
+            rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
             lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4, Ndraws=2000,
             apply_agewt=True, apply_grad=True, lndistprior=None,
             apply_dlabels=True, data_coords=None, logl_dim_prior=True,
             ltol=0.02, ltol_subthresh=0.005, logl_initthresh=1e-4,
-            rstate=None, save_dist_draws=True, save_red_draws=True,
-            verbose=True):
+            rstate=None, save_dar_draws=True, verbose=True):
         """
         Fit all input models to the input data to compute the associated
         log-posteriors.
@@ -449,6 +580,15 @@ class BruteForce():
         avlim : 2-tuple, optional
             The bounds where Av predictions are reliable.
             Default is `(0., 6.)`.
+
+        rvlim : 2-tuple, optional
+            The lower and upper bound where the reddening vector shape changes
+            are reliable. Default is `(1., 8.)`.
+
+        rv_gauss : 2-tuple, optional
+            The mean and standard deviation of the Gaussian prior on R(V).
+            The default is `(3.32, 0.18)` based on the results from
+            Schlafly et al. (2016).
 
         lnprior : `~numpy.ndarray` of shape `(Ndata, Nfilt)`, optional
             Log-prior grid to be used. If not provided, this will default
@@ -517,13 +657,9 @@ class BruteForce():
         rstate : `~numpy.random.RandomState`, optional
             `~numpy.random.RandomState` instance.
 
-        save_dist_draws : bool, optional
-            Whether to save distance draws (in units of kpc).
-            Default is `True`.
-
-        save_red_draws : bool, optional
-            Whether to save reddening draws (in units of Av).
-            Default is `True`.
+        save_dar_draws : bool, optional
+            Whether to save distance (kpc), reddening (Av), and
+            dust curve shape (Rv) draws. Default is `True`.
 
         verbose : bool, optional
             Whether to print progress to `~sys.stderr`. Default is `True`.
@@ -540,7 +676,6 @@ class BruteForce():
                              "`parallax_err`.")
         if phot_offsets is None:
             phot_offsets = np.ones(Nfilt)
-        return_distreds = save_dist_draws or save_red_draws
 
         # Initialize log(prior).
         if lnprior is None:
@@ -556,7 +691,6 @@ class BruteForce():
             try:
                 lnprior += np.log(self.models_labels['agewt'])
             except:
-                warnings.warn("No age weights provided in `labels`. ")
                 pass
 
         # Reweight based on spacing.
@@ -584,7 +718,7 @@ class BruteForce():
             data_mask *= clean
 
         # Check there are enough bands to fit.
-        Nbmin = 3  # minimum number of bands needed
+        Nbmin = 4  # minimum number of bands needed
         if np.any(np.sum(data_mask, axis=1) < Nbmin):
             raise ValueError("Objects with fewer than {0} bands of "
                              "photometry are currently included in the "
@@ -601,18 +735,21 @@ class BruteForce():
                                                   dtype='float32'))
         out.create_dataset("avs", data=np.ones((Ndata, Ndraws),
                                                dtype='float32'))
-        out.create_dataset("cov_sa", data=np.zeros((Ndata, Ndraws, 2, 2),
-                                                   dtype='float32'))
+        out.create_dataset("rvs", data=np.ones((Ndata, Ndraws),
+                                               dtype='float32'))
+        out.create_dataset("cov_sar", data=np.zeros((Ndata, Ndraws, 3, 3),
+                                                    dtype='float32'))
         out.create_dataset("log_evidence", data=np.zeros(Ndata,
                                                          dtype='float32'))
         out.create_dataset("best_chi2", data=np.zeros(Ndata, dtype='float32'))
         out.create_dataset("Nbands", data=np.zeros(Ndata, dtype='int16'))
-        if save_dist_draws:
+        if save_dar_draws:
             out.create_dataset("dists", data=np.ones((Ndata, Ndraws),
                                                      dtype='float32'))
-        if save_red_draws:
             out.create_dataset("reds", data=np.ones((Ndata, Ndraws),
                                                     dtype='float32'))
+            out.create_dataset("dreds", data=np.ones((Ndata, Ndraws),
+                                                     dtype='float32'))
 
         # Fit data.
         if verbose:
@@ -623,7 +760,8 @@ class BruteForce():
                                               data_mask,
                                               parallax=parallax,
                                               parallax_err=parallax_err,
-                                              avlim=avlim,
+                                              avlim=avlim, rvlim=rvlim,
+                                              rv_gauss=rv_gauss,
                                               Nmc_prior=Nmc_prior,
                                               lnprior=lnprior,
                                               wt_thresh=wt_thresh,
@@ -632,7 +770,7 @@ class BruteForce():
                                               lndistprior=lndistprior,
                                               apply_dlabels=apply_dlabels,
                                               data_coords=data_coords,
-                                              return_distreds=return_distreds,
+                                              return_distreds=save_dar_draws,
                                               ltol_subthresh=ltol_subthresh,
                                               logl_dim_prior=logl_dim_prior,
                                               logl_initthresh=logl_initthresh,
@@ -643,22 +781,24 @@ class BruteForce():
                 sys.stderr.flush()
 
             # Save results.
-            if return_distreds:
-                (idxs, scales, avs, covs_sa, Ndim,
-                 levid, chi2min, dists, reds) = results
+            if save_dar_draws:
+                (idxs, scales, avs, rvs, covs_sar, Ndim,
+                 levid, chi2min, dists, reds, dreds) = results
             else:
-                idxs, scales, avs, covs_sa, Ndim, levid, chi2min = results
+                (idxs, scales, avs, rvs, covs_sar,
+                 Ndim, levid, chi2min) = results
             out['idxs'][i] = idxs
             out['scales'][i] = scales
             out['avs'][i] = avs
-            out['cov_sa'][i] = covs_sa
+            out['rvs'][i] = rvs
+            out['cov_sar'][i] = covs_sar
             out['Nbands'][i] = Ndim
             out['log_evidence'][i] = levid
             out['best_chi2'][i] = chi2min
-            if save_dist_draws:
+            if save_dar_draws:
                 out['dists'][i] = dists
-            if save_red_draws:
                 out['reds'][i] = reds
+                out['dreds'][i] = dreds
 
         if verbose:
             sys.stderr.write('\n')
@@ -667,7 +807,8 @@ class BruteForce():
         out.close()  # close output results file
 
     def _fit(self, data, data_err, data_mask,
-             parallax=None, parallax_err=None, Nmc_prior=100, avlim=(0., 6.),
+             parallax=None, parallax_err=None, Nmc_prior=100,
+             avlim=(0., 6.), rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
              lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4, Ndraws=2000,
              lndistprior=None, apply_dlabels=True, data_coords=None,
              return_distreds=True, logl_dim_prior=True, ltol=0.02,
@@ -700,6 +841,15 @@ class BruteForce():
         avlim : 2-tuple, optional
             The bounds where Av predictions are reliable.
             Default is `(0., 6.)`.
+
+        rvlim : 2-tuple, optional
+            The lower and upper bound where the reddening vector shape changes
+            are reliable. Default is `(1., 8.)`.
+
+        rv_gauss : 2-tuple, optional
+            The mean and standard deviation of the Gaussian prior on R(V).
+            The default is `(3.32, 0.18)` based on the results from
+            Schlafly et al. (2016).
 
         lnprior : `~numpy.ndarray` of shape `(Ndata, Nfilt)`, optional
             Log-prior grid to be used. If not provided, will default
@@ -823,6 +973,7 @@ class BruteForce():
 
         # Wrap log-likelihood with fixed kwargs.
         loglike_kwargs = {'avlim': avlim, 'ltol': ltol,
+                          'rvlim': rvlim, 'rv_gauss': rv_gauss,
                           'logl_dim_prior': logl_dim_prior,
                           'wt_thresh': ltol_subthresh,
                           'init_thresh': logl_initthresh,
@@ -841,7 +992,7 @@ class BruteForce():
                           'lnprior': lnprior, 'wt_thresh': wt_thresh,
                           'cdf_thresh': cdf_thresh, 'rstate': rstate,
                           'lndistprior': lndistprior, 'avlim': avlim,
-                          'dlabels': dlabels,
+                          'rvlim': rvlim, 'dlabels': dlabels,
                           'return_distreds': return_distreds}
         _logpost = _function_wrapper(_logpost_zip, [], logpost_kwargs,
                                      name='logpost')
@@ -861,9 +1012,9 @@ class BruteForce():
 
             # Extract `map`-ed results.
             for results, blob in zip(results_map, lnpost_map):
-                lnlike, Ndim, chi2, scales, avs, ds2, da2, dsda = results
+                lnlike, Ndim, chi2, scales, avs, rvs, icovs_sar = results
                 if return_distreds:
-                    sel, lnpost, dists, reds, logwts = blob
+                    sel, lnpost, dists, reds, dreds, logwts = blob
                 else:
                     sel, lnpost = blob
 
@@ -872,17 +1023,16 @@ class BruteForce():
                 levid = logsumexp(lnpost)
 
                 # Resample.
-                wt = np.exp(lnpost - levid)
-                wt /= wt.sum()
-                idxs = rstate.choice(len(sel), size=Ndraws, p=wt)
-                sidxs = sel[idxs]
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    wt = np.exp(lnpost - levid)
+                    wt /= wt.sum()
+                    idxs = rstate.choice(len(sel), size=Ndraws, p=wt)
+                    sidxs = sel[idxs]
 
                 # Grab/compute corresponding values.
-                scales, avs, ds2, da2, dsda = (scales[sidxs], avs[sidxs],
-                                               ds2[sidxs], da2[sidxs],
-                                               dsda[sidxs])
-                cov_sa = np.array([np.linalg.inv(np.array([[s, sa], [sa, a]]))
-                                   for s, a, sa in zip(ds2, da2, dsda)])
+                scales, avs, rvs = scales[sidxs], avs[sidxs], rvs[sidxs]
+                cov_sar = _inverse3(icovs_sar[sidxs])
 
                 # Draw distances and reddenings.
                 if return_distreds:
@@ -891,17 +1041,21 @@ class BruteForce():
                         wt = np.exp(logwts[idx] - logsumexp(logwts[idx]))
                         wt /= wt.sum()
                         imc[i] = rstate.choice(Nmc_prior, p=wt)
-                    dists, reds = dists[idxs, imc], reds[idxs, imc]
-                    yield (sidxs, scales, avs, cov_sa, Ndim, levid, chi2min,
-                           dists, reds)
+                    dists = dists[idxs, imc]
+                    reds = reds[idxs, imc]
+                    dreds = dreds[idxs, imc]
+                    yield (sidxs, scales, avs, rvs, cov_sar,
+                           Ndim, levid, chi2min,
+                           dists, reds, dreds)
                 else:
-                    yield sidxs, scales, avs, cov_sa, Ndim, levid, chi2min
+                    yield (sidxs, scales, avs, rvs, cov_sar,
+                           Ndim, levid, chi2min)
 
 
 def _lnpost(results, parallax=None, parallax_err=None, coord=None,
             Nmc_prior=100, lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4,
-            lndistprior=None, dlabels=None, avlim=(0., 6.), rstate=None,
-            return_distreds=True, *args, **kwargs):
+            lndistprior=None, dlabels=None, avlim=(0., 6.), rvlim=(1., 8.),
+            rstate=None, return_distreds=True, *args, **kwargs):
     """
     Internal function used to estimate posteriors from fits using the
     provided priors via Monte Carlo integration.
@@ -956,6 +1110,10 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
         The bounds where Av predictions are reliable.
         Default is `(0., 6.)`.
 
+    rvlim : 2-tuple, optional
+        The lower and upper bound where the reddening vector shape changes
+        are reliable. Default is `(1., 8.)`.
+
     rstate : `~numpy.random.RandomState`, optional
         `~numpy.random.RandomState` instance.
 
@@ -977,7 +1135,10 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
         The dist draws for each selected model.
 
     reds : `~numpy.ndarray` of shape `(Nsel, Nmc_prior)`, optional
-       The reddening draws for each selected model.
+       The reddening draws (Av) for each selected model.
+
+    dreds : `~numpy.ndarray` of shape `(Nsel, Nmc_prior)`, optional
+       The differential reddening draws (Rv) for each selected model.
 
     logwts : `~numpy.ndarray` of shape `(Nsel, Nmc_prior)`, optional
         The ln(weights) for each selected model.
@@ -1012,7 +1173,7 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
         coord = np.zeros(2)
 
     # Grab results.
-    lnlike, Ndim, chi2, scales, avs, ds2, da2, dsda = results
+    lnlike, Ndim, chi2, scales, avs, rvs, icovs_sar = results
     Nmodels = len(lnlike)
 
     # Compute initial log-posteriors.
@@ -1020,6 +1181,7 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
 
     # Apply rough parallax prior for clipping.
     if parallax is not None and parallax_err is not None:
+        ds2 = icovs_sar[:, 0, 0]
         scales_err = 1./np.sqrt(np.abs(ds2))  # approximate scale errors
         lnprob = lnpost + scale_parallax_lnprior(scales, scales_err,
                                                  parallax, parallax_err)
@@ -1041,12 +1203,8 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
     Nsel = len(sel)
 
     # Generate covariance matrices for the selected fits.
-    scale, av, sinv2, ainv2, sainv = (scales[sel], avs[sel],
-                                      ds2[sel], da2[sel],
-                                      dsda[sel])
-    cinv_sa = np.array([np.array([[s, sa], [sa, a]])
-                       for s, a, sa in zip(sinv2, ainv2, sainv)])
-    cov_sa = np.array([np.linalg.inv(ci) for ci in cinv_sa])
+    scale, av, rv = scales[sel], avs[sel], rvs[sel]
+    cov_sar = _inverse3(icovs_sar[sel])
 
     # Now actually apply distance (and parallax) priors.
     if Nmc_prior > 0:
@@ -1054,10 +1212,10 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
         # overlap integral.
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            s_mc, a_mc = np.array([mvn(np.array([s, a]), c,
-                                   size=Nmc_prior)
-                                   for s, a, c in zip(scale, av,
-                                                      cov_sa)]).T
+            s_mc, a_mc, r_mc = np.array([mvn(np.array([s, a, r]), c,
+                                         size=Nmc_prior)
+                                         for s, a, r, c in zip(scale, av, rv,
+                                                               cov_sar)]).T
         if dlabels is not None:
             dlabels_mc = np.tile(dlabels[sel], Nmc_prior).reshape(-1, Nsel)
         else:
@@ -1072,18 +1230,21 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
             # Evaluate parallax prior.
             lnp_mc += parallax_lnprior(par_mc, parallax, parallax_err)
         # Ignore points that are out of bounds.
-        inbounds = ((s_mc >= 0.) & (a_mc >= avlim[0]) &
-                    (a_mc <= avlim[1]))
+        inbounds = ((s_mc >= 1e-20) &
+                    (a_mc >= avlim[0]) & (a_mc <= avlim[1]) &
+                    (r_mc >= rvlim[0]) & (r_mc <= rvlim[1]))
         lnp_mc[~inbounds] = -1e300
         Nmc_prior_eff = np.sum(inbounds, axis=0)
         # Compute integral.
-        lnp = logsumexp(lnp_mc, axis=0) - np.log(Nmc_prior_eff)
-        lnpost += lnp
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            lnp = logsumexp(lnp_mc, axis=0) - np.log(Nmc_prior_eff)
+            lnpost += lnp
     else:
         # Just assume the maximum-likelihood estimate.
         lnpost = lnprob[sel]
 
     if return_distreds:
-        return sel, lnpost, dist_mc.T, a_mc.T, lnp_mc.T
+        return sel, lnpost, dist_mc.T, a_mc.T, r_mc.T, lnp_mc.T
     else:
         return sel, lnpost

@@ -23,7 +23,7 @@ from scipy.ndimage import gaussian_filter as norm_kde
 import copy
 
 from .pdf import gal_lnprior, parallax_lnprior
-from .utils import quantile, draw_sav, get_seds, magnitude
+from .utils import quantile, draw_sar, get_seds, magnitude
 
 try:
     from scipy.special import logsumexp
@@ -43,8 +43,8 @@ __all__ = ["cornerplot", "dist_vs_red", "posterior_predictive",
            "photometric_offsets", "_hist2d"]
 
 
-def cornerplot(idxs, data, params, lndistprior=None,
-               coord=None, avlim=(0., 6.), weights=None, parallax=None,
+def cornerplot(idxs, data, params, lndistprior=None, coord=None,
+               avlim=(0., 6.), rvlim=(1., 8.), weights=None, parallax=None,
                parallax_err=None, Nr=500, applied_parallax=True,
                pcolor='blue', parallax_kwargs=None,
                dcolor='red', dist_kwargs=None, span=None,
@@ -63,11 +63,12 @@ def cornerplot(idxs, data, params, lndistprior=None,
         An array of resampled indices corresponding to the set of models used
         to fit the data.
 
-    data : 2-tuple or 3-tuple containing `~numpy.ndarray`s of shape `(Nsamps)`
-        The data that will be plotted. Either a collection of `(dists, reds)`
-        that were saved, or a collection of `(scales, avs, covs_sa)` that
-        will be used to regenerate `(dists, reds)` in conjunction with
-        any applied ditsance and/or parallax priors.
+    data : 3-tuple or 4-tuple containing `~numpy.ndarray`s of shape `(Nsamps)`
+        The data that will be plotted. Either a collection of
+        `(dists, reds, dreds)` that were saved, or a collection of
+        `(scales, avs, rvs, covs_sar)` that will be used to regenerate
+        `(dists, reds, dreds)` in conjunction with any applied distance
+        and/or parallax priors.
 
     params : structured `~numpy.ndarray` with shape `(Nmodels,)`
         Set of parameters corresponding to the input set of models. Note that
@@ -83,6 +84,9 @@ def cornerplot(idxs, data, params, lndistprior=None,
 
     avlim : 2-tuple, optional
         The Av limits used to truncate results. Default is `(0., 6.)`.
+
+    rvlim : 2-tuple, optional
+        The Rv limits used to truncate results. Default is `(1., 8.)`.
 
     weights : `~numpy.ndarray` of shape `(Nsamps)`, optional
         An optional set of importance weights used to reweight the samples.
@@ -123,7 +127,7 @@ def cornerplot(idxs, data, params, lndistprior=None,
 
             span = [(0., 10.), 0.95, (5., 6.)]
 
-        Default is `0.997` (3-sigma credible interval).
+        Default is `0.99` (99% credible interval).
 
     quantiles : iterable, optional
         A list of fractional quantiles to overplot on the 1-D marginalized
@@ -272,20 +276,21 @@ def cornerplot(idxs, data, params, lndistprior=None,
 
     try:
         # Grab distance and reddening samples.
-        ddraws, adraws = copy.deepcopy(data)
+        ddraws, adraws, rdraws = copy.deepcopy(data)
         pdraws = 1. / ddraws
     except:
         # Regenerate distance and reddening samples from inputs.
-        scales, avs, covs_sa = copy.deepcopy(data)
+        scales, avs, rvs, covs_sar = copy.deepcopy(data)
 
-        if lndistprior is None and coord is None:
+        if lndistprior == gal_lnprior and coord is None:
             raise ValueError("`coord` must be passed if the default distance "
                              "prior was used.")
 
-        # Add in parallax and Av realizations.
+        # Add in scale/parallax/distance, Av, and Rv realizations.
         nsamps = len(idxs)
-        sdraws, adraws = draw_sav(scales, avs, covs_sa, ndraws=Nr, avlim=avlim,
-                                  rstate=rstate)
+        sdraws, adraws, rdraws = draw_sar(scales, avs, rvs, covs_sar,
+                                          ndraws=Nr, avlim=avlim, rvlim=rvlim,
+                                          rstate=rstate)
         pdraws = np.sqrt(sdraws)
         ddraws = 1. / pdraws
 
@@ -302,9 +307,10 @@ def cornerplot(idxs, data, params, lndistprior=None,
         pdraws = pdraws[np.arange(nsamps), ridx]
         ddraws = ddraws[np.arange(nsamps), ridx]
         adraws = adraws[np.arange(nsamps), ridx]
+        rdraws = rdraws[np.arange(nsamps), ridx]
 
     # Append to samples.
-    samples = np.c_[samples.T, adraws, pdraws, ddraws].T
+    samples = np.c_[samples.T, adraws, rdraws, pdraws, ddraws].T
     ndim, nsamps = samples.shape
 
     # Check weights.
@@ -315,7 +321,7 @@ def cornerplot(idxs, data, params, lndistprior=None,
 
     # Determine plotting bounds.
     if span is None:
-        span = [0.997 for i in range(ndim)]
+        span = [0.99 for i in range(ndim)]
     span = list(span)
     if len(span) != ndim:
         raise ValueError("Dimension mismatch between samples and span.")
@@ -330,6 +336,7 @@ def cornerplot(idxs, data, params, lndistprior=None,
     if labels is None:
         labels = list(params.dtype.names)
     labels.append('Av')
+    labels.append('Rv')
     labels.append('Parallax')
     labels.append('Distance')
 
@@ -530,9 +537,9 @@ def cornerplot(idxs, data, params, lndistprior=None,
     return (fig, axes)
 
 
-def dist_vs_red(data, Rv=None, dist_type='distance_modulus',
-                lndistprior=None, coord=None, avlim=(0., 6.), weights=None,
-                parallax=None, parallax_err=None, Nr=300,
+def dist_vs_red(data, ebv=None, dist_type='distance_modulus',
+                lndistprior=None, coord=None, avlim=(0., 6.), rvlim=(1., 8.),
+                weights=None, parallax=None, parallax_err=None, Nr=300,
                 cmap='Blues', bins=300, span=None, smooth=0.01,
                 plot_kwargs=None, truths=None, truth_color='red',
                 truth_kwargs=None, rstate=None):
@@ -541,15 +548,16 @@ def dist_vs_red(data, Rv=None, dist_type='distance_modulus',
 
     Parameters
     ----------
-    data : 2-tuple or 3-tuple containing `~numpy.ndarray`s of shape `(Nsamps)`
-        The data that will be plotted. Either a collection of `(dists, reds)`
-        that were saved, or a collection of `(scales, avs, covs_sa)` that
-        will be used to regenerate `(dists, reds)` in conjunction with
-        any applied ditsance and/or parallax priors.
+    data : 3-tuple or 4-tuple containing `~numpy.ndarray`s of shape `(Nsamps)`
+        The data that will be plotted. Either a collection of
+        `(dists, reds, dreds)` that were saved, or a collection of
+        `(scales, avs, rvs, covs_sar)` that will be used to regenerate
+        `(dists, reds)` in conjunction with any applied distance
+        and/or parallax priors.
 
-    Rv : float, optional
-        If provided, will convert from Av to E(B-V) when plotting. Default
-        is `None`.
+    ebv : bool, optional
+        If provided, will convert from Av to E(B-V) when plotting using
+        the provided Rv values. Default is `False`.
 
     dist_type : str, optional
         The distance format to be plotted. Options include `'parallax'`,
@@ -566,6 +574,9 @@ def dist_vs_red(data, Rv=None, dist_type='distance_modulus',
 
     avlim : 2-tuple, optional
         The Av limits used to truncate results. Default is `(0., 6.)`.
+
+    rvlim : 2-tuple, optional
+        The Rv limits used to truncate results. Default is `(1., 8.)`.
 
     weights : `~numpy.ndarray` of shape `(Nsamps)`, optional
         An optional set of importance weights used to reweight the samples.
@@ -586,7 +597,7 @@ def dist_vs_red(data, Rv=None, dist_type='distance_modulus',
     bins : int or list of ints with length `(ndim,)`, optional
         The number of bins to be used in each dimension. Default is `300`.
 
-    span : iterable with shape `(ndim, 2)`, optional
+    span : iterable with shape `(2, 2)`, optional
         A list where each element is a length-2 tuple containing
         lower and upper bounds. If not provided, the x-axis will use the
         provided Av bounds while the y-axis will span `(4., 19.)` in
@@ -665,9 +676,9 @@ def dist_vs_red(data, Rv=None, dist_type='distance_modulus',
         xbin, ybin = bins
     except:
         xbin = ybin = bins
-    if Rv is not None:
+    if ebv:
         ylabel = r'$E(B-V)$ [mag]'
-        ylims = np.array(avlims) / Rv
+        ylims = avlims  # default Rv goes from [1., 8.] -> min(Rv) = 1.
     else:
         ylabel = r'$A_v$ [mag]'
         ylims = avlims
@@ -717,21 +728,22 @@ def dist_vs_red(data, Rv=None, dist_type='distance_modulus',
 
     try:
         # Grab distance and reddening samples.
-        ddraws, adraws = copy.deepcopy(data)
+        ddraws, adraws, rdraws = copy.deepcopy(data)
         pdraws = 1. / ddraws
         sdraws = pdraws**2
         dmdraws = 5. * np.log10(ddraws) + 10.
     except:
         # Regenerate distance and reddening samples from inputs.
-        scales, avs, covs_sa = copy.deepcopy(data)
+        scales, avs, rvs, covs_sar = copy.deepcopy(data)
 
         if lndistprior is None and coord is None:
             raise ValueError("`coord` must be passed if the default distance "
                              "prior was used.")
 
         # Generate parallax and Av realizations.
-        sdraws, adraws = draw_sav(scales, avs, covs_sa, ndraws=Nr,
-                                  avlim=avlim, rstate=rstate)
+        sdraws, adraws, rdraws = draw_sar(scales, avs, rvs, covs_sar,
+                                          ndraws=Nr, avlim=avlim, rvlim=rvlim,
+                                          rstate=rstate)
         pdraws = np.sqrt(sdraws)
         ddraws = 1. / pdraws
         dmdraws = 5. * np.log10(ddraws) + 10.
@@ -748,8 +760,8 @@ def dist_vs_red(data, Rv=None, dist_type='distance_modulus',
 
     # Grab draws.
     ydraws = adraws.flatten()
-    if Rv is not None:
-        ydraws /= Rv
+    if ebv:
+        ydraws /= rdraws.flatten()
     if dist_type == 'scale':
         xdraws = sdraws.flatten()
     elif dist_type == 'parallax':
@@ -777,9 +789,9 @@ def dist_vs_red(data, Rv=None, dist_type='distance_modulus',
     return H, xedges, yedges, img
 
 
-def posterior_predictive(models, idxs, reds, dists, weights=None, flux=False,
-                         data=None, data_err=None, data_mask=None, offset=None,
-                         vcolor='blue', pcolor='red', labels=None,
+def posterior_predictive(models, idxs, reds, dreds, dists, weights=None,
+                         flux=False, data=None, data_err=None, data_mask=None,
+                         offset=None, vcolor='blue', pcolor='red', labels=None,
                          rstate=None, fig=None):
     """
     Plot the posterior predictive SED.
@@ -796,6 +808,10 @@ def posterior_predictive(models, idxs, reds, dists, weights=None, flux=False,
 
     reds : `~numpy.ndarray` of shape `(Nsamps)`
         Reddening samples (in Av) associated with the model indices.
+
+    dreds : `~numpy.ndarray` of shape `(Nsamps)`
+        "Differential" reddening samples (in Rv) associated with
+        the model indices.
 
     dists : `~numpy.ndarray` of shape `(Nsamps)`
         Distance samples (in kpc) associated with the model indices.
@@ -876,7 +892,7 @@ def posterior_predictive(models, idxs, reds, dists, weights=None, flux=False,
         offset = np.ones(nfilt)
 
     # Generate SEDs.
-    seds = get_seds(models[idxs], reds, return_flux=flux)
+    seds = get_seds(models[idxs], av=reds, rv=dreds, return_flux=flux)
     if flux:
         # SEDs are in flux space.
         seds /= dists[:, None]**2
@@ -893,7 +909,7 @@ def posterior_predictive(models, idxs, reds, dists, weights=None, flux=False,
     # Plot posterior predictive SED distribution.
     if np.any(weights != weights[0]):
         # If weights are non-uniform, sample indices proportional to weights.
-        idxs = rstate.choice(nsamps, p=weights/weights.sum(), size=nsamps*50)
+        idxs = rstate.choice(nsamps, p=weights/weights.sum(), size=nsamps*10)
     else:
         idxs = np.arange(nsamps)
     parts = ax.violinplot(seds, positions=np.arange(nfilt),
@@ -905,10 +921,11 @@ def posterior_predictive(models, idxs, reds, dists, weights=None, flux=False,
     # Plot photometry.
     if data is not None:
         if flux:
-            m, e = data[data_mask] * offset, data_err[data_mask] * offset
+            m = data[data_mask] * offset[data_mask]
+            e = data_err[data_mask] * offset[data_mask]
         else:
-            m, e = magnitude(data[data_mask] * offset,
-                             data_err[data_mask] * offset)
+            m, e = magnitude(data[data_mask] * offset[data_mask],
+                             data_err[data_mask] * offset[data_mask])
         ax.errorbar(np.arange(nfilt)[data_mask], m, yerr=e,
                     marker='o', color=pcolor, linestyle='none',
                     ms=7, lw=3)
@@ -926,9 +943,9 @@ def posterior_predictive(models, idxs, reds, dists, weights=None, flux=False,
     return fig, ax, parts
 
 
-def photometric_offsets(phot, err, mask, models, idxs, reds, dists, x=None,
-                        flux=True, weights=None, bins=100, offset=None,
-                        plot_thresh=0., cmap='viridis',
+def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
+                        x=None, flux=True, weights=None, bins=100, offset=None,
+                        plot_thresh=0., cmap='viridis', xspan=None, yspan=None,
                         titles=None, xlabel=None, plot_kwargs=None, fig=None):
     """
     Plot photometric offsets (`mag_pred - mag_obs`).
@@ -956,6 +973,10 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dists, x=None,
 
     reds : `~numpy.ndarray` of shape `(Nobj, Nsamps)`
         Reddening samples (in Av) associated with the model indices.
+
+    dreds : `~numpy.ndarray` of shape `(Nsamps)`
+        "Differential" reddening samples (in Rv) associated with
+        the model indices.
 
     dists : `~numpy.ndarray` of shape `(Nobj, Nsamps)`
         Distance samples (in kpc) associated with the model indices.
@@ -986,6 +1007,14 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dists, x=None,
 
     cmap : colormap, optional
         The colormap used when plotting results. Default is `'viridis'`.
+
+    xspan : iterable with shape `(nfilt, 2)`, optional
+        A list where each element is a length-2 tuple containing
+        lower and upper bounds for the x-axis for each plot.
+
+    yspan : iterable with shape `(nfilt, 2)`, optional
+        A list where each element is a length-2 tuple containing
+        lower and upper bounds for the y-axis for each plot.
 
     titles : iterable of str of length `Nfilt`, optional
         Titles for each of the subplots corresponding to each band.
@@ -1018,7 +1047,7 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dists, x=None,
     if weights is None:
         weights = np.ones((nobj, nsamps))
     elif weights.shape != (nobj, nsamps):
-        weights = np.repeat(weights, nsamps)
+        weights = np.repeat(weights, nsamps).reshape(nobj, nsamps)
     try:
         nbins = len(bins)
         if nbins != 2:
@@ -1039,7 +1068,8 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dists, x=None,
         xlabel = [xlabel for i in range(nfilt)]
 
     # Compute posterior predictive SED magnitudes.
-    mpred = get_seds(models[idxs.flatten()], reds.flatten())
+    mpred = get_seds(models[idxs.flatten()],
+                     av=reds.flatten(), rv=dreds.flatten())
     mpred += 5. * np.log10(dists.flatten())[:, None]
     mpred = mpred.reshape(nobj, nsamps, nfilt)
 
@@ -1074,7 +1104,15 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dists, x=None,
         # Plot 2-D histogram.
         mp = mpred[mask[:, i], :, i].flatten()
         w = weights[mask[:, i]].flatten()
-        ax[i].hist2d(xp, mp - mobs, bins=bins[i], weights=w,
+        if xspan is None:
+            bx = np.linspace(np.min(xp), np.max(xp), bins[i] + 1)
+        else:
+            bx = np.linspace(xspan[i][0], xspan[i][1], bins[i] + 1)
+        if yspan is None:
+            by = np.linspace(np.min(mp - mobs), np.max(mp - mobs), bins[i] + 1)
+        else:
+            by = np.linspace(yspan[i][0], yspan[i][1], bins[i] + 1)
+        ax[i].hist2d(xp, mp - mobs, bins=(bx, by), weights=w,
                      cmin=plot_thresh, cmap=cmap, **plot_kwargs)
         ax[i].set_xlabel(xlabel[i])
         ax[i].set_title(titles[i])
@@ -1113,7 +1151,7 @@ def _hist2d(x, y, smooth=0.02, span=None, weights=None, levels=None,
 
             span = [(0., 10.), 0.95, (5., 6.)]
 
-        Default is `0.997` (3-sigma credible interval).
+        Default is `0.99` (99% credible interval).
 
     weights : iterable with shape `(nsamps,)`
         Weights associated with the samples. Default is `None` (no weights).
@@ -1164,7 +1202,7 @@ def _hist2d(x, y, smooth=0.02, span=None, weights=None, levels=None,
     # Determine plotting bounds.
     data = [x, y]
     if span is None:
-        span = [0.997 for i in range(2)]
+        span = [0.99 for i in range(2)]
     span = list(span)
     if len(span) != 2:
         raise ValueError("Dimension mismatch between samples and span.")

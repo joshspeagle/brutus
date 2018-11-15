@@ -23,7 +23,7 @@ from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter as norm_kde
 import copy
 
-from .utils import draw_sav
+from .utils import draw_sar
 
 try:
     from scipy.special import logsumexp
@@ -608,8 +608,9 @@ def gal_lnprior(dists, coord, labels=None, R_solar=8., Z_solar=0.025,
         return lnprior, components
 
 
-def bin_pdfs_distred(data, cdf=False, Rv=None, dist_type='distance_modulus',
-                     lndistprior=None, coords=None, avlim=(0., 6.),
+def bin_pdfs_distred(data, cdf=False, ebv=False, dist_type='distance_modulus',
+                     lndistprior=None, coords=None,
+                     avlim=(0., 6.), rvlim=(1., 8.),
                      parallaxes=None, parallax_errors=None, Nr=100,
                      bins=(750, 300), span=None, smooth=0.01, rstate=None,
                      verbose=False):
@@ -619,18 +620,20 @@ def bin_pdfs_distred(data, cdf=False, Rv=None, dist_type='distance_modulus',
 
     Parameters
     ----------
-    data : 2-tuple or 3-tuple containing `~numpy.ndarray`s of shape `(Nsamps)`
-        The data that will be plotted. Either a collection of `(dists, reds)`
-        that were saved, or a collection of `(scales, avs, covs_sa)` that
-        will be used to regenerate `(dists, reds)` in conjunction with
-        any applied ditsance and/or parallax priors.
+    data : 3-tuple or 4-tuple containing `~numpy.ndarray`s of shape `(Nsamps)`
+        The data that will be plotted. Either a collection of
+        `(dists, reds, dreds)` that were saved, or a collection of
+        `(scales, avs, rvs, covs_sar)` that will be used to regenerate
+        `(dists, reds)` in conjunction with any applied distance
+        and/or parallax priors.
 
     cdf : bool, optional
         Whether to compute the CDF along the reddening axis instead of the
         PDF. Useful when evaluating the MAP LOS fit. Default is `False`.
 
-    Rv : float, optional
-        If provided, will convert from Av to E(B-V). Default is `None`.
+    ebv : bool, optional
+        If provided, will convert from Av to E(B-V) when plotting using
+        the provided Rv values. Default is `False`.
 
     dist_type : str, optional
         The distance format to be plotted. Options include `'parallax'`,
@@ -647,6 +650,9 @@ def bin_pdfs_distred(data, cdf=False, Rv=None, dist_type='distance_modulus',
 
     avlim : 2-tuple, optional
         The Av limits used to truncate results. Default is `(0., 6.)`.
+
+    rvlim : 2-tuple, optional
+        The Rv limits used to truncate results. Default is `(1., 8.)`.
 
     parallaxes : `~numpy.ndarray` of shape `(Nobj,)`, optional
         The parallax estimates for the sources.
@@ -715,10 +721,10 @@ def bin_pdfs_distred(data, cdf=False, Rv=None, dist_type='distance_modulus',
         xbin, ybin = bins
     except:
         xbin = ybin = bins
-    if Rv is not None:
-        ylims = np.array(avlim) / Rv
+    if ebv:
+        ylims = avlims  # default Rv goes from [1., 8.] -> min(Rv) = 1.
     else:
-        ylims = avlim
+        ylims = avlims
     if dist_type == 'scale':
         xlims = (1. / dlims[::-1])**2
     elif dist_type == 'parallax':
@@ -779,17 +785,16 @@ def bin_pdfs_distred(data, cdf=False, Rv=None, dist_type='distance_modulus',
             binned_vals[i] = H / nsamps
     except:
         # Regenerate distance and reddening samples from inputs.
-        scales, avs, covs_sa = copy.deepcopy(data)
+        scales, avs, rvs, covs_sar = copy.deepcopy(data)
 
         if lndistprior is None and coord is None:
             raise ValueError("`coord` must be passed if the default distance "
                              "prior was used.")
 
         # Generate parallax and Av realizations.
-        for i, stuff in enumerate(zip(scales, avs, covs_sa,
-                                      parallaxes, parallax_errors,
-                                      coords)):
-            (scales_obj, avs_obj, covs_sa_obj,
+        for i, stuff in enumerate(zip(scales, avs, rvs, covs_sa,
+                                      parallaxes, parallax_errors, coords)):
+            (scales_obj, avs_obj, rvs_obj, covs_sa_obj,
              parallax, parallax_err, coord) = stuff
 
             # Print progress.
@@ -797,8 +802,10 @@ def bin_pdfs_distred(data, cdf=False, Rv=None, dist_type='distance_modulus',
                 sys.stderr.write('\rBinning object {0}/{1}'.format(i+1, nobjs))
 
             # Draw random samples.
-            sdraws, adraws = draw_sav(scales_obj, avs_obj, covs_sa_smooth_obj,
-                                      ndraws=Nr, avlim=avlim, rstate=rstate)
+            sdraws, adraws, rdraws = draw_sar(scales_obj, avs_obj, rvs_obj,
+                                              covs_sa_smooth_obj, ndraws=Nr,
+                                              avlim=avlim, rvlim=rvlim,
+                                              rstate=rstate)
             pdraws = np.sqrt(sdraws)
             ddraws = 1. / pdraws
             dmdraws = 5. * np.log10(ddraws) + 10.
