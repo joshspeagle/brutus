@@ -28,9 +28,10 @@ __all__ = ["LOS_clouds_priortransform", "LOS_clouds_loglike_bin",
            "kernel_tophat", "kernel_gauss", "kernel_lorentz"]
 
 
-def LOS_clouds_priortransform(u, rlims=(0., 6.), dlims=(4., 19.), smooth=False,
+def LOS_clouds_priortransform(u, rlims=(0., 6.), dlims=(4., 19.),
                               pb_params=(-3., 0.7, -np.inf, 0.),
-                              s_params=(-3., 0.3, -np.inf, 0.)):
+                              smooth=False, s_params=(-3., 0.3, -np.inf, 0.),
+                              dust_template=False, nlims=(0.2, 2)):
     """
     The "prior transform" for the LOS fit that converts from draws on the
     N-dimensional unit cube to samples from the prior. Used in nested sampling
@@ -54,16 +55,16 @@ def LOS_clouds_priortransform(u, rlims=(0., 6.), dlims=(4., 19.), smooth=False,
         `(4., 19.)`, which also assumes distance is in units of distance
         modulus.
 
-    smooth : bool, optional
-        Whether or not to sample additional smoothing parameters.
-        Default is `False`.
-
     pb_params : 4-tuple, optional
         Mean, standard deviation, lower bound, and upper bound for a
         truncated log-normal distribution used as a prior for the outlier
         model. The default is `(-3., 0.7, -np.inf, 0.)`, which corresponds
         to a mean of 0.05, a standard deviation of a factor of 2, a lower
         bound of 0, and an upper bound of 1.
+
+    smooth : bool, optional
+        Whether or not to sample additional smoothing parameters.
+        Default is `False`.
 
     s_params : 4-tuple, optional
         Mean, standard deviation, lower bound, and upper bound for a
@@ -72,6 +73,17 @@ def LOS_clouds_priortransform(u, rlims=(0., 6.), dlims=(4., 19.), smooth=False,
         `(-3.5, 0.7, -np.inf, 0.)`, which corresponds to a mean of 0.05, a
         standard deviation of a factor of 1.35, a lower bound of 0, and an
         upper bound of 1.
+
+    dust_template : bool, optional
+        Whether or not to use a sptial distribution for the dust based on
+        a particular template. If true, dust along the line of sight
+        will be in terms of rescalings of the template rather than
+        Av. Default is `False`.
+
+    nlims : 2-tuple, optional
+        Lower and upper bounds for the uniform prior for the rescaling
+        applied to the Planck spatial reddening template.
+        Default is `(0.2, 2.)`.
 
     Returns
     -------
@@ -102,6 +114,10 @@ def LOS_clouds_priortransform(u, rlims=(0., 6.), dlims=(4., 19.), smooth=False,
 
     # reddening
     x[s+1::2] = np.sort(u[s+1::2]) * (rlims[1] - rlims[0]) + rlims[0]
+
+    if dust_template:
+        # replace with rescalings for the template
+        x[s+3::2] = np.sort(u[s+3::2]) * (nlims[1] - nlims[0]) + nlims[0]
 
     # distances
     x[s+2::2] = np.sort(u[s+2::2]) * (dlims[1] - dlims[0]) + dlims[0]
@@ -235,7 +251,8 @@ def LOS_clouds_loglike_bin(theta, cdfs, xedges, yedges, interpolate=True):
 
 
 def LOS_clouds_loglike_samples(theta, dsamps, rsamps, kernel='gauss',
-                               rlims=(0., 6.), Ndraws=25):
+                               rlims=(0., 6.), template_reds=None,
+                               Ndraws=25):
     """
     Compute the log-likelihood for the cumulative reddening along the
     line of sight (LOS) parameterized by `theta`, given a set of input
@@ -266,6 +283,12 @@ def LOS_clouds_loglike_samples(theta, dsamps, rsamps, kernel='gauss',
     rlims : 2-tuple, optional
         The reddening bounds within which we'd like to sample. Default is
         `(0., 6.)`, which also assumes reddening is in units of Av.
+
+    template_reds : `~numpy.ndarray` of shape `(Nobj)`, optional
+        Reddenings for each star based on a spatial dust template.
+        If not provided, the same reddening value in a given distance
+        bin will be fit to all stars. If provided, a rescaled version of the
+        individual reddenings will be fit instead.
 
     Ndraws : int, optional
         The number of draws to use for each star. Default is `25`.
@@ -299,13 +322,23 @@ def LOS_clouds_loglike_samples(theta, dsamps, rsamps, kernel='gauss',
     # Define cloud edges ("distance bounds").
     xedges = np.concatenate(([0], dists, [1e10]))
 
-    # Define kernel parameters (mean, sigma) per LOS chunk.
-    kparams = np.array([(r, rsmooth) for r in reds])
-    kparams[0][1] = rsmooth0
-
     # Sub-sample distance and reddening samples.
     ds, rs = dsamps[:, :Ndraws], rsamps[:, :Ndraws]
     Nobj, Nsamps = ds.shape
+
+    # Reshape sigmas to match samples.
+    rsmooth, rsmooth0 = np.full_like(rs, rsmooth), np.full_like(rs, rsmooth0)
+
+    # Get reddenings to each star in each distance slice (kernel mean).
+    reds = np.array([np.full_like(rs, r) for r in reds])
+
+    # Adjust reddenings after the foreground if a spatial template is used.
+    if template_reds is not None:
+        reds[1:] *= template_reds[None, :, None]  # reds[1:] are rescalings
+
+    # Define kernel parameters (mean, sigma) per LOS chunk.
+    kparams = np.array([(r, rsmooth) for r in reds])
+    kparams[0][1] = rsmooth0
 
     # Compute log-weights for samples along the LOS by evaluating reddening
     # samples within each segment against the associated centered kernel.
