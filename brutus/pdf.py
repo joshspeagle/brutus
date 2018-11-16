@@ -609,7 +609,7 @@ def gal_lnprior(dists, coord, labels=None, R_solar=8., Z_solar=0.025,
 
 
 def bin_pdfs_distred(data, cdf=False, ebv=False, dist_type='distance_modulus',
-                     lndistprior=None, coords=None,
+                     lndistprior=None, coord=None,
                      avlim=(0., 6.), rvlim=(1., 8.),
                      parallaxes=None, parallax_errors=None, Nr=100,
                      bins=(750, 300), span=None, smooth=0.01, rstate=None,
@@ -644,9 +644,9 @@ def bin_pdfs_distred(data, cdf=False, ebv=False, dist_type='distance_modulus',
         The log-distsance prior function used. If not provided, the galactic
         model from Green et al. (2014) will be assumed.
 
-    coord : iterable of 2-tuples with len `Nobj`, optional
+    coord : 2-tuple, optional
         The galactic `(l, b)` coordinates for the object, which is passed to
-        `lndistprior`.
+        `lndistprior` when re-generating the fits.
 
     avlim : 2-tuple, optional
         The Av limits used to truncate results. Default is `(0., 6.)`.
@@ -757,16 +757,16 @@ def bin_pdfs_distred(data, cdf=False, ebv=False, dist_type='distance_modulus',
     # Compute binned PDFs.
     binned_vals = np.zeros((nobjs, xbin, ybin), dtype='float32')
     try:
-        # Grab distance and reddening samples.
-        ddraws, adraws = copy.deepcopy(data)
+        # Grab (distance, reddening (Av), differential reddening (Rv)) samples.
+        ddraws, adraws, rdraws = copy.deepcopy(data)
         pdraws = 1. / ddraws
         sdraws = pdraws**2
         dmdraws = 5. * np.log10(ddraws) + 10.
 
         # Grab relevant draws.
         ydraws = adraws
-        if Rv is not None:
-            ydraws /= Rv
+        if ebv:
+            ydraws /= rdraws
         if dist_type == 'scale':
             xdraws = sdraws
         elif dist_type == 'parallax':
@@ -792,9 +792,9 @@ def bin_pdfs_distred(data, cdf=False, ebv=False, dist_type='distance_modulus',
                              "prior was used.")
 
         # Generate parallax and Av realizations.
-        for i, stuff in enumerate(zip(scales, avs, rvs, covs_sa,
+        for i, stuff in enumerate(zip(scales, avs, rvs, covs_sar,
                                       parallaxes, parallax_errors, coords)):
-            (scales_obj, avs_obj, rvs_obj, covs_sa_obj,
+            (scales_obj, avs_obj, rvs_obj, covs_sar_obj,
              parallax, parallax_err, coord) = stuff
 
             # Print progress.
@@ -803,7 +803,7 @@ def bin_pdfs_distred(data, cdf=False, ebv=False, dist_type='distance_modulus',
 
             # Draw random samples.
             sdraws, adraws, rdraws = draw_sar(scales_obj, avs_obj, rvs_obj,
-                                              covs_sa_smooth_obj, ndraws=Nr,
+                                              covs_sar_obj, ndraws=Nr,
                                               avlim=avlim, rvlim=rvlim,
                                               rstate=rstate)
             pdraws = np.sqrt(sdraws)
@@ -821,8 +821,8 @@ def bin_pdfs_distred(data, cdf=False, ebv=False, dist_type='distance_modulus',
 
             # Grab draws.
             ydraws = adraws.flatten()
-            if Rv is not None:
-                ydraws /= Rv
+            if ebv:
+                ydraws /= rdraws.flatten()
             if dist_type == 'scale':
                 xdraws = sdraws.flatten()
             elif dist_type == 'parallax':
