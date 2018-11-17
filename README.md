@@ -2,7 +2,7 @@
 #### _**Et tu, Brute?**_
 
 `brutus` is a Pure Python package that uses "brute force" Bayesian inference
-to derive distances, reddenings, and stellar properties from photometry over
+to derive distances, reddenings, and stellar properties from photometry using
 a grid of stellar models.
 
 ### Documentation
@@ -19,7 +19,11 @@ The current Bayestar grid (v2) can be found
 [here](https://www.dropbox.com/s/mxi8qvlupnxbni7/grid_bayestar_v2.h5?dl=0).
 
 **Warning: The current MIST grid will soon be replaced.**
-**Warning: `brutus` v>=0.5.0 is incompatible with earlier grids.**
+
+By default, `brutus` also utilizes a 3-D dust prior based on the "Bayestar17"
+dust map from [Green et al. (2018)](https://arxiv.org/abs/1801.03555). The
+relevant data file can be found
+[here](https://www.dropbox.com/s/kkdcnvvuf2t3jt0/bayestar2017_v1.h5?dl=0).
 
 ### Generating SEDs
 `brutus` contains built-in SED generation utilities that run over the MIST

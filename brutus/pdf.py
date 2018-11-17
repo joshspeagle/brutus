@@ -24,6 +24,7 @@ from scipy.ndimage import gaussian_filter as norm_kde
 import copy
 
 from .utils import draw_sar
+from .dust import Bayestar
 
 try:
     from scipy.special import logsumexp
@@ -33,8 +34,9 @@ except ImportError:
 __all__ = ["imf_lnprior", "ps1_MrLF_lnprior", "parallax_lnprior",
            "scale_parallax_lnprior", "parallax_to_scale",
            "logn_disk", "logn_halo",
-           "logp_feh_disk", "logp_feh_halo",
-           "gal_lnprior", "bin_pdfs_distred"]
+           "logp_feh_disk", "logp_feh_halo", "gal_lnprior",
+           "dust_lnprior",
+           "bin_pdfs_distred"]
 
 
 def imf_lnprior(mgrid):
@@ -606,6 +608,89 @@ def gal_lnprior(dists, coord, labels=None, R_solar=8., Z_solar=0.025,
         return lnprior
     else:
         return lnprior, components
+
+
+def dust_lnprior(dists, coord, avs, dustfile='bayestar2017_v1.h5',
+                 offset=0., scale=1., smooth=3., return_components=False):
+    """
+    Log-prior for a 3-D galactic dust model.
+
+    Parameters
+    ----------
+    dists : `~numpy.ndarray` of shape `(N,)`
+        Distance from the observer in kpc.
+
+    coord : 2-tuple
+        The `(l, b)` galaxy coordinates of the object.
+
+    avs : `~numpy.ndarray` of shape `(N,)`
+        Reddenings associated with the corresponding distance draws.
+
+    dustfile : str, optional
+        The filepath pointing to where the 3-D dust map is stored. The default
+        is `bayestar2017_v1.h5`, which can be downloaded from the
+        GitHub repository and is based on the "Bayestar17" 3-D
+        dust map from Green et al. (2018).
+
+    offset : float, optional
+        A systematic offset to be added to the corresponding A(V) predictions
+        from the dust map. Default is `0.` (no offset). Applied *after*
+        `scale` is applied.
+
+    scale : float, optional
+        A systematic scaling to be multiplied to the corresponding A(V)
+        predictions from the dust map. Default is `1.` (same scaling).
+        Applied *before* `offset` is applied.
+
+    smooth : float, optional
+        The factor used to inflate the derived uncertainties and smooth out
+        the dust map. Default is `3.` (3x larger errors).
+
+    return_components : bool, optional
+        Whether to also return the components of the reddening LOS fit.
+        Default is `False`.
+
+    Returns
+    -------
+    lnprior : `~numpy.ndarray` of shape (N)
+        The corresponding normalized ln(prior).
+
+    av_mean : `~numpy.ndarray` of shape (N), optional
+        The corresponding mean reddening of the prior.
+
+    av_err : `~numpy.ndarray` of shape (N), optional
+        The corresponding reddening error of the prior.
+
+    """
+
+    global bayestar
+    try:
+        # Get (mean, standard deviation) from `bayestar` object along LOS.
+        av_dist, av_mean, av_err = bayestar.query(coord)
+    except:
+        # Load dustmap.
+        bayestar = Bayestar(dustfile=dustfile)
+        # Get (mean, standard deviation) from `bayestar` object along LOS.
+        av_dist, av_mean, av_err = bayestar.query(coord)
+
+    # Check that we have coverage.
+    if np.all(np.isfinite(av_mean) & np.isfinite(av_err)):
+        # Interpolate at corresponding distances.
+        av_mean = scale * np.interp(dists, av_dist, av_mean) + offset
+        av_err = smooth * scale * np.interp(dists, av_dist, av_err)
+
+        # Evaluate Gaussian prior.
+        chi2 = (avs - av_mean)**2 / av_err**2  # chi2
+        lnorm = np.log(2. * np.pi * av_err**2)  # normalization
+        lnprior = -0.5 * (chi2 + lnorm)
+    else:
+        # If we have no coverage, assume a uniform prior everywhere.
+        lnprior = np.zeros_like(avs)
+
+    if not return_components:
+        return lnprior
+    else:
+        return lnprior, (av_mean, av_err)
 
 
 def bin_pdfs_distred(data, cdf=False, ebv=False, dist_type='distance_modulus',

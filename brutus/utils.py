@@ -153,7 +153,11 @@ def load_models(filepath, filters=None, labels=None, verbose=True):
                   'Mr', 'agewt']
 
     # Read in models.
-    f = h5py.File(filepath)
+    try:
+        f = h5py.File(filepath, 'r', libver='latest', swmr=True)
+    except:
+        f = h5py.File(filepath, 'r')
+        pass
     mag_coeffs = f['mag_coeffs']
     models = np.zeros((len(mag_coeffs), len(filters), len(mag_coeffs[0][0])),
                       dtype='float32')

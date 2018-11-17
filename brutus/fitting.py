@@ -30,7 +30,8 @@ __all__ = ["loglike", "_optimize_fit", "BruteForce", "_lnpost"]
 
 
 def loglike(data, data_err, data_mask, mag_coeffs,
-            avlim=(0., 6.), rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
+            avlim=(0., 6.), av_gauss=(0., 1e6),
+            rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
             av_init=None, rv_init=None,
             dim_prior=True, ltol=0.02, wt_thresh=0.005, init_thresh=1e-4,
             return_vals=False, *args, **kwargs):
@@ -58,6 +59,11 @@ def loglike(data, data_err, data_mask, mag_coeffs,
     avlim : 2-tuple, optional
         The lower and upper bound where the reddened photometry is reliable.
         Default is `(0., 6.)`.
+
+    av_gauss : 2-tuple, optional
+        The mean and standard deviation of the Gaussian prior that is placed
+        on A(V). The default is `(0., 1e6)`, which is designed to be
+        essentially flat over `avlim`.
 
     rvlim : 2-tuple, optional
         The lower and upper bound where the reddening vector shape changes
@@ -159,7 +165,8 @@ def loglike(data, data_err, data_mask, mag_coeffs,
     results = _optimize_fit(flux, tot_var, models, rvecs, drvecs,
                             av_init, rv_init, mcoeffs, tol=ltol,
                             resid=None, mags=mags, mags_var=mags_var,
-                            avlim=avlim, rvlim=rvlim, rv_gauss=rv_gauss)
+                            avlim=avlim, av_gauss=av_gauss,
+                            rvlim=rvlim, rv_gauss=rv_gauss)
     models, rvecs, drvecs, scale, av, rv, icov_sar, resid = results
 
     if init_thresh is not None:
@@ -194,7 +201,8 @@ def loglike(data, data_err, data_mask, mag_coeffs,
 
         # Re-compute models.
         results = _optimize_fit(flux, tot_var, models, rvecs, drvecs,
-                                av_new, rv_new, mcoeffs, avlim=avlim,
+                                av_new, rv_new, mcoeffs,
+                                avlim=avlim, av_gauss=av_gauss,
                                 rvlim=rvlim, rv_gauss=rv_gauss,
                                 resid=resid, stepsize=stepsize)
         (models, rvecs, drvecs,
@@ -234,7 +242,8 @@ def loglike(data, data_err, data_mask, mag_coeffs,
 
 
 def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
-                  avlim=(0., 6.), rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
+                  avlim=(0., 6.), av_gauss=(0., 1e6),
+                  rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
                   resid=None, tol=0.02, mags=None, mags_var=None, stepsize=1.):
     """
     Optimize the distance and reddening between the models and the data using
@@ -261,7 +270,7 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
     av : `~numpy.ndarray` of shape `(Nmodel,)`
         Av values of the models.
 
-    av : `~numpy.ndarray` of shape `(Nmodel,)`
+    rv : `~numpy.ndarray` of shape `(Nmodel,)`
         Rv values of the models.
 
     mag_coeffs : `~numpy.ndarray` of shape `(Nmodel, Nfilt, 3)`
@@ -271,6 +280,11 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
     avlim : 2-tuple, optional
         The lower and upper bound where the reddened photometry is reliable.
         Default is `(0., 6.)`.
+
+    av_gauss : 2-tuple, optional
+        The mean and standard deviation of the Gaussian prior that is placed
+        on A(V). The default is `(0., 1e6)`, which is designed to be
+        essentially flat over `avlim`.
 
     rvlim : 2-tuple, optional
         The lower and upper bound where the reddening vector shape changes
@@ -331,6 +345,7 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
         else:
             resid = data - models
 
+    Av_mean, Av_std = av_gauss
     Rv_mean, Rv_std = rv_gauss
 
     if mags is not None and mags_var is not None:
@@ -349,6 +364,9 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
             # Compute residual terms.
             resid_s = np.sum(resid / mags_var, axis=1)
             resid_a = np.sum(resid * rvecs / mags_var, axis=1)
+            # Add in Gaussian Av prior.
+            resid_a += (Av_mean - av) / Av_std**2
+            a_den += 1. / Av_std**2
             # Compute determinants (normalization terms).
             sa_idet = 1. / (s_den * a_den - sa_mix**2)
             # Compute ML solution for Delta_Av.
@@ -407,6 +425,8 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
         # Derive ML Delta_Av (`dav`) between data and models.
         a_num = np.sum(rvecs * resid / tot_var, axis=1)
         a_den = np.sum(np.square(rvecs) / tot_var, axis=1)
+        a_num += (Av_mean - av) / Av_std**2  # add Av gaussian prior
+        a_den += 1. / Av_std**2  # add Av gaussian prior
         dav = a_num / a_den
         # Adjust dAv based on the provided stepsize.
         dav *= stepsize
@@ -487,7 +507,7 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
 class BruteForce():
     """
     Fits data and generates predictions for scale-factors and reddening
-    over a grid in initial mass, EEP, and metallicity.
+    over a grid in stellar parameters.
 
     """
 
@@ -507,7 +527,7 @@ class BruteForce():
         labels_mask : structured `~numpy.ndarray` of shape `(1, Nlabel)`
             Masks corresponding to each label to indicate whether it is
             an ancillary prediction (e.g., `logt`) or was used to compute
-            the model grid (e.g., `mini`).
+            the model grid (e.g., `feh`).
 
         pool : user-provided pool, optional
             Use this pool of workers to execute operations in parallel when
@@ -533,10 +553,11 @@ class BruteForce():
 
     def fit(self, data, data_err, data_mask, data_labels, save_file,
             phot_offsets=None, parallax=None, parallax_err=None,
-            Nmc_prior=100, avlim=(0., 6.),
+            Nmc_prior=100, avlim=(0., 6.), av_gauss=None,
             rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
             lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4, Ndraws=2000,
-            apply_agewt=True, apply_grad=True, lndistprior=None,
+            apply_agewt=True, apply_grad=True,
+            lndistprior=None, lndustprior=None, dustfile='bayestar2017_v1.h5',
             apply_dlabels=True, data_coords=None, logl_dim_prior=True,
             ltol=0.02, ltol_subthresh=0.005, logl_initthresh=1e-4,
             rstate=None, save_dar_draws=True, verbose=True):
@@ -581,6 +602,11 @@ class BruteForce():
             The bounds where Av predictions are reliable.
             Default is `(0., 6.)`.
 
+        av_gauss : 2-tuple, optional
+            The mean and standard deviation of a Gaussian prior on A(V).
+            If provided, this will be used in lieu of the default
+            distance-reddening prior and incorporated directly into the fits.
+
         rvlim : 2-tuple, optional
             The lower and upper bound where the reddening vector shape changes
             are reliable. Default is `(1., 8.)`.
@@ -623,8 +649,15 @@ class BruteForce():
             Default is `True`.
 
         lndistprior : func, optional
-            The log-distsance prior function to be applied. If not provided,
+            The log-distance prior function to be applied. If not provided,
             this will default to the galactic model from Green et al. (2014).
+
+        lndustprior : func, optional
+            The log-dust prior function to be applied. If not provided,
+            this will default to the 3-D dust map from Green et al. (2018).
+
+        dustfile : str, optional
+            The filepath to the 3-D dust map. Default is `bayestar2017_v1.h5`.
 
         apply_dlabels : bool, optional
             Whether to pass the model labels to the distance prior to
@@ -706,8 +739,25 @@ class BruteForce():
         if lndistprior is None and data_coords is None:
             raise ValueError("`data_coords` must be provided if using the "
                              "default distance prior.")
+        if lndustprior is None and data_coords is None and av_gauss is None:
+            raise ValueError("`data_coords` must be provided if using the "
+                             "default dust prior.")
         if lndistprior is None:
             lndistprior = gal_lnprior
+        if lndustprior is None:
+            # Check provided `dustfile` is valid.
+            try:
+                # Try reading in parallel-friendly way if possible.
+                try:
+                    ft = h5py.File(dustfile, 'r', libver='latest', swmr=True)
+                except:
+                    ft = h5py.File(dustfile, 'r')
+                    pass
+            except:
+                raise ValueError("The default dust prior is being used but "
+                                 "the relevant data file is not located at "
+                                 "the provided `dustpath`.")
+            lndustprior = dust_lnprior
         if data_coords is None:
             data_coords = np.zeros((Ndata, 2))
 
@@ -721,10 +771,10 @@ class BruteForce():
         Nbmin = 4  # minimum number of bands needed
         if np.any(np.sum(data_mask, axis=1) < Nbmin):
             raise ValueError("Objects with fewer than {0} bands of "
-                             "photometry are currently included in the "
-                             "data. These objects give degenerate fits and "
-                             "cannot be properly modeled. Please remove these "
-                             "objects.".format(Nbmin))
+                             "acceptable photometry are currently included in "
+                             "the dataset. These objects give degenerate fits "
+                             "and cannot be properly modeled. Please remove "
+                             "these objects.".format(Nbmin))
 
         # Initialize results file.
         out = h5py.File("{0}.h5".format(save_file), "w-")
@@ -761,6 +811,7 @@ class BruteForce():
                                               parallax=parallax,
                                               parallax_err=parallax_err,
                                               avlim=avlim, rvlim=rvlim,
+                                              av_gauss=av_gauss,
                                               rv_gauss=rv_gauss,
                                               Nmc_prior=Nmc_prior,
                                               lnprior=lnprior,
@@ -768,6 +819,8 @@ class BruteForce():
                                               cdf_thresh=cdf_thresh,
                                               Ndraws=Ndraws, rstate=rstate,
                                               lndistprior=lndistprior,
+                                              lndustprior=lndustprior,
+                                              dustfile=dustfile,
                                               apply_dlabels=apply_dlabels,
                                               data_coords=data_coords,
                                               return_distreds=save_dar_draws,
@@ -808,9 +861,11 @@ class BruteForce():
 
     def _fit(self, data, data_err, data_mask,
              parallax=None, parallax_err=None, Nmc_prior=100,
-             avlim=(0., 6.), rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
+             avlim=(0., 6.), av_gauss=None,
+             rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
              lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4, Ndraws=2000,
-             lndistprior=None, apply_dlabels=True, data_coords=None,
+             lndistprior=None, lndustprior=None, dustfile='bayestar2017_v1.h5',
+             apply_dlabels=True, data_coords=None,
              return_distreds=True, logl_dim_prior=True, ltol=0.02,
              ltol_subthresh=0.005, logl_initthresh=1e-4, rstate=None):
         """
@@ -841,6 +896,11 @@ class BruteForce():
         avlim : 2-tuple, optional
             The bounds where Av predictions are reliable.
             Default is `(0., 6.)`.
+
+        av_gauss : 2-tuple, optional
+            The mean and standard deviation of a Gaussian prior on A(V).
+            If provided, this will be used in lieu of the default
+            distance-reddening prior and incorporated directly into the fits.
 
         rvlim : 2-tuple, optional
             The lower and upper bound where the reddening vector shape changes
@@ -874,6 +934,13 @@ class BruteForce():
         lndistprior : func, optional
             The log-distsance prior function to be applied. If not provided,
             this will default to the galactic model from Green et al. (2014).
+
+        lndustprior : func, optional
+            The log-dust prior function to be applied. If not provided,
+            this will default to the 3-D dust map from Green et al. (2018).
+
+        dustfile : str, optional
+            The filepath to the 3-D dust map. Default is `bayestar2017_v1.h5`.
 
         apply_dlabels : bool, optional
             Whether to pass the model labels to the distance prior to
@@ -941,8 +1008,25 @@ class BruteForce():
         if lndistprior is None and data_coords is None:
             raise ValueError("`data_coords` must be provided if using the "
                              "default distance prior.")
+        if lndustprior is None and data_coords is None and av_gauss is None:
+            raise ValueError("`data_coords` must be provided if using the "
+                             "default dust prior.")
         if lndistprior is None:
             lndistprior = gal_lnprior
+        if lndustprior is None:
+            # Check provided `dustfile` is valid.
+            try:
+                # Try reading in parallel-friendly way if possible.
+                try:
+                    ft = h5py.File(dustfile, 'r', libver='latest', swmr=True)
+                except:
+                    ft = h5py.File(dustfile, 'r')
+                    pass
+            except:
+                raise ValueError("The default dust prior is being used but "
+                                 "the relevant data file is not located at "
+                                 "the provided `dustpath`.")
+            lndustprior = dust_lnprior
         if data_coords is None:
             data_coords = np.zeros((Ndata, 2))
         if apply_dlabels:
@@ -978,6 +1062,8 @@ class BruteForce():
                           'wt_thresh': ltol_subthresh,
                           'init_thresh': logl_initthresh,
                           'return_vals': True}
+        if av_gauss is not None:
+            loglike_kwargs['av_gauss'] = av_gauss  # only pass if provided
         _loglike = _function_wrapper(_loglike_zip, [], loglike_kwargs,
                                      name='loglike')
 
@@ -991,8 +1077,10 @@ class BruteForce():
         logpost_kwargs = {'Nmc_prior': Nmc_prior, 'lnprior': lnprior,
                           'lnprior': lnprior, 'wt_thresh': wt_thresh,
                           'cdf_thresh': cdf_thresh, 'rstate': rstate,
-                          'lndistprior': lndistprior, 'avlim': avlim,
-                          'rvlim': rvlim, 'dlabels': dlabels,
+                          'lndistprior': lndistprior,
+                          'lndustprior': lndustprior, 'dustfile': dustfile,
+                          'avlim': avlim, 'rvlim': rvlim, 'dlabels': dlabels,
+                          'apply_av_prior': av_gauss is None,
                           'return_distreds': return_distreds}
         _logpost = _function_wrapper(_logpost_zip, [], logpost_kwargs,
                                      name='logpost')
@@ -1054,8 +1142,10 @@ class BruteForce():
 
 def _lnpost(results, parallax=None, parallax_err=None, coord=None,
             Nmc_prior=100, lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4,
-            lndistprior=None, dlabels=None, avlim=(0., 6.), rvlim=(1., 8.),
-            rstate=None, return_distreds=True, *args, **kwargs):
+            lndistprior=None, lndustprior=None, dustfile='bayestar2017_v1.h5',
+            dlabels=None, avlim=(0., 6.), rvlim=(1., 8.),
+            rstate=None, apply_av_prior=True, return_distreds=True,
+            *args, **kwargs):
     """
     Internal function used to estimate posteriors from fits using the
     provided priors via Monte Carlo integration.
@@ -1102,6 +1192,13 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
         The log-distsance prior function to be applied. If not provided,
         this will default to the galactic model from Green et al. (2014).
 
+    lndustprior : func, optional
+        The log-dust prior function to be applied. If not provided,
+        this will default to the 3-D dust map from Green et al. (2018).
+
+    dustfile : str, optional
+        The filepath to the 3-D dust map. Default is `bayestar2017_v1.h5`.
+
     dlabels : bool, optional
         The model labels to be passed the distance prior to
         apply any additional distance-based prior on the parameters.
@@ -1116,6 +1213,9 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
 
     rstate : `~numpy.random.RandomState`, optional
         `~numpy.random.RandomState` instance.
+
+    apply_av_prior : bool, optional
+        Whether to apply the 3-D dust prior
 
     return_distreds : bool, optional
         Whether to return weighted distance and reddening draws (in units of
@@ -1167,8 +1267,13 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
     if lndistprior is None and coord is None:
         raise ValueError("`coord` must be provided if using the "
                          "default distance prior.")
+    if lndustprior is None and coord is None and apply_av_prior:
+        raise ValueError("`coord` must be provided if using the "
+                         "default dust prior.")
     if lndistprior is None:
         lndistprior = gal_lnprior
+    if lndustprior is None:
+        lndustprior = dust_lnprior
     if coord is None:
         coord = np.zeros(2)
 
@@ -1206,7 +1311,7 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
     scale, av, rv = scales[sel], avs[sel], rvs[sel]
     cov_sar = _inverse3(icovs_sar[sel])
 
-    # Now actually apply distance (and parallax) priors.
+    # Now actually apply priors.
     if Nmc_prior > 0:
         # Use Monte Carlo integration to get an estimate of the
         # overlap integral.
@@ -1226,8 +1331,11 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
             dist_mc = 1. / par_mc
             # Evaluate distance prior.
             lnp_mc = lndistprior(dist_mc, coord, labels=dlabels_mc)
+            # Evaluate dust prior.
+            if apply_av_prior:
+                lnp_mc += lndustprior(dist_mc, coord, a_mc, dustfile=dustfile)
+        # Evaluate parallax prior.
         if parallax is not None and parallax_err is not None:
-            # Evaluate parallax prior.
             lnp_mc += parallax_lnprior(par_mc, parallax, parallax_err)
         # Ignore points that are out of bounds.
         inbounds = ((s_mc >= 1e-20) &
