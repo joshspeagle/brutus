@@ -237,8 +237,6 @@ def cornerplot(idxs, data, params, lndistprior=None, coord=None,
         parallax_kwargs = dict()
     if lndistprior is None:
         lndistprior = gal_lnprior
-    if dist_kwargs is None:
-        dist_kwargs = dict()
 
     # Set defaults.
     hist_kwargs['alpha'] = hist_kwargs.get('alpha', 0.6)
@@ -247,7 +245,6 @@ def cornerplot(idxs, data, params, lndistprior=None, coord=None,
     truth_kwargs['linewidth'] = truth_kwargs.get('linewidth', 2)
     truth_kwargs['alpha'] = truth_kwargs.get('alpha', 0.7)
     parallax_kwargs['alpha'] = parallax_kwargs.get('alpha', 0.3)
-    dist_kwargs['alpha'] = dist_kwargs.get('alpha', 0.3)
 
     # Ignore age weights.
     labels = [l for l in params.dtype.names if l != 'agewt']
@@ -1275,7 +1272,7 @@ def photometric_offsets_2d(phot, err, mask, models, idxs, reds, dreds, dists,
     if titles is None:
         titles = ['Band {0}'.format(i) for i in range(nfilt)]
     if show_off and offset is not None:
-        titles = [t+' ({:2.2}% offset)'.format(100.*(1.-off))
+        titles = [t+' ({:2.2}% offset)'.format(100.*(off-1.))
                   for t, off in zip(titles, offset)]
     if xlabel is None:
         xlabel = 'X'
