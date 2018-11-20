@@ -35,8 +35,7 @@ __all__ = ["imf_lnprior", "ps1_MrLF_lnprior", "parallax_lnprior",
            "scale_parallax_lnprior", "parallax_to_scale",
            "logn_disk", "logn_halo",
            "logp_feh_disk", "logp_feh_halo", "gal_lnprior",
-           "dust_lnprior",
-           "bin_pdfs_distred"]
+           "dust_lnprior", "bin_pdfs_distred"]
 
 
 def imf_lnprior(mgrid):
@@ -601,8 +600,7 @@ def gal_lnprior(dists, coord, labels=None, R_solar=8., Z_solar=0.025,
             lnprior += feh_lnp
             components += [feh_lnp_thin, feh_lnp_thick, feh_lnp_halo]
         except:
-            raise ValueError("No `'feh'` provided -- cannot compute "
-                             "galactic metallicity prior.")
+            pass
 
     if not return_components:
         return lnprior

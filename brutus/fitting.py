@@ -83,7 +83,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
     dim_prior : bool, optional
         Whether to apply a dimensional-based correction (prior) to the
         log-likelihood. Transforms the likelihood to a chi2 distribution
-        with `Nfilt - 2` degrees of freedom. Default is `True`.
+        with `Nfilt - 3` degrees of freedom. Default is `True`.
 
     ltol : float, optional
         The weighted tolerance in the computed log-likelihoods used to
@@ -232,7 +232,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
     # Apply dimensionality prior.
     if dim_prior:
         # Compute logpdf of chi2 distribution.
-        a = 0.5 * (Ndim - 2)  # effective dof
+        a = 0.5 * (Ndim - 3)  # effective dof
         lnl = xlogy(a - 1., chi2) - (chi2 / 2.) - gammaln(a) - (np.log(2.) * a)
 
     if return_vals:

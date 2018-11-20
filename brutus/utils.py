@@ -17,6 +17,7 @@ import math
 import numpy as np
 import warnings
 import h5py
+from scipy.special import xlogy, gammaln
 
 try:
     from scipy.special import logsumexp
@@ -28,7 +29,7 @@ from .filters import FILTERS
 __all__ = ["_function_wrapper", "_adjoint3", "_inverse_transpose3",
            "_inverse3", "_dot3", "load_models", "quantile", "draw_sar",
            "magnitude", "inv_magnitude", "luptitude", "inv_luptitude",
-           "get_seds", "photometric_offsets"]
+           "get_seds", "phot_loglike", "photometric_offsets"]
 
 
 class _function_wrapper(object):
@@ -564,8 +565,66 @@ def get_seds(mag_coeffs, av=None, rv=None, return_flux=False,
         return seds
 
 
+def phot_loglike(data, data_err, data_mask, models, dim_prior=True):
+    """
+    Computes the log-likelihood between noisy data and noiseless models.
+
+    Parameters
+    ----------
+    data : `~numpy.ndarray` of shape `(Nfilt)`
+        Observed data values.
+
+    data_err : `~numpy.ndarray` of shape `(Nfilt)`
+        Associated (Normal) errors on the observed values.
+
+    data_mask : `~numpy.ndarray` of shape `(Nfilt)`
+        Binary mask (0/1) indicating whether the data was observed.
+
+    models : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        Models predictions.
+
+    dim_prior : bool, optional
+        Whether to apply a dimensional-based correction (prior) to the
+        log-likelihood. Transforms the likelihood to a chi2 distribution
+        with `Nfilt - 3` degrees of freedom. Default is `True`.
+
+    Returns
+    -------
+    lnlike : `~numpy.ndarray` of shape `(Nmodel)`
+        Log-likelihood values.
+
+    """
+
+    # Subselect only clean observations.
+    Ndim = sum(data_mask)  # number of dimensions
+    flux, fluxerr = data[data_mask], data_err[data_mask]  # mean, error
+    mfluxes = models[:, data_mask]  # model predictions
+    tot_var = np.square(fluxerr) + np.zeros_like(mfluxes)  # total variance
+
+    # Compute residuals.
+    resid = flux - mfluxes
+
+    # Compute chi2.
+    chi2 = np.sum(np.square(resid) / tot_var, axis=1)
+
+    # Compute multivariate normal logpdf.
+    lnl = -0.5 * chi2
+    lnl += -0.5 * (Ndim * np.log(2. * np.pi) +
+                   np.sum(np.log(tot_var), axis=1))
+
+    # Apply dimensionality prior.
+    if dim_prior:
+        # Compute logpdf of chi2 distribution.
+        a = 0.5 * (Ndim - 3)  # effective dof
+        lnl = xlogy(a - 1., chi2) - (chi2 / 2.) - gammaln(a) - (np.log(2.) * a)
+
+    return lnl
+
+
 def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
-                        sel=None, Nmc=500, rstate=None):
+                        sel=None, Nmc=50, old_offsets=None, dim_prior=True,
+                        prior_mean=None, prior_std=None, verbose=True,
+                        rstate=None):
     """
     Compute (multiplicative) photometric offsets between data and model.
 
@@ -603,7 +662,29 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
 
     Nmc : float, optional
         Number of realizations used to bootstrap the sample and
-        average over the model realizations. Default is `500`.
+        average over the model realizations. Default is `50`.
+
+    old_offsets : `~numpy.ndarray` of shape `(Nfilt)`, optional
+        Multiplicative photometric offsets that were applied to
+        the data (i.e. `data_new = data * phot_offsets`) and errors
+        when computing the fits.
+
+    prior_mean : `~numpy.ndarray` of shape `(Nfilt)`, optional
+        Mean of Gaussian prior on the photometric offsets. Must be provided
+        with `prior_std`.
+
+    prior_std : `~numpy.ndarray` of shape `(Nfilt)`, optional
+        Standard deviation of Gaussian prior on the photometric offsets.
+        Must be provided with `prior_mean`.
+
+    dim_prior : bool, optional
+        Whether to apply a dimensional-based correction (prior) to the
+        log-likelihood when reweighting the data while cycling through each
+        band. Transforms the likelihood to a chi2 distribution
+        with `Nfilt - 3` degrees of freedom. Default is `True`.
+
+    verbose : bool, optional
+        Whether to print progress to `~sys.stderr`. Default is `True`.
 
     rstate : `~numpy.random.RandomState`, optional
         `~numpy.random.RandomState` instance.
@@ -612,6 +693,9 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
     -------
     ratios : `~numpy.ndarray` of shape `(Nfilt)`
         Median ratios of model / data.
+
+    ratios_err : `~numpy.ndarray` of shape `(Nfilt)`
+        Errors (bootstrapped) on ratios of model / data.
 
     nratio : `~numpy.ndarray` of shape `(Nfilt)`
         The number of objects used to compute `ratios`.
@@ -624,6 +708,8 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
     Nsamps = idxs.shape[1]
     if sel is None:
         sel = np.ones(Nobj, dtype='bool')
+    if old_offsets is None:
+        old_offsets = np.ones(Nfilt)
     if rstate is None:
         rstate = np.random
 
@@ -635,21 +721,50 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
 
     # Compute photometric ratios.
     ratios, nratio = np.ones(Nfilt), np.zeros(Nfilt, dtype='int')
+    ratios_err = np.zeros(Nfilt)
     for i in range(Nfilt):
         # Subselect objects with reliable data.
-        s = mask[:, i] & sel
+        # Observed in the band (1), selected by user argument (2), and
+        # with >3 bands of photometry *excluding* the current band (3).
+        s = mask[:, i] & sel & (np.sum(mask, axis=1) > 3 + 1)
         n = sum(s)
         nratio[i] = n
         if n > 0:
             # Compute photometric ratio.
             ratio = seds[s, :, i] / phot[s, None, i]
+            # Compute weights from ignoring current band.
+            mtemp = np.array(mask)
+            mtemp[:, i] = False
+            lnl = np.array([phot_loglike(p * old_offsets, e * old_offsets, mt,
+                                         sed, dim_prior=dim_prior)
+                            for p, e, mt, sed in zip(phot[s], err[s],
+                                                     mtemp[s], seds[s])])
+            levid = logsumexp(lnl, axis=1)
+            logwt = lnl - levid[:, None]
+            wt = np.exp(logwt)
+            wt /= wt.sum(axis=1)[:, None]
             # Bootstrap results.
             offsets = []
             for j in range(Nmc):
-                ridx = rstate.choice(n, size=n)  # resample objects
-                midx = rstate.choice(Nsamps, size=n)  # select random models
-                offsets.append(np.median(ratio[ridx, midx]))  # compute median
+                if verbose:
+                    sys.stderr.write('\rBand {0} ({1}/{2})     '
+                                     .format(i+1, j+1, Nmc))
+                    sys.stderr.flush()
+                # Resample objects.
+                ridx = rstate.choice(n, size=n)
+                # Resample models based on computed weights (ignoring band).
+                midx = [rstate.choice(Nsamps, p=w) for w in wt[ridx]]
+                # Compute median.
+                offsets.append(np.median(ratio[ridx, midx]))
             # Compute median (of median).
-            ratios[i] = np.median(offsets)
+            ratios[i], ratios_err[i] = np.median(offsets), np.std(offsets)
+    if verbose:
+        sys.stderr.write('\n')
 
-    return ratios / np.median(ratios), nratio
+    # Apply prior.
+    if prior_mean is not None and prior_std is not None:
+        var_tot = ratios_err**2 + prior_std**2
+        ratios = (ratios * prior_std**2 + prior_mean * ratios_err**2) / var_tot
+        ratios_err = ratios_err * prior_std / np.sqrt(var_tot)
+
+    return ratios, ratios_err, nratio
