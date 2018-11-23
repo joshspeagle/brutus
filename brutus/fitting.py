@@ -16,6 +16,7 @@ import math
 import numpy as np
 import warnings
 import h5py
+import time
 from scipy.special import xlogy, gammaln
 
 try:
@@ -132,9 +133,9 @@ def loglike(data, data_err, data_mask, mag_coeffs,
     # Initialize values.
     Nmodels, Nfilt, Ncoef = mag_coeffs.shape
     if av_init is None:
-        av_init = np.zeros(Nmodels)
+        av_init = np.zeros(Nmodels) + av_gauss[0]
     if rv_init is None:
-        rv_init = np.zeros(Nmodels) + 3.3
+        rv_init = np.zeros(Nmodels) + rv_gauss[0]
 
     # Clean data (safety checks).
     with warnings.catch_warnings():
@@ -163,7 +164,8 @@ def loglike(data, data_err, data_mask, mag_coeffs,
 
     # Compute initial magnitude fit.
     results = _optimize_fit(flux, tot_var, models, rvecs, drvecs,
-                            av_init, rv_init, mcoeffs, tol=ltol,
+                            av_init, rv_init, mcoeffs,
+                            tol=2.5*ltol, init_thresh=init_thresh,
                             resid=None, mags=mags, mags_var=mags_var,
                             avlim=avlim, av_gauss=av_gauss,
                             rvlim=rvlim, rv_gauss=rv_gauss)
@@ -244,7 +246,8 @@ def loglike(data, data_err, data_mask, mag_coeffs,
 def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
                   avlim=(0., 6.), av_gauss=(0., 1e6),
                   rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
-                  resid=None, tol=0.02, mags=None, mags_var=None, stepsize=1.):
+                  resid=None, tol=0.05, init_thresh=1e-4, stepsize=1.,
+                  mags=None, mags_var=None):
     """
     Optimize the distance and reddening between the models and the data using
     the gradient.
@@ -299,15 +302,24 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
         Residuals between the data and models.
         If not provided, this will be computed.
 
+    tol : float, optional
+        The maximum tolerance in the computed Av and Rv values used to
+        determine convergence during the magnitude fits. Default is `0.05`.
+
+    init_thresh : bool, optional
+        The weight threshold used to mask out fits after the initial
+        magnitude-based fit before transforming the results back to
+        flux density (and iterating until convergence). Default is `1e-4`.
+
+    stepsize : float or `~numpy.ndarray`, optional
+        The stepsize (in units of the computed gradient). Default is `1.`.
+
     mags : `~numpy.ndarray` of shape `(Nfilt)`, optional
         Observed data values in magnitudes.
 
     mags_var : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`, optional
         Associated (Normal) errors on the observed values compared to the
         models in magnitudes.
-
-    stepsize : float or `~numpy.ndarray`, optional
-        The stepsize (in units of the computed gradient). Default is `1.`.
 
     Returns
     -------
@@ -409,10 +421,15 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
 
             # Update residuals.
             resid -= (av * drv)[:, None] * drvecs
+
             # Update reddening vector.
             rvecs += drv[:, None] * drvecs
-            # Compute error.
-            err = np.max([dav, drv])
+
+            # Compute error based on best-fitting objects.
+            chi2 = np.sum(np.square(resid) / mags_var, axis=1)
+            logwt = -0.5 * chi2
+            init_sel = np.where(logwt > np.max(logwt) + np.log(init_thresh))[0]
+            err = np.max([np.abs(dav[init_sel]), np.abs(drv[init_sel])])
     else:
         # If our data is in flux densities, we can solve the linear system
         # implicitly for `(s_ML, Av_ML, Rv_ML)`. However, the solution
@@ -493,13 +510,16 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
     r_den += 1. / Rv_std**2  # add Rv gaussian prior
 
     # Construct precision matrices (inverse covariances).
-    icov_sar = np.array([[[dsds, dsda, dsdr],
-                          [dsda, dada, dadr],
-                          [dsdr, dadr, drdr]]
-                         for (dsds, dada, drdr,
-                              dsda, dsdr, dadr) in zip(s_den, a_den, r_den,
-                                                       sa_mix, sr_mix,
-                                                       ar_mix)])
+    icov_sar = np.zeros((len(models), 3, 3))
+    icov_sar[:, 0, 0] = s_den  # scale
+    icov_sar[:, 1, 1] = a_den  # Av
+    icov_sar[:, 2, 2] = r_den  # Rv
+    icov_sar[:, 0, 1] = sa_mix  # scale-Av cross-term
+    icov_sar[:, 1, 0] = sa_mix  # scale-Av cross-term
+    icov_sar[:, 0, 2] = sr_mix  # scale-Rv cross-term
+    icov_sar[:, 2, 0] = sr_mix  # scale-Rv cross-term
+    icov_sar[:, 1, 2] = ar_mix  # Av-Rv cross-term
+    icov_sar[:, 2, 1] = ar_mix  # Av-Rv cross-term
 
     return models, rvecs, drvecs, scale, av, rv, icov_sar, resid
 
@@ -803,6 +823,8 @@ class BruteForce():
 
         # Fit data.
         if verbose:
+            t1 = time.time()
+            t = 0.
             sys.stderr.write('\rFitting object {0}/{1}'.format(1, Ndata))
             sys.stderr.flush()
         for i, results in enumerate(self._fit(data * phot_offsets,
@@ -830,7 +852,17 @@ class BruteForce():
                                               ltol=ltol)):
             # Print progress.
             if verbose and i < Ndata - 1:
-                sys.stderr.write('\rFitting object {0}/{1}'.format(i+2, Ndata))
+                # Compute time stamps.
+                t2 = time.time()
+                dt = t2 - t1  # time for current object
+                t1 = t2
+                t += dt  # total time elapsed
+                t_avg = t / (i + 1)  # avg time per object
+                t_est = t_avg * (Ndata - i - 1)  # estimated remaining time
+                sys.stderr.write('\rFitting object {:d}/{:d} '
+                                 '(mean time: {:2.3f} s/obj, '
+                                 'est. remaining: {:10.3f} s)'
+                                 .format(i+2, Ndata, t_avg, t_est))
                 sys.stderr.flush()
 
             # Save results.
@@ -854,6 +886,18 @@ class BruteForce():
                 out['dreds'][i] = dreds
 
         if verbose:
+            # Compute time stamps.
+            t2 = time.time()
+            dt = t2 - t1  # time for current object
+            t1 = t2
+            t += dt  # total time elapsed
+            t_avg = t / (i + 1)  # avg time per object
+            t_est = t_avg * (Ndata - i - 1)  # estimated remaining time
+            sys.stderr.write('\rFitting object {:d}/{:d} '
+                             '(mean time: {:2.3f} s/obj, '
+                             'est. time remaining: {:10.3f} s)'
+                             .format(i+1, Ndata, t_avg, t_est))
+            sys.stderr.flush()
             sys.stderr.write('\n')
             sys.stderr.flush()
 

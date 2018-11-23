@@ -622,7 +622,7 @@ def phot_loglike(data, data_err, data_mask, models, dim_prior=True):
 
 
 def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
-                        sel=None, Nmc=50, old_offsets=None, dim_prior=True,
+                        sel=None, Nmc=150, old_offsets=None, dim_prior=True,
                         prior_mean=None, prior_std=None, verbose=True,
                         rstate=None):
     """
@@ -662,7 +662,7 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
 
     Nmc : float, optional
         Number of realizations used to bootstrap the sample and
-        average over the model realizations. Default is `50`.
+        average over the model realizations. Default is `150`.
 
     old_offsets : `~numpy.ndarray` of shape `(Nfilt)`, optional
         Multiplicative photometric offsets that were applied to
