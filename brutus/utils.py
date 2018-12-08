@@ -29,7 +29,7 @@ from .filters import FILTERS
 __all__ = ["_function_wrapper", "_adjoint3", "_inverse_transpose3",
            "_inverse3", "_dot3", "load_models", "quantile", "draw_sar",
            "magnitude", "inv_magnitude", "luptitude", "inv_luptitude",
-           "get_seds", "phot_loglike", "photometric_offsets"]
+           "add_mag", "get_seds", "phot_loglike", "photometric_offsets"]
 
 
 class _function_wrapper(object):
@@ -484,6 +484,34 @@ def inv_luptitude(mag, err, skynoise=1., zeropoints=1.):
     return phot, phot_err
 
 
+def add_mag(mag1, mag2, f1=1., f2=1.):
+    """
+    Return combined magnitude from adding together individual components
+    with corresponding weights.
+
+    Parameters
+    ----------
+    mag1 : float or `~numpy.ndarray`
+        Magnitude(s) of the first ("primary") component.
+
+    mag2 : float or `~numpy.ndarray`
+        Magnitude(s) of the second ("secondary") component.
+
+    f1 : float or `~numpy.ndarray`
+        Fraction of contribution from the first component. Default is `1.`.
+
+    f2 : float or `~numpy.ndarray`
+        Fraction of contribution from the second component. Default is `1.`.
+
+    """
+
+    flux1, flux2 = 10**(-0.4 * mag1), 10**(-0.4 * mag2)
+    flux_tot = f1 * flux1 + f2 * flux2
+    mag_tot = -2.5 * np.log10(flux_tot)
+
+    return mag_tot
+
+
 def get_seds(mag_coeffs, av=None, rv=None, return_flux=False,
              return_rvec=False, return_drvec=False):
     """
@@ -534,8 +562,12 @@ def get_seds(mag_coeffs, av=None, rv=None, return_flux=False,
     Nmodels, Nbands, Ncoef = mag_coeffs.shape
     if av is None:
         av = np.zeros(Nmodels)
+    elif isinstance(av, (int, float)):
+        av = np.full(Nmodels, av)
     if rv is None:
-        rv = np.zeros(Nmodels) + 3.3
+        rv = np.full(Nmodels, 3.3)
+    elif isinstance(rv, (int, float)):
+        rv = np.full(Nmodels, rv)
 
     # Turn provided Av values into polynomial features.
     mags = mag_coeffs[:, :, 0]

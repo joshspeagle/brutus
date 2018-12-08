@@ -759,12 +759,15 @@ class BruteForce():
         if lndistprior is None and data_coords is None:
             raise ValueError("`data_coords` must be provided if using the "
                              "default distance prior.")
+        if lndistprior is None:
+            lndistprior = gal_lnprior
+
+        # Initialize (distance-)dust log(prior).
         if lndustprior is None and data_coords is None and av_gauss is None:
             raise ValueError("`data_coords` must be provided if using the "
                              "default dust prior.")
-        if lndistprior is None:
-            lndistprior = gal_lnprior
         if lndustprior is None:
+            lndustprior = dust_lnprior
             # Check provided `dustfile` is valid.
             try:
                 # Try reading in parallel-friendly way if possible.
@@ -777,7 +780,14 @@ class BruteForce():
                 raise ValueError("The default dust prior is being used but "
                                  "the relevant data file is not located at "
                                  "the provided `dustpath`.")
-            lndustprior = dust_lnprior
+            try:
+                # Pre-load provided dustfile into default prior.
+                lndustprior(np.linspace(100), (180., 90.), np.linspace(100),
+                            dustfile=dustfile)
+            except:
+                pass
+
+        # Fill data coordinates.
         if data_coords is None:
             data_coords = np.zeros((Ndata, 2))
 

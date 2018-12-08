@@ -1352,7 +1352,7 @@ def photometric_offsets_2d(phot, err, mask, models, idxs, reds, dreds, dists,
             bounds[:2] = xspan[i]
         if yspan is not None:
             bounds[2:] = yspan[i]
-        img = ax[i].imshow(offset2d, origin='lower', extent=bounds,
+        img = ax[i].imshow(offset2d.T, origin='lower', extent=bounds,
                            vmin=clims[0], vmax=clims[1], aspect='auto',
                            cmap=cmap, **plot_kwargs)
         ax[i].set_xlabel(xlabel)

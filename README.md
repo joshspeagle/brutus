@@ -6,7 +6,7 @@ to derive distances, reddenings, and stellar properties from photometry using
 a grid of stellar models.
 
 ### Documentation
-**Currently nonexistent.**
+**Currently nonexistent.** Please see the demos for usage examples.
 
 ### Data
 While `brutus` can be run over an arbitrary set of stellar models,
@@ -32,9 +32,11 @@ stellar models and utilize the SED prediction engine taken from
 **`brutus` can be installed and run without setting up this capability** using
 the pre-computed grids defined above. This functionality is provided so that
 users can generate their own grid of MIST models if desired. Please contact
-Phil Cargile (pcargile@cfa.harvard.edu) for the relevant data files.
+Phil Cargile (pcargile@cfa.harvard.edu) and Josh Speagle
+(jspeagle@cfa.harvard.edu) for the relevant data files.
 
-**Warning: This currently is incompatible with `brutus` v>=0.5.0.**
+An empirical correction table that supplements the data files can be found
+[here](https://www.dropbox.com/s/ufga5zadf1i7d27/corr_mist_v1.txt?dl=0).
 
 ### Installation
 `brutus` can be installed by running
