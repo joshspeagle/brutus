@@ -583,7 +583,9 @@ class SEDmaker(MISTtracks):
         def loss(x):
             return (self.get_predictions([mini * smf, x, feh])[aidx] - loga)**2
         # Find best-fit age that minimizes loss.
-        res = minimize(loss, eep)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = minimize(loss, eep)
         # Check against tolerance.
         if res['fun'] < tol:
             eep2 = res['x'][0]
@@ -678,7 +680,8 @@ class SEDmaker(MISTtracks):
                                         np.arange(8., 10. + 1e-5, 0.5)])
         if eep_grid is None:  # EEP
             eep_grid = np.concatenate([np.arange(202, 454, 12),
-                                       np.arange(454, 808, 6)])
+                                       np.arange(454, 808 + 1, 6)])
+            eep_grid -= 1e-5
         if feh_grid is None:  # metallicity
             feh_grid = np.arange(-4., 0.5 + 1e-5, 0.06)
             feh_grid[-1] -= 1e-5

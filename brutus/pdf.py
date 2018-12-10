@@ -38,14 +38,31 @@ __all__ = ["imf_lnprior", "ps1_MrLF_lnprior", "parallax_lnprior",
            "dust_lnprior", "bin_pdfs_distred"]
 
 
-def imf_lnprior(mgrid):
+def imf_lnprior(mgrid, alpha_low=1.3, alpha_high=2.3, mass_break=0.5,
+                mgrid2=None):
     """
-    Apply Kroupa IMF prior over the provided initial mass grid.
+    Apply a Kroupa-like broken IMF prior over the provided initial mass grid.
 
     Parameters
     ----------
     mgrid : `~numpy.ndarray` of shape (Ngrid)
-        Grid of initial mass the Kroupa IMF will be evaluated over.
+        Grid of initial mass (solar units) the IMF will be evaluated over.
+
+    alpha_low : float, optional
+        Power-law slope for the low-mass component of the IMF.
+        Default is `1.3`.
+
+    alpha_high : float, optional
+        Power-law slope for the high-mass component of the IMF.
+        Default is `2.3`.
+
+    mass_break : float, optional
+        The mass where we transition from `alpha_low` to `alpha_high`.
+        Default is `0.5`.
+
+    mgrid2 : `~numpy.ndarray` of shape (Ngrid)
+        Grid of initial mass (solar units) for the second portion of a binary
+        that the IMF will be evaluated over.
 
     Returns
     -------
@@ -55,21 +72,43 @@ def imf_lnprior(mgrid):
     """
 
     # Initialize log-prior.
-    lnprior = np.zeros_like(mgrid)
+    lnprior = np.zeros_like(mgrid) - np.inf
 
     # Low mass.
-    low_mass = mgrid <= 0.08
-    lnprior[low_mass] = -0.3 * np.log(mgrid[low_mass])
-
-    # Intermediate mass.
-    mid_mass = (mgrid <= 0.5) & (mgrid > 0.08)
-    lnprior[mid_mass] = -1.3 * np.log(mgrid[mid_mass]) + np.log(0.08)
+    low_mass = (mgrid <= mass_break) & (mgrid > 0.08)
+    lnprior[low_mass] = -alpha_low * np.log(mgrid[low_mass])
 
     # High mass.
-    high_mass = mgrid > 0.5
-    lnprior[high_mass] = -2.3 * np.log(mgrid[high_mass]) + np.log(0.5 * 0.08)
+    high_mass = mgrid > mass_break
+    lnprior[high_mass] = (-alpha_high * np.log(mgrid[high_mass])
+                          + (alpha_high - alpha_low) * np.log(mass_break))
 
-    return lnprior
+    # Compute normalization.
+    norm_low = mass_break ** (1. - alpha_low) / (alpha_high - 1.)
+    norm_high = 0.08 ** (1. - alpha_low) / (alpha_low - 1.)  # H-burning limit
+    norm_high -= mass_break ** (1. - alpha_low) / (alpha_low - 1.)
+    norm = norm_low + norm_high
+
+    # Compute contribution from binary component.
+    if mgrid2 is not None:
+        lnprior2 = np.zeros_like(mgrid2) - np.inf
+
+        # Low mass.
+        low_mass = (mgrid2 <= mass_break) & (mgrid2 > 0.08)
+        lnprior2[low_mass] = -alpha_low * np.log(mgrid2[low_mass])
+
+        # High mass.
+        high_mass = mgrid2 > mass_break
+        lnprior2[high_mass] = (-alpha_high * np.log(mgrid2[high_mass])
+                               + (alpha_high - alpha_low) * np.log(mass_break))
+
+        # Combine with primary.
+        lnprior += lnprior2
+
+        # Compute new normalization.
+        norm = (norm_low ** 2 + norm_high ** 2 + 2 * norm_low * norm_high)
+
+    return lnprior - np.log(norm)
 
 
 def ps1_MrLF_lnprior(Mr):

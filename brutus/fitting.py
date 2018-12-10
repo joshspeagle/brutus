@@ -34,7 +34,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
             avlim=(0., 6.), av_gauss=(0., 1e6),
             rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
             av_init=None, rv_init=None,
-            dim_prior=True, ltol=0.02, wt_thresh=0.005, init_thresh=1e-4,
+            dim_prior=True, ltol=0.03, wt_thresh=0.005, init_thresh=1e-3,
             return_vals=False, *args, **kwargs):
     """
     Computes the log-likelihood between noisy data and noiseless models
@@ -88,7 +88,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
 
     ltol : float, optional
         The weighted tolerance in the computed log-likelihoods used to
-        determine convergence. Default is `0.02`.
+        determine convergence. Default is `0.03`.
 
     wt_thresh : float, optional
         The threshold used to sub-select the best-fit log-likelihoods used
@@ -97,7 +97,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
     init_thresh : bool, optional
         The weight threshold used to mask out fits after the initial
         magnitude-based fit before transforming the results back to
-        flux density (and iterating until convergence). Default is `1e-4`.
+        flux density (and iterating until convergence). Default is `1e-3`.
 
     return_vals : bool, optional
         Whether to return the best-fit scale-factor, reddening, and shape
@@ -246,7 +246,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
 def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
                   avlim=(0., 6.), av_gauss=(0., 1e6),
                   rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
-                  resid=None, tol=0.05, init_thresh=1e-4, stepsize=1.,
+                  resid=None, tol=0.05, init_thresh=1e-3, stepsize=1.,
                   mags=None, mags_var=None):
     """
     Optimize the distance and reddening between the models and the data using
@@ -309,7 +309,7 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
     init_thresh : bool, optional
         The weight threshold used to mask out fits after the initial
         magnitude-based fit before transforming the results back to
-        flux density (and iterating until convergence). Default is `1e-4`.
+        flux density (and iterating until convergence). Default is `1e-3`.
 
     stepsize : float or `~numpy.ndarray`, optional
         The stepsize (in units of the computed gradient). Default is `1.`.
@@ -574,12 +574,12 @@ class BruteForce():
     def fit(self, data, data_err, data_mask, data_labels, save_file,
             phot_offsets=None, parallax=None, parallax_err=None,
             Nmc_prior=100, avlim=(0., 6.), av_gauss=None,
-            rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
+            rvlim=(1., 8.), rv_gauss=(3.32, 0.18), binary_frac=0.5,
             lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4, Ndraws=2000,
             apply_agewt=True, apply_grad=True,
             lndistprior=None, lndustprior=None, dustfile='bayestar2017_v1.h5',
             apply_dlabels=True, data_coords=None, logl_dim_prior=True,
-            ltol=0.02, ltol_subthresh=0.005, logl_initthresh=1e-4,
+            ltol=0.03, ltol_subthresh=0.005, logl_initthresh=1e-3,
             rstate=None, save_dar_draws=True, verbose=True):
         """
         Fit all input models to the input data to compute the associated
@@ -636,12 +636,18 @@ class BruteForce():
             The default is `(3.32, 0.18)` based on the results from
             Schlafly et al. (2016).
 
+        binary_frac : float, optional
+            The expected binary fraction, applied when the MIST models are
+            used and modeling unresolved binaries. Default is `0.5`.
+
         lnprior : `~numpy.ndarray` of shape `(Ndata, Nfilt)`, optional
             Log-prior grid to be used. If not provided, this will default
             to [1] a Kroupa IMF prior in initial mass (`'mini'`) and
             uniform priors in age, metallicity, and dust if we are using the
             MIST models and [2] a PanSTARRS r-band luminosity function-based
-            prior if we are using the Bayestar models.
+            prior if we are using the Bayestar models. Unresolved binaries
+            with secondary mass fractions of `'smf'` are treated as
+            two independent draws from the IMF with binarity `p=0.5`.
             **Be sure to check this behavior you are using custom models.**
 
         wt_thresh : float, optional
@@ -696,7 +702,7 @@ class BruteForce():
 
         ltol : float, optional
             The weighted tolerance in the computed log-likelihoods used to
-            determine convergence. Default is `0.02`.
+            determine convergence. Default is `0.03`.
 
         ltol_subthresh : float, optional
             The threshold used to sub-select the best-fit log-likelihoods used
@@ -705,7 +711,7 @@ class BruteForce():
         logl_initthresh : float, optional
             The threshold `logl_initthresh * max(y_wt)` used to ignore models
             with (relatively) negligible weights after computing the initial
-            set of fits but before optimizing them. Default is `1e-4`.
+            set of fits but before optimizing them. Default is `1e-3`.
 
         rstate : `~numpy.random.RandomState`, optional
             `~numpy.random.RandomState` instance.
@@ -735,9 +741,22 @@ class BruteForce():
             try:
                 # Set IMF prior.
                 lnprior = imf_lnprior(self.models_labels['mini'])
+                try:
+                    # Add in binary contribution.
+                    mini = self.models_labels['mini']
+                    mini2 = (self.models_labels['smf'] *
+                             self.models_labels['mini'])
+                    bnry = mini2 > 0.
+                    lnprior[bnry] = imf_lnprior(mini, mgrid2=mini2)[bnry]
+                    # Weight by binary fraction.
+                    lnprior[bnry] += np.log(binary_frac)
+                    lnprior[~bnry] += np.log(1. - binary_frac)
+                except:
+                    pass
             except:
                 # Set PS1 r-band LF prior.
                 lnprior = ps1_MrLF_lnprior(self.models_labels['Mr'])
+                pass
 
         # Apply age weights to reweight from EEP to age.
         if apply_agewt:
@@ -782,8 +801,8 @@ class BruteForce():
                                  "the provided `dustpath`.")
             try:
                 # Pre-load provided dustfile into default prior.
-                lndustprior(np.linspace(100), (180., 90.), np.linspace(100),
-                            dustfile=dustfile)
+                lndustprior(np.linspace(0, 100), np.array([180., 90.]),
+                            np.linspace(0, 100), dustfile=dustfile)
             except:
                 pass
 
@@ -920,8 +939,8 @@ class BruteForce():
              lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4, Ndraws=2000,
              lndistprior=None, lndustprior=None, dustfile='bayestar2017_v1.h5',
              apply_dlabels=True, data_coords=None,
-             return_distreds=True, logl_dim_prior=True, ltol=0.02,
-             ltol_subthresh=0.005, logl_initthresh=1e-4, rstate=None):
+             return_distreds=True, logl_dim_prior=True, ltol=0.03,
+             ltol_subthresh=0.005, logl_initthresh=1e-3, rstate=None):
         """
         Internal generator used to compute fits.
 
@@ -1017,7 +1036,7 @@ class BruteForce():
 
         ltol : float, optional
             The weighted tolerance in the computed log-likelihoods used to
-            determine convergence. Default is `0.02`.
+            determine convergence. Default is `0.03`.
 
         ltol_subthresh : float, optional
             The threshold used to sub-select the best-fit log-likelihoods used
@@ -1026,7 +1045,7 @@ class BruteForce():
         logl_initthresh : float, optional
             The threshold `logl_initthresh * max(y_wt)` used to ignore models
             with (relatively) negligible weights after computing the initial
-            set of fits but before optimizing them. Default is `1e-4`.
+            set of fits but before optimizing them. Default is `1e-3`.
 
         rstate : `~numpy.random.RandomState`, optional
             `~numpy.random.RandomState` instance.

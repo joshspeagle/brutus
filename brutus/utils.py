@@ -149,7 +149,7 @@ def load_models(filepath, filters=None, labels=None, verbose=True):
     if filters is None:
         filters = FILTERS
     if labels is None:
-        labels = ['mini', 'feh', 'eep',
+        labels = ['mini', 'feh', 'eep', 'smf',
                   'loga', 'logl', 'logt', 'logg',
                   'Mr', 'agewt']
 
