@@ -654,7 +654,8 @@ def phot_loglike(data, data_err, data_mask, models, dim_prior=True):
 
 
 def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
-                        sel=None, Nmc=150, old_offsets=None, dim_prior=True,
+                        sel=None, weights=None, Nmc=150,
+                        old_offsets=None, dim_prior=True,
                         prior_mean=None, prior_std=None, verbose=True,
                         rstate=None):
     """
@@ -691,6 +692,9 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
     sel : `~numpy.ndarray` of shape `(Nobj)`, optional
         Boolean selection array of objects that should be used when
         computing offsets. If not provided, all objects will be used.
+
+    sel : `~numpy.ndarray` of shape `(Nobj, Nsamps)`, optional
+        Associated set of weights for each sample.
 
     Nmc : float, optional
         Number of realizations used to bootstrap the sample and
@@ -740,6 +744,8 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
     Nsamps = idxs.shape[1]
     if sel is None:
         sel = np.ones(Nobj, dtype='bool')
+    if weights is None:
+        weights = np.ones((Nobj, Nsamps), dtype='float')
     if old_offsets is None:
         old_offsets = np.ones(Nfilt)
     if rstate is None:
@@ -758,7 +764,8 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
         # Subselect objects with reliable data.
         # Observed in the band (1), selected by user argument (2), and
         # with >3 bands of photometry *excluding* the current band (3).
-        s = mask[:, i] & sel & (np.sum(mask, axis=1) > 3 + 1)
+        s = (mask[:, i] & sel & (np.sum(mask, axis=1) > 3 + 1) &
+             (np.sum(weights, axis=1) > 0))
         n = sum(s)
         nratio[i] = n
         if n > 0:
@@ -774,7 +781,10 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
             levid = logsumexp(lnl, axis=1)
             logwt = lnl - levid[:, None]
             wt = np.exp(logwt)
+            wt *= weights[s]
             wt /= wt.sum(axis=1)[:, None]
+            wt_obj = np.array(np.sum(weights[s], axis=1) > 0, dtype='float')
+            wt_obj /= sum(wt_obj)
             # Bootstrap results.
             offsets = []
             for j in range(Nmc):
@@ -783,7 +793,7 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
                                      .format(i+1, j+1, Nmc))
                     sys.stderr.flush()
                 # Resample objects.
-                ridx = rstate.choice(n, size=n)
+                ridx = rstate.choice(n, size=n, p=wt_obj)
                 # Resample models based on computed weights (ignoring band).
                 midx = [rstate.choice(Nsamps, p=w) for w in wt[ridx]]
                 # Compute median.

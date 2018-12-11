@@ -785,7 +785,7 @@ class BruteForce():
         if lndustprior is None and data_coords is None and av_gauss is None:
             raise ValueError("`data_coords` must be provided if using the "
                              "default dust prior.")
-        if lndustprior is None:
+        if lndustprior is None and av_gauss is None:
             lndustprior = dust_lnprior
             # Check provided `dustfile` is valid.
             try:
