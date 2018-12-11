@@ -14,7 +14,7 @@ it is configured for two by default: [MIST](http://waps.cfa.harvard.edu/MIST/)
 and [Bayestar](https://arxiv.org/pdf/1401.1508.pdf).
 
 The current MIST grid (v7) can be found
-[here](https://www.dropbox.com/s/rufyasj40axq4w2/grid_mist_v7.h5?dl=0).
+[here](https://www.dropbox.com/s/qzqqupp0hf6gg45/grid_mist_v7.h5?dl=0).
 The current Bayestar grid (v2) can be found
 [here](https://www.dropbox.com/s/mxi8qvlupnxbni7/grid_bayestar_v2.h5?dl=0).
 

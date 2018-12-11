@@ -730,7 +730,7 @@ class SEDmaker(MISTtracks):
         for i, (mini, eep, feh, smf) in enumerate(self.grid_label):
 
             # Compute model and parameter predictions.
-            (sed, params1,
+            (sed, params,
              params2, eep2) = self.get_sed(mini=mini, eep=eep, feh=feh,
                                            smf=smf, av=0., rv=3.3,
                                            dist=dist, loga_max=loga_max,
