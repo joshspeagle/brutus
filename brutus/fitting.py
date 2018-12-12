@@ -35,6 +35,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
             rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
             av_init=None, rv_init=None,
             dim_prior=True, ltol=0.03, wt_thresh=0.005, init_thresh=1e-3,
+            parallax=None, parallax_err=None, parallax_clip=5.,
             return_vals=False, *args, **kwargs):
     """
     Computes the log-likelihood between noisy data and noiseless models
@@ -98,6 +99,18 @@ def loglike(data, data_err, data_mask, mag_coeffs,
         The weight threshold used to mask out fits after the initial
         magnitude-based fit before transforming the results back to
         flux density (and iterating until convergence). Default is `1e-3`.
+
+    parallax : float, optional
+        Parallax measurement. If provided and `init_thresh` is not `None`,
+        (i.e. initial clipping is turned on), this will be used to clip models
+        after the initial magnitude fits.
+
+    parallax_err : float, optional
+        Error on the parallax measurements. Must be provided along with
+        `parallax`.
+
+    parallax_clip : float, optional
+        The "sigma" value used for clipping. Default is `5.`.
 
     return_vals : bool, optional
         Whether to return the best-fit scale-factor, reddening, and shape
@@ -175,11 +188,31 @@ def loglike(data, data_err, data_mask, mag_coeffs,
         # Cull initial bad fits before moving on.
         chi2 = np.sum(np.square(resid) / tot_var, axis=1)
         # Compute multivariate normal logpdf.
-        lnl = -0.5 * chi2
-        lnl += -0.5 * (Ndim * np.log(2. * np.pi) +
-                       np.sum(np.log(tot_var), axis=1))
+        lnl = -0.5 * chi2  # ignore constant
         # Subselect models.
-        init_sel = np.where(lnl > np.max(lnl) + np.log(init_thresh))[0]
+        if parallax is not None and parallax_err is not None:
+            # Extract naive scale error.
+            ds2 = icov_sar[:, 0, 0]
+            scale_err = np.sqrt(1./ds2)
+            # Compute parallax bounds.
+            parallax_low = parallax - parallax_clip * parallax_err
+            parallax_high = parallax + parallax_clip * parallax_err
+            # Check +/- X*sig intervals overlap to some degree.
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                par_high = np.sqrt(scale + parallax_clip * scale_err)
+                par_low = np.sqrt(scale - parallax_clip * scale_err)
+                par_out = (par_high < parallax_low) | (par_low > parallax_high)
+            # Compute initial clipping.
+            lnl_sel = lnl > np.max(lnl) + np.log(init_thresh)
+            init_sel = np.where(lnl_sel & ~par_out)[0]
+            if len(init_sel) == 0:
+                init_sel = np.where(lnl_sel)[0]
+        else:
+            # Threshold using log-likelihoods.
+            lnl_sel = lnl > np.max(lnl) + np.log(init_thresh)
+            init_sel = np.where(lnl_sel)[0]
+        # Subselect data.
         tot_var = tot_var[init_sel]
         models = models[init_sel]
         rvecs = rvecs[init_sel]
@@ -214,9 +247,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
         chi2_new = np.sum(np.square(resid) / tot_var, axis=1)
 
         # Compute multivariate normal logpdf.
-        lnl_new = -0.5 * chi2_new
-        lnl_new += -0.5 * (Ndim * np.log(2. * np.pi) +
-                           np.sum(np.log(tot_var), axis=1))
+        lnl_new = -0.5 * chi2_new  # ignore constant
 
         # Compute stopping criterion.
         lnl_sel = np.where(lnl_new > np.max(lnl_new) + np.log(wt_thresh))[0]
@@ -227,6 +258,8 @@ def loglike(data, data_err, data_mask, mag_coeffs,
         lnl_old = lnl_new
 
     # Insert optimized models into initial array of results.
+    lnl_new += -0.5 * (Ndim * np.log(2. * np.pi) +
+                       np.sum(np.log(tot_var), axis=1))  # add constant
     lnl[init_sel], chi2[init_sel] = lnl_new, chi2_new
     scale[init_sel], av[init_sel], rv[init_sel] = scale_new, av_new, rv_new
     icov_sar[init_sel] = icov_sar_new
@@ -366,11 +399,15 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
         # solve for Av and Rv in turn to so we can impose priors and bounds
         # on both quantities.
 
+        # Compute constants.
+        s_den = np.sum(1. / mags_var, axis=1)
+        rp_den = np.sum(np.square(drvecs) / mags_var, axis=1)
+        srp_mix = np.sum(drvecs / mags_var, axis=1)
+
         err = 1e300
         while err > tol:
             # Solve for Av.
             # Derive partial derivatives.
-            s_den = np.sum(1. / mags_var, axis=1)
             a_den = np.sum(np.square(rvecs) / mags_var, axis=1)
             sa_mix = np.sum(rvecs / mags_var, axis=1)
             # Compute residual terms.
@@ -389,17 +426,16 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
             lsel, hsel = dav < dav_low, dav > dav_high
             dav[lsel] = dav_low[lsel]
             dav[hsel] = dav_high[hsel]
+
             # Increment to new Av.
             av += dav
-
             # Update residuals.
             resid -= dav[:, None] * rvecs  # update residuals
 
             # Solve for Rv.
             # Derive partial derivatives.
-            s_den = np.sum(1. / mags_var, axis=1)
-            r_den = np.sum(np.square(drvecs) / mags_var, axis=1) * av**2
-            sr_mix = np.sum(drvecs / mags_var, axis=1) * av
+            r_den = rp_den * av**2
+            sr_mix = srp_mix * av
             # Compute residual terms.
             resid_s = np.sum(resid / mags_var, axis=1)
             resid_r = np.sum(resid * drvecs / mags_var, axis=1) * av
@@ -416,12 +452,11 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
             lsel, hsel = drv < drv_low, drv > drv_high
             drv[lsel] = drv_low[lsel]
             drv[hsel] = drv_high[hsel]
+
             # Increment to new Rv.
             rv += drv
-
             # Update residuals.
             resid -= (av * drv)[:, None] * drvecs
-
             # Update reddening vector.
             rvecs += drv[:, None] * drvecs
 
@@ -1134,8 +1169,9 @@ class BruteForce():
 
         # Re-define log-likelihood to deal with zipped values.
         def _loglike_zip(z, *args, **kwargs):
-            d, e, m = z  # grab data, error, mask
-            return loglike(d, e, m, models, *args, **kwargs)
+            d, e, m, p, pe = z  # grab data, error, mask, parallax+err
+            return loglike(d, e, m, models, parallax=p, parallax_err=pe,
+                           *args, **kwargs)
 
         # Wrap log-likelihood with fixed kwargs.
         loglike_kwargs = {'avlim': avlim, 'ltol': ltol,
@@ -1172,7 +1208,9 @@ class BruteForce():
                                     data_mask_list, counter_list):
 
             # Compute log-likelihoods optimizing over s and Av.
-            results_map = list(self.M(_loglike, zip(x, xe, xm)))
+            results_map = list(self.M(_loglike, zip(x, xe, xm,
+                                                    parallax[chunk],
+                                                    parallax_err[chunk])))
 
             # Compute posteriors.
             lnpost_map = list(self.M(_logpost,
