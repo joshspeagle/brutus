@@ -806,8 +806,10 @@ class BruteForce():
                 label = self.models_labels[l]
                 if self.labels_mask[l][0]:
                     ulabel = np.unique(label)  # grab underlying grid
-                    lngrad_label = np.log(np.gradient(ulabel))  # compute grad
-                    lnprior += np.interp(label, ulabel, lngrad_label)  # add
+                    if len(ulabel) > 1:
+                        # Compute and add gradient.
+                        lngrad_label = np.log(np.gradient(ulabel))
+                        lnprior += np.interp(label, ulabel, lngrad_label)
 
         # Initialize distance log(prior).
         if lndistprior is None and data_coords is None:

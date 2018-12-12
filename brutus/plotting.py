@@ -810,8 +810,8 @@ def posterior_predictive(models, idxs, reds, dreds, dists, weights=None,
         Observed data values (fluxes). If provided, these will be overplotted.
 
     data_err : `~numpy.ndarray` of shape `(Nfilt)`
-        Associated errors on the data values. If provided, these will be
-        overplotted as error bars.
+        Associated 1-sigma errors on the data values. If provided,
+        these will be overplotted as **3-sigma** error bars.
 
     data_mask : `~numpy.ndarray` of shape `(Nfilt)`
         Binary mask (0/1) indicating whether the data value was observed.
@@ -909,7 +909,7 @@ def posterior_predictive(models, idxs, reds, dreds, dists, weights=None,
         else:
             m, e = magnitude(data[data_mask] * offset[data_mask],
                              data_err[data_mask] * offset[data_mask])
-        ax.errorbar(np.arange(nfilt)[data_mask], m, yerr=e,
+        ax.errorbar(np.arange(nfilt)[data_mask], m, yerr=3.*e,
                     marker='o', color=pcolor, linestyle='none',
                     ms=7, lw=3)
     # Label axes.
