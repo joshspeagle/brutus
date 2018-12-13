@@ -106,7 +106,9 @@ def _inverse3(A):
     return np.swapaxes(_inverse_transpose3(A), -1, -2)
 
 
-def load_models(filepath, filters=None, labels=None, verbose=True):
+def load_models(filepath, filters=None, labels=None,
+                include_ms=True, include_postms=True, include_binaries=True,
+                verbose=True):
     """
 
     Parameters
@@ -123,8 +125,21 @@ def load_models(filepath, filters=None, labels=None, verbose=True):
     labels : iterable of strings with length `Nlabel`, optional
         List of labels associated with the set of imported stellar models.
         Any labels that are not available will be skipped over.
-        The default set is
-        `['mini', 'feh', 'eep', 'loga', 'logl', 'logt', 'logg', 'Mr', 'agewt']`
+        The default set is `['mini', 'feh', 'eep', 'smf'. 'loga', 'logl',`
+        `'logt', 'logg', 'Mr', 'agewt']`.
+
+    include_ms : bool, optional
+        Whether to include objects on the Main Sequence. Applied as a cut on
+        `eep <= 454` when `'eep'` is included. Default is `True`.
+
+    include_postms : bool, optional
+        Whether to include objects evolved off the Main Sequence. Applied as a
+        cut on `eep > 454` when `'eep'` is included. Default is `True`.
+
+    include_binaries : bool, optional
+        Whether to include unresolved binaries. Applied as a cut on
+        secondary mass fraction (`'smf'`) when it has been included. Default
+        is `True`. If set to `False`, `'smf'` is not returned as a label.
 
     verbose : bool, optional
         Whether to print progress. Default is `True`.
@@ -201,10 +216,38 @@ def load_models(filepath, filters=None, labels=None, verbose=True):
 
     # Remove extraneous/undefined labels.
     labels2 = [l for i, l in zip(combined_labels[0], labels) if ~np.isnan(i)]
+
+    # Apply cuts.
+    sel = np.ones(len(combined_labels), dtype='bool')
+    if include_ms and include_postms:
+        sel = np.ones(len(combined_labels), dtype='bool')
+    elif not include_ms and not include_postms:
+        raise ValueError("If you don't include the Main Sequence and "
+                         "Post-Main Sequence models you have nothing left!")
+    elif include_postms:
+        try:
+            sel = combined_labels['eep'] > 454.
+        except:
+            pass
+    elif include_ms:
+        try:
+            sel = combined_labels['eep'] <= 454.
+        except:
+            pass
+    else:
+        raise RuntimeError("Something has gone horribly wrong!")
+    if not include_binaries:
+        try:
+            sel *= combined_labels['smf'] == 0.
+            labels2 = [l for l in labels2 if l != 'smf']
+        except:
+            pass
+
+    # Compile results.
     combined_labels = combined_labels[labels2]
     label_mask = label_mask[labels2]
 
-    return models, combined_labels, label_mask
+    return models[sel], combined_labels[sel], label_mask
 
 
 def quantile(x, q, weights=None):

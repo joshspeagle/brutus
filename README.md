@@ -23,6 +23,15 @@ dust map from [Green et al. (2018)](https://arxiv.org/abs/1801.03555). The
 relevant data file can be found
 [here](https://www.dropbox.com/s/kkdcnvvuf2t3jt0/bayestar2017_v1.h5?dl=0).
 
+Zero-point offsets in several provided bands that were derived using Gaia
+can be downloaded
+[here](https://www.dropbox.com/s/ck43do4chssbyd0/offsets_bs_v2.txt?dl=0)
+for Bayestar and
+[here](https://www.dropbox.com/s/j40pqz1g0x0d5kp/offsets_mist_v7.txt?dl=0)
+for MIST.
+Make sure you you use the zero-points derived for the grid with
+the same version number.
+
 ### Generating SEDs
 `brutus` contains built-in SED generation utilities that run over the MIST
 stellar models and utilize the SED prediction engine taken from 

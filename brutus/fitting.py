@@ -850,8 +850,10 @@ class BruteForce():
         # Clean data to remove bad photometry user may not have masked.
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
+            mag, err = magnitude(data, data_err)
+            bad_mag = (mag > 50) & (err < 0.1)
             clean = np.isfinite(data) & np.isfinite(data_err) & (data_err > 0.)
-            data_mask *= clean
+            data_mask *= (clean & ~bad_mag)
 
         # Check there are enough bands to fit.
         Nbmin = 4  # minimum number of bands needed

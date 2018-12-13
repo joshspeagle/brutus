@@ -1088,7 +1088,8 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
         # Compute selection ignoring current band.
         mtemp = np.array(mask)
         mtemp[:, i] = False
-        s = mask[:, i] & (np.sum(mtemp, axis=1) > 3)
+        s = (mask[:, i] & (np.sum(mtemp, axis=1) > 3) &
+             (np.all(np.isfinite(magobs), axis=1)))
         # Compute weights from ignoring current band.
         lnl = np.array([phot_loglike(mo, me, mt, mp, dim_prior=dim_prior)
                         for mo, me, mt, mp in zip(magobs[s], mageobs[s],
@@ -1110,11 +1111,13 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
         mp = mpred[s, :, i].flatten()
         w = weights[s].flatten() * wt.flatten()
         if xspan is None:
-            bx = np.linspace(np.min(xp), np.max(xp), bins[i] + 1)
+            xlow, xhigh = quantile(xp, [0.02, 0.98], weights=w)
+            bx = np.linspace(xlow, xhigh, bins[i] + 1)
         else:
             bx = np.linspace(xspan[i][0], xspan[i][1], bins[i] + 1)
         if yspan is None:
-            by = np.linspace(np.min(mp - mobs), np.max(mp - mobs), bins[i] + 1)
+            ylow, yhigh = quantile(mp - mobs, [0.02, 0.98], weights=w)
+            by = np.linspace(ylow, yhigh, bins[i] + 1)
         else:
             by = np.linspace(yspan[i][0], yspan[i][1], bins[i] + 1)
         ax[i].hist2d(xp, mp - mobs, bins=(bx, by), weights=w,
@@ -1323,7 +1326,8 @@ def photometric_offsets_2d(phot, err, mask, models, idxs, reds, dreds, dists,
         # Compute selection ignoring current band.
         mtemp = np.array(mask)
         mtemp[:, i] = False
-        s = mask[:, i] & (np.sum(mtemp, axis=1) > 3)
+        s = (mask[:, i] & (np.sum(mtemp, axis=1) > 3) &
+             (np.all(np.isfinite(magobs), axis=1)))
         # Compute weights from ignoring current band.
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
