@@ -3,7 +3,7 @@
 
 """
 Collection of methods that generate the underlying grid of SED models. Code
-contributed by Ben Johnson.
+also contributed by Ben Johnson and Phil Cargile.
 
 """
 
@@ -25,9 +25,6 @@ from scipy.interpolate import RegularGridInterpolator
 from scipy import polyfit
 from scipy.optimize import minimize
 
-import minesweeper
-from minesweeper.photANN import ANN
-
 from .filters import FILTERS
 from .utils import add_mag
 
@@ -45,7 +42,8 @@ rename = {"mini": "initial_mass",  # input parameters
           "logl": "log_L",
           "logr": "log_R"}
 
-__all__ = ["MISTtracks", "SEDmaker", "FastNN", "FastPaynePredictor"]
+__all__ = ["MISTtracks", "SEDmaker", "FastNN", "FastNNPredictor",
+           "Isochrone"]
 
 
 class MISTtracks(object):
@@ -57,8 +55,7 @@ class MISTtracks(object):
     ----------
     mistfile : str, optional
         The name of the HDF5 file containing the MIST tracks. Default is
-        `MIST_1.2_EEPtrk.h5` and is extracted from the `minesweeper`
-        home path.
+        `MIST_1.2_EEPtrk.h5` and is extracted from `data/DATAFILES/`.
 
     labels : iterable of shape `(3)`, optional
         The names of the parameters on which to interpolate. This defaults to
@@ -105,7 +102,7 @@ class MISTtracks(object):
 
         # Import MIST grid.
         if mistfile is None:
-            mistfile = minesweeper.__abspath__ + 'data/MIST/MIST_1.2_EEPtrk.h5'
+            mistfile = 'data/DATAFILES/MIST_1.2_EEPtrk.h5'
         self.mistfile = mistfile
         with h5py.File(self.mistfile, "r") as misth5:
             self.make_lib(misth5, verbose=verbose)
@@ -297,7 +294,7 @@ class MISTtracks(object):
         if ndim == 1:
             preds = self.interpolator(labels)[0]
         elif ndim == 2:
-            preds = np.array([self.interpolator(l)[0] for l in labels])
+            preds = self.interpolator(labels)
         else:
             raise ValueError("Input `labels` not 1-D or 2-D.")
 
@@ -337,7 +334,7 @@ class MISTtracks(object):
         if ndim == 1:
             corrs = self.interpolator_corr(labels)[0]
         elif ndim == 2:
-            corrs = np.array([self.interpolator_corr(l)[0] for l in labels])
+            corrs = self.interpolator_corr(labels)
         else:
             raise ValueError("Input `labels` not 1-D or 2-D.")
 
@@ -347,7 +344,7 @@ class MISTtracks(object):
 class SEDmaker(MISTtracks):
     """
     An object that generates photometry interpolated from MIST tracks in
-    EEP, initial mass, and metallicity using "The Payne".
+    EEP, initial mass, and metallicity using artificial neural networks.
 
     Parameters
     ----------
@@ -355,15 +352,14 @@ class SEDmaker(MISTtracks):
         The names of filters that photometry should be computed for. If not
         provided, photometry will be computed for all available filters.
 
-    nnpath : str, optional
-        The path to the neural network files from The Payne used to generate
-        fast predictions. If not provided, these will be extracted from the
-        `minesweeper` home path.
+    nnfile : str, optional
+        The neural network file used to generate fast predictions.
+        If not provided, this will default to `nnMIST_BC.h5` and is extracted
+        from `data/DATAFILES/`.
 
     mistfile : str, optional
         The name of the HDF5 file containing the MIST tracks. Default is
-        `MIST_1.2_EEPtrk.h5` and is extracted from the `minesweeper`
-        home path.
+        `MIST_1.2_EEPtrk.h5` and is extracted from the `data/DATAFILES/`.
 
     labels : iterable of shape `(3)`, optional
         The names of the parameters over which to interpolate. This defaults to
@@ -390,7 +386,7 @@ class SEDmaker(MISTtracks):
 
     """
 
-    def __init__(self, filters=None, nnpath=None, mistfile=None,
+    def __init__(self, filters=None, nnfile=None, mistfile=None,
                  labels=["mini", "eep", "feh"],
                  predictions=["loga", "logl", "logt", "logg", "feh_surf"],
                  ageweight=True, corrfile=None, verbose=True):
@@ -408,9 +404,9 @@ class SEDmaker(MISTtracks):
                                        ageweight=ageweight, corrfile=corrfile,
                                        verbose=verbose)
 
-        # Initialize The Payne.
-        self.payne = FastPaynePredictor(filters=filters, nnpath=nnpath,
-                                        verbose=verbose)
+        # Initialize NNs.
+        self.FNNP = FastNNPredictor(filters=filters, nnfile=nnfile,
+                                    verbose=verbose)
 
     def get_sed(self, mini=1., eep=350., feh=0., av=0., rv=3.3, smf=0.,
                 dist=1000., loga_max=10.14, tol=1e-3, mini_bound=0.5,
@@ -501,7 +497,7 @@ class SEDmaker(MISTtracks):
         # Generate predictions.
         params_arr = self.get_predictions(labels, apply_corr=apply_corr)
         params = dict(zip(self.predictions, params_arr))  # convert to dict
-        sed = np.full(self.payne.NFILT, np.nan)  # SED
+        sed = np.full(self.FNNP.NFILT, np.nan)  # SED
 
         # Binary predictions.
         params_arr2 = np.full_like(params_arr, np.nan)
@@ -513,10 +509,10 @@ class SEDmaker(MISTtracks):
         loga = params['loga']
         if loga <= loga_max:
             # Compute SED.
-            sed = self.payne.sed(logl=params["logl"], logt=params["logt"],
-                                 logg=params["logg"],
-                                 feh_surf=params["feh_surf"],
-                                 alphafe=0., av=av, rv=rv, dist=dist)
+            sed = self.FNNP.sed(logl=params["logl"], logt=params["logt"],
+                                logg=params["logg"],
+                                feh_surf=params["feh_surf"],
+                                alphafe=0., av=av, rv=rv, dist=dist)
             # Add in unresolved binary component if we're on the Main Sequence.
             if smf > 0. and eep <= 454. and mini * smf >= mini_min:
                 # Generate predictions for secondary binary component.
@@ -530,16 +526,16 @@ class SEDmaker(MISTtracks):
                                                    apply_corr=apply_corr)
                 params2 = dict(zip(self.predictions, params_arr2))
                 # Compute SED.
-                sed2 = self.payne.sed(logl=params2["logl"],
-                                      logt=params2["logt"],
-                                      logg=params2["logg"],
-                                      feh_surf=params2["feh_surf"],
-                                      alphafe=0., av=av, rv=rv, dist=dist)
+                sed2 = self.FNNP.sed(logl=params2["logl"],
+                                     logt=params2["logt"],
+                                     logg=params2["logg"],
+                                     feh_surf=params2["feh_surf"],
+                                     alphafe=0., av=av, rv=rv, dist=dist)
                 # Combine primary and secondary components.
                 sed = add_mag(sed, sed2)
             elif smf > 0.:
                 # Overwrite original prediction with "empty" SED.
-                sed = np.full(self.payne.NFILT, np.nan)
+                sed = np.full(self.FNNP.NFILT, np.nan)
 
         # If we are not returning a dictionary, overwrite `params`.
         if not return_dict:
@@ -744,7 +740,7 @@ class SEDmaker(MISTtracks):
             if np.any(np.isnan(sed)) or np.any(np.isnan(params)):
                 # Flag results and fill with `nan`s.
                 self.grid_sel[i] = False
-                self.grid_sed[i] = tuple(np.full((self.payne.NFILT, 1),
+                self.grid_sed[i] = tuple(np.full((self.FNNP.NFILT, 1),
                                                  np.nan))
             else:
                 # Compute fits for reddening.
@@ -790,80 +786,62 @@ class SEDmaker(MISTtracks):
 
 class FastNN(object):
     """
-    Object that wraps the underlying neural networks used to train "The Payne".
+    Object that wraps the underlying neural networks used to interpolate
+    between grid points on the bolometric correction tables.
 
     Parameters
     ----------
-    nnlist : list of strings
-        List of filenames where the neural networks are stored.
+    filters : list of strings, optional
+        The names of filters that photometry should be computed for.
+        If not provided, all available filters will be used.
+
+    nnfile : str, optional
+        The neutral network file. Default is `nnMIST_BC.h5` stored under
+        `data/DATAFILES/`.
 
     verbose : bool, optional
         Whether to print progress. Default is `True`.
 
     """
 
-    def __init__(self, nnlist, verbose=True):
+    def __init__(self, filters=None, nnfile=None, verbose=True):
 
         # Initialize values.
+        if filters is None:
+            filters = np.array(FILTERS)
+        if nnfile is None:
+            nnfile = 'data/DATAFILES/nnMIST_BC.h5'
+
+        # Read in NN data.
         if verbose:
             sys.stderr.write('Initializing FastNN predictor...')
-        self._convert_torch(nnlist)
-        self.set_minmax(nnlist)
+        self._load_NN(filters, nnfile)
         if verbose:
             sys.stderr.write('done!\n')
 
-    def _convert_torch(self, nnlist):
+    def _load_NN(self, filters, nnfile):
         """
-        Convert `torch.Variable` to `~numpy.ndarray` of approriate shape.
-
-        Parameters
-        ----------
-        nnlist : list of strings
-            List of filenames where the neural networks are stored.
+        Load in weight and bias from each neural network layer.
 
         """
 
-        # Store weights and bias.
-        self.w1 = np.array([nn.model.lin1.weight.data.numpy()
-                            for nn in nnlist])
-        self.b1 = np.expand_dims(np.array([nn.model.lin1.bias.data.numpy()
-                                           for nn in nnlist]), -1)
-        self.w2 = np.array([nn.model.lin2.weight.data.numpy()
-                            for nn in nnlist])
-        self.b2 = np.expand_dims(np.array([nn.model.lin2.bias.data.numpy()
-                                           for nn in nnlist]), -1)
-        self.w3 = np.array([nn.model.lin3.weight.data.numpy()
-                            for nn in nnlist])
-        self.b3 = np.expand_dims(np.array([nn.model.lin3.bias.data.numpy()
-                                           for nn in nnlist]), -1)
-
-    def set_minmax(self, nnlist):
-        """
-        Set the values necessary for scaling/encoding the feature vector and
-        make sure they are the same for every pixel/band.
-
-        Parameters
-        ----------
-        nnlist : list of strings
-            List of filenames where the neural networks are stored.
-
-        """
-
-        # Check if `nnlist` is non-empty.
-        try:
-            nn = nnlist[0]
-            self.xmin = nn.model.xmin
-            self.xmax = nn.model.xmax
-        except:
-            raise ValueError("Could not find an appropriate `xmin, xmax` for "
-                             "scaling `x` variable")
-
-        # Check that all NNs have the same `xspan`.
-        self.xspan = (self.xmax - self.xmin)
-        assert np.all(self.xspan > 0)
-        for nn in nnlist:
-            assert np.all(nn.model.xmin == self.xmin)
-            assert np.all(nn.model.xmax == self.xmax)
+        with h5py.File(nnfile) as f:
+            # Store weights and bias.
+            self.w1 = np.array([f[fltr]['w1'] for fltr in filters])
+            self.b1 = np.array([f[fltr]['b1'] for fltr in filters])
+            self.w2 = np.array([f[fltr]['w2'] for fltr in filters])
+            self.b2 = np.array([f[fltr]['b2'] for fltr in filters])
+            self.w3 = np.array([f[fltr]['w3'] for fltr in filters])
+            self.b3 = np.array([f[fltr]['b3'] for fltr in filters])
+            xmin = np.array([f[fltr]['xmin'] for fltr in filters])
+            xmax = np.array([f[fltr]['xmax'] for fltr in filters])
+            if len(np.unique(xmin)) == 6 and len(np.unique(xmax)) == 6:
+                self.xmin = xmin[0]
+                self.xmax = xmax[0]
+                self.xspan = (self.xmax - self.xmin)
+            else:
+                raise ValueError("Some of the neural networks have different "
+                                 "`xmin` and `xmax` ranges for parameters.")
 
     def encode(self, x):
         """
@@ -924,36 +902,42 @@ class FastNN(object):
         return np.squeeze(y)
 
 
-class FastPaynePredictor(FastNN):
+class FastNNPredictor(FastNN):
     """
     Object that generates SED predictions for a provided set of filters
-    using the `minesweeper` neural networks used to train "The Payne".
+    using neural networks trained on bolometric correction tables.
 
     Parameters
     ----------
-    filters : list of strings
+    filters : list of strings, optional
         The names of filters that photometry should be computed for.
+        If not provided, all available filters will be used.
 
-    nnpath : str, optional
-        The path to the neural network directory.
+    nnfile : str, optional
+        The neutral network file. Default is `nnMIST_BC.h5` stored under
+        `data/DATAFILES/`.
 
     verbose : bool, optional
         Whether to print progress. Default is `True`.
 
     """
 
-    def __init__(self, filters, nnpath=None, verbose=True):
+    def __init__(self, filters=None, nnfile=None, verbose=True):
 
         # Initialize values.
+        if filters is None:
+            filters = np.array(FILTERS)
         self.filters = filters
         self.NFILT = len(filters)
-        nnlist = [ANN(f, nnpath=nnpath, verbose=False) for f in filters]
-        super(FastPaynePredictor, self).__init__(nnlist, verbose=verbose)
+        if nnfile is None:
+            nnfile = 'data/DATAFILES/nnMIST_BC.h5'
+        super(FastNNPredictor, self).__init__(filters=filters, nnfile=nnfile,
+                                              verbose=verbose)
 
     def sed(self, logt=3.8, logg=4.4, feh_surf=0., logl=0., alphafe=0.,
             av=0., rv=3.3, dist=1000., filt_idxs=slice(None)):
         """
-        Returns the SED predicted by "The Payne" for the input set of
+        Returns the SED predicted by neural networks for the input set of
         physical parameters for a specified subset of bands. Predictions
         are in apparent magnitudes at the specified distance. See
         `filters` for the order of the bands.
@@ -1019,3 +1003,348 @@ class FastPaynePredictor(FastNN):
             m = np.full(self.NFILT, np.nan)
 
         return np.atleast_1d(m)[filt_idxs]
+
+
+class Isochrone(object):
+    """
+    An object that generates photometry interpolated from MIST isochrones in
+    EEP, metallicity, and log(age) using artificial neural networks.
+
+    Parameters
+    ----------
+    filters : list of strings, optional
+        The names of filters that photometry should be computed for. If not
+        provided, photometry will be computed for all available filters.
+
+    nnfile : str, optional
+        The neural network file used to generate fast predictions.
+        If not provided, this will default to `nnMIST_BC.h5` and is extracted
+        from `data/DATAFILES/`.
+
+    mistfile : str, optional
+        The name of the HDF5 file containing the MIST tracks. Default is
+        `MIST_1.2_iso.h5` and is extracted from the `data/DATAFILES/`.
+
+    predictions : iterable of shape `(4)`, optional
+        The names of the parameters to output at the request location in
+        the `labels` parameter space. Default is
+        `["mini", "mass", "logl", "logt", "logr", "logg", "feh_surf"]`.
+        **Do not modify this unless you know what you're doing.**
+
+    corrfile : str, optional
+        The name of the text file containing corrections for the MIST models.
+        Default is `None`. If not provided, a warning will be raised.
+
+    verbose : bool, optional
+        Whether to output progress to `~sys.stderr`. Default is `True`.
+
+    """
+
+    def __init__(self, filters=None, nnfile=None, mistfile=None,
+                 predictions=None, corrfile=None, verbose=True):
+
+        # Initialize values.
+        if filters is None:
+            filters = np.array(FILTERS)
+        self.filters = filters
+        if nnfile is None:
+            nnfile = 'data/DATAFILES/nnMIST_BC.h5'
+        if mistfile is None:
+            mistfile = 'data/DATAFILES/MIST_1.2_iso.h5'
+        if predictions is None:
+            predictions = ["mini", "mass", "logl", "logt",
+                           "logr", "logg", "feh_surf"]
+        self.predictions = predictions
+
+        # Import correction file.
+        self.corrfile = corrfile
+        if corrfile is None:
+            warnings.warn("No correction file has been provided. Predictions "
+                          "at lower masses may suffer.")
+        else:
+            self.build_interpolator_corr()
+
+        # Load file.
+        with h5py.File(mistfile) as f:
+            self.feh_grid = f['feh'][:]
+            self.loga_grid = f['loga'][:]
+            self.eep_grid = f['eep'][:]
+            self.pred_grid = f['predictions'][:]
+            self.pred_labels = f['predictions'].attrs['labels']
+
+        # Initialize interpolator.
+        self.build_interpolator()
+
+        # Initialize NNs.
+        self.FNNP = FastNNPredictor(filters=filters, nnfile=nnfile,
+                                    verbose=verbose)
+
+    def build_interpolator(self):
+        """
+        Construct the `~scipy.interpolate.RegularGridInterpolator` object
+        used to generate isochrones. The re-structured grid is stored under
+        `grid_dims`, `xgrid`, and `ygrid`, while the interpolator object
+        is stored under `interpolator`.
+
+        """
+
+        # Set up grid.
+        self.feh_u = np.unique(self.feh_grid)
+        self.loga_u = np.unique(self.loga_grid)
+        self.eep_u = np.unique(self.eep_grid)
+        self.xgrid = (self.feh_u, self.loga_u, self.eep_u)
+        self.grid_dims = (len(self.xgrid[0]), len(self.xgrid[1]),
+                          len(self.xgrid[2]), len(self.pred_labels))
+
+        # Initialize interpolator
+        self.interpolator = RegularGridInterpolator(self.xgrid,
+                                                    self.pred_grid,
+                                                    method='linear',
+                                                    bounds_error=False,
+                                                    fill_value=np.nan)
+
+        # Set label references.
+        self.logt_idx = np.where(np.array(self.predictions) == 'logt')[0][0]
+        self.logl_idx = np.where(np.array(self.predictions) == 'logl')[0][0]
+        self.logg_idx = np.where(np.array(self.predictions) == 'logg')[0][0]
+        self.feh_surf_idx = np.where(np.array(self.predictions) ==
+                                     'feh_surf')[0][0]
+        self.mini_idx = np.where(np.array(self.predictions) == 'mini')[0][0]
+
+    def build_interpolator_corr(self):
+        """
+        Construct the `~scipy.interpolate.RegularGridInterpolator` object
+        used to generate internal corrections to model predictions.
+        The re-structured grid is stored under `grid_dims_corr`, `xgrid_corr`,
+        and `ygrid_corr`, while the interpolator object is stored under
+        `interpolator_corr`.
+
+        """
+
+        # Load data.
+        mini, eep, feh, dlogt, dlogr = np.loadtxt(self.corrfile).T
+
+        # Set up grid.
+        self.xgrid_corr = (np.unique(mini), np.unique(eep), np.unique(feh))
+        self.output_corr = np.c_[dlogt, dlogr]
+        self.grid_dims_corr = (len(self.xgrid_corr[0]),
+                               len(self.xgrid_corr[1]),
+                               len(self.xgrid_corr[2]),
+                               2)
+        self.X_corr = np.array([np.digitize(mini, np.unique(mini), right=True),
+                                np.digitize(eep, np.unique(eep), right=True),
+                                np.digitize(feh, np.unique(feh), right=True)])
+        self.X_corr = self.X_corr.T
+        self.ygrid_corr = np.zeros(self.grid_dims_corr) + np.nan
+        for x, y in zip(self.X_corr, self.output_corr):
+            self.ygrid_corr[tuple(x)] = y
+
+        # Initialize interpolator
+        self.interpolator_corr = RegularGridInterpolator(self.xgrid_corr,
+                                                         self.ygrid_corr,
+                                                         method='linear',
+                                                         bounds_error=False,
+                                                         fill_value=0.)
+
+    def get_predictions(self, feh=0., loga=8.5, eep=None, apply_corr=True):
+        """
+        Returns physical predictions for a given metallicity, log(age), and
+        EEP (either a single value or a grid).
+
+        Parameters
+        ----------
+        feh : float, optional
+            Metallicity defined logarithmically in terms of solar metallicity.
+            Default is `0.`.
+
+        loga : float, optional
+            Log(age) where age is in years. Default is `8.5`.
+
+        eep : `~numpy.ndarray` of shape `(Neep)`, optional
+            Equivalent evolutionary point(s) (EEPs). See the MIST documentation
+            for additional details on how these are defined. If not provided,
+            the default EEP grid defined on initialization will be used.
+
+        apply_corr : bool, optional
+            Whether to try and apply empirical corrections based on the input
+            `corrfile`. Default is `True`.
+
+        Returns
+        -------
+        preds : 2-D `~numpy.ndarray` of shape `(Npred, Nobj)`
+            The set of predictions corresponding to the input
+            `eep` values.
+
+        """
+
+        # Fill out input labels.
+        if eep is None:
+            eep = self.eep_u
+        feh = np.full_like(eep, feh)
+        loga = np.full_like(eep, loga)
+        labels = np.c_[feh, loga, eep]
+
+        # Generate predictions.
+        preds = self.interpolator(labels)
+        mini = preds[:, self.mini_idx]
+
+        # Apply corrections.
+        if apply_corr and self.corrfile is not None:
+            corrs = self.get_corrections(mini=mini, feh=feh, eep=eep)
+            dlogt, dlogr = corrs.T
+            preds[:, self.logt_idx] += dlogt
+            preds[:, self.logl_idx] += 2. * dlogr
+
+        return preds
+
+    def get_corrections(self, mini=1., feh=0., eep=350.):
+        """
+        Returns interpolated corrections in some predictions for the input
+        set of labels.
+
+        Parameters
+        ----------
+        mini : float or `~numpy.ndarray`, optional
+            Initial mass in units of solar masses. Default is `1.`.
+
+        feh : float or `~numpy.ndarray`, optional
+            Metallicity defined logarithmically in terms of solar metallicity.
+            Default is `0.`.
+
+        eep : float or `~numpy.ndarray`, optional
+            Equivalent evolutionary point(s) (EEPs). See the MIST documentation
+            for additional details on how these are defined. Default is `350.`.
+
+        Returns
+        -------
+        corrs : 1-D or 2-D `~numpy.ndarray` of shape `(Ncorr, Nobj)`
+            The set of corrections (1-D or 2-D) corresponding to the input
+            `labels`.
+
+        """
+
+        labels = np.c_[mini, eep, feh]
+        if labels.shape[0] == 1:
+            corrs = self.interpolator_corr(labels[0])[0]
+        else:
+            corrs = self.interpolator_corr(labels)
+
+        return corrs
+
+    def get_seds(self, feh=0., loga=8.5, eep=None, av=0., rv=3.3, smf=0.,
+                 dist=1000., mini_bound=0.5, apply_corr=True,
+                 return_dict=True, **kwargs):
+        """
+        Generate and return the Spectral Energy Distribution (SED)
+        and associated parameters for a given set of inputs.
+
+        Parameters
+        ----------
+        feh : float, optional
+            Metallicity defined logarithmically in terms of solar metallicity.
+            Default is `0.`.
+
+        loga : float, optional
+            Log(age) where age is in years. Default is `8.5`.
+
+        eep : `~numpy.ndarray` of shape `(Neep)`, optional
+            Equivalent evolutionary point(s) (EEPs). See the MIST documentation
+            for additional details on how these are defined. If not provided,
+            the default EEP grid defined on initialization will be used.
+
+        av : float, optional
+            Dust attenuation defined in terms of reddened V-band magnitudes.
+            Default is `0.`.
+
+        rv : float, optional
+            Change in the reddening vector in terms of R(V)=A(V)/E(B-V).
+            Default is `3.3`.
+
+        smf : float, optional
+            Secondary mass fraction for unresolved binary. Default is `0.`
+            (single stellar system). Note that binaries are not permitted
+            off the main sequence (`eep > 454`).
+
+        dist : float, optional
+            Distance in parsecs. Default is `1000.` (i.e. 1 kpc).
+
+        mini_bound : float, optional
+            A hard bound on the initial mass. Any models below this threshold
+            will be masked (including those from binary components).
+            Default is `0.5`.
+
+        apply_corr : bool, optional
+            Whether to try and apply empirical corrections based on the input
+            `corrfile`. Default is `True`.
+
+        return_dict : bool, optional
+            Whether to return the parameters as a dictionary.
+            Default is `True`.
+
+        Returns
+        -------
+        sed : `~numpy.ndarray` of shape `(Nfilters,)`
+            The predicted SED in magnitudes in the initialized filters.
+
+        params : dict or array of length `(Npred,)`
+            The corresponding predicted parameters associated with the given
+            SED of the primary component.
+
+        params2 : dict or array of length `(Npred,)`
+            The corresponding predicted parameters associated with the given
+            SED of the secondary component.
+
+        """
+
+        # Initialize EEPs.
+        if eep is None:
+            eep = self.eep_u
+        Neep = len(eep)
+
+        # Generate predictions.
+        params_arr = self.get_predictions(feh=feh, loga=loga, eep=eep,
+                                          apply_corr=apply_corr)
+        params = dict(zip(self.predictions, params_arr.T))  # convert to dict
+
+        # Generate isochrone SEDs.
+        seds = np.full((Neep, self.FNNP.NFILT), np.nan)
+        for i in range(Neep):
+            if params["mini"][i] >= mini_bound:
+                seds[i] = self.FNNP.sed(logl=params["logl"][i],
+                                        logt=params["logt"][i],
+                                        logg=params["logg"][i],
+                                        feh_surf=params["feh_surf"][i],
+                                        alphafe=0., av=av, rv=rv, dist=dist)
+
+        # Add in binaries (if appropriate).
+        params_arr2 = np.full_like(params_arr, np.nan)
+        params2 = dict(zip(self.predictions, params_arr2.T))
+        if 0. < smf < 1.:
+            mini = params["mini"]
+            mini2 = mini * smf
+            eep2 = np.interp(mini2, mini, eep, left=np.nan, right=np.nan)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                eep2[(eep2 > 454) | (eep > 454)] = np.nan
+            params_arr2 = self.get_predictions(feh=feh, loga=loga, eep=eep2,
+                                               apply_corr=apply_corr)
+            params2 = dict(zip(self.predictions, params_arr2.T))
+            seds2 = np.full((Neep, self.FNNP.NFILT), np.nan)
+            for i in range(Neep):
+                if params2["mini"][i] >= mini_bound:
+                    seds2[i] = self.FNNP.sed(logl=params2["logl"][i],
+                                             logt=params2["logt"][i],
+                                             logg=params2["logg"][i],
+                                             feh_surf=params2["feh_surf"][i],
+                                             alphafe=0., av=av, rv=rv,
+                                             dist=dist)
+            seds = add_mag(seds, seds2)
+        elif smf == 1.:
+            seds[eep <= 454] -= 2.5 * np.log10(2.)
+            params2, params_arr2 = deepcopy(params), deepcopy(params_arr2)
+
+        # If we are not returning a dictionary, overwrite `params`.
+        if not return_dict:
+            params, params2 = params_arr, params_arr2
+
+        return seds, params, params2

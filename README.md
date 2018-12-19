@@ -1,49 +1,50 @@
 # brutus
 #### _**Et tu, Brute?**_
 
-`brutus` is a Pure Python package that uses "brute force" Bayesian inference
-to derive distances, reddenings, and stellar properties from photometry using
-a grid of stellar models.
+`brutus` is a Pure Python package whose core modules involve using
+"brute force" Bayesian inference to derive distances, reddenings, and 
+stellar properties from photometry using a grid of stellar models.
+
+The package is designed to be highly modular, with current modules including
+utilities for modeling individual stars, co-eval stellar associations, and
+stellar-based 3-D dust mapping.
 
 ### Documentation
-**Currently nonexistent.** Please see the demos for usage examples.
+**Currently nonexistent.**
 
 ### Data
-While `brutus` can be run over an arbitrary set of stellar models,
-it is configured for two by default: [MIST](http://waps.cfa.harvard.edu/MIST/)
+
+Various files needed to run different `brutus` modules can be downloaded
+[here](https://www.dropbox.com/sh/ozq9tk8iyy8fhte/AAC_G0wA9eQ8shHbZzAKwLe-a?dl=0).
+Various components of these are described below.
+
+#### Stellar Models
+Note that while `brutus` can (in theory) be run over an arbitrary set of
+stellar models, it is configured for two by default: 
+[MIST](http://waps.cfa.harvard.edu/MIST/)
 and [Bayestar](https://arxiv.org/pdf/1401.1508.pdf).
 
-The current MIST grid (v7) can be found
-[here](https://www.dropbox.com/s/g27bn8fmeiaqdxn/grid_mist_v7.h5?dl=0).
-The current Bayestar grid (v2) can be found
-[here](https://www.dropbox.com/s/mxi8qvlupnxbni7/grid_bayestar_v2.h5?dl=0).
+#### Zero-points
+Zero-point offsets in several bands have been derived using Gaia data
+and can be included during runtime.
 
-By default, `brutus` also utilizes a 3-D dust prior based on the "Bayestar17"
-dust map from [Green et al. (2018)](https://arxiv.org/abs/1801.03555). The
-relevant data file can be found
-[here](https://www.dropbox.com/s/kkdcnvvuf2t3jt0/bayestar2017_v1.h5?dl=0).
+#### Dust Map
+`brutus` is able to incorporate a 3-D dust prior. The current prior is
+based on the "Bayestar17" dust map from
+[Green et al. (2018)](https://arxiv.org/abs/1801.03555).
 
-Zero-point offsets in several provided bands that were derived using Gaia
-can be downloaded
-[here](https://www.dropbox.com/s/ck43do4chssbyd0/offsets_bs_v2.txt?dl=0)
-for Bayestar and
-[here](https://www.dropbox.com/s/j40pqz1g0x0d5kp/offsets_mist_v7.txt?dl=0)
-for MIST.
-Make sure you you use the zero-points derived for the grid with
-the same version number.
-
-### Generating SEDs
-`brutus` contains built-in SED generation utilities that run over the MIST
-stellar models and utilize the SED prediction engine taken from 
+#### Generating SEDs
+`brutus` contains built-in SED generation utilities based on the MIST
+stellar models, modeled off of
 [`minesweeper`](https://github.com/pacargile/MINESweeper).
-**`brutus` can be installed and run without setting up this capability** using
-the pre-computed grids defined above. This functionality is provided so that
-users can generate their own grid of MIST models if desired. Please contact
-Phil Cargile (pcargile@cfa.harvard.edu) and Josh Speagle
-(jspeagle@cfa.harvard.edu) for the relevant data files.
+These are optimized for either generating photometry from stellar mass
+tracks or for a single-age stellar isochrone, and are based on
+artificial neural networks trained on bolometric correction tables.
+An empirical correction table to the models derived using several clusters is
+also provided, which improves the models down to ~0.5 solar masses.
 
-An empirical correction table that supplements the data files can be found
-[here](https://www.dropbox.com/s/ufga5zadf1i7d27/corr_mist_v1.txt?dl=0).
+Please contact Phil Cargile (pcargile@cfa.harvard.edu) and Josh Speagle
+(jspeagle@cfa.harvard.edu) for more information on the provided data files.
 
 ### Installation
 `brutus` can be installed by running
@@ -54,5 +55,4 @@ from inside the repository.
 
 ### Demos
 Several Jupyter notebooks currently outline very basic usage of the code.
-Please contact Josh Speagle (jspeagle@cfa.harvard.edu)
-if you have any questions.
+Please contact Josh Speagle (jspeagle@cfa.harvard.edu) with any questions.

@@ -775,7 +775,7 @@ def dist_vs_red(data, ebv=None, dist_type='distance_modulus',
 def posterior_predictive(models, idxs, reds, dreds, dists, weights=None,
                          flux=False, data=None, data_err=None, data_mask=None,
                          offset=None, vcolor='blue', pcolor='red', labels=None,
-                         rstate=None, fig=None):
+                         rstate=None, psig=3., fig=None):
     """
     Plot the posterior predictive SED.
 
@@ -840,13 +840,17 @@ def posterior_predictive(models, idxs, reds, dreds, dists, weights=None,
         Whether to label the top (rather than bottom) ticks. Default is
         `False`.
 
+    rstate : `~numpy.random.RandomState`, optional
+        `~numpy.random.RandomState` instance.
+
+    psig : float, optional
+        The number of sigma to plot when showcasing the error bars
+        from any provided `data_err`. Default is `3.`.
+
     fig : (`~matplotlib.figure.Figure`, `~matplotlib.axes.Axes`), optional
         If provided, overplot the traces and marginalized 1-D posteriors
         onto the provided figure. Otherwise, by default an
         internal figure is generated.
-
-    rstate : `~numpy.random.RandomState`, optional
-        `~numpy.random.RandomState` instance.
 
     Returns
     -------
@@ -909,7 +913,7 @@ def posterior_predictive(models, idxs, reds, dreds, dists, weights=None,
         else:
             m, e = magnitude(data[data_mask] * offset[data_mask],
                              data_err[data_mask] * offset[data_mask])
-        ax.errorbar(np.arange(nfilt)[data_mask], m, yerr=3.*e,
+        ax.errorbar(np.arange(nfilt)[data_mask], m, yerr=psig*e,
                     marker='o', color=pcolor, linestyle='none',
                     ms=7, lw=3)
     # Label axes.

@@ -615,7 +615,7 @@ class BruteForce():
             lndistprior=None, lndustprior=None, dustfile='bayestar2017_v1.h5',
             apply_dlabels=True, data_coords=None, logl_dim_prior=True,
             ltol=0.03, ltol_subthresh=0.005, logl_initthresh=1e-3,
-            rstate=None, save_dar_draws=True, verbose=True):
+            rstate=None, save_dar_draws=True, running_io=True, verbose=True):
         """
         Fit all input models to the input data to compute the associated
         log-posteriors.
@@ -755,6 +755,15 @@ class BruteForce():
             Whether to save distance (kpc), reddening (Av), and
             dust curve shape (Rv) draws. Default is `True`.
 
+        running_io : bool, optional
+            Whether to write out the result from each fit in real time. If
+            `True`, then the results from each object will be saved as soon as
+            they are complete to prevent losing a batch of objects if something
+            goes wrong. If `False`, the results will be stored internally
+            until the end of the run, when they will all be written together.
+            This may be better if working on a filesystem with slow I/O
+            operations. Default is `True`.
+
         verbose : bool, optional
             Whether to print progress to `~sys.stderr`. Default is `True`.
 
@@ -888,6 +897,19 @@ class BruteForce():
                                                     dtype='float32'))
             out.create_dataset("dreds", data=np.ones((Ndata, Ndraws),
                                                      dtype='float32'))
+        if not running_io:
+            idxs_arr = np.full((Ndata, Ndraws), -99, dtype='int32')
+            scale_arr = np.ones((Ndata, Ndraws), dtype='float32')
+            av_arr = np.ones((Ndata, Ndraws), dtype='float32')
+            rv_arr = np.ones((Ndata, Ndraws), dtype='float32')
+            cov_arr = np.ones((Ndata, Ndraws, 3, 3), dtype='float32')
+            logevid_arr = np.ones(Ndata, dtype='float32')
+            chi2best_arr = np.ones(Ndata, dtype='float32')
+            nbands_arr = np.ones(Ndata, dtype='int16')
+            if save_dar_draws:
+                dist_arr = np.ones((Ndata, Ndraws), dtype='float32')
+                red_arr = np.ones((Ndata, Ndraws), dtype='float32')
+                dred_arr = np.ones((Ndata, Ndraws), dtype='float32')
 
         # Fit data.
         if verbose:
@@ -933,25 +955,41 @@ class BruteForce():
                                  .format(i+2, Ndata, t_avg, t_est))
                 sys.stderr.flush()
 
-            # Save results.
+            # Grab results.
             if save_dar_draws:
                 (idxs, scales, avs, rvs, covs_sar, Ndim,
                  levid, chi2min, dists, reds, dreds) = results
             else:
                 (idxs, scales, avs, rvs, covs_sar,
                  Ndim, levid, chi2min) = results
-            out['idxs'][i] = idxs
-            out['scales'][i] = scales
-            out['avs'][i] = avs
-            out['rvs'][i] = rvs
-            out['cov_sar'][i] = covs_sar
-            out['Nbands'][i] = Ndim
-            out['log_evidence'][i] = levid
-            out['best_chi2'][i] = chi2min
-            if save_dar_draws:
-                out['dists'][i] = dists
-                out['reds'][i] = reds
-                out['dreds'][i] = dreds
+
+            # Save results.
+            if running_io:
+                out['idxs'][i] = idxs
+                out['scales'][i] = scales
+                out['avs'][i] = avs
+                out['rvs'][i] = rvs
+                out['cov_sar'][i] = covs_sar
+                out['Nbands'][i] = Ndim
+                out['log_evidence'][i] = levid
+                out['best_chi2'][i] = chi2min
+                if save_dar_draws:
+                    out['dists'][i] = dists
+                    out['reds'][i] = reds
+                    out['dreds'][i] = dreds
+            else:
+                idxs_arr[i] = idxs
+                scale_arr[i] = scales
+                av_arr[i] = avs
+                rv_arr[i] = rvs
+                cov_arr[i] = covs_sar
+                logevid_arr[i] = levid
+                chi2best_arr[i] = chi2min
+                nbands_arr[i] = Ndim
+                if save_dar_draws:
+                    dist_arr[i] = dists
+                    red_arr[i] = reds
+                    dred_arr[i] = dreds
 
         if verbose:
             # Compute time stamps.
@@ -969,7 +1007,23 @@ class BruteForce():
             sys.stderr.write('\n')
             sys.stderr.flush()
 
-        out.close()  # close output results file
+        # Dump results to disk if we have disabled running I/O.
+        if not running_io:
+            out['idxs'] = idxs_arr
+            out['scales'] = scale_arr
+            out['avs'] = av_arr
+            out['rvs'] = rv_arr
+            out['cov_sar'] = cov_arr
+            out['Nbands'] = nbands_arr
+            out['log_evidence'] = logevid_arr
+            out['best_chi2'] = chi2best_arr
+            if save_dar_draws:
+                out['dists'] = dist_arr
+                out['reds'] = red_arr
+                out['dreds'] = dred_arr
+
+        # Close the output file.
+        out.close()
 
     def _fit(self, data, data_err, data_mask,
              parallax=None, parallax_err=None, Nmc_prior=100,
