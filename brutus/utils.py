@@ -27,9 +27,10 @@ except ImportError:
 from .filters import FILTERS
 
 __all__ = ["_function_wrapper", "_adjoint3", "_inverse_transpose3",
-           "_inverse3", "_dot3", "load_models", "quantile", "draw_sar",
-           "magnitude", "inv_magnitude", "luptitude", "inv_luptitude",
-           "add_mag", "get_seds", "phot_loglike", "photometric_offsets"]
+           "_inverse3", "_dot3", "load_models", "load_zeropoints",
+           "quantile", "draw_sar", "magnitude", "inv_magnitude",
+           "luptitude", "inv_luptitude", "add_mag", "get_seds",
+           "phot_loglike", "photometric_offsets"]
 
 
 class _function_wrapper(object):
@@ -114,7 +115,7 @@ def load_models(filepath, filters=None, labels=None,
     Parameters
     ----------
     filepath : string, optional
-        The filepath to where the models are located.
+        The filepath of the models.
 
     filters : iterable of strings with length `Nfilt`, optional
         List of filters that will be loaded. If not provided, will default
@@ -248,6 +249,59 @@ def load_models(filepath, filters=None, labels=None,
     label_mask = label_mask[labels2]
 
     return models[sel], combined_labels[sel], label_mask
+
+
+def load_zeropoints(filepath, filters=None, verbose=True):
+    """
+
+    Parameters
+    ----------
+    filepath : string, optional
+        The filepath of the zeropoints.
+
+    filters : iterable of strings with length `Nfilt`, optional
+        List of filters that will be loaded. If not provided, will default
+        to all available filters. See the internally-defined `FILTERS` variable
+        for more details on filter names. Any filters that are not available
+        will be skipped over.
+
+    verbose : bool, optional
+        Whether to print a summary of the zero-points. Default is `True`.
+
+    Returns
+    -------
+    zeropoints : `~numpy.ndarray` of shape `(Nfilt)`
+        Array of constants that will be *multiplied* to the *data* to account
+        for zero-point magnitude offsets (i.e. multiplicative flux offsets).
+
+    """
+
+    # Initialize values.
+    if filters is None:
+        filters = FILTERS
+    Nfilters = len(filters)
+
+    # Read in zeropoints.
+    filts, offsets = np.loadtxt(filepath, dtype='str').T
+    offsets = offsets.astype(float)
+
+    # Fill in zeropoints where appropriate.
+    zeropoints = np.full(Nfilters, np.nan)
+    for i, filt in enumerate(filters):
+        filt_idx = np.where(filts == filt)[0]  # get filter location
+        if len(filt_idx) == 1:
+            zeropoints[i] = offsets[filt_idx[0]]  # insert offset
+        elif len(filt_idx) == 0:
+            zeropoints[i] = 1.  # assume no offset if not calibrated
+        else:
+            raise ValueError("Something went wrong when extracting "
+                             "zero-points for filter {}.".format(filt))
+
+    if verbose:
+        for filt, zp in zip(filters, zeropoints):
+            sys.stderr.write('{0} ({1:2.2}%)\n'.format(filt, 100 * (zp - 1.)))
+
+    return zeropoints
 
 
 def quantile(x, q, weights=None):

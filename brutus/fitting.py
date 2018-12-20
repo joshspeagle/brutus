@@ -876,28 +876,30 @@ class BruteForce():
         # Initialize results file.
         out = h5py.File("{0}.h5".format(save_file), "w-")
         out.create_dataset("labels", data=data_labels)
-        out.create_dataset("idxs", data=np.full((Ndata, Ndraws), -99,
-                                                dtype='int32'))
-        out.create_dataset("scales", data=np.ones((Ndata, Ndraws),
-                                                  dtype='float32'))
-        out.create_dataset("avs", data=np.ones((Ndata, Ndraws),
-                                               dtype='float32'))
-        out.create_dataset("rvs", data=np.ones((Ndata, Ndraws),
-                                               dtype='float32'))
-        out.create_dataset("cov_sar", data=np.zeros((Ndata, Ndraws, 3, 3),
-                                                    dtype='float32'))
-        out.create_dataset("log_evidence", data=np.zeros(Ndata,
+        if running_io:
+            out.create_dataset("idxs", data=np.full((Ndata, Ndraws), -99,
+                                                    dtype='int32'))
+            out.create_dataset("scales", data=np.ones((Ndata, Ndraws),
+                                                      dtype='float32'))
+            out.create_dataset("avs", data=np.ones((Ndata, Ndraws),
+                                                   dtype='float32'))
+            out.create_dataset("rvs", data=np.ones((Ndata, Ndraws),
+                                                   dtype='float32'))
+            out.create_dataset("cov_sar", data=np.zeros((Ndata, Ndraws, 3, 3),
+                                                        dtype='float32'))
+            out.create_dataset("log_evidence", data=np.zeros(Ndata,
+                                                             dtype='float32'))
+            out.create_dataset("best_chi2", data=np.zeros(Ndata,
+                                                          dtype='float32'))
+            out.create_dataset("Nbands", data=np.zeros(Ndata, dtype='int16'))
+            if save_dar_draws:
+                out.create_dataset("dists", data=np.ones((Ndata, Ndraws),
                                                          dtype='float32'))
-        out.create_dataset("best_chi2", data=np.zeros(Ndata, dtype='float32'))
-        out.create_dataset("Nbands", data=np.zeros(Ndata, dtype='int16'))
-        if save_dar_draws:
-            out.create_dataset("dists", data=np.ones((Ndata, Ndraws),
-                                                     dtype='float32'))
-            out.create_dataset("reds", data=np.ones((Ndata, Ndraws),
-                                                    dtype='float32'))
-            out.create_dataset("dreds", data=np.ones((Ndata, Ndraws),
-                                                     dtype='float32'))
-        if not running_io:
+                out.create_dataset("reds", data=np.ones((Ndata, Ndraws),
+                                                        dtype='float32'))
+                out.create_dataset("dreds", data=np.ones((Ndata, Ndraws),
+                                                         dtype='float32'))
+        else:
             idxs_arr = np.full((Ndata, Ndraws), -99, dtype='int32')
             scale_arr = np.ones((Ndata, Ndraws), dtype='float32')
             av_arr = np.ones((Ndata, Ndraws), dtype='float32')
@@ -1009,18 +1011,18 @@ class BruteForce():
 
         # Dump results to disk if we have disabled running I/O.
         if not running_io:
-            out['idxs'] = idxs_arr
-            out['scales'] = scale_arr
-            out['avs'] = av_arr
-            out['rvs'] = rv_arr
-            out['cov_sar'] = cov_arr
-            out['Nbands'] = nbands_arr
-            out['log_evidence'] = logevid_arr
-            out['best_chi2'] = chi2best_arr
+            out.create_dataset("idxs", data=idxs_arr)
+            out.create_dataset("scales", data=scale_arr)
+            out.create_dataset("avs", data=av_arr)
+            out.create_dataset("rvs", data=rv_arr)
+            out.create_dataset("cov_sar", data=cov_arr)
+            out.create_dataset("log_evidence", data=logevid_arr)
+            out.create_dataset("best_chi2", data=chi2best_arr)
+            out.create_dataset("Nbands", data=nbands_arr)
             if save_dar_draws:
-                out['dists'] = dist_arr
-                out['reds'] = red_arr
-                out['dreds'] = dred_arr
+                out.create_dataset("dists", data=dist_arr)
+                out.create_dataset("reds", data=red_arr)
+                out.create_dataset("dreds", data=dred_arr)
 
         # Close the output file.
         out.close()

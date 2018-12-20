@@ -1047,6 +1047,8 @@ class Isochrone(object):
         if filters is None:
             filters = np.array(FILTERS)
         self.filters = filters
+        if verbose:
+            sys.stderr.write('Filters: {}\n'.format(filters))
         if nnfile is None:
             nnfile = 'data/DATAFILES/nnMIST_BC.h5'
         if mistfile is None:
@@ -1055,6 +1057,9 @@ class Isochrone(object):
             predictions = ["mini", "mass", "logl", "logt",
                            "logr", "logg", "feh_surf"]
         self.predictions = predictions
+
+        if verbose:
+            sys.stderr.write('Constructing MIST isochrones...')
 
         # Import correction file.
         self.corrfile = corrfile
@@ -1074,6 +1079,9 @@ class Isochrone(object):
 
         # Initialize interpolator.
         self.build_interpolator()
+
+        if verbose:
+            sys.stderr.write('done!\n')
 
         # Initialize NNs.
         self.FNNP = FastNNPredictor(filters=filters, nnfile=nnfile,
@@ -1095,6 +1103,17 @@ class Isochrone(object):
         self.xgrid = (self.feh_u, self.loga_u, self.eep_u)
         self.grid_dims = (len(self.xgrid[0]), len(self.xgrid[1]),
                           len(self.xgrid[2]), len(self.pred_labels))
+
+        # Fill in "holes".
+        for i in range(len(self.feh_u)):
+            for j in range(len(self.loga_u)):
+                # Select values where one or more predictions "failed".
+                sel = np.all(np.isfinite(self.pred_grid[i, j]), axis=1)
+                # Linearly interpolate over built-in EEP grid.
+                pnew = np.array([np.interp(self.eep_u, self.eep_u[sel], par,
+                                           left=np.nan, right=np.nan)
+                                 for par in self.pred_grid[i, j, sel].T]).T
+                self.pred_grid[i, j] = pnew  # assign new predictions
 
         # Initialize interpolator
         self.interpolator = RegularGridInterpolator(self.xgrid,
