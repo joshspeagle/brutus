@@ -267,6 +267,7 @@ class MISTtracks(object):
         # Set label references.
         self.logt_idx = np.where(np.array(self.predictions) == 'logt')[0][0]
         self.logl_idx = np.where(np.array(self.predictions) == 'logl')[0][0]
+        self.logg_idx = np.where(np.array(self.predictions) == 'logg')[0][0]
 
     def get_predictions(self, labels, apply_corr=True):
         """
@@ -308,6 +309,7 @@ class MISTtracks(object):
                 dlogt, dlogr = corrs.T
                 preds[:, self.logt_idx] += dlogt
                 preds[:, self.logl_idx] += 2. * dlogr
+                preds[:, self.logg_idx] -= 2. * dlogr
 
         return preds
 
@@ -1107,7 +1109,7 @@ class Isochrone(object):
         # Fill in "holes".
         for i in range(len(self.feh_u)):
             for j in range(len(self.loga_u)):
-                # Select values where one or more predictions "failed".
+                # Select values where predictions exist.
                 sel = np.all(np.isfinite(self.pred_grid[i, j]), axis=1)
                 # Linearly interpolate over built-in EEP grid.
                 pnew = np.array([np.interp(self.eep_u, self.eep_u[sel], par,
@@ -1199,6 +1201,7 @@ class Isochrone(object):
         # Fill out input labels.
         if eep is None:
             eep = self.eep_u
+        eep = np.array(eep, dtype='float')
         feh = np.full_like(eep, feh)
         loga = np.full_like(eep, loga)
         labels = np.c_[feh, loga, eep]
@@ -1213,6 +1216,7 @@ class Isochrone(object):
             dlogt, dlogr = corrs.T
             preds[:, self.logt_idx] += dlogt
             preds[:, self.logl_idx] += 2. * dlogr
+            preds[:, self.logg_idx] -= 2. * dlogr
 
         return preds
 
@@ -1318,6 +1322,7 @@ class Isochrone(object):
         # Initialize EEPs.
         if eep is None:
             eep = self.eep_u
+        eep = np.array(eep, dtype='float')
         Neep = len(eep)
 
         # Generate predictions.
