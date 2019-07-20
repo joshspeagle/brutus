@@ -7,15 +7,11 @@ Utility functions.
 """
 
 from __future__ import (print_function, division)
-import six
 from six.moves import range
 
 import sys
-import os
 import warnings
-import math
 import numpy as np
-import warnings
 import h5py
 from scipy.special import xlogy, gammaln
 
@@ -837,7 +833,6 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
 
     # Initialize values.
     Nobj, Nfilt = phot.shape
-    Nmodels = len(models)
     Nsamps = idxs.shape[1]
     if sel is None:
         sel = np.ones(Nobj, dtype='bool')

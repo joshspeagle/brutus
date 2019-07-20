@@ -7,8 +7,6 @@ Available filters.
 """
 
 from __future__ import (print_function, division)
-import six
-from six.moves import range
 
 # Define the set of filters available for the provided MIST models.
 # The Bayestar models are only defined for PanSTARRS `grizy` and 2MASS.

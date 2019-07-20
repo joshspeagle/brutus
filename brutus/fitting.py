@@ -7,14 +7,10 @@ Brute force fitter.
 """
 
 from __future__ import (print_function, division)
-from six.moves import range
 
 import sys
-import os
 import warnings
-import math
 import numpy as np
-import warnings
 import h5py
 import time
 from scipy.special import xlogy, gammaln
@@ -24,8 +20,10 @@ try:
 except ImportError:
     from scipy.misc import logsumexp
 
-from .pdf import *
-from .utils import *
+from .pdf import imf_lnprior, ps1_MrLF_lnprior
+from .pdf import parallax_lnprior, scale_parallax_lnprior
+from .pdf import gal_lnprior, dust_lnprior
+from .utils import _function_wrapper, _inverse3, magnitude, get_seds
 
 __all__ = ["loglike", "_optimize_fit", "BruteForce", "_lnpost"]
 
@@ -608,9 +606,9 @@ class BruteForce():
 
     def fit(self, data, data_err, data_mask, data_labels, save_file,
             phot_offsets=None, parallax=None, parallax_err=None,
-            Nmc_prior=100, avlim=(0., 6.), av_gauss=None,
+            Nmc_prior=50, avlim=(0., 6.), av_gauss=None,
             rvlim=(1., 8.), rv_gauss=(3.32, 0.18), binary_frac=0.5,
-            lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4, Ndraws=2000,
+            lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4, Ndraws=500,
             apply_agewt=True, apply_grad=True,
             lndistprior=None, lndustprior=None, dustfile='bayestar2017_v1.h5',
             apply_dlabels=True, data_coords=None, logl_dim_prior=True,
@@ -837,9 +835,9 @@ class BruteForce():
             try:
                 # Try reading in parallel-friendly way if possible.
                 try:
-                    ft = h5py.File(dustfile, 'r', libver='latest', swmr=True)
+                    h5py.File(dustfile, 'r', libver='latest', swmr=True)
                 except:
-                    ft = h5py.File(dustfile, 'r')
+                    h5py.File(dustfile, 'r')
                     pass
             except:
                 raise ValueError("The default dust prior is being used but "
@@ -1152,13 +1150,12 @@ class BruteForce():
 
         """
 
-        Ndata, Nmodels = len(data), self.NMODEL
+        Ndata = len(data)
         models = np.array(self.models)
         if wt_thresh is None and cdf_thresh is None:
             wt_thresh = -np.inf  # default to no clipping/thresholding
         if rstate is None:
             rstate = np.random
-        mvn = rstate.multivariate_normal
         if parallax is not None and parallax_err is None:
             raise ValueError("Must provide both `parallax` and "
                              "`parallax_err`.")
@@ -1189,9 +1186,9 @@ class BruteForce():
             try:
                 # Try reading in parallel-friendly way if possible.
                 try:
-                    ft = h5py.File(dustfile, 'r', libver='latest', swmr=True)
+                    h5py.File(dustfile, 'r', libver='latest', swmr=True)
                 except:
-                    ft = h5py.File(dustfile, 'r')
+                    h5py.File(dustfile, 'r')
                     pass
             except:
                 raise ValueError("The default dust prior is being used but "

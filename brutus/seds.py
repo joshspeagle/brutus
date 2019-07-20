@@ -8,15 +8,11 @@ also contributed by Ben Johnson and Phil Cargile.
 """
 
 from __future__ import (print_function, division)
-import six
 from six.moves import range
 
 import sys
-import os
 import warnings
-import math
 import numpy as np
-import warnings
 import time
 from copy import deepcopy
 from itertools import product
@@ -111,6 +107,7 @@ class MISTtracks(object):
         # Construct age weights.
         if ageweight:
             self.add_age_weights()
+        self._ageidx = self.predictions.index("loga")
 
         # Construct grid.
         self.build_interpolator()
@@ -183,7 +180,7 @@ class MISTtracks(object):
         assert ("loga" in self.predictions)
 
         # Loop over tracks.
-        age_ind = self.predictions.index("loga")
+        age_ind = self._ageidx
         ageweights = np.zeros(len(self.libparams))
         for i, m in enumerate(self.gridpoints["mini"]):
             for j, z in enumerate(self.gridpoints["feh"]):
@@ -506,7 +503,6 @@ class SEDmaker(MISTtracks):
         params2 = dict(zip(self.predictions, params_arr2))
 
         # Generate SED.
-        aidx = np.where(np.array(self.predictions) == 'loga')[0][0]
         mini_min = max(self.mini_bound, mini_bound)
         loga = params['loga']
         if loga <= loga_max:
@@ -520,7 +516,7 @@ class SEDmaker(MISTtracks):
                 # Generate predictions for secondary binary component.
                 if eep2 is None:
                     # Convert loga to EEP.
-                    eep2 = self.get_eep(loga, aidx, mini=mini, eep=eep,
+                    eep2 = self.get_eep(loga, mini=mini, eep=eep,
                                         feh=feh, smf=smf, tol=tol)
                 labels2 = {'mini': mini * smf, 'eep': eep2, 'feh': feh}
                 labels2 = np.array([labels2[l] for l in self.labels])
@@ -548,7 +544,7 @@ class SEDmaker(MISTtracks):
         else:
             return sed, params, params2
 
-    def get_eep(self, loga, aidx, mini=1., eep=350., feh=0., smf=0., tol=1e-3):
+    def get_eep(self, loga, mini=1., eep=350., feh=0., smf=0., tol=1e-3):
         """
         Compute the corresponding EEP for a particular age.
 
@@ -556,10 +552,6 @@ class SEDmaker(MISTtracks):
         ----------
         loga : float
             The base-10 logarithm of the age.
-
-        aidx : int
-            The integer corresponding to the index of the `loga` prediction
-            (from `get_predictions`).
 
         mini : float, optional
             Initial mass in units of solar masses. Default is `1.`.
@@ -583,6 +575,8 @@ class SEDmaker(MISTtracks):
             Default is `1e-3`.
 
         """
+
+        aidx = self._ageidx  # index of age variable
 
         # Define loss function.
         def loss(x):
@@ -714,7 +708,6 @@ class SEDmaker(MISTtracks):
                                                   feh_grid, smf_grid])),
                                    dtype=ltype)
         Ngrid = len(self.grid_label)
-        Nsmf = len(smf_grid)
 
         # Generate SEDs on the grid.
         ptype = np.dtype([(n, np.float) for n in self.predictions])

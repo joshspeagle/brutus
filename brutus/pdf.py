@@ -7,15 +7,11 @@ PDF functions.
 """
 
 from __future__ import (print_function, division)
-import six
-from six.moves import range
 
 import sys
 import os
 import warnings
-import math
 import numpy as np
-import warnings
 from astropy import units
 from astropy.coordinates import SkyCoord
 from astropy.coordinates import CylindricalRepresentation as CylRep
@@ -648,7 +644,8 @@ def gal_lnprior(dists, coord, labels=None, R_solar=8., Z_solar=0.025,
 
 
 def dust_lnprior(dists, coord, avs, dustfile='bayestar2017_v1.h5',
-                 offset=0., scale=1., smooth=3., return_components=False):
+                 offset=0., scale=1., smooth=1., scatter=0.2,
+                 return_components=False):
     """
     Log-prior for a 3-D galactic dust model.
 
@@ -681,7 +678,13 @@ def dust_lnprior(dists, coord, avs, dustfile='bayestar2017_v1.h5',
 
     smooth : float, optional
         The factor used to inflate the derived uncertainties and smooth out
-        the dust map. Default is `3.` (3x larger errors).
+        the dust map. Applied *before* `scatter` is added.
+        Default is `1.`.
+
+    scatter : float, optional
+        Additional scatter that is added in quadrature with the derived
+        uncertainties (*after* `smooth` has been applied)
+        from the 3-D dust map. Default is `0.2`.
 
     return_components : bool, optional
         Whether to also return the components of the reddening LOS fit.
@@ -715,6 +718,7 @@ def dust_lnprior(dists, coord, avs, dustfile='bayestar2017_v1.h5',
         # Interpolate at corresponding distances.
         av_mean = scale * np.interp(dists, av_dist, av_mean) + offset
         av_err = smooth * scale * np.interp(dists, av_dist, av_err)
+        av_err = np.sqrt(av_err**2 + scatter**2)
 
         # Evaluate Gaussian prior.
         chi2 = (avs - av_mean)**2 / av_err**2  # chi2
@@ -915,9 +919,9 @@ def bin_pdfs_distred(data, cdf=False, ebv=False, dist_type='distance_modulus',
 
         # Generate parallax and Av realizations.
         for i, stuff in enumerate(zip(scales, avs, rvs, covs_sar,
-                                      parallaxes, parallax_errors, coords)):
+                                      parallaxes, parallax_errors, coord)):
             (scales_obj, avs_obj, rvs_obj, covs_sar_obj,
-             parallax, parallax_err, coord) = stuff
+             parallax, parallax_err, crd) = stuff
 
             # Print progress.
             if verbose:
@@ -933,7 +937,7 @@ def bin_pdfs_distred(data, cdf=False, ebv=False, dist_type='distance_modulus',
             dmdraws = 5. * np.log10(ddraws) + 10.
 
             # Re-apply distance and parallax priors to realizations.
-            lnp_draws = lndistprior(ddraws, coord)
+            lnp_draws = lndistprior(ddraws, crd)
             if parallax is not None and parallax_err is not None:
                 lnp_draws += parallax_lnprior(pdraws, parallax, parallax_err)
             lnp = logsumexp(lnp_draws, axis=1)

@@ -8,15 +8,8 @@ Based on the `dustmaps` package by Greg Green (Green et al. 2018).
 """
 
 from __future__ import (print_function, division)
-import six
-from six.moves import range
 
-import sys
-import os
-import warnings
-import math
 import numpy as np
-import warnings
 import h5py
 
 import astropy.coordinates as coordinates
@@ -286,9 +279,6 @@ class Bayestar(DustMap):
         Returns distances, mean(Av), and std(Av) at the requested coordinates.
 
         """
-
-        # Get number of coordinates requested.
-        n_coords_ret = coords.shape[0]
 
         # Extract the correct angular pixel(s).
         try:

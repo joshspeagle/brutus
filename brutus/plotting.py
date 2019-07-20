@@ -7,13 +7,10 @@ Plotting utilities.
 """
 
 from __future__ import (print_function, division)
-import six
 from six.moves import range
 
-import sys
-import os
 import warnings
-import math
+import logging
 import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib.ticker import MaxNLocator, NullLocator
@@ -30,14 +27,9 @@ try:
 except ImportError:
     from scipy.misc import logsumexp
 
-try:
-    str_type = types.StringTypes
-    float_type = types.FloatType
-    int_type = types.IntType
-except:
-    str_type = str
-    float_type = float
-    int_type = int
+str_type = str
+float_type = float
+int_type = int
 
 __all__ = ["cornerplot", "dist_vs_red", "posterior_predictive",
            "photometric_offsets", "photometric_offsets_2d", "_hist2d"]
@@ -47,10 +39,11 @@ def cornerplot(idxs, data, params, lndistprior=None, coord=None,
                avlim=(0., 6.), rvlim=(1., 8.), weights=None, parallax=None,
                parallax_err=None, Nr=500, applied_parallax=True,
                pcolor='blue', parallax_kwargs=None, span=None,
-               quantiles=[0.025, 0.5, 0.975], color='black', smooth=0.035,
+               quantiles=[0.025, 0.5, 0.975], color='black', smooth=10,
                hist_kwargs=None, hist2d_kwargs=None, labels=None,
                label_kwargs=None, show_titles=False, title_fmt=".2f",
-               title_kwargs=None, truths=None, truth_color='red',
+               title_kwargs=None, title_quantiles=[0.025, 0.5, 0.975],
+               truths=None, truth_color='red',
                truth_kwargs=None, max_n_ticks=5, top_ticks=False,
                use_math_text=False, verbose=False, fig=None, rstate=None):
     """
@@ -135,9 +128,9 @@ def cornerplot(idxs, data, params, lndistprior=None, coord=None,
         The standard deviation (either a single value or a different value for
         each subplot) for the Gaussian kernel used to smooth the 1-D and 2-D
         marginalized posteriors, expressed as a fraction of the span.
-        Default is `0.035` (3.5% smoothing). If an integer is provided instead,
-        this will instead default to a simple (weighted) histogram with
-        `bins=smooth`.
+        If an integer is provided instead, this will instead default
+        to a simple (weighted) histogram with `bins=smooth`.
+        Default is `10` (10 bins).
 
     hist_kwargs : dict, optional
         Extra keyword arguments to send to the 1-D (smoothed) histograms.
@@ -156,8 +149,10 @@ def cornerplot(idxs, data, params, lndistprior=None, coord=None,
 
     show_titles : bool, optional
         Whether to display a title above each 1-D marginalized posterior
-        showing the 0.5 quantile along with the upper/lower bounds associated
-        with the 0.025 and 0.975 (95%/2-sigma credible interval) quantiles.
+        showing the quantiles specified by `title_quantiles`. By default,
+        This will show the median (0.5 quantile) along with the upper/lower
+        bounds associated with the 0.025 and 0.975 (95%/2-sigma credible
+        interval) quantiles.
         Default is `True`.
 
     title_fmt : str, optional
@@ -167,6 +162,11 @@ def cornerplot(idxs, data, params, lndistprior=None, coord=None,
     title_kwargs : dict, optional
         Extra keyword arguments that will be sent to the
         `~matplotlib.axes.Axes.set_title` command.
+
+    title_quantiles : iterable, optional
+        A list of 3 fractional quantiles displayed in the title, ordered
+        from lowest to highest. Default is `[0.025, 0.5, 0.975]`
+        (spanning the 95%/2-sigma credible interval).
 
     truths : iterable with shape `(ndim,)`, optional
         A list of reference values that will be overplotted on the traces and
@@ -427,7 +427,7 @@ def cornerplot(idxs, data, params, lndistprior=None, coord=None,
         if show_titles:
             title = None
             if title_fmt is not None:
-                ql, qm, qh = quantile(x, [0.025, 0.5, 0.975], weights=weights)
+                ql, qm, qh = quantile(x, title_quantiles, weights=weights)
                 q_minus, q_plus = qm - ql, qh - qm
                 fmt = "{{0:{0}}}".format(title_fmt).format
                 title = r"${{{0}}}_{{-{1}}}^{{+{2}}}$"

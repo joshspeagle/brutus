@@ -25,23 +25,26 @@ stellar models, it is configured for two by default:
 and [Bayestar](https://arxiv.org/pdf/1401.1508.pdf).
 
 #### Zero-points
-Zero-point offsets in several bands have been derived using Gaia data
-and can be included during runtime.
+Zero-point offsets in several bands have been estimated using Gaia data
+and can be included during runtime. 
+**These are currently not thoroughly vetted, so use at your own risk.**
 
 #### Dust Map
 `brutus` is able to incorporate a 3-D dust prior. The current prior is
-based on the "Bayestar17" dust map from
-[Green et al. (2018)](https://arxiv.org/abs/1801.03555).
+based on the "Bayestar19" dust map from
+[Green et al. (2019)](https://arxiv.org/abs/1905.02734).
 
 #### Generating SEDs
 `brutus` contains built-in SED generation utilities based on the MIST
 stellar models, modeled off of
 [`minesweeper`](https://github.com/pacargile/MINESweeper).
 These are optimized for either generating photometry from stellar mass
-tracks or for a single-age stellar isochrone, and are based on
+tracks or for a single-age stellar isochrone based on
 artificial neural networks trained on bolometric correction tables.
+
 An empirical correction table to the models derived using several clusters is
 also provided, which improves the models down to ~0.5 solar masses.
+**These are currently not thoroughly vetted, so use at your own risk.**
 
 Please contact Phil Cargile (pcargile@cfa.harvard.edu) and Josh Speagle
 (jspeagle@cfa.harvard.edu) for more information on the provided data files.
