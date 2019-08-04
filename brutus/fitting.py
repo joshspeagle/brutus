@@ -13,7 +13,7 @@ import warnings
 import numpy as np
 import h5py
 import time
-from scipy.special import xlogy, gammaln
+from scipy.stats import chi2 as chisquare
 
 try:
     from scipy.special import logsumexp
@@ -32,20 +32,21 @@ def loglike(data, data_err, data_mask, mag_coeffs,
             avlim=(0., 6.), av_gauss=(0., 1e6),
             rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
             av_init=None, rv_init=None,
-            dim_prior=True, ltol=0.03, wt_thresh=0.005, init_thresh=1e-3,
-            parallax=None, parallax_err=None, parallax_clip=5.,
+            dim_prior=True, ltol=3e-2, wt_thresh=1e-2, init_thresh=5e-3,
+            parallax=None, parallax_err=None,
             return_vals=False, *args, **kwargs):
     """
     Computes the log-likelihood between noisy data and noiseless models
-    optimizing over the scale-factor and dust attenuation.
+    optimizing over the scale-factor, dust attenuation, and the shape of the
+    reddening curve.
 
     Parameters
     ----------
     data : `~numpy.ndarray` of shape `(Nfilt)`
-        Observed data values.
+        Measured flux densities, in units of `10**(-0.4 * mag)`.
 
     data_err : `~numpy.ndarray` of shape `(Nfilt)`
-        Associated (Normal) errors on the observed values.
+        Associated (Normal) errors on the observed flux densities.
 
     data_mask : `~numpy.ndarray` of shape `(Nfilt)`
         Binary mask (0/1) indicating whether the data was observed.
@@ -87,16 +88,17 @@ def loglike(data, data_err, data_mask, mag_coeffs,
 
     ltol : float, optional
         The weighted tolerance in the computed log-likelihoods used to
-        determine convergence. Default is `0.03`.
+        determine convergence. Default is `3e-2`.
 
     wt_thresh : float, optional
         The threshold used to sub-select the best-fit log-likelihoods used
-        to determine convergence. Default is `0.005`.
+        to determine convergence. Default is `1e-2`.
 
     init_thresh : bool, optional
         The weight threshold used to mask out fits after the initial
         magnitude-based fit before transforming the results back to
-        flux density (and iterating until convergence). Default is `1e-3`.
+        flux density (and iterating until convergence). Default is `5e-3`.
+        **This must be smaller than or equal to `wt_thresh`.**
 
     parallax : float, optional
         Parallax measurement. If provided and `init_thresh` is not `None`,
@@ -106,9 +108,6 @@ def loglike(data, data_err, data_mask, mag_coeffs,
     parallax_err : float, optional
         Error on the parallax measurements. Must be provided along with
         `parallax`.
-
-    parallax_clip : float, optional
-        The "sigma" value used for clipping. Default is `5.`.
 
     return_vals : bool, optional
         Whether to return the best-fit scale-factor, reddening, and shape
@@ -140,6 +139,10 @@ def loglike(data, data_err, data_mask, mag_coeffs,
         `(s_ML, Av_ML, Rv_ML)`.
 
     """
+
+    if init_thresh > wt_thresh:
+        raise ValueError("The initial threshold must be smaller than or equal "
+                         "to the final threshold applied to be useful!")
 
     # Initialize values.
     Nmodels, Nfilt, Ncoef = mag_coeffs.shape
@@ -174,9 +177,10 @@ def loglike(data, data_err, data_mask, mag_coeffs,
                                      return_rvec=True, return_drvec=True)
 
     # Compute initial magnitude fit.
+    mtol = 2.5 * ltol
     results = _optimize_fit(flux, tot_var, models, rvecs, drvecs,
                             av_init, rv_init, mcoeffs,
-                            tol=2.5*ltol, init_thresh=init_thresh,
+                            tol=mtol, init_thresh=init_thresh,
                             resid=None, mags=mags, mags_var=mags_var,
                             avlim=avlim, av_gauss=av_gauss,
                             rvlim=rvlim, rv_gauss=rv_gauss)
@@ -187,29 +191,18 @@ def loglike(data, data_err, data_mask, mag_coeffs,
         chi2 = np.sum(np.square(resid) / tot_var, axis=1)
         # Compute multivariate normal logpdf.
         lnl = -0.5 * chi2  # ignore constant
-        # Subselect models.
+        # Add parallax to log-likelihood.
+        lnl_p = lnl
         if parallax is not None and parallax_err is not None:
-            # Extract naive scale error.
-            ds2 = icov_sar[:, 0, 0]
-            scale_err = np.sqrt(1./ds2)
-            # Compute parallax bounds.
-            parallax_low = parallax - parallax_clip * parallax_err
-            parallax_high = parallax + parallax_clip * parallax_err
-            # Check +/- X*sig intervals overlap to some degree.
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                par_high = np.sqrt(scale + parallax_clip * scale_err)
-                par_low = np.sqrt(scale - parallax_clip * scale_err)
-                par_out = (par_high < parallax_low) | (par_low > parallax_high)
-            # Compute initial clipping.
-            lnl_sel = lnl > np.max(lnl) + np.log(init_thresh)
-            init_sel = np.where(lnl_sel & ~par_out)[0]
-            if len(init_sel) == 0:
-                init_sel = np.where(lnl_sel)[0]
-        else:
-            # Threshold using log-likelihoods.
-            lnl_sel = lnl > np.max(lnl) + np.log(init_thresh)
-            init_sel = np.where(lnl_sel)[0]
+            if np.isfinite(parallax) and np.isfinite(parallax_err):
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    par = np.sqrt(scale)
+                    chi2_p = (par - parallax)**2 / parallax_err**2
+                    lnl_p = lnl - 0.5 * chi2_p
+        # Subselect models using log-likelihood thresholding.
+        lnl_sel = lnl_p > np.max(lnl_p) + np.log(init_thresh)
+        init_sel = np.where(lnl_sel)[0]
         # Subselect data.
         tot_var = tot_var[init_sel]
         models = models[init_sel]
@@ -265,8 +258,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
     # Apply dimensionality prior.
     if dim_prior:
         # Compute logpdf of chi2 distribution.
-        a = 0.5 * (Ndim - 3)  # effective dof
-        lnl = xlogy(a - 1., chi2) - (chi2 / 2.) - gammaln(a) - (np.log(2.) * a)
+        lnl = chisquare.logpdf(chi2, Ndim - 3)
 
     if return_vals:
         return lnl, Ndim, chi2, scale, av, rv, icov_sar
@@ -277,7 +269,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
 def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
                   avlim=(0., 6.), av_gauss=(0., 1e6),
                   rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
-                  resid=None, tol=0.05, init_thresh=1e-3, stepsize=1.,
+                  resid=None, tol=0.05, init_thresh=5e-3, stepsize=1.,
                   mags=None, mags_var=None):
     """
     Optimize the distance and reddening between the models and the data using
@@ -340,7 +332,7 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
     init_thresh : bool, optional
         The weight threshold used to mask out fits after the initial
         magnitude-based fit before transforming the results back to
-        flux density (and iterating until convergence). Default is `1e-3`.
+        flux density (and iterating until convergence). Default is `5e-3`.
 
     stepsize : float or `~numpy.ndarray`, optional
         The stepsize (in units of the computed gradient). Default is `1.`.
@@ -607,12 +599,12 @@ class BruteForce():
     def fit(self, data, data_err, data_mask, data_labels, save_file,
             phot_offsets=None, parallax=None, parallax_err=None,
             Nmc_prior=50, avlim=(0., 6.), av_gauss=None,
-            rvlim=(1., 8.), rv_gauss=(3.32, 0.18), binary_frac=0.5,
-            lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4, Ndraws=500,
+            rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
+            lnprior=None, wt_thresh=5e-3, cdf_thresh=2e-3, Ndraws=250,
             apply_agewt=True, apply_grad=True,
-            lndistprior=None, lndustprior=None, dustfile='bayestar2017_v1.h5',
+            lngalprior=None, lndustprior=None, dustfile=None,
             apply_dlabels=True, data_coords=None, logl_dim_prior=True,
-            ltol=0.03, ltol_subthresh=0.005, logl_initthresh=1e-3,
+            ltol=3e-2, ltol_subthresh=1e-2, logl_initthresh=5e-3,
             rstate=None, save_dar_draws=True, running_io=True, verbose=True):
         """
         Fit all input models to the input data to compute the associated
@@ -669,10 +661,6 @@ class BruteForce():
             The default is `(3.32, 0.18)` based on the results from
             Schlafly et al. (2016).
 
-        binary_frac : float, optional
-            The expected binary fraction, applied when the MIST models are
-            used and modeling unresolved binaries. Default is `0.5`.
-
         lnprior : `~numpy.ndarray` of shape `(Ndata, Nfilt)`, optional
             Log-prior grid to be used. If not provided, this will default
             to [1] a Kroupa IMF prior in initial mass (`'mini'`) and
@@ -680,24 +668,24 @@ class BruteForce():
             MIST models and [2] a PanSTARRS r-band luminosity function-based
             prior if we are using the Bayestar models. Unresolved binaries
             with secondary mass fractions of `'smf'` are treated as
-            two independent draws from the IMF with binarity `p=0.5`.
+            being drawn from a uniform prior from `smf=[0., 1.]`.
             **Be sure to check this behavior you are using custom models.**
 
         wt_thresh : float, optional
             The threshold `wt_thresh * max(y_wt)` used to ignore models
             with (relatively) negligible weights when resampling.
-            Default is `1e-3`.
+            Default is `5e-3`.
 
         cdf_thresh : float, optional
             The `1 - cdf_thresh` threshold of the (sorted) CDF used to ignore
             models with (relatively) negligible weights when resampling.
             This option is only used when `wt_thresh=None`.
-            Default is `2e-4`.
+            Default is `2e-3`.
 
         Ndraws : int, optional
             The number of realizations of the brute-force PDF to save
             to disk. Indices, scales, and scale errors are saved.
-            Default is `2000`.
+            Default is `250`.
 
         apply_agewt : bool, optional
             Whether to apply the age weights derived from the MIST models
@@ -707,16 +695,18 @@ class BruteForce():
             Whether to account for the grid spacing using `np.gradient`.
             Default is `True`.
 
-        lndistprior : func, optional
-            The log-distance prior function to be applied. If not provided,
-            this will default to the galactic model from Green et al. (2014).
+        lngalprior : func, optional
+            The log-prior function to be applied based on a 3-D Galactic model.
+            If not provided, this will default to a modified Galactic model
+            from Green et al. (2014) that places priors on distance,
+            metallicity, and age.
 
         lndustprior : func, optional
             The log-dust prior function to be applied. If not provided,
-            this will default to the 3-D dust map from Green et al. (2018).
+            this will default to the 3-D dust map from Green et al. (2019).
 
         dustfile : str, optional
-            The filepath to the 3-D dust map. Default is `bayestar2017_v1.h5`.
+            The filepath to the 3-D dust map.
 
         apply_dlabels : bool, optional
             Whether to pass the model labels to the distance prior to
@@ -725,26 +715,27 @@ class BruteForce():
 
         data_coords : `~numpy.ndarray` of shape `(Ndata, 2)`, optional
             The galactic `(l, b)` coordinates for the objects that are being
-            fit. These are passed to `lndistprior` when constructing the
+            fit. These are passed to `lngalprior` when constructing the
             distance prior.
 
         logl_dim_prior : bool, optional
             Whether to apply a dimensional-based correction (prior) to the
             log-likelihood. Transforms the likelihood to a chi2 distribution
-            with `Nfilt - 2` degrees of freedom. Default is `True`.
+            with `Nfilt - 3` degrees of freedom. Default is `True`.
 
         ltol : float, optional
             The weighted tolerance in the computed log-likelihoods used to
-            determine convergence. Default is `0.03`.
+            determine convergence. Default is `3e-2`.
 
         ltol_subthresh : float, optional
             The threshold used to sub-select the best-fit log-likelihoods used
-            to determine convergence. Default is `0.005`.
+            to determine convergence. Default is `1e-2`.
 
         logl_initthresh : float, optional
             The threshold `logl_initthresh * max(y_wt)` used to ignore models
             with (relatively) negligible weights after computing the initial
-            set of fits but before optimizing them. Default is `1e-3`.
+            set of fits but before optimizing them. Default is `5e-3`.
+            **This must be smaller than or equal to `ltol_subthresh`.**
 
         rstate : `~numpy.random.RandomState`, optional
             `~numpy.random.RandomState` instance.
@@ -767,6 +758,11 @@ class BruteForce():
 
         """
 
+        if logl_initthresh > ltol_subthresh:
+            raise ValueError("The initial threshold must be smaller than "
+                             "or equal to the convergence threshold in order "
+                             "to be useful!")
+
         Ndata, Nfilt = data.shape
         if wt_thresh is None and cdf_thresh is None:
             wt_thresh = -np.inf  # default to no clipping/thresholding
@@ -781,20 +777,8 @@ class BruteForce():
         # Initialize log(prior).
         if lnprior is None:
             try:
-                # Set IMF prior.
+                # Set IMF prior (binaries assigned uniform prior).
                 lnprior = imf_lnprior(self.models_labels['mini'])
-                try:
-                    # Add in binary contribution.
-                    mini = self.models_labels['mini']
-                    mini2 = (self.models_labels['smf'] *
-                             self.models_labels['mini'])
-                    bnry = mini2 > 0.
-                    lnprior[bnry] = imf_lnprior(mini, mgrid2=mini2)[bnry]
-                    # Weight by binary fraction.
-                    lnprior[bnry] += np.log(binary_frac)
-                    lnprior[~bnry] += np.log(1. - binary_frac)
-                except:
-                    pass
             except:
                 # Set PS1 r-band LF prior.
                 lnprior = ps1_MrLF_lnprior(self.models_labels['Mr'])
@@ -819,11 +803,11 @@ class BruteForce():
                         lnprior += np.interp(label, ulabel, lngrad_label)
 
         # Initialize distance log(prior).
-        if lndistprior is None and data_coords is None:
+        if lngalprior is None and data_coords is None:
             raise ValueError("`data_coords` must be provided if using the "
-                             "default distance prior.")
-        if lndistprior is None:
-            lndistprior = gal_lnprior
+                             "default Galactic model prior.")
+        if lngalprior is None:
+            lngalprior = gal_lnprior
 
         # Initialize (distance-)dust log(prior).
         if lndustprior is None and data_coords is None and av_gauss is None:
@@ -875,41 +859,49 @@ class BruteForce():
         out = h5py.File("{0}.h5".format(save_file), "w-")
         out.create_dataset("labels", data=data_labels)
         if running_io:
-            out.create_dataset("idxs", data=np.full((Ndata, Ndraws), -99,
-                                                    dtype='int32'))
-            out.create_dataset("scales", data=np.ones((Ndata, Ndraws),
+            out.create_dataset("model_idx", data=np.full((Ndata, Ndraws), -99,
+                                                         dtype='int32'))
+            out.create_dataset("ml_scale", data=np.ones((Ndata, Ndraws),
+                                                        dtype='float32'))
+            out.create_dataset("ml_av", data=np.zeros((Ndata, Ndraws),
                                                       dtype='float32'))
-            out.create_dataset("avs", data=np.ones((Ndata, Ndraws),
-                                                   dtype='float32'))
-            out.create_dataset("rvs", data=np.ones((Ndata, Ndraws),
-                                                   dtype='float32'))
-            out.create_dataset("cov_sar", data=np.zeros((Ndata, Ndraws, 3, 3),
-                                                        dtype='float32'))
-            out.create_dataset("log_evidence", data=np.zeros(Ndata,
+            out.create_dataset("ml_rv", data=np.zeros((Ndata, Ndraws),
+                                                      dtype='float32'))
+            out.create_dataset("ml_cov_sar", data=np.zeros((Ndata, Ndraws,
+                                                            3, 3),
+                                                           dtype='float32'))
+            out.create_dataset("obj_log_post", data=np.zeros((Ndata, Ndraws),
                                                              dtype='float32'))
-            out.create_dataset("best_chi2", data=np.zeros(Ndata,
-                                                          dtype='float32'))
-            out.create_dataset("Nbands", data=np.zeros(Ndata, dtype='int16'))
+            out.create_dataset("obj_log_evid", data=np.zeros(Ndata,
+                                                             dtype='float32'))
+            out.create_dataset("obj_chi2min", data=np.zeros(Ndata,
+                                                            dtype='float32'))
+            out.create_dataset("obj_Nbands", data=np.zeros(Ndata,
+                                                           dtype='int16'))
             if save_dar_draws:
-                out.create_dataset("dists", data=np.ones((Ndata, Ndraws),
-                                                         dtype='float32'))
-                out.create_dataset("reds", data=np.ones((Ndata, Ndraws),
-                                                        dtype='float32'))
-                out.create_dataset("dreds", data=np.ones((Ndata, Ndraws),
-                                                         dtype='float32'))
+                out.create_dataset("samps_dist", data=np.ones((Ndata, Ndraws),
+                                                              dtype='float32'))
+                out.create_dataset("samps_red", data=np.ones((Ndata, Ndraws),
+                                                             dtype='float32'))
+                out.create_dataset("samps_dred", data=np.ones((Ndata, Ndraws),
+                                                              dtype='float32'))
+                out.create_dataset("samps_logp", data=np.ones((Ndata, Ndraws),
+                                                              dtype='float32'))
         else:
             idxs_arr = np.full((Ndata, Ndraws), -99, dtype='int32')
             scale_arr = np.ones((Ndata, Ndraws), dtype='float32')
-            av_arr = np.ones((Ndata, Ndraws), dtype='float32')
-            rv_arr = np.ones((Ndata, Ndraws), dtype='float32')
-            cov_arr = np.ones((Ndata, Ndraws, 3, 3), dtype='float32')
-            logevid_arr = np.ones(Ndata, dtype='float32')
-            chi2best_arr = np.ones(Ndata, dtype='float32')
+            av_arr = np.zeros((Ndata, Ndraws), dtype='float32')
+            rv_arr = np.zeros((Ndata, Ndraws), dtype='float32')
+            cov_arr = np.zeros((Ndata, Ndraws, 3, 3), dtype='float32')
+            logpost_arr = np.zeros((Ndata, Ndraws), dtype='float32')
+            logevid_arr = np.zeros(Ndata, dtype='float32')
+            chi2best_arr = np.zeros(Ndata, dtype='float32')
             nbands_arr = np.ones(Ndata, dtype='int16')
             if save_dar_draws:
                 dist_arr = np.ones((Ndata, Ndraws), dtype='float32')
                 red_arr = np.ones((Ndata, Ndraws), dtype='float32')
                 dred_arr = np.ones((Ndata, Ndraws), dtype='float32')
+                logp_arr = np.ones((Ndata, Ndraws), dtype='float32')
 
         # Fit data.
         if verbose:
@@ -930,7 +922,7 @@ class BruteForce():
                                               wt_thresh=wt_thresh,
                                               cdf_thresh=cdf_thresh,
                                               Ndraws=Ndraws, rstate=rstate,
-                                              lndistprior=lndistprior,
+                                              lngalprior=lngalprior,
                                               lndustprior=lndustprior,
                                               dustfile=dustfile,
                                               apply_dlabels=apply_dlabels,
@@ -958,31 +950,34 @@ class BruteForce():
             # Grab results.
             if save_dar_draws:
                 (idxs, scales, avs, rvs, covs_sar, Ndim,
-                 levid, chi2min, dists, reds, dreds) = results
+                 lpost, levid, chi2min, dists, reds, dreds, logwt) = results
             else:
                 (idxs, scales, avs, rvs, covs_sar,
-                 Ndim, levid, chi2min) = results
+                 Ndim, lpost, levid, chi2min) = results
 
             # Save results.
             if running_io:
-                out['idxs'][i] = idxs
-                out['scales'][i] = scales
-                out['avs'][i] = avs
-                out['rvs'][i] = rvs
-                out['cov_sar'][i] = covs_sar
-                out['Nbands'][i] = Ndim
-                out['log_evidence'][i] = levid
-                out['best_chi2'][i] = chi2min
+                out['model_idx'][i] = idxs
+                out['ml_scale'][i] = scales
+                out['ml_av'][i] = avs
+                out['ml_rv'][i] = rvs
+                out['ml_cov_sar'][i] = covs_sar
+                out['obj_Nbands'][i] = Ndim
+                out['obj_log_post'][i] = lpost
+                out['obj_log_evid'][i] = levid
+                out['obj_chi2min'][i] = chi2min
                 if save_dar_draws:
-                    out['dists'][i] = dists
-                    out['reds'][i] = reds
-                    out['dreds'][i] = dreds
+                    out['samps_dist'][i] = dists
+                    out['samps_red'][i] = reds
+                    out['samps_dred'][i] = dreds
+                    out['samps_logp'][i] = logwt
             else:
                 idxs_arr[i] = idxs
                 scale_arr[i] = scales
                 av_arr[i] = avs
                 rv_arr[i] = rvs
                 cov_arr[i] = covs_sar
+                logpost_arr[i] = lpost
                 logevid_arr[i] = levid
                 chi2best_arr[i] = chi2min
                 nbands_arr[i] = Ndim
@@ -990,6 +985,7 @@ class BruteForce():
                     dist_arr[i] = dists
                     red_arr[i] = reds
                     dred_arr[i] = dreds
+                    logp_arr[i] = logwt
 
         if verbose:
             # Compute time stamps.
@@ -1009,18 +1005,20 @@ class BruteForce():
 
         # Dump results to disk if we have disabled running I/O.
         if not running_io:
-            out.create_dataset("idxs", data=idxs_arr)
-            out.create_dataset("scales", data=scale_arr)
-            out.create_dataset("avs", data=av_arr)
-            out.create_dataset("rvs", data=rv_arr)
-            out.create_dataset("cov_sar", data=cov_arr)
-            out.create_dataset("log_evidence", data=logevid_arr)
-            out.create_dataset("best_chi2", data=chi2best_arr)
-            out.create_dataset("Nbands", data=nbands_arr)
+            out.create_dataset("model_idx", data=idxs_arr)
+            out.create_dataset("ml_scale", data=scale_arr)
+            out.create_dataset("ml_av", data=av_arr)
+            out.create_dataset("ml_rv", data=rv_arr)
+            out.create_dataset("ml_cov_sar", data=cov_arr)
+            out.create_dataset("obj_log_post", data=logpost_arr)
+            out.create_dataset("obj_log_evid", data=logevid_arr)
+            out.create_dataset("obj_chi2min", data=chi2best_arr)
+            out.create_dataset("obj_Nbands", data=nbands_arr)
             if save_dar_draws:
-                out.create_dataset("dists", data=dist_arr)
-                out.create_dataset("reds", data=red_arr)
-                out.create_dataset("dreds", data=dred_arr)
+                out.create_dataset("samps_dist", data=dist_arr)
+                out.create_dataset("samps_red", data=red_arr)
+                out.create_dataset("samps_dred", data=dred_arr)
+                out.create_dataset("samps_logp", data=logp_arr)
 
         # Close the output file.
         out.close()
@@ -1029,11 +1027,11 @@ class BruteForce():
              parallax=None, parallax_err=None, Nmc_prior=100,
              avlim=(0., 6.), av_gauss=None,
              rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
-             lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4, Ndraws=2000,
-             lndistprior=None, lndustprior=None, dustfile='bayestar2017_v1.h5',
+             lnprior=None, wt_thresh=5e-3, cdf_thresh=2e-3, Ndraws=250,
+             lngalprior=None, lndustprior=None, dustfile=None,
              apply_dlabels=True, data_coords=None,
-             return_distreds=True, logl_dim_prior=True, ltol=0.03,
-             ltol_subthresh=0.005, logl_initthresh=1e-3, rstate=None):
+             return_distreds=True, logl_dim_prior=True, ltol=3e-2,
+             ltol_subthresh=1e-2, logl_initthresh=5e-3, rstate=None):
         """
         Internal generator used to compute fits.
 
@@ -1084,26 +1082,28 @@ class BruteForce():
         wt_thresh : float, optional
             The threshold `wt_thresh * max(y_wt)` used to ignore models
             with (relatively) negligible weights.
-            Default is `1e-3`.
+            Default is `5e-3`.
 
         cdf_thresh : float, optional
             The `1 - cdf_thresh` threshold of the (sorted) CDF used to ignore
             models with (relatively) negligible weights when resampling.
             This option is only used when `wt_thresh=None`.
-            Default is `2e-4`.
+            Default is `2e-3`.
 
         Ndraws : int, optional
             The number of realizations of the brute-force PDF to save
             to disk. Indices, scales, and scale errors are saved.
-            Default is `2000`.
+            Default is `250`.
 
-        lndistprior : func, optional
-            The log-distsance prior function to be applied. If not provided,
-            this will default to the galactic model from Green et al. (2014).
+        lngalprior : func, optional
+            The log-prior function to be applied based on a 3-D Galactic model.
+            If not provided, this will default to a modified Galactic model
+            from Green et al. (2014) that places priors on distance,
+            metallicity, and age.
 
         lndustprior : func, optional
             The log-dust prior function to be applied. If not provided,
-            this will default to the 3-D dust map from Green et al. (2018).
+            this will default to the 3-D dust map from Green et al. (2019).
 
         dustfile : str, optional
             The filepath to the 3-D dust map. Default is `bayestar2017_v1.h5`.
@@ -1115,7 +1115,7 @@ class BruteForce():
 
         data_coords : `~numpy.ndarray` of shape `(Ndata, 2)`, optional
             The galactic `(l, b)` coordinates for the objects that are being
-            fit. These are passed to `lndistprior` when constructing the
+            fit. These are passed to `lngalprior` when constructing the
             distance prior.
 
         return_distreds : bool, optional
@@ -1125,20 +1125,21 @@ class BruteForce():
         logl_dim_prior : bool, optional
             Whether to apply a dimensional-based correction (prior) to the
             log-likelihood. Transforms the likelihood to a chi2 distribution
-            with `Nfilt - 2` degrees of freedom. Default is `True`.
+            with `Nfilt - 3` degrees of freedom. Default is `True`.
 
         ltol : float, optional
             The weighted tolerance in the computed log-likelihoods used to
-            determine convergence. Default is `0.03`.
+            determine convergence. Default is `3e-2`.
 
         ltol_subthresh : float, optional
             The threshold used to sub-select the best-fit log-likelihoods used
-            to determine convergence. Default is `0.005`.
+            to determine convergence. Default is `1e-2`.
 
         logl_initthresh : float, optional
             The threshold `logl_initthresh * max(y_wt)` used to ignore models
             with (relatively) negligible weights after computing the initial
-            set of fits but before optimizing them. Default is `1e-3`.
+            set of fits but before optimizing them. Default is `5e-3`.
+            **This must be smaller than or equal to `ltol_subthresh`.**
 
         rstate : `~numpy.random.RandomState`, optional
             `~numpy.random.RandomState` instance.
@@ -1149,6 +1150,11 @@ class BruteForce():
             Outputs yielded from the generator.
 
         """
+
+        if logl_initthresh > ltol_subthresh:
+            raise ValueError("The initial threshold must be smaller than "
+                             "or equal to the convergence threshold in order "
+                             "to be useful!")
 
         Ndata = len(data)
         models = np.array(self.models)
@@ -1170,11 +1176,11 @@ class BruteForce():
         self.lnprior = lnprior
 
         # Initialize distance log(prior).
-        if lndistprior is None and data_coords is None:
+        if lngalprior is None and data_coords is None:
             raise ValueError("`data_coords` must be provided if using the "
-                             "default distance prior.")
-        if lndistprior is None:
-            lndistprior = gal_lnprior
+                             "default Galactic model prior.")
+        if lngalprior is None:
+            lngalprior = gal_lnprior
 
         # Initialize (distance-)dust log(prior).
         if lndustprior is None and data_coords is None and av_gauss is None:
@@ -1208,9 +1214,7 @@ class BruteForce():
         else:
             dlabels = None
 
-        # Modifications to support parallelism.
-
-        # Split up data products into `nprocs` chunks.
+        # To support parallelism, we split data products into `nprocs` chunks.
         counter = 0
         data_list = []
         data_err_list = []
@@ -1252,7 +1256,7 @@ class BruteForce():
         logpost_kwargs = {'Nmc_prior': Nmc_prior, 'lnprior': lnprior,
                           'lnprior': lnprior, 'wt_thresh': wt_thresh,
                           'cdf_thresh': cdf_thresh, 'rstate': rstate,
-                          'lndistprior': lndistprior,
+                          'lngalprior': lngalprior,
                           'lndustprior': lndustprior, 'dustfile': dustfile,
                           'avlim': avlim, 'rvlim': rvlim, 'dlabels': dlabels,
                           'apply_av_prior': av_gauss is None,
@@ -1264,24 +1268,33 @@ class BruteForce():
         for x, xe, xm, chunk in zip(data_list, data_err_list,
                                     data_mask_list, counter_list):
 
-            # Compute log-likelihoods optimizing over s and Av.
+            # Compute log-likelihoods optimizing over s, Av, and Rv.
             results_map = list(self.M(_loglike, zip(x, xe, xm,
                                                     parallax[chunk],
                                                     parallax_err[chunk])))
 
-            # Compute posteriors.
+            # Compute posteriors using Monte Carlo integration.
             lnpost_map = list(self.M(_logpost,
                                      zip(results_map, parallax[chunk],
                                          parallax_err[chunk],
                                          data_coords[chunk])))
 
             # Extract `map`-ed results.
-            for results, blob in zip(results_map, lnpost_map):
+            for results, blob, p, pe in zip(results_map, lnpost_map,
+                                            parallax[chunk],
+                                            parallax_err[chunk]):
                 lnlike, Ndim, chi2, scales, avs, rvs, icovs_sar = results
                 if return_distreds:
                     sel, lnpost, dists, reds, dreds, logwts = blob
                 else:
                     sel, lnpost = blob
+
+                # Add in parallax to chi2 and Ndim if provided.
+                if np.isfinite(p) and np.isfinite(pe):
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        chi2 += (np.sqrt(scales) - p)**2 / pe**2
+                        Ndim += 1
 
                 # Compute GOF metrics.
                 chi2min = np.min(chi2[sel])
@@ -1298,9 +1311,10 @@ class BruteForce():
                 # Grab/compute corresponding values.
                 scales, avs, rvs = scales[sidxs], avs[sidxs], rvs[sidxs]
                 cov_sar = _inverse3(icovs_sar[sidxs])
+                lnpost = lnpost[idxs]
 
-                # Draw distances and reddenings.
                 if return_distreds:
+                    # Draw distances and reddenings.
                     imc = np.zeros(Ndraws, dtype='int')
                     for i, idx in enumerate(idxs):
                         wt = np.exp(logwts[idx] - logsumexp(logwts[idx]))
@@ -1309,17 +1323,20 @@ class BruteForce():
                     dists = dists[idxs, imc]
                     reds = reds[idxs, imc]
                     dreds = dreds[idxs, imc]
+                    logwts = logwts[idxs, imc]
+                    # Return per-object results + draws.
                     yield (sidxs, scales, avs, rvs, cov_sar,
-                           Ndim, levid, chi2min,
-                           dists, reds, dreds)
+                           Ndim, lnpost, levid, chi2min,
+                           dists, reds, dreds, logwts)
                 else:
+                    # Return per-object results.
                     yield (sidxs, scales, avs, rvs, cov_sar,
-                           Ndim, levid, chi2min)
+                           Ndim, lnpost, levid, chi2min)
 
 
 def _lnpost(results, parallax=None, parallax_err=None, coord=None,
-            Nmc_prior=100, lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-4,
-            lndistprior=None, lndustprior=None, dustfile='bayestar2017_v1.h5',
+            Nmc_prior=100, lnprior=None, wt_thresh=5e-3, cdf_thresh=2e-3,
+            lngalprior=None, lndustprior=None, dustfile=None,
             dlabels=None, avlim=(0., 6.), rvlim=(1., 8.),
             rstate=None, apply_av_prior=True, return_distreds=True,
             *args, **kwargs):
@@ -1343,7 +1360,7 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
 
     coord : tuple of shape `(2,)`, optional
         The galactic `(l, b)` coordinates for the object being
-        fit. These are passed to `lndistprior` when constructing the
+        fit. These are passed to `lngalprior` when constructing the
         distance prior.
 
     Nmc_prior : int, optional
@@ -1357,28 +1374,30 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
     wt_thresh : float, optional
         The threshold `wt_thresh * max(y_wt)` used to ignore models
         with (relatively) negligible weights.
-        Default is `1e-3`.
+        Default is `5e-3`.
 
     cdf_thresh : float, optional
         The `1 - cdf_thresh` threshold of the (sorted) CDF used to ignore
         models with (relatively) negligible weights when resampling.
         This option is only used when `wt_thresh=None`.
-        Default is `2e-4`.
+        Default is `2e-3`.
 
-    lndistprior : func, optional
-        The log-distsance prior function to be applied. If not provided,
-        this will default to the galactic model from Green et al. (2014).
+    lngalprior : func, optional
+        The log-prior function to be applied based on a 3-D Galactic model.
+        If not provided, this will default to a modified Galactic model
+        from Green et al. (2014) that places priors on distance,
+        metallicity, and age.
 
     lndustprior : func, optional
         The log-dust prior function to be applied. If not provided,
-        this will default to the 3-D dust map from Green et al. (2018).
+        this will default to the 3-D dust map from Green et al. (2019).
 
     dustfile : str, optional
         The filepath to the 3-D dust map. Default is `bayestar2017_v1.h5`.
 
     dlabels : bool, optional
-        The model labels to be passed the distance prior to
-        apply any additional distance-based prior on the parameters.
+        The model labels to be passed the Galactic prior to
+        apply any additional priors on the parameters.
 
     avlim : 2-tuple, optional
         The bounds where Av predictions are reliable.
@@ -1392,7 +1411,7 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
         `~numpy.random.RandomState` instance.
 
     apply_av_prior : bool, optional
-        Whether to apply the 3-D dust prior
+        Whether to apply the 3-D dust prior. Default is `True`.
 
     return_distreds : bool, optional
         Whether to return weighted distance and reddening draws (in units of
@@ -1441,14 +1460,14 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
         lnprior = 0.
 
     # Initialize distance log(prior).
-    if lndistprior is None and coord is None:
+    if lngalprior is None and coord is None:
         raise ValueError("`coord` must be provided if using the "
-                         "default distance prior.")
+                         "default Galactic model prior.")
     if lndustprior is None and coord is None and apply_av_prior:
         raise ValueError("`coord` must be provided if using the "
                          "default dust prior.")
-    if lndistprior is None:
-        lndistprior = gal_lnprior
+    if lngalprior is None:
+        lngalprior = gal_lnprior
     if lndustprior is None:
         lndustprior = dust_lnprior
     if coord is None:
@@ -1474,7 +1493,7 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
     if wt_thresh is not None:
         # Use relative amplitude to threshold.
         lwt_min = np.log(wt_thresh) + np.max(lnprob)
-        sel = np.arange(Nmodels)[lnprob > lwt_min]
+        sel = np.where(lnprob > lwt_min)[0]
     else:
         # Use CDF to threshold.
         idx_sort = np.argsort(lnprob)
@@ -1507,7 +1526,7 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
             par_mc = np.sqrt(s_mc)
             dist_mc = 1. / par_mc
             # Evaluate distance prior.
-            lnp_mc = lndistprior(dist_mc, coord, labels=dlabels_mc)
+            lnp_mc = lngalprior(dist_mc, coord, labels=dlabels_mc)
             # Evaluate dust prior.
             if apply_av_prior:
                 lnp_mc += lndustprior(dist_mc, coord, a_mc, dustfile=dustfile)

@@ -295,7 +295,7 @@ def load_zeropoints(filepath, filters=None, verbose=True):
 
     if verbose:
         for filt, zp in zip(filters, zeropoints):
-            sys.stderr.write('{0} ({1:2.2}%)\n'.format(filt, 100 * (zp - 1.)))
+            sys.stderr.write('{0} ({1:3.2}%)\n'.format(filt, 100 * (zp - 1.)))
 
     return zeropoints
 

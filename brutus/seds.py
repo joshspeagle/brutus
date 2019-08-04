@@ -69,10 +69,6 @@ class MISTtracks(object):
         EEP grid point, which are needed when applying priors in age.
         Default is `True`.
 
-    corrfile : str, optional
-        The name of the text file containing corrections for the MIST tracks.
-        Default is `None`. If not provided, a warning will be raised.
-
     verbose : bool, optional
         Whether to output progress to `~sys.stderr`. Default is `True`.
 
@@ -80,7 +76,7 @@ class MISTtracks(object):
 
     def __init__(self, mistfile=None, labels=["mini", "eep", "feh"],
                  predictions=["loga", "logl", "logt", "logg", "feh_surf"],
-                 ageweight=True, corrfile=None, verbose=True):
+                 ageweight=True, verbose=True):
 
         # Initialize values.
         self.labels = list(np.array(labels))
@@ -88,13 +84,13 @@ class MISTtracks(object):
         self.ndim, self.npred = len(self.labels), len(self.predictions)
         self.null = np.zeros(self.npred) + np.nan
 
-        # Import correction file.
-        self.corrfile = corrfile
-        if corrfile is None:
-            warnings.warn("No correction file has been provided. Predictions "
-                          "at lower masses may suffer.")
-        else:
-            self.build_interpolator_corr()
+        # Set label references.
+        self.mini_idx = np.where(np.array(self.labels) == 'mini')[0][0]
+        self.eep_idx = np.where(np.array(self.labels) == 'eep')[0][0]
+        self.feh_idx = np.where(np.array(self.labels) == 'feh')[0][0]
+        self.logt_idx = np.where(np.array(self.predictions) == 'logt')[0][0]
+        self.logl_idx = np.where(np.array(self.predictions) == 'logl')[0][0]
+        self.logg_idx = np.where(np.array(self.predictions) == 'logg')[0][0]
 
         # Import MIST grid.
         if mistfile is None:
@@ -105,9 +101,9 @@ class MISTtracks(object):
         self.lib_as_grid()
 
         # Construct age weights.
+        self._ageidx = self.predictions.index("loga")
         if ageweight:
             self.add_age_weights()
-        self._ageidx = self.predictions.index("loga")
 
         # Construct grid.
         self.build_interpolator()
@@ -226,47 +222,7 @@ class MISTtracks(object):
                                                     bounds_error=False,
                                                     fill_value=np.nan)
 
-    def build_interpolator_corr(self):
-        """
-        Construct the `~scipy.interpolate.RegularGridInterpolator` object
-        used to generate internal corrections to model predictions.
-        The re-structured grid is stored under `grid_dims_corr`, `xgrid_corr`,
-        and `ygrid_corr`, while the interpolator object is stored under
-        `interpolator_corr`.
-
-        """
-
-        # Load data.
-        mini, eep, feh, dlogt, dlogr = np.loadtxt(self.corrfile).T
-
-        # Set up grid.
-        self.xgrid_corr = (np.unique(mini), np.unique(eep), np.unique(feh))
-        self.output_corr = np.c_[dlogt, dlogr]
-        self.grid_dims_corr = (len(self.xgrid_corr[0]),
-                               len(self.xgrid_corr[1]),
-                               len(self.xgrid_corr[2]),
-                               2)
-        self.X_corr = np.array([np.digitize(mini, np.unique(mini), right=True),
-                                np.digitize(eep, np.unique(eep), right=True),
-                                np.digitize(feh, np.unique(feh), right=True)])
-        self.X_corr = self.X_corr.T
-        self.ygrid_corr = np.zeros(self.grid_dims_corr) + np.nan
-        for x, y in zip(self.X_corr, self.output_corr):
-            self.ygrid_corr[tuple(x)] = y
-
-        # Initialize interpolator
-        self.interpolator_corr = RegularGridInterpolator(self.xgrid_corr,
-                                                         self.ygrid_corr,
-                                                         method='linear',
-                                                         bounds_error=False,
-                                                         fill_value=0.)
-
-        # Set label references.
-        self.logt_idx = np.where(np.array(self.predictions) == 'logt')[0][0]
-        self.logl_idx = np.where(np.array(self.predictions) == 'logl')[0][0]
-        self.logg_idx = np.where(np.array(self.predictions) == 'logg')[0][0]
-
-    def get_predictions(self, labels, apply_corr=True):
+    def get_predictions(self, labels, apply_corr=True, corr_params=None):
         """
         Returns interpolated predictions for the input set of labels.
 
@@ -276,8 +232,14 @@ class MISTtracks(object):
             A set of labels we are interested in generating predictions for.
 
         apply_corr : bool, optional
-            Whether to try and apply empirical corrections based on the input
-            `corrfile`. Default is `True`.
+            Whether to apply empirical corrections to the effective
+            temperature and radius as a function of the input labels.
+            Default is `True`.
+
+        corr_params : tuple, optional
+            Parameters that are used to generate the empirical corrections.
+            If not provided, the default values are used.
+            See `get_corrections` for additional details.
 
         Returns
         -------
@@ -296,12 +258,13 @@ class MISTtracks(object):
         else:
             raise ValueError("Input `labels` not 1-D or 2-D.")
 
-        if apply_corr and self.corrfile is not None:
-            corrs = self.get_corrections(labels)
+        if apply_corr:
+            corrs = self.get_corrections(labels, corr_params=corr_params)
             if ndim == 1:
                 dlogt, dlogr = corrs
                 preds[self.logt_idx] += dlogt
                 preds[self.logl_idx] += 2. * dlogr
+                preds[self.logg_idx] -= 2. * dlogr
             elif ndim == 2:
                 dlogt, dlogr = corrs.T
                 preds[:, self.logt_idx] += dlogt
@@ -310,7 +273,7 @@ class MISTtracks(object):
 
         return preds
 
-    def get_corrections(self, labels):
+    def get_corrections(self, labels, corr_params=None):
         """
         Returns interpolated corrections in some predictions for the input
         set of labels.
@@ -320,6 +283,23 @@ class MISTtracks(object):
         labels : 1-D or 2-D `~numpy.ndarray` of shape `(Nlabel, Nobj)`
             A set of labels we are interested in generating predictions for.
 
+        corr_params : tuple, optional
+            A tuple of `(dtdm, drdm, msto_smooth, feh_coef)` that are used to
+            generate the empirical correction as a function of mass,
+            metallicity, and EEP. Note that corrections are defined
+            so that they do not affect predictions on the main sequence
+            above 1 solar mass.
+            `dtdm` adjusts the log(effective temperature) as a function
+            of mass, while `drdm` adjusts the radius. `msto_smooth` sets the
+            EEP scale for the exponential decay used to smoothly transition
+            back to the underlying theoretical parameters
+            around the Main Sequence Turn-Off (MSTO) point at `eep=454`.
+            `feh_scale` is the coefficient used to enhance/suppress
+            the magnitude of the effect as a function of metallicity
+            following `np.exp(feh_scale * feh)`.
+            If not provided, the default values of `dtdm=0.09`, `drdm=-0.09`,
+            `msto_smooth = 30.`, and `feh_scale = 0.5` are used.
+
         Returns
         -------
         corrs : 1-D or 2-D `~numpy.ndarray` of shape `(Ncorr, Nobj)`
@@ -328,12 +308,38 @@ class MISTtracks(object):
 
         """
 
+        # Extract relevant parameters.
         labels = np.array(labels)
         ndim = labels.ndim
+        mini, eep, feh = labels[[self.mini_idx, self.eep_idx, self.feh_idx]]
+        if corr_params is not None:
+            dtdm, drdm, msto_smooth, feh_scale = corr_params
+        else:
+            dtdm, drdm, msto_smooth, feh_scale = 0.09, -0.09, 30., 0.5
+
+        # Compute logt and logr corrections.
+        dlogt = np.log10(1. + (mini - 1.) * dtdm)  # Teff
+        dlogr = np.log10(1. + (mini - 1.) * drdm)  # radius
+
+        # EEP suppression
+        ecorr = 1 - 1. / (1. + np.exp(-(eep - 454) / msto_smooth))
+
+        # [Fe/H] dependence
+        fcorr = np.exp(feh_scale * feh)
+
+        # Combined effect.
+        dlogt *= ecorr * fcorr
+        dlogr *= ecorr * fcorr
+
         if ndim == 1:
-            corrs = self.interpolator_corr(labels)[0]
+            if mini >= 1.:
+                corrs = np.array([0., 0.])
+            else:
+                corrs = np.array([dlogt, dlogr])
         elif ndim == 2:
-            corrs = self.interpolator_corr(labels)
+            dlogt[mini >= 1.] = 0.
+            dlogr[mini >= 1.] = 0.
+            corrs = np.c_[dlogt, dlogr]
         else:
             raise ValueError("Input `labels` not 1-D or 2-D.")
 
@@ -376,10 +382,6 @@ class SEDmaker(MISTtracks):
         EEP grid point, which are needed when applying priors in age.
         Default is `True`.
 
-    corrfile : str, optional
-        The name of the text file containing corrections for the MIST tracks.
-        Default is `None`. If not provided, a warning will be raised.
-
     verbose : bool, optional
         Whether to output progress to `~sys.stderr`. Default is `True`.
 
@@ -388,7 +390,7 @@ class SEDmaker(MISTtracks):
     def __init__(self, filters=None, nnfile=None, mistfile=None,
                  labels=["mini", "eep", "feh"],
                  predictions=["loga", "logl", "logt", "logg", "feh_surf"],
-                 ageweight=True, corrfile=None, verbose=True):
+                 ageweight=True, verbose=True):
 
         # Initialize filters.
         if filters is None:
@@ -400,7 +402,7 @@ class SEDmaker(MISTtracks):
         # Initialize underlying MIST tracks.
         super(SEDmaker, self).__init__(mistfile=mistfile, labels=labels,
                                        predictions=predictions,
-                                       ageweight=ageweight, corrfile=corrfile,
+                                       ageweight=ageweight,
                                        verbose=verbose)
 
         # Initialize NNs.
@@ -408,9 +410,9 @@ class SEDmaker(MISTtracks):
                                     verbose=verbose)
 
     def get_sed(self, mini=1., eep=350., feh=0., av=0., rv=3.3, smf=0.,
-                dist=1000., loga_max=10.14, tol=1e-3, mini_bound=0.5,
-                apply_corr=True, eep2=None, return_eep2=False,
-                return_dict=True, **kwargs):
+                dist=1000., loga_max=10.14, eep_binary_max=480.,
+                tol=1e-3, mini_bound=0.5, apply_corr=True, corr_params=None,
+                eep2=None, return_eep2=False, return_dict=True, **kwargs):
         """
         Generate and return the Spectral Energy Distribution (SED)
         and associated parameters for a given set of inputs.
@@ -439,8 +441,7 @@ class SEDmaker(MISTtracks):
 
         smf : float, optional
             Secondary mass fraction for unresolved binary. Default is `0.`
-            (single stellar system). Note that binaries are not permitted
-            off the main sequence (`eep > 454`).
+            (i.e. single stellar system).
 
         dist : float, optional
             Distance in parsecs. Default is `1000.` (i.e. 1 kpc).
@@ -448,6 +449,11 @@ class SEDmaker(MISTtracks):
         loga_max : float, optional
             The maximum allowed age. No SEDs will be generated above
             `loga_max`. Default is `10.14` (13.8 Gyr).
+
+        eep_binary_max : float, optional
+            The maximum EEP where binaries are permitted. By default, binaries
+            are disallowed once the primary begins its giant expansion
+            after turning off the Main Sequence at `eep=480.`.
 
         tol : float, optional
             The tolerance in the `loga` solution for a given EEP. Used when
@@ -460,8 +466,14 @@ class SEDmaker(MISTtracks):
             Default is `0.5`.
 
         apply_corr : bool, optional
-            Whether to apply corrections to the generic predictions based on
-            the correction file loaded on initialization. Default is `True`.
+            Whether to apply empirical corrections to the effective
+            temperature and radius as a function of mass, metallicity, and EEP.
+            Default is `True`.
+
+        corr_params : tuple, optional
+            Parameters that are used to generate the empirical corrections.
+            If not provided, the default values are used.
+            See `get_corrections` for additional details.
 
         eep2 : float, optional
             Equivalent evolutionary point (EEP) of the secondary. If not
@@ -494,7 +506,8 @@ class SEDmaker(MISTtracks):
         labels = np.array([labels[l] for l in self.labels])  # reorder
 
         # Generate predictions.
-        params_arr = self.get_predictions(labels, apply_corr=apply_corr)
+        params_arr = self.get_predictions(labels, apply_corr=apply_corr,
+                                          corr_params=corr_params)
         params = dict(zip(self.predictions, params_arr))  # convert to dict
         sed = np.full(self.FNNP.NFILT, np.nan)  # SED
 
@@ -512,7 +525,7 @@ class SEDmaker(MISTtracks):
                                 feh_surf=params["feh_surf"],
                                 alphafe=0., av=av, rv=rv, dist=dist)
             # Add in unresolved binary component if we're on the Main Sequence.
-            if smf > 0. and eep <= 454. and mini * smf >= mini_min:
+            if smf > 0. and eep <= eep_binary_max and mini * smf >= mini_min:
                 # Generate predictions for secondary binary component.
                 if eep2 is None:
                     # Convert loga to EEP.
@@ -521,7 +534,8 @@ class SEDmaker(MISTtracks):
                 labels2 = {'mini': mini * smf, 'eep': eep2, 'feh': feh}
                 labels2 = np.array([labels2[l] for l in self.labels])
                 params_arr2 = self.get_predictions(labels2,
-                                                   apply_corr=apply_corr)
+                                                   apply_corr=apply_corr,
+                                                   corr_params=corr_params)
                 params2 = dict(zip(self.predictions, params_arr2))
                 # Compute SED.
                 sed2 = self.FNNP.sed(logl=params2["logl"],
@@ -567,8 +581,7 @@ class SEDmaker(MISTtracks):
 
         smf : float, optional
             Secondary mass fraction for unresolved binary. Default is `0.`
-            (single stellar system). Note that binaries are not permitted
-            off the main sequence (`eep > 454`).
+            (single stellar system).
 
         tol : float, optional
             The tolerance in the `loga` solution for a given EEP.
@@ -596,7 +609,8 @@ class SEDmaker(MISTtracks):
     def make_grid(self, mini_grid=None, eep_grid=None, feh_grid=None,
                   smf_grid=None, av_grid=None, av_wt=None,
                   rv_grid=None, rv_wt=None, dist=1000., loga_max=10.14,
-                  apply_corr=True, mini_bound=0.5, verbose=True, **kwargs):
+                  eep_binary_max=480., mini_bound=0.5,
+                  apply_corr=True, corr_params=None, verbose=True, **kwargs):
         """
         Generate and return SED predictions over a grid in inputs.
         Reddened photometry is generated by fitting
@@ -660,14 +674,25 @@ class SEDmaker(MISTtracks):
             The maximum allowed age. No SEDs will be generated above
             `loga_max`. Default is `10.14` (13.8 Gyr).
 
-        apply_corr : bool, optional
-            Whether to apply corrections to the predictions/photometry based on
-            the correction file loaded on initialization. Default is `True`.
+        eep_binary_max : float, optional
+            The maximum EEP where binaries are permitted. By default, binaries
+            are disallowed once the primary begins its giant expansion
+            after turning off the Main Sequence at `eep=480.`.
 
         mini_bound : float, optional
             A hard bound on the initial mass. Any models below this threshold
             will be masked (including those from binary components).
             Default is `0.5`.
+
+        apply_corr : bool, optional
+            Whether to apply empirical corrections to the effective
+            temperature and radius as a function of mass, metallicity, and EEP.
+            Default is `True`.
+
+        corr_params : tuple, optional
+            Parameters that are used to generate the empirical corrections.
+            If not provided, the default values are used.
+            See `get_corrections` for additional details.
 
         verbose : bool, optional
             Whether to print progress. Default is `True`.
@@ -725,8 +750,10 @@ class SEDmaker(MISTtracks):
              params2, eep2) = self.get_sed(mini=mini, eep=eep, feh=feh,
                                            smf=smf, av=0., rv=3.3,
                                            dist=dist, loga_max=loga_max,
+                                           eep_binary_max=eep_binary_max,
                                            return_dict=False, return_eep2=True,
                                            apply_corr=apply_corr,
+                                           corr_params=corr_params,
                                            mini_bound=mini_bound)
             # Save predictions for primary.
             self.grid_param[i] = tuple(params)
@@ -743,8 +770,10 @@ class SEDmaker(MISTtracks):
                                                smf=smf, eep2=eep2,
                                                av=av, rv=rv,
                                                dist=dist, loga_max=loga_max,
+                                               eep_binary_max=eep_binary_max,
                                                return_dict=False,
                                                apply_corr=apply_corr,
+                                               corr_params=corr_params,
                                                mini_bound=mini_bound)[0]
                                   for av in av_grid]
                                  for rv in rv_grid])
@@ -1026,17 +1055,13 @@ class Isochrone(object):
         `["mini", "mass", "logl", "logt", "logr", "logg", "feh_surf"]`.
         **Do not modify this unless you know what you're doing.**
 
-    corrfile : str, optional
-        The name of the text file containing corrections for the MIST models.
-        Default is `None`. If not provided, a warning will be raised.
-
     verbose : bool, optional
         Whether to output progress to `~sys.stderr`. Default is `True`.
 
     """
 
     def __init__(self, filters=None, nnfile=None, mistfile=None,
-                 predictions=None, corrfile=None, verbose=True):
+                 predictions=None, verbose=True):
 
         # Initialize values.
         if filters is None:
@@ -1055,14 +1080,6 @@ class Isochrone(object):
 
         if verbose:
             sys.stderr.write('Constructing MIST isochrones...')
-
-        # Import correction file.
-        self.corrfile = corrfile
-        if corrfile is None:
-            warnings.warn("No correction file has been provided. Predictions "
-                          "at lower masses may suffer.")
-        else:
-            self.build_interpolator_corr()
 
         # Load file.
         with h5py.File(mistfile) as f:
@@ -1125,42 +1142,8 @@ class Isochrone(object):
                                      'feh_surf')[0][0]
         self.mini_idx = np.where(np.array(self.predictions) == 'mini')[0][0]
 
-    def build_interpolator_corr(self):
-        """
-        Construct the `~scipy.interpolate.RegularGridInterpolator` object
-        used to generate internal corrections to model predictions.
-        The re-structured grid is stored under `grid_dims_corr`, `xgrid_corr`,
-        and `ygrid_corr`, while the interpolator object is stored under
-        `interpolator_corr`.
-
-        """
-
-        # Load data.
-        mini, eep, feh, dlogt, dlogr = np.loadtxt(self.corrfile).T
-
-        # Set up grid.
-        self.xgrid_corr = (np.unique(mini), np.unique(eep), np.unique(feh))
-        self.output_corr = np.c_[dlogt, dlogr]
-        self.grid_dims_corr = (len(self.xgrid_corr[0]),
-                               len(self.xgrid_corr[1]),
-                               len(self.xgrid_corr[2]),
-                               2)
-        self.X_corr = np.array([np.digitize(mini, np.unique(mini), right=True),
-                                np.digitize(eep, np.unique(eep), right=True),
-                                np.digitize(feh, np.unique(feh), right=True)])
-        self.X_corr = self.X_corr.T
-        self.ygrid_corr = np.zeros(self.grid_dims_corr) + np.nan
-        for x, y in zip(self.X_corr, self.output_corr):
-            self.ygrid_corr[tuple(x)] = y
-
-        # Initialize interpolator
-        self.interpolator_corr = RegularGridInterpolator(self.xgrid_corr,
-                                                         self.ygrid_corr,
-                                                         method='linear',
-                                                         bounds_error=False,
-                                                         fill_value=0.)
-
-    def get_predictions(self, feh=0., loga=8.5, eep=None, apply_corr=True):
+    def get_predictions(self, feh=0., loga=8.5, eep=None,
+                        apply_corr=True, corr_params=None):
         """
         Returns physical predictions for a given metallicity, log(age), and
         EEP (either a single value or a grid).
@@ -1180,8 +1163,14 @@ class Isochrone(object):
             the default EEP grid defined on initialization will be used.
 
         apply_corr : bool, optional
-            Whether to try and apply empirical corrections based on the input
-            `corrfile`. Default is `True`.
+            Whether to apply empirical corrections to the effective
+            temperature and radius as a function of mass, metallicity, and EEP.
+            Default is `True`.
+
+        corr_params : tuple, optional
+            Parameters that are used to generate the empirical corrections.
+            If not provided, the default values are used.
+            See `get_corrections` for additional details.
 
         Returns
         -------
@@ -1204,8 +1193,9 @@ class Isochrone(object):
         mini = preds[:, self.mini_idx]
 
         # Apply corrections.
-        if apply_corr and self.corrfile is not None:
-            corrs = self.get_corrections(mini=mini, feh=feh, eep=eep)
+        if apply_corr:
+            corrs = self.get_corrections(mini=mini, feh=feh, eep=eep,
+                                         corr_params=corr_params)
             dlogt, dlogr = corrs.T
             preds[:, self.logt_idx] += dlogt
             preds[:, self.logl_idx] += 2. * dlogr
@@ -1213,7 +1203,7 @@ class Isochrone(object):
 
         return preds
 
-    def get_corrections(self, mini=1., feh=0., eep=350.):
+    def get_corrections(self, mini=1., feh=0., eep=350., corr_params=None):
         """
         Returns interpolated corrections in some predictions for the input
         set of labels.
@@ -1231,6 +1221,23 @@ class Isochrone(object):
             Equivalent evolutionary point(s) (EEPs). See the MIST documentation
             for additional details on how these are defined. Default is `350.`.
 
+        corr_params : tuple, optional
+            A tuple of `(dtdm, drdm, msto_smooth, feh_coef)` that are used to
+            generate the empirical correction as a function of mass,
+            metallicity, and EEP. Note that corrections are defined
+            so that they do not affect predictions on the main sequence
+            above 1 solar mass.
+            `dtdm` adjusts the log(effective temperature) as a function
+            of mass, while `drdm` adjusts the radius. `msto_smooth` sets the
+            EEP scale for the exponential decay used to smoothly transition
+            back to the underlying theoretical parameters
+            around the Main Sequence Turn-Off (MSTO) point at `eep=454`.
+            `feh_scale` is the coefficient used to enhance/suppress
+            the magnitude of the effect as a function of metallicity
+            following `np.exp(feh_scale * feh)`.
+            If not provided, the default values of `dtdm=0.09`, `drdm=-0.09`,
+            `msto_smooth = 30.`, and `feh_scale = 0.5` are used.
+
         Returns
         -------
         corrs : 1-D or 2-D `~numpy.ndarray` of shape `(Ncorr, Nobj)`
@@ -1239,16 +1246,42 @@ class Isochrone(object):
 
         """
 
+        if corr_params is not None:
+            dtdm, drdm, msto_smooth, feh_scale = corr_params
+        else:
+            dtdm, drdm, msto_smooth, feh_scale = 0.09, -0.09, 30., 0.5
+
+        # Baseline corrections to logt and logr.
+        dlogt = np.log10(1. + (mini - 1.) * dtdm)  # Teff
+        dlogr = np.log10(1. + (mini - 1.) * drdm)  # radius
+
+        # EEP suppression.
+        ecorr = 1 - 1. / (1. + np.exp(-(eep - 454) / msto_smooth))
+
+        # [Fe/H] dependence.
+        fcorr = np.exp(feh_scale * feh)
+
+        # Combined effect.
+        dlogt *= ecorr * fcorr
+        dlogr *= ecorr * fcorr
+
+        # Remove corrections above 1 solar mass.
         labels = np.c_[mini, eep, feh]
         if labels.shape[0] == 1:
-            corrs = self.interpolator_corr(labels[0])[0]
+            if mini >= 1.:
+                corrs = np.array([0., 0.])
+            else:
+                corrs = np.array([dlogt, dlogr])
         else:
-            corrs = self.interpolator_corr(labels)
+            dlogt[mini >= 1.] = 0.
+            dlogr[mini >= 1.] = 0.
+            corrs = np.c_[dlogt, dlogr]
 
         return corrs
 
     def get_seds(self, feh=0., loga=8.5, eep=None, av=0., rv=3.3, smf=0.,
-                 dist=1000., mini_bound=0.5, apply_corr=True,
+                 dist=1000., mini_bound=0.5, eep_binary_max=480.,
+                 apply_corr=True, corr_params=None,
                  return_dict=True, **kwargs):
         """
         Generate and return the Spectral Energy Distribution (SED)
@@ -1278,8 +1311,7 @@ class Isochrone(object):
 
         smf : float, optional
             Secondary mass fraction for unresolved binary. Default is `0.`
-            (single stellar system). Note that binaries are not permitted
-            off the main sequence (`eep > 454`).
+            (single stellar system).
 
         dist : float, optional
             Distance in parsecs. Default is `1000.` (i.e. 1 kpc).
@@ -1289,9 +1321,20 @@ class Isochrone(object):
             will be masked (including those from binary components).
             Default is `0.5`.
 
+        eep_binary_max : float, optional
+            The maximum EEP where binaries are permitted. By default, binaries
+            are disallowed once the primary begins its giant expansion
+            after turning off the Main Sequence at `eep=480.`.
+
         apply_corr : bool, optional
-            Whether to try and apply empirical corrections based on the input
-            `corrfile`. Default is `True`.
+            Whether to apply empirical corrections to the effective
+            temperature and radius as a function of mass, metallicity, and EEP.
+            Default is `True`.
+
+        corr_params : tuple, optional
+            Parameters that are used to generate the empirical corrections.
+            If not provided, the default values are used.
+            See `get_corrections` for additional details.
 
         return_dict : bool, optional
             Whether to return the parameters as a dictionary.
@@ -1320,7 +1363,8 @@ class Isochrone(object):
 
         # Generate predictions.
         params_arr = self.get_predictions(feh=feh, loga=loga, eep=eep,
-                                          apply_corr=apply_corr)
+                                          apply_corr=apply_corr,
+                                          corr_params=corr_params)
         params = dict(zip(self.predictions, params_arr.T))  # convert to dict
 
         # Generate isochrone SEDs.
@@ -1339,12 +1383,18 @@ class Isochrone(object):
         if 0. < smf < 1.:
             mini = params["mini"]
             mini2 = mini * smf
-            eep2 = np.interp(mini2, mini, eep, left=np.nan, right=np.nan)
+            mini_mask = np.where(np.isfinite(mini))[0]
+            if len(mini_mask) > 0:
+                eep2 = np.interp(mini2, mini[mini_mask], eep[mini_mask],
+                                 left=np.nan, right=np.nan)
+            else:
+                eep2 = np.full_like(eep, np.nan)
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                eep2[(eep2 > 454) | (eep > 454)] = np.nan
+                eep2[(eep2 > eep_binary_max) | (eep > eep_binary_max)] = np.nan
             params_arr2 = self.get_predictions(feh=feh, loga=loga, eep=eep2,
-                                               apply_corr=apply_corr)
+                                               apply_corr=apply_corr,
+                                               corr_params=corr_params)
             params2 = dict(zip(self.predictions, params_arr2.T))
             seds2 = np.full((Neep, self.FNNP.NFILT), np.nan)
             for i in range(Neep):
@@ -1357,7 +1407,7 @@ class Isochrone(object):
                                              dist=dist)
             seds = add_mag(seds, seds2)
         elif smf == 1.:
-            seds[eep <= 454] -= 2.5 * np.log10(2.)
+            seds[eep <= eep_binary_max] -= 2.5 * np.log10(2.)
             params2, params_arr2 = deepcopy(params), deepcopy(params_arr2)
 
         # If we are not returning a dictionary, overwrite `params`.

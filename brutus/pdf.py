@@ -18,6 +18,7 @@ from astropy.coordinates import CylindricalRepresentation as CylRep
 from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter as norm_kde
 import copy
+from scipy.stats import truncnorm
 
 from .utils import draw_sar
 from .dust import Bayestar
@@ -30,8 +31,10 @@ except ImportError:
 __all__ = ["imf_lnprior", "ps1_MrLF_lnprior", "parallax_lnprior",
            "scale_parallax_lnprior", "parallax_to_scale",
            "logn_disk", "logn_halo",
-           "logp_feh_disk", "logp_feh_halo", "gal_lnprior",
-           "dust_lnprior", "bin_pdfs_distred"]
+           "logp_feh_disk", "logp_feh_halo",
+           "logp_age_disk", "logp_age_halo",
+           "gal_lnprior", "dust_lnprior",
+           "bin_pdfs_distred"]
 
 
 def imf_lnprior(mgrid, alpha_low=1.3, alpha_high=2.3, mass_break=0.5,
@@ -392,8 +395,8 @@ def logp_feh_disk(feh, Z, feh_mean=-0.89, feh_sigma=0.2,
 
     Returns
     -------
-    logn : `~numpy.ndarray` of shape (N)
-        The corresponding normalized ln(number density).
+    logp : `~numpy.ndarray` of shape (N)
+        The corresponding normalized ln(probability).
 
     """
 
@@ -415,8 +418,7 @@ def logp_feh_halo(feh, feh_mean=-1.46, feh_sigma=0.3):
     Parameters
     ----------
     feh : `~numpy.ndarray` of shape (N)
-        The metallicities of the corresponding models whose `Z` has been
-        provided.
+        The metallicities of the corresponding models.
 
     feh_mean : float, optional
         The mean metallicity of the halo. Default is `-1.46`.
@@ -427,8 +429,8 @@ def logp_feh_halo(feh, feh_mean=-1.46, feh_sigma=0.3):
 
     Returns
     -------
-    logn : `~numpy.ndarray` of shape (N)
-        The corresponding normalized ln(number density).
+    logp : `~numpy.ndarray` of shape (N)
+        The corresponding normalized ln(probability).
 
     """
 
@@ -440,20 +442,172 @@ def logp_feh_halo(feh, feh_mean=-1.46, feh_sigma=0.3):
     return lnprior
 
 
+def logp_age_disk(age, Z, feh_mean=-0.89, exp_amp=0.55, exp_scale=0.5,
+                  max_age=13.8, min_age=0.,
+                  feh_age_ctr=-0.5, feh_age_scale=0.5,
+                  nsigma_from_max_age=2., max_sigma=4., min_sigma=1.):
+    """
+    Log-prior for the age in the disk component of the galaxy. Designed to
+    follow the disk metallicity prior.
+
+    Parameters
+    ----------
+    age : `~numpy.ndarray` of shape (N)
+        The ages of the corresponding models whose `Z` has been provided.
+
+    Z : `~numpy.ndarray` of shape (N)
+        The height above the galactic midplane.
+
+    feh_mean : float, optional
+        The mean metallicity of the disk in the midplane. Default is `-0.89`.
+
+    exp_amp : float, optional
+        The amplitude of the exponential dependence of the metallicity prior
+        on `Z`. Default is `0.55`.
+
+    exp_scale : float, optional
+        The scale height for the exponential dependence of the metallicity
+        prior on `Z` (in units of kpc). Default is `0.5`.
+
+    max_age : float, optional
+        The maximum allowed mean age (in Gyr). Default is `13.8`.
+
+    min_age : float, optional
+        The minimum allowed mean age (in Gyr). Default is `0.`.
+
+    feh_age_ctr : float, optional
+        The mean metallicity where the mean age is halfway between
+        `max_age` and `min_age`. Default is `-0.5`.
+
+    feh_age_scale : float, optional
+        The exponential scale-length at which the mean age approaches
+        `max_age` or `min_age` as it moves to lower or higher mean metallicity,
+        respectively. Default is `0.5`.
+
+    nsigma_from_max_age : float, optional
+        The number of sigma away the mean age should be from `max_age`
+        (i.e. the mean age is `nsigma_from_max_age`-sigma lower
+        than `max_age`). Default is `2.`.
+
+    max_sigma : float, optional
+        The maximum allowed sigma (in Gyr). Default is `4.`.
+
+    min_sigma : float, optional
+        The minimum allowed sigma (in Gyr). Default is `1.`.
+
+    Returns
+    -------
+    logp : `~numpy.ndarray` of shape (N)
+        The corresponding normalized ln(probability).
+
+    """
+
+    # Compute mean metallicity.
+    feh_mean_pred = feh_mean + exp_amp * np.exp(-np.abs(Z) / exp_scale)
+
+    # Compute mean age.
+    age_mean_pred = ((max_age - min_age)
+                     / (1. + np.exp((feh_mean_pred - feh_age_ctr)
+                                    / feh_age_scale))
+                     + min_age)
+
+    # Compute age spread.
+    age_sigma_pred = (max_age - age_mean_pred) / nsigma_from_max_age
+    age_sigma_pred[age_sigma_pred > max_sigma] = max_sigma  # ceiling to max
+    age_sigma_pred[age_sigma_pred < min_sigma] = min_sigma  # floor to min
+
+    # Compute log-probability.
+    a = (min_age - age_mean_pred) / age_sigma_pred
+    b = (max_age - age_mean_pred) / age_sigma_pred
+    lnprior = truncnorm.logpdf(age, a, b,
+                               loc=age_mean_pred, scale=age_sigma_pred)
+
+    return lnprior
+
+
+def logp_age_halo(age, feh_mean=-1.46,
+                  max_age=13.8, min_age=0.,
+                  feh_age_ctr=-0.5, feh_age_scale=0.5,
+                  nsigma_from_max_age=2., max_sigma=4., min_sigma=1.):
+    """
+    Log-prior for the age in the halo component of the galaxy. Designed to
+    follow the halo metallicity prior.
+
+    Parameters
+    ----------
+    age : `~numpy.ndarray` of shape (N)
+        The ages of the corresponding models.
+
+    feh_mean : float, optional
+        The mean metallicity of the halo. Default is `-1.46`.
+
+    max_age : float, optional
+        The maximum allowed mean age (in Gyr). Default is `13.8`.
+
+    min_age : float, optional
+        The minimum allowed mean age (in Gyr). Default is `0.`.
+
+    feh_age_ctr : float, optional
+        The mean metallicity where the mean age is halfway between
+        `max_age` and `min_age`. Default is `-0.5`.
+
+    feh_age_scale : float, optional
+        The exponential scale-length at which the mean age approaches
+        `max_age` or `min_age` as it moves to lower or higher mean metallicity,
+        respectively. Default is `0.5`.
+
+    nsigma_from_max_age : float, optional
+        The number of sigma away the mean age should be from `max_age`
+        (i.e. the mean age is `nsigma_from_max_age`-sigma lower
+        than `max_age`). Default is `2.`.
+
+    max_sigma : float, optional
+        The maximum allowed sigma (in Gyr). Default is `4.`.
+
+    min_sigma : float, optional
+        The minimum allowed sigma (in Gyr). Default is `1.`.
+
+    Returns
+    -------
+    logn : `~numpy.ndarray` of shape (N)
+        The corresponding normalized ln(number density).
+
+    """
+
+    # Compute mean age.
+    age_mean_pred = ((max_age - min_age)
+                     / (1. + np.exp((feh_mean - feh_age_ctr) / feh_age_scale))
+                     + min_age)
+
+    # Compute age spread.
+    age_sigma_pred = (max_age - age_mean_pred) / nsigma_from_max_age
+    age_sigma_pred = min(max(age_sigma_pred, min_sigma), max_sigma)  # bound
+
+    # Compute log-probability.
+    a = (min_age - age_mean_pred) / age_sigma_pred
+    b = (max_age - age_mean_pred) / age_sigma_pred
+    lnprior = truncnorm.logpdf(age, a, b,
+                               loc=age_mean_pred, scale=age_sigma_pred)
+
+    return lnprior
+
+
 def gal_lnprior(dists, coord, labels=None, R_solar=8., Z_solar=0.025,
                 R_thin=2.15, Z_thin=0.245, R_thick=3.26, Z_thick=0.745,
                 f_thick=0.13, Rb_halo=27.8, Rs_halo=0.5, q_halo=0.7,
                 eta_halo_inner=2.62, eta_halo_outer=3.80, f_halo=0.003,
-                feh_thin=-0.89, feh_thick=-0.75, feh_disk_sigma=0.2,
-                feh_disk_exp_amp=0.55, feh_disk_exp_scale=0.5, feh_f_thin=0.63,
+                feh_thin=-0.75, feh_thick=-0.89, feh_disk_sigma=0.2,
+                feh_disk_exp_amp=0.55, feh_disk_exp_scale=0.5, feh_f_thin=0.37,
                 feh_halo=-1.46, feh_halo_sigma=0.3,
+                max_age=13.8, min_age=0., feh_age_ctr=-0.5, feh_age_scale=0.5,
+                nsigma_from_max_age=2., max_sigma=4., min_sigma=1.,
                 return_components=False):
     """
     Log-prior for a galactic model containing a thin disk, thick disk, and
     halo. The default behavior imposes a prior based on the total
-    number density from all three components. If the metallicity is
-    provided, then an associated galactic metallicity model is also imposed.
-    Parameters taken from Green et al. (2014, 2015, 2018).
+    number density from all three components. If the metallicity and/or age is
+    provided, then an associated galactic metallicity and/or age model
+    is also imposed. Partially based on Green et al. (2014).
 
     Parameters
     ----------
@@ -520,11 +674,11 @@ def gal_lnprior(dists, coord, labels=None, R_solar=8., Z_solar=0.025,
 
     feh_thin : float, optional
         The mean metallicity of the thin disk in the midplane.
-        Default is `-0.89`.
+        Default is `-0.75`.
 
     feh_thick : float, optional
         The mean metallicity of the thick disk in the midplane.
-        Default is `-0.75`.
+        Default is `-0.89`.
 
     feh_disk_sigma : float, optional
         The standard deviation in the metallicity of the disk.
@@ -538,6 +692,13 @@ def gal_lnprior(dists, coord, labels=None, R_solar=8., Z_solar=0.025,
         The scale height for the exponential dependence of the metallicity
         prior on `Z` in the disk (in units of kpc). Default is `0.5`.
 
+    feh_f_thin : float, optional
+        The fraction of the metallicity distribution comprised of the
+        "thin disk" (i.e. higher-metallicity) component. Default is `0.37`.
+        Note that since the age model is tied to the metallicity model,
+        `feh_f_thin` is also used to determine the relative contribution
+        of each age component.
+
     feh_halo : float, optional
         The mean metallicity of the halo. Default is `-1.46`.
 
@@ -545,22 +706,43 @@ def gal_lnprior(dists, coord, labels=None, R_solar=8., Z_solar=0.025,
         The standard deviation in the metallicity of the halo.
         Default is `0.3`.
 
+    max_age : float, optional
+        The maximum allowed mean age (in Gyr). Default is `13.8`.
+
+    min_age : float, optional
+        The minimum allowed mean age (in Gyr). Default is `0.`.
+
+    feh_age_ctr : float, optional
+        The mean metallicity where the mean age is halfway between
+        `max_age` and `min_age`. Default is `-0.5`.
+
+    feh_age_scale : float, optional
+        The exponential scale-length at which the mean age approaches
+        `max_age` or `min_age` as it moves to lower or higher mean metallicity,
+        respectively. Default is `0.5`.
+
+    nsigma_from_max_age : float, optional
+        The number of sigma away the mean age should be from `max_age`
+        (i.e. the mean age is `nsigma_from_max_age`-sigma lower
+        than `max_age`). Default is `2.`.
+
+    max_sigma : float, optional
+        The maximum allowed sigma (in Gyr). Default is `4.`.
+
+    min_sigma : float, optional
+        The minimum allowed sigma (in Gyr). Default is `1.`.
+
     return_components : bool, optional
-        Whether to also return the separate components. Default is `False`.
+        Whether to also return the separate components that make up
+        the prior. Default is `False`.
 
     Returns
     -------
     lnprior : `~numpy.ndarray` of shape (N)
         The corresponding normalized ln(prior).
 
-    lnprior_thin : `~numpy.ndarray` of shape (N), optional
-        The corresponding normalized ln(prior) from the thin disk.
-
-    lnprior_thick : `~numpy.ndarray` of shape (N), optional
-        The corresponding normalized ln(prior) from the thick disk.
-
-    lnprior_halo : `~numpy.ndarray` of shape (N), optional
-        The corresponding normalized ln(prior) from the halo.
+    components : dict, optional
+        The individual components of `lnprior`.
 
     """
 
@@ -595,27 +777,30 @@ def gal_lnprior(dists, coord, labels=None, R_solar=8., Z_solar=0.025,
     lnprior = logsumexp([logp_thin, logp_thick, logp_halo], axis=0)
 
     # Collect components.
-    components = [logp_thin, logp_thick, logp_halo]
+    components = {}
+    components['number_density'] = [logp_thin, logp_thick, logp_halo]
 
-    # Apply the galactic metallicity prior.
+    # Apply more sophisticated priors.
     if labels is not None:
+
+        # Compute disk/halo membership probabilities.
+        logp_disk = logsumexp([logp_thin, logp_thick], axis=0)
+        lnprior_disk = logp_disk - lnprior
+        lnprior_halo = logp_halo - lnprior
+
+        # Apply the galactic metallicity prior.
         try:
             # Grab metallicities.
             feh = labels['feh']
 
-            # Compute membership probabilities.
-            logp_disk = logsumexp([logp_thin, logp_thick], axis=0)
-            lnprior_disk = logp_disk - lnprior
-            lnprior_halo = logp_halo - lnprior
-
-            # Compute think disk metallicity prior.
+            # Compute "thin disk" metallicity prior.
             feh_lnp_thin = logp_feh_disk(feh, Z, feh_mean=feh_thin,
                                          feh_sigma=feh_disk_sigma,
                                          exp_amp=feh_disk_exp_amp,
                                          exp_scale=feh_disk_exp_scale)
             feh_lnp_thin += np.log(feh_f_thin) + lnprior_disk
 
-            # Compute thick disk metallicity prior.
+            # Compute "thick disk" metallicity prior.
             feh_lnp_thick = logp_feh_disk(feh, Z, feh_mean=feh_thick,
                                           feh_sigma=feh_disk_sigma,
                                           exp_amp=feh_disk_exp_amp,
@@ -633,7 +818,57 @@ def gal_lnprior(dists, coord, labels=None, R_solar=8., Z_solar=0.025,
 
             # Add to computed log-prior components.
             lnprior += feh_lnp
-            components += [feh_lnp_thin, feh_lnp_thick, feh_lnp_halo]
+            components['feh'] = [feh_lnp_thin, feh_lnp_thick, feh_lnp_halo]
+        except:
+            pass
+
+        # Apply the galactic age prior.
+        try:
+            # Grab ages (in Gyr).
+            age = 10**labels['loga'] / 1e9
+            nsig = nsigma_from_max_age
+
+            # Compute "thin disk" age prior.
+            age_lnp_thin = logp_age_disk(age, Z, feh_mean=feh_thin,
+                                         exp_amp=feh_disk_exp_amp,
+                                         exp_scale=feh_disk_exp_scale,
+                                         max_age=max_age, min_age=min_age,
+                                         feh_age_ctr=feh_age_ctr,
+                                         feh_age_scale=feh_age_scale,
+                                         nsigma_from_max_age=nsig,
+                                         max_sigma=max_sigma,
+                                         min_sigma=min_sigma)
+            age_lnp_thin += np.log(feh_f_thin) + lnprior_disk
+
+            # Compute "thick disk" age prior.
+            age_lnp_thick = logp_age_disk(age, Z, feh_mean=feh_thick,
+                                          exp_amp=feh_disk_exp_amp,
+                                          exp_scale=feh_disk_exp_scale,
+                                          max_age=max_age, min_age=min_age,
+                                          feh_age_ctr=feh_age_ctr,
+                                          feh_age_scale=feh_age_scale,
+                                          nsigma_from_max_age=nsig,
+                                          max_sigma=max_sigma,
+                                          min_sigma=min_sigma)
+            age_lnp_thick += np.log(1. - feh_f_thin) + lnprior_disk
+
+            # Compute halo age prior.
+            age_lnp_halo = logp_age_halo(age, feh_mean=feh_halo,
+                                         max_age=max_age, min_age=min_age,
+                                         feh_age_ctr=feh_age_ctr,
+                                         feh_age_scale=feh_age_scale,
+                                         nsigma_from_max_age=nsig,
+                                         max_sigma=max_sigma,
+                                         min_sigma=min_sigma)
+            age_lnp_halo += lnprior_halo
+
+            # Compute total age prior.
+            age_lnp = logsumexp([age_lnp_thin, age_lnp_thick, age_lnp_halo],
+                                axis=0)
+
+            # Add to computed log-prior components.
+            lnprior += age_lnp
+            components['age'] = [age_lnp_thin, age_lnp_thick, age_lnp_halo]
         except:
             pass
 
@@ -643,7 +878,7 @@ def gal_lnprior(dists, coord, labels=None, R_solar=8., Z_solar=0.025,
         return lnprior, components
 
 
-def dust_lnprior(dists, coord, avs, dustfile='bayestar2017_v1.h5',
+def dust_lnprior(dists, coord, avs, dustfile='bayestar2019_v1.h5',
                  offset=0., scale=1., smooth=1., scatter=0.2,
                  return_components=False):
     """
@@ -662,9 +897,9 @@ def dust_lnprior(dists, coord, avs, dustfile='bayestar2017_v1.h5',
 
     dustfile : str, optional
         The filepath pointing to where the 3-D dust map is stored. The default
-        is `bayestar2017_v1.h5`, which can be downloaded from the
-        GitHub repository and is based on the "Bayestar17" 3-D
-        dust map from Green et al. (2018).
+        is `bayestar2019_v1.h5`, which can be downloaded from the
+        GitHub repository and is based on the "Bayestar19" 3-D
+        dust map from Green et al. (2019).
 
     offset : float, optional
         A systematic offset to be added to the corresponding A(V) predictions
