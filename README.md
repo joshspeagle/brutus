@@ -6,7 +6,7 @@
 stellar properties from photometry using a grid of stellar models.
 
 The package is designed to be highly modular, with current modules including
-utilities for modeling individual stars, co-eval stellar associations, and
+utilities for modeling individual stars, star clusters, and
 stellar-based 3-D dust mapping.
 
 ### Documentation
@@ -14,15 +14,15 @@ stellar-based 3-D dust mapping.
 
 ### Data
 
-Various files needed to run different `brutus` modules can be downloaded
-[here](https://www.dropbox.com/sh/ozq9tk8iyy8fhte/AAC_G0wA9eQ8shHbZzAKwLe-a?dl=0).
+**Various files needed to run different `brutus` modules can be downloaded
+[here](https://www.dropbox.com/sh/ozq9tk8iyy8fhte/AAC_G0wA9eQ8shHbZzAKwLe-a?dl=0).**
 Various components of these are described below.
 
 #### Stellar Models
 Note that while `brutus` can (in theory) be run over an arbitrary set of
 stellar models, it is configured for two by default: 
 [MIST](http://waps.cfa.harvard.edu/MIST/)
-and [Bayestar](https://arxiv.org/pdf/1401.1508.pdf).
+and [Bayestar](https://arxiv.org/abs/1401.1508).
 
 #### Zero-points
 Zero-point offsets in several bands have been estimated using Gaia data
@@ -42,9 +42,11 @@ These are optimized for either generating photometry from stellar mass
 tracks or for a single-age stellar isochrone based on
 artificial neural networks trained on bolometric correction tables.
 
-An empirical correction table to the models derived using several clusters is
-also provided, which improves the models down to ~0.5 solar masses.
-**These are currently not thoroughly vetted, so use at your own risk.**
+Empirical corrections to the MIST models derived using several clusters are
+implemented by default, which improves main sequence behavior
+down to ~0.5 solar masses.
+These can be easily disabled by users using the appropriate flag.
+**These are currently not thoroughly vetted.**
 
 Please contact Phil Cargile (pcargile@cfa.harvard.edu) and Josh Speagle
 (jspeagle@cfa.harvard.edu) for more information on the provided data files.
