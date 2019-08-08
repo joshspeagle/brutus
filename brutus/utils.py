@@ -747,7 +747,7 @@ def phot_loglike(data, data_err, data_mask, models, dim_prior=True):
 
 
 def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
-                        sel=None, weights=None, Nmc=150,
+                        sel=None, weights=None, mask_fit=None, Nmc=150,
                         old_offsets=None, dim_prior=True,
                         prior_mean=None, prior_std=None, verbose=True,
                         rstate=None):
@@ -786,8 +786,16 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
         Boolean selection array of objects that should be used when
         computing offsets. If not provided, all objects will be used.
 
-    sel : `~numpy.ndarray` of shape `(Nobj, Nsamps)`, optional
+    weights : `~numpy.ndarray` of shape `(Nobj, Nsamps)`, optional
         Associated set of weights for each sample.
+
+    mask_fit : `~numpy.ndarray` of shape `(Nfilt)`, optional
+        Boolean selection array of indicating the filters that were used
+        in the fit. If a filter was used, the models will be re-weighted
+        ignoring that band when computing the photometric offsets. If a filter
+        was not used, then no additional re-weighting will be applied.
+        If not provided, by default all bands will be assumed to have been
+        used.
 
     Nmc : float, optional
         Number of realizations used to bootstrap the sample and
@@ -838,6 +846,8 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
         sel = np.ones(Nobj, dtype='bool')
     if weights is None:
         weights = np.ones((Nobj, Nsamps), dtype='float')
+    if mask_fit is None:
+        mask_fit = np.ones(Nfilt, dtype='bool')
     if old_offsets is None:
         old_offsets = np.ones(Nfilt)
     if rstate is None:
@@ -854,25 +864,37 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
     ratios_err = np.zeros(Nfilt)
     for i in range(Nfilt):
         # Subselect objects with reliable data.
-        # Observed in the band (1), selected by user argument (2), and
-        # with >3 bands of photometry *excluding* the current band (3).
-        s = (mask[:, i] & sel & (np.sum(mask, axis=1) > 3 + 1) &
-             (np.sum(weights, axis=1) > 0))
-        n = sum(s)
+        if mask_fit[i]:
+            # Band was used in the fit. So we want to select objects that are:
+            # 1. observed in the band,
+            # 2. selected by user argument, and
+            # 3. with >3 bands of photometry *excluding* the current band.
+            s = np.where(mask[:, i] & sel & (np.sum(mask, axis=1) > 3 + 1) &
+                         (np.sum(weights, axis=1) > 0))[0]
+        else:
+            # Band was not used in the fit. We will use the same criteria as
+            # above, but do not need to impose an additional band restriction.
+            s = np.where(mask[:, i] & sel & (np.sum(mask, axis=1) > 3) &
+                         (np.sum(weights, axis=1) > 0))[0]
+        n = len(s)
         nratio[i] = n
         if n > 0:
             # Compute photometric ratio.
             ratio = seds[s, :, i] / phot[s, None, i]
-            # Compute weights from ignoring current band.
-            mtemp = np.array(mask)
-            mtemp[:, i] = False
-            lnl = np.array([phot_loglike(p * old_offsets, e * old_offsets, mt,
-                                         sed, dim_prior=dim_prior)
-                            for p, e, mt, sed in zip(phot[s], err[s],
-                                                     mtemp[s], seds[s])])
-            levid = logsumexp(lnl, axis=1)
-            logwt = lnl - levid[:, None]
-            wt = np.exp(logwt)
+            if mask_fit[i]:
+                # Compute weights from ignoring current band.
+                mtemp = np.array(mask)
+                mtemp[:, i] = False
+                lnl = np.array([phot_loglike(p * old_offsets, e * old_offsets,
+                                             mt, sed, dim_prior=dim_prior)
+                                for p, e, mt, sed in zip(phot[s], err[s],
+                                                         mtemp[s], seds[s])])
+                levid = logsumexp(lnl, axis=1)
+                logwt = lnl - levid[:, None]
+                wt = np.exp(logwt)
+            else:
+                # Weights are uniform.
+                wt = np.ones((n, Nsamps))
             wt *= weights[s]
             wt /= wt.sum(axis=1)[:, None]
             wt_obj = np.array(np.sum(weights[s], axis=1) > 0, dtype='float')

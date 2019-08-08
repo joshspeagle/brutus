@@ -787,7 +787,7 @@ class BruteForce():
         # Apply age weights to reweight from EEP to age.
         if apply_agewt:
             try:
-                lnprior += np.log(self.models_labels['agewt'])
+                lnprior += np.log(np.abs(self.models_labels['agewt']))
             except:
                 pass
 
@@ -1475,7 +1475,6 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
 
     # Grab results.
     lnlike, Ndim, chi2, scales, avs, rvs, icovs_sar = results
-    Nmodels = len(lnlike)
 
     # Compute initial log-posteriors.
     lnpost = lnlike + lnprior
