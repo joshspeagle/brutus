@@ -10,7 +10,7 @@ from __future__ import (print_function, division)
 
 # Define the set of filters available for the provided MIST models.
 # The Bayestar models are only defined for PanSTARRS `grizy` and 2MASS.
-gaia = ["Gaia_G_DR2Rev", "Gaia_BP_DR2Rev", "Gaia_RP_DR2Rev"]
+gaia = ["Gaia_G_MAW", "Gaia_BP_MAWf", "Gaia_RP_MAW"]
 sdss = ["SDSS_{}".format(b) for b in "ugriz"]
 ps = ["PS_{}".format(b) for b in ["g", "r", "i", "z", "y", "w", "open"]]
 decam = ["DECam_{}".format(b) for b in "ugrizY"]

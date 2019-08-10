@@ -907,7 +907,7 @@ class BruteForce():
         if verbose:
             t1 = time.time()
             t = 0.
-            sys.stderr.write('\rFitting object {0}/{1}'.format(1, Ndata))
+            sys.stderr.write('\rFitting object {0}/{1}  '.format(1, Ndata))
             sys.stderr.flush()
         for i, results in enumerate(self._fit(data * phot_offsets,
                                               data_err * phot_offsets,
@@ -932,6 +932,15 @@ class BruteForce():
                                               logl_dim_prior=logl_dim_prior,
                                               logl_initthresh=logl_initthresh,
                                               ltol=ltol)):
+
+            # Grab results.
+            if save_dar_draws:
+                (idxs, scales, avs, rvs, covs_sar, Ndim,
+                 lpost, levid, chi2min, dists, reds, dreds, logwt) = results
+            else:
+                (idxs, scales, avs, rvs, covs_sar,
+                 Ndim, lpost, levid, chi2min) = results
+
             # Print progress.
             if verbose and i < Ndata - 1:
                 # Compute time stamps.
@@ -942,18 +951,12 @@ class BruteForce():
                 t_avg = t / (i + 1)  # avg time per object
                 t_est = t_avg * (Ndata - i - 1)  # estimated remaining time
                 sys.stderr.write('\rFitting object {:d}/{:d} '
+                                 '[chi2/n: {:2.1f}/{:d}] '
                                  '(mean time: {:2.3f} s/obj, '
-                                 'est. remaining: {:10.3f} s)'
-                                 .format(i+2, Ndata, t_avg, t_est))
+                                 'est. remaining: {:10.3f} s)    '
+                                 .format(i+2, Ndata, chi2min, Ndim,
+                                         t_avg, t_est))
                 sys.stderr.flush()
-
-            # Grab results.
-            if save_dar_draws:
-                (idxs, scales, avs, rvs, covs_sar, Ndim,
-                 lpost, levid, chi2min, dists, reds, dreds, logwt) = results
-            else:
-                (idxs, scales, avs, rvs, covs_sar,
-                 Ndim, lpost, levid, chi2min) = results
 
             # Save results.
             if running_io:
@@ -996,9 +999,10 @@ class BruteForce():
             t_avg = t / (i + 1)  # avg time per object
             t_est = t_avg * (Ndata - i - 1)  # estimated remaining time
             sys.stderr.write('\rFitting object {:d}/{:d} '
+                             '[chi2/n: {:2.1f}/{:d}] '
                              '(mean time: {:2.3f} s/obj, '
-                             'est. time remaining: {:10.3f} s)'
-                             .format(i+1, Ndata, t_avg, t_est))
+                             'est. time remaining: {:10.3f} s)    '
+                             .format(i+1, Ndata, chi2min, Ndim, t_avg, t_est))
             sys.stderr.flush()
             sys.stderr.write('\n')
             sys.stderr.flush()
