@@ -703,6 +703,10 @@ def dist_vs_red(data, ebv=None, dist_type='distance_modulus',
             xsmooth, ysmooth = smooth * dx, smooth * dy
     if np.isfinite(x_min_smooth):
         xsmooth = min(x_min_smooth, xsmooth)
+    try:
+        xsmooth = xsmooth[0]  # catch possible list
+    except:
+        pass
 
     # Set defaults.
     truth_kwargs['linestyle'] = truth_kwargs.get('linestyle', 'solid')
