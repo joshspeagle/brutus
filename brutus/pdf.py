@@ -1072,6 +1072,10 @@ def bin_pdfs_distred(data, cdf=False, ebv=False, dist_type='distance_modulus',
             xsmooth_t = min(x_min_smooth, xsmooth)
         else:
             xsmooth_t = xsmooth
+        try:
+            xsmooth_t = xsmooth_t[0]  # catch possible list
+        except:
+            pass
         # Smooth 2-D PDF.
         binned_vals[i] = norm_kde(H, (xsmooth_t / dx, ysmooth / dy))
 
