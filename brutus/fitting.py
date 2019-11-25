@@ -1557,6 +1557,10 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
         # Just assume the maximum-likelihood estimate.
         lnpost = lnprob[sel]
 
+    lnpost_mask = np.where(~np.isfinite(lnpost))[0]
+    if len(lnpost_mask) > 0:
+        lnpost[lnpost_mask] = -1e300
+
     if return_distreds:
         return sel, lnpost, dist_mc.T, a_mc.T, r_mc.T, lnp_mc.T
     else:
