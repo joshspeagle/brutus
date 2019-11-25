@@ -605,7 +605,8 @@ class BruteForce():
             lngalprior=None, lndustprior=None, dustfile=None,
             apply_dlabels=True, data_coords=None, logl_dim_prior=True,
             ltol=3e-2, ltol_subthresh=1e-2, logl_initthresh=5e-3,
-            rstate=None, save_dar_draws=True, running_io=True, verbose=True):
+            merr_min=0.25, rstate=None, save_dar_draws=True,
+            running_io=True, verbose=True):
         """
         Fit all input models to the input data to compute the associated
         log-posteriors.
@@ -737,6 +738,10 @@ class BruteForce():
             set of fits but before optimizing them. Default is `5e-3`.
             **This must be smaller than or equal to `ltol_subthresh`.**
 
+        merr_min : float, optional
+            The minimum allowed magnitude error (converted from the provided
+            fluxes) used for internal masking. Default is `0.25`.
+
         rstate : `~numpy.random.RandomState`, optional
             `~numpy.random.RandomState` instance.
 
@@ -842,7 +847,7 @@ class BruteForce():
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             mag, err = magnitude(data, data_err)
-            bad_mag = (mag > 50) & (err < 0.1)
+            bad_mag = (mag > 50) & (err < merr_min)
             clean = np.isfinite(data) & np.isfinite(data_err) & (data_err > 0.)
             data_mask *= (clean & ~bad_mag)
 
@@ -853,7 +858,8 @@ class BruteForce():
                              "acceptable photometry are currently included in "
                              "the dataset. These objects give degenerate fits "
                              "and cannot be properly modeled. Please remove "
-                             "these objects.".format(Nbmin))
+                             "these objects or increase `merr_min`."
+                             .format(Nbmin))
 
         # Initialize results file.
         out = h5py.File("{0}.h5".format(save_file), "w-")
