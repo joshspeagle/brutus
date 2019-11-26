@@ -1493,6 +1493,9 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
                                                  parallax, parallax_err)
     else:
         lnprob = lnpost
+    lnprob_mask = np.where(~np.isfinite(lnprob))[0]  # safety check
+    if len(lnprob_mask) > 0:
+        lnprob[lnprob_mask] = -1e300
 
     # Apply thresholding.
     if wt_thresh is not None:
@@ -1553,7 +1556,7 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
         # Just assume the maximum-likelihood estimate.
         lnpost = lnprob[sel]
 
-    lnpost_mask = np.where(~np.isfinite(lnpost))[0]
+    lnpost_mask = np.where(~np.isfinite(lnpost))[0]  # safety check
     if len(lnpost_mask) > 0:
         lnpost[lnpost_mask] = -1e300
 
