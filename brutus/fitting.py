@@ -1460,10 +1460,6 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
     if parallax is not None and parallax_err is None:
         raise ValueError("Must provide both `parallax` and "
                          "`parallax_err`.")
-    if parallax is None:
-        parallax = np.nan
-    if parallax_err is None:
-        parallax_err = np.nan
 
     # Initialize log(prior).
     if lnprior is None:
