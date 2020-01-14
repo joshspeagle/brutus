@@ -105,17 +105,22 @@ def LOS_clouds_priortransform(u, rlims=(0., 6.), dlims=(4., 19.),
     else:
         s = 0
 
-    # reddening
-    x[s+1::2] = np.sort(u[s+1::2]) * (rlims[1] - rlims[0]) + rlims[0]
+    # distances
+    x[s+2::2] = np.sort(u[s+2::2]) * (dlims[1] - dlims[0]) + dlims[0]
+        
+    # foreground reddening    
+    x[s+1] = u[s+1] * (rlims[1] - rlims[0]) + rlims[0]
+
+    # cloud reddenings
+    x[s+3::2] = (u[s+3::2][np.argsort(u[s+2::2])]) * (rlims[1] - rlims[0]) + rlims[0]
 
     if dust_template:
         # replace with rescalings for the template
-        x[s+3::2] = np.sort(u[s+3::2]) * (nlims[1] - nlims[0]) + nlims[0]
-
-    # distances
-    x[s+2::2] = np.sort(u[s+2::2]) * (dlims[1] - dlims[0]) + dlims[0]
+        x[s+3::2] = u[s+3::2][np.argsort(u[s+2::2])] * (nlims[1] - nlims[0]) + nlims[0]
+        
 
     return x
+
 
 
 def LOS_clouds_loglike_samples(theta, dsamps, rsamps, kernel='gauss',
