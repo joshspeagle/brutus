@@ -23,7 +23,7 @@ __all__ = ["LOS_clouds_priortransform", "LOS_clouds_loglike_samples",
 
 def LOS_clouds_priortransform(u, rlims=(0., 6.), dlims=(4., 19.),
                               pb_params=(-3., 0.7, -np.inf, 0.),
-                              smooth=False, s_params=(-3., 0.3, -np.inf, 0.),
+                              s_params=(-3., 0.3, -np.inf, 0.),
                               dust_template=False, nlims=(0.2, 2)):
     """
     The "prior transform" for the LOS fit that converts from draws on the
@@ -54,10 +54,6 @@ def LOS_clouds_priortransform(u, rlims=(0., 6.), dlims=(4., 19.),
         model. The default is `(-3., 0.7, -np.inf, 0.)`, which corresponds
         to a mean of 0.05, a standard deviation of a factor of 2, a lower
         bound of 0, and an upper bound of 1.
-
-    smooth : bool, optional
-        Whether or not to sample additional smoothing parameters.
-        Default is `False`.
 
     s_params : 4-tuple, optional
         Mean, standard deviation, lower bound, and upper bound for a
@@ -94,33 +90,29 @@ def LOS_clouds_priortransform(u, rlims=(0., 6.), dlims=(4., 19.),
     b = (pb_high - pb_mean) / pb_std  # set normalized upper bound
     x[0] = np.exp(truncnorm.ppf(u[0], a, b, loc=pb_mean, scale=pb_std))
 
-    if smooth:
-        # s (fractional smoothing)
-        s_mean, s_std, s_low, s_high = s_params
-        a = (s_low - s_mean) / s_std  # set normalized lower bound
-        b = (s_high - s_mean) / s_std  # set normalized upper bound
-        x[1] = np.exp(truncnorm.ppf(u[1], a, b, loc=s_mean, scale=s_std))
-        x[2] = np.exp(truncnorm.ppf(u[2], a, b, loc=s_mean, scale=s_std))
-        s = 2
-    else:
-        s = 0
+    # s (fractional smoothing)
+    ns = 2  # 2 parameters for foreground + background smoothing
+    s_mean, s_std, s_low, s_high = s_params
+    a = (s_low - s_mean) / s_std  # set normalized lower bound
+    b = (s_high - s_mean) / s_std  # set normalized upper bound
+    x[1] = np.exp(truncnorm.ppf(u[1], a, b, loc=s_mean, scale=s_std))
+    x[2] = np.exp(truncnorm.ppf(u[2], a, b, loc=s_mean, scale=s_std))
 
     # distances
-    x[s+2::2] = np.sort(u[s+2::2]) * (dlims[1] - dlims[0]) + dlims[0]
+    x[ns+2::2] = np.sort(u[ns+2::2]) * (dlims[1] - dlims[0]) + dlims[0]
         
     # foreground reddening    
-    x[s+1] = u[s+1] * (rlims[1] - rlims[0]) + rlims[0]
+    x[ns+1] = u[ns+1] * (rlims[1] - rlims[0]) + rlims[0]
 
     # cloud reddenings
-    x[s+3::2] = (u[s+3::2][np.argsort(u[s+2::2])]) * (rlims[1] - rlims[0]) + rlims[0]
+    dsort = np.argsort(u[ns+2::2])  # sort distances
+    x[ns+3::2] = (u[ns+3::2][dsort]) * (rlims[1] - rlims[0]) + rlims[0]
 
     if dust_template:
         # replace with rescalings for the template
-        x[s+3::2] = u[s+3::2][np.argsort(u[s+2::2])] * (nlims[1] - nlims[0]) + nlims[0]
+        x[ns+3::2] = u[ns+3::2][dsort] * (nlims[1] - nlims[0]) + nlims[0]
         
-
     return x
-
 
 
 def LOS_clouds_loglike_samples(theta, dsamps, rsamps, kernel='gauss',
