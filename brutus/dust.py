@@ -189,7 +189,7 @@ class Bayestar(DustMap):
 
     """
 
-    def __init__(self, dustfile='bayestar2017_v1.h5'):
+    def __init__(self, dustfile='bayestar2019_v1.h5'):
         """
         Initialize the map from `dustfile`.
 

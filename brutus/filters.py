@@ -18,12 +18,14 @@ tycho = ["Tycho_B", "Tycho_V"]
 bessell = ["Bessell_{}".format(b) for b in "UBVRI"]
 tmass = ["2MASS_{}".format(b) for b in ["J", "H", "Ks"]]
 ukidss = ["UKIDSS_{}".format(b) for b in "ZYJHK"]
+vista = ["VISTA_{}".format(b) for b in ["Z", "Y", "J", "H", "Ks"]]
 wise = ["WISE_W{}".format(b) for b in "1234"]
 hipp = ["Hipparcos_Hp"]
 kepler = ["Kepler_D51", "Kepler_Kp"]
 tess = ["TESS"]
 
-FILTERS = (gaia + sdss + ps + decam + tycho + bessell + tmass + ukidss + wise +
-           hipp + kepler + tess)
+FILTERS = (gaia + sdss + ps + decam + bessell +
+           tmass + vista + ukidss + wise +
+           tycho + hipp + kepler + tess)
 
 __all__ = []

@@ -100,8 +100,8 @@ def LOS_clouds_priortransform(u, rlims=(0., 6.), dlims=(4., 19.),
 
     # distances
     x[ns+2::2] = np.sort(u[ns+2::2]) * (dlims[1] - dlims[0]) + dlims[0]
-        
-    # foreground reddening    
+
+    # foreground reddening
     x[ns+1] = u[ns+1] * (rlims[1] - rlims[0]) + rlims[0]
 
     # cloud reddenings
@@ -111,7 +111,7 @@ def LOS_clouds_priortransform(u, rlims=(0., 6.), dlims=(4., 19.),
     if dust_template:
         # replace with rescalings for the template
         x[ns+3::2] = u[ns+3::2][dsort] * (nlims[1] - nlims[0]) + nlims[0]
-        
+
     return x
 
 
