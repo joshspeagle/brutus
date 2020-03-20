@@ -300,7 +300,7 @@ def logn_disk(R, Z, R_solar=8.2, Z_solar=0.025, R_scale=2.6, Z_scale=0.3):
     return -(rterm + zterm)
 
 
-def logn_halo(R, Z, R_solar=8.2, Z_solar=0.025, R_smooth=0.5,
+def logn_halo(R, Z, R_solar=8.2, Z_solar=0.025, R_smooth=1.0,
               eta=4.2, q_ctr=0.2, q_inf=0.8, r_q=6.):
     """
     Log-number density of stars in the halo component of the galaxy.
@@ -323,7 +323,7 @@ def logn_halo(R, Z, R_solar=8.2, Z_solar=0.025, R_smooth=0.5,
 
     R_smooth : float, optional
         The smoothing radius in kpc used to avoid singularities
-        around the Galactic center. Default is `0.5`.
+        around the Galactic center. Default is `1.0`.
 
     eta : float, optional
         The (negative) power law index describing the number density.
@@ -468,7 +468,7 @@ def logp_age_from_feh(age, feh_mean=-0.2, max_age=13.8, min_age=0.,
 def gal_lnprior(dists, coord, labels=None, R_solar=8.2, Z_solar=0.025,
                 R_thin=2.6, Z_thin=0.3,
                 R_thick=2.0, Z_thick=0.9, f_thick=0.04,
-                Rs_halo=0.5, q_halo_ctr=0.2, q_halo_inf=0.8, r_q_halo=6.0,
+                Rs_halo=1.0, q_halo_ctr=0.2, q_halo_inf=0.8, r_q_halo=6.0,
                 eta_halo=4.2, f_halo=0.005,
                 feh_thin=-0.2, feh_thin_sigma=0.3,
                 feh_thick=-0.7, feh_thick_sigma=0.4,
@@ -523,7 +523,7 @@ def gal_lnprior(dists, coord, labels=None, R_solar=8.2, Z_solar=0.025,
 
     Rs_halo : float, optional
         The smoothing radius in kpc used to avoid singularities
-        around the galactic center. Default is `0.5`.
+        around the galactic center. Default is `1.0`.
 
     q_halo_ctr : float, optional
         The nominal oblateness of the halo at Galactic center.

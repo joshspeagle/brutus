@@ -849,7 +849,7 @@ class FastNN(object):
 
         """
 
-        with h5py.File(nnfile) as f:
+        with h5py.File(nnfile, "r") as f:
             # Store weights and bias.
             self.w1 = np.array([f[fltr]['w1'] for fltr in filters])
             self.b1 = np.array([f[fltr]['b1'] for fltr in filters])
@@ -1082,7 +1082,7 @@ class Isochrone(object):
             sys.stderr.write('Constructing MIST isochrones...')
 
         # Load file.
-        with h5py.File(mistfile) as f:
+        with h5py.File(mistfile, "r") as f:
             self.feh_grid = f['feh'][:]
             self.loga_grid = f['loga'][:]
             self.eep_grid = f['eep'][:]
