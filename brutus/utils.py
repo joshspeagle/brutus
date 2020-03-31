@@ -23,7 +23,7 @@ except ImportError:
 from .filters import FILTERS
 
 __all__ = ["_function_wrapper", "_adjoint3", "_inverse_transpose3",
-           "_inverse3", "_dot3", "load_models", "load_zeropoints",
+           "_inverse3", "_dot3", "load_models", "load_offsets",
            "quantile", "draw_sar", "magnitude", "inv_magnitude",
            "luptitude", "inv_luptitude", "add_mag", "get_seds",
            "phot_loglike", "photometric_offsets"]
@@ -104,7 +104,7 @@ def _inverse3(A):
 
 
 def load_models(filepath, filters=None, labels=None,
-                include_ms=True, include_postms=True, include_binaries=True,
+                include_ms=True, include_postms=True, include_binaries=False,
                 verbose=True):
     """
 
@@ -172,6 +172,7 @@ def load_models(filepath, filters=None, labels=None,
         f = h5py.File(filepath, 'r')
         pass
     mag_coeffs = f['mag_coeffs']
+    
     models = np.zeros((len(mag_coeffs), len(filters), len(mag_coeffs[0][0])),
                       dtype='float32')
     for i, filt in enumerate(filters):
@@ -235,7 +236,7 @@ def load_models(filepath, filters=None, labels=None,
         raise RuntimeError("Something has gone horribly wrong!")
     if not include_binaries:
         try:
-            sel *= combined_labels['smf'] == 0.
+            sel *= labels2['smf'] == 0.
             labels2 = [l for l in labels2 if l != 'smf']
         except:
             pass
@@ -247,13 +248,13 @@ def load_models(filepath, filters=None, labels=None,
     return models[sel], combined_labels[sel], label_mask
 
 
-def load_zeropoints(filepath, filters=None, verbose=True):
+def load_offsets(filepath, filters=None, verbose=True):
     """
 
     Parameters
     ----------
     filepath : string, optional
-        The filepath of the zeropoints.
+        The filepath of the photometric offsets.
 
     filters : iterable of strings with length `Nfilt`, optional
         List of filters that will be loaded. If not provided, will default
@@ -262,13 +263,13 @@ def load_zeropoints(filepath, filters=None, verbose=True):
         will be skipped over.
 
     verbose : bool, optional
-        Whether to print a summary of the zero-points. Default is `True`.
+        Whether to print a summary of the offsets. Default is `True`.
 
     Returns
     -------
-    zeropoints : `~numpy.ndarray` of shape `(Nfilt)`
+    offsets : `~numpy.ndarray` of shape `(Nfilt)`
         Array of constants that will be *multiplied* to the *data* to account
-        for zero-point magnitude offsets (i.e. multiplicative flux offsets).
+        for offsets (i.e. multiplicative flux offsets).
 
     """
 
@@ -277,27 +278,27 @@ def load_zeropoints(filepath, filters=None, verbose=True):
         filters = FILTERS
     Nfilters = len(filters)
 
-    # Read in zeropoints.
+    # Read in offsets.
     filts, offsets = np.loadtxt(filepath, dtype='str').T
     offsets = offsets.astype(float)
 
-    # Fill in zeropoints where appropriate.
-    zeropoints = np.full(Nfilters, np.nan)
+    # Fill in offsets where appropriate.
+    offsets = np.full(Nfilters, np.nan)
     for i, filt in enumerate(filters):
         filt_idx = np.where(filts == filt)[0]  # get filter location
         if len(filt_idx) == 1:
-            zeropoints[i] = offsets[filt_idx[0]]  # insert offset
+            offsets[i] = offsets[filt_idx[0]]  # insert offset
         elif len(filt_idx) == 0:
-            zeropoints[i] = 1.  # assume no offset if not calibrated
+            offsets[i] = 1.  # assume no offset if not calibrated
         else:
             raise ValueError("Something went wrong when extracting "
-                             "zero-points for filter {}.".format(filt))
+                             "offsets for filter {}.".format(filt))
 
     if verbose:
-        for filt, zp in zip(filters, zeropoints):
+        for filt, zp in zip(filters, offsets):
             sys.stderr.write('{0} ({1:3.2}%)\n'.format(filt, 100 * (zp - 1.)))
 
-    return zeropoints
+    return offsets
 
 
 def quantile(x, q, weights=None):

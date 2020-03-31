@@ -252,8 +252,8 @@ def cornerplot(idxs, data, params, lndistprior=None, coord=None,
     # Deal with 1D results.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        samples = params[idxs][labels]
-        samples = samples.view((np.float64, len(samples.dtype.names)))
+        samples = params[idxs]
+        samples = np.array([samples[l] for l in labels]).T
     samples = np.atleast_1d(samples)
     if len(samples.shape) == 1:
         samples = np.atleast_2d(samples)
@@ -778,8 +778,8 @@ def dist_vs_red(data, ebv=None, dist_type='distance_modulus',
 
 def posterior_predictive(models, idxs, reds, dreds, dists, weights=None,
                          flux=False, data=None, data_err=None, data_mask=None,
-                         offset=None, vcolor='blue', pcolor='red', labels=None,
-                         rstate=None, psig=3., fig=None):
+                         offset=None, vcolor='blue', pcolor='black',
+                         labels=None, rstate=None, psig=2., fig=None):
     """
     Plot the posterior predictive SED.
 
@@ -831,7 +831,8 @@ def posterior_predictive(models, idxs, reds, dreds, dists, weights=None,
         SED posterior predictive distribution. Default is `'blue'`.
 
     pcolor : str, optional
-        Color used when plotting the provided data values. Default is `'red'`.
+        Color used when plotting the provided data values.
+        Default is `'black'`.
 
     labels : iterable with shape `(ndim,)`, optional
         A list of names corresponding to each filter. If not provided,
@@ -849,7 +850,7 @@ def posterior_predictive(models, idxs, reds, dreds, dists, weights=None,
 
     psig : float, optional
         The number of sigma to plot when showcasing the error bars
-        from any provided `data_err`. Default is `3.`.
+        from any provided `data_err`. Default is `2.`.
 
     fig : (`~matplotlib.figure.Figure`, `~matplotlib.axes.Axes`), optional
         If provided, overplot the traces and marginalized 1-D posteriors

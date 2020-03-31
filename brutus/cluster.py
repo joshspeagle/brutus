@@ -21,7 +21,7 @@ __all__ = ["isochrone_loglike"]
 
 
 def isochrone_loglike(theta, isochrone, phot, err, cluster_params='free',
-                      zeropoints='fixed', corr_params='fixed',
+                      offsets='fixed', corr_params='fixed',
                       mini_bound=0.08, eep_binary_max=480.,
                       smf_grid=None, eep_grid=None,
                       parallax=None, parallax_err=None,
@@ -38,12 +38,12 @@ def isochrone_loglike(theta, isochrone, phot, err, cluster_params='free',
         The full collection of parameters that can be modeled includes three
         sets of parameters. The first are the parameters related to
         the **physical cluster properties**.
-        The second are the **"zero-points"** in each band (i.e. what the
+        The second are the **"offsets"** in each band (i.e. what the
         data need to be multiplied by to agree with the models).
         The third are the parameters used to apply **empirical corrections**
         to the isochrone as a function of mass, metallicity, and EEP.
         Certain parameters can be held fixed in the likelihood by specifying
-        their value via `cluster_params`, `zeropoints`, and/or `corr_params`.
+        their value via `cluster_params`, `offsets`, and/or `corr_params`.
         In those cases, `theta` essentially "skips" over fixed parameters
         based on their relative position.
         As an example, if `feh`, `loga`, and `dist` are specified in
@@ -51,7 +51,7 @@ def isochrone_loglike(theta, isochrone, phot, err, cluster_params='free',
         would be `(av, rv, fout)` rather than `(feh, loga, av)`.
         Note that if `parallax` and `parallax_err` are not provided,
         *either* the `dist` value in `cluster_params` must be fixed *or*
-        at least one entry in `zeropoints` must be fixed.
+        at least one entry in `offsets` must be fixed.
 
     isochrone : `~seds.Isochrone` object
         The `~seds.Isochrone` object from the `~seds` module used to generate
@@ -74,8 +74,8 @@ def isochrone_loglike(theta, isochrone, phot, err, cluster_params='free',
         log(age), distance, and R(V) would look like
         `[None, 9.5, None, 3.3, 880.]`. Default is `'free'`.
 
-    zeropoints : iterable of shape `(Nfilt,)`, `'free'`, or `'fixed'`, optional
-        Flux zero-points that are *multiplied* to the observed fluxes
+    offsets : iterable of shape `(Nfilt,)`, `'free'`, or `'fixed'`, optional
+        Flux offsets that are *multiplied* to the observed fluxes
         to ensure better agreement with the models. If `'free'` is passed,
         all values will be included when reading `theta`. If `'fixed'` is
         passed, all values will be fixed to `1.0` and not included when reading
@@ -123,13 +123,13 @@ def isochrone_loglike(theta, isochrone, phot, err, cluster_params='free',
         The measured parallaxes corresponding to each object.
         Note that if `parallax` and `parallax_err` are not provided,
         either the `dist` value in `cluster_params` must be fixed or
-        at least one entry in `zeropoints` must be fixed.
+        at least one entry in `offsets` must be fixed.
 
     parallax_err : `~numpy.ndarray` of shape `(Nobj,)`, optional
         The measurement errors corresponding to the values in `parallax`.
         Note that if `parallax` and `parallax_err` are not provided,
         either the `dist` value in `cluster_params` must be fixed or
-        at least one entry in `zeropoints` must be fixed.
+        at least one entry in `offsets` must be fixed.
 
     cluster_prob : float or `~numpy.ndarray` of shape `(Nobj,)`, optional
         Cluster membership probabilities for each object. If not provided,
@@ -196,15 +196,15 @@ def isochrone_loglike(theta, isochrone, phot, err, cluster_params='free',
     if eep_grid is None:
         eep_grid = np.linspace(202., 808., 2000)
 
-    # Sanity check to make sure distance and zero-points are not degenerate.
+    # Sanity check to make sure distance and offsets are not degenerate.
     if parallax is None and parallax_err is None:
-        if zeropoints == 'free' and (cluster_params == 'free' or
-                                     cluster_params[4] is None):
+        if offsets == 'free' and (cluster_params == 'free' or
+                                  cluster_params[4] is None):
             raise ValueError("Without any measured parallaxes, there is a "
-                             "degeneracy between the photometry zero-points "
+                             "degeneracy between the photometry offsets "
                              "and the distance. Please provide either a "
                              "distance value in `cluster_params` or at "
-                             "least one zero-point in `zeropoints`.")
+                             "least one offset in `offsets`.")
 
     # Sanity check to make sure either `feh_scale` or `drdm` and `dtdm` are
     # provided.
@@ -247,25 +247,25 @@ def isochrone_loglike(theta, isochrone, phot, err, cluster_params='free',
         feh, loga, av, rv, dist, fout = np.array(p)
     fout = max(min(1., fout), 0.)  # bound between [0., 1.]
 
-    # Read in multiplicative zero-points.
-    if zeropoints == 'free':
-        # If no constraints are provided, read out list of all zero-points.
+    # Read in multiplicative offsets.
+    if offsets == 'free':
+        # If no constraints are provided, read out list of all offsets.
         Xb = theta[counter:counter+Nbands]
         counter += Nbands
-    elif zeropoints == 'fixed':
+    elif offsets == 'fixed':
         Xb = np.ones(Nbands)
         counter += Nbands
     else:
         # If constraints are specified, we read out parameters one at a time.
         Xb = np.zeros(Nbands)
-        for i, z in enumerate(zeropoints):
+        for i, z in enumerate(offsets):
             if z is None:
-                # If zero-point is not specified, read out from `theta` and
+                # If offset is not specified, read out from `theta` and
                 # increment the counter.
                 Xb[i] = theta[counter]
                 counter += 1
             else:
-                # If zero-point is specified, set value and do not increment
+                # If offset is specified, set value and do not increment
                 # counter.
                 Xb[i] = z
 
