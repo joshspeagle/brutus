@@ -279,15 +279,15 @@ def load_offsets(filepath, filters=None, verbose=True):
     Nfilters = len(filters)
 
     # Read in offsets.
-    filts, offsets = np.loadtxt(filepath, dtype='str').T
-    offsets = offsets.astype(float)
+    filts, vals = np.loadtxt(filepath, dtype='str').T
+    vals = vals.astype(float)
 
     # Fill in offsets where appropriate.
     offsets = np.full(Nfilters, np.nan)
     for i, filt in enumerate(filters):
         filt_idx = np.where(filts == filt)[0]  # get filter location
         if len(filt_idx) == 1:
-            offsets[i] = offsets[filt_idx[0]]  # insert offset
+            offsets[i] = vals[filt_idx[0]]  # insert offset
         elif len(filt_idx) == 0:
             offsets[i] = 1.  # assume no offset if not calibrated
         else:
