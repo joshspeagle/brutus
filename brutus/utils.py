@@ -234,9 +234,9 @@ def load_models(filepath, filters=None, labels=None,
             pass
     else:
         raise RuntimeError("Something has gone horribly wrong!")
-    if not include_binaries:
+    if not include_binaries and 'smf' in labels2:
         try:
-            sel *= labels2['smf'] == 0.
+            sel *= combined_labels['smf'] == 0.
             labels2 = [l for l in labels2 if l != 'smf']
         except:
             pass
