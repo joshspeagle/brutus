@@ -29,7 +29,7 @@ __all__ = ["loglike", "_optimize_fit", "BruteForce", "_lnpost"]
 
 
 def loglike(data, data_err, data_mask, mag_coeffs,
-            avlim=(0., 6.), av_gauss=(0., 1e6),
+            avlim=(0., 20.), av_gauss=(0., 1e6),
             rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
             av_init=None, rv_init=None,
             dim_prior=True, ltol=3e-2, wt_thresh=1e-2, init_thresh=5e-3,
@@ -59,7 +59,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
 
     avlim : 2-tuple, optional
         The lower and upper bound where the reddened photometry is reliable.
-        Default is `(0., 6.)`.
+        Default is `(0., 20.)`.
 
     av_gauss : 2-tuple, optional
         The mean and standard deviation of the Gaussian prior that is placed
@@ -267,7 +267,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
 
 
 def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
-                  avlim=(0., 6.), av_gauss=(0., 1e6),
+                  avlim=(0., 20.), av_gauss=(0., 1e6),
                   rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
                   resid=None, tol=0.05, init_thresh=5e-3, stepsize=1.,
                   mags=None, mags_var=None):
@@ -305,7 +305,7 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
 
     avlim : 2-tuple, optional
         The lower and upper bound where the reddened photometry is reliable.
-        Default is `(0., 6.)`.
+        Default is `(0., 20.)`.
 
     av_gauss : 2-tuple, optional
         The mean and standard deviation of the Gaussian prior that is placed
@@ -598,7 +598,7 @@ class BruteForce():
 
     def fit(self, data, data_err, data_mask, data_labels, save_file,
             phot_offsets=None, parallax=None, parallax_err=None,
-            Nmc_prior=50, avlim=(0., 6.), av_gauss=None,
+            Nmc_prior=50, avlim=(0., 20.), av_gauss=None,
             rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
             lnprior=None, wt_thresh=5e-3, cdf_thresh=2e-3, Ndraws=250,
             apply_agewt=True, apply_grad=True,
@@ -646,7 +646,7 @@ class BruteForce():
 
         avlim : 2-tuple, optional
             The bounds where Av predictions are reliable.
-            Default is `(0., 6.)`.
+            Default is `(0., 20.)`.
 
         av_gauss : 2-tuple, optional
             The mean and standard deviation of a Gaussian prior on A(V).
@@ -1039,7 +1039,7 @@ class BruteForce():
 
     def _fit(self, data, data_err, data_mask,
              parallax=None, parallax_err=None, Nmc_prior=100,
-             avlim=(0., 6.), av_gauss=None,
+             avlim=(0., 20.), av_gauss=None,
              rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
              lnprior=None, wt_thresh=5e-3, cdf_thresh=2e-3, Ndraws=250,
              lngalprior=None, lndustprior=None, dustfile=None,
@@ -1073,7 +1073,7 @@ class BruteForce():
 
         avlim : 2-tuple, optional
             The bounds where Av predictions are reliable.
-            Default is `(0., 6.)`.
+            Default is `(0., 20.)`.
 
         av_gauss : 2-tuple, optional
             The mean and standard deviation of a Gaussian prior on A(V).
@@ -1351,7 +1351,7 @@ class BruteForce():
 def _lnpost(results, parallax=None, parallax_err=None, coord=None,
             Nmc_prior=100, lnprior=None, wt_thresh=5e-3, cdf_thresh=2e-3,
             lngalprior=None, lndustprior=None, dustfile=None,
-            dlabels=None, avlim=(0., 6.), rvlim=(1., 8.),
+            dlabels=None, avlim=(0., 20.), rvlim=(1., 8.),
             rstate=None, apply_av_prior=True, return_distreds=True,
             *args, **kwargs):
     """
@@ -1415,7 +1415,7 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
 
     avlim : 2-tuple, optional
         The bounds where Av predictions are reliable.
-        Default is `(0., 6.)`.
+        Default is `(0., 20.)`.
 
     rvlim : 2-tuple, optional
         The lower and upper bound where the reddening vector shape changes
