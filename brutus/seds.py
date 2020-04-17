@@ -32,6 +32,7 @@ rename = {"mini": "initial_mass",  # input parameters
           "afe": "initial_[a/Fe]",
           "mass": "star_mass",  # outputs
           "feh_surf": "[Fe/H]",
+          "afe_surf": "[a/Fe]",
           "loga": "log_age",
           "logt": "log_Teff",
           "logg": "log_g",
@@ -56,7 +57,7 @@ class MISTtracks(object):
     predictions : iterable of shape `(4)`, optional
         The names of the parameters to output at the request location in
         the `labels` parameter space. Default is
-        `["loga", "logl", "logt", "logg"]`.
+        `["loga", "logl", "logt", "logg", "feh_surf", "afe_surf"]`.
         **Do not modify this unless you know what you're doing.**
 
     ageweight : bool, optional
@@ -70,7 +71,8 @@ class MISTtracks(object):
     """
 
     def __init__(self, mistfile=None,
-                 predictions=["loga", "logl", "logt", "logg", "feh_surf"],
+                 predictions=["loga", "logl", "logt", "logg",
+                              "feh_surf", "afe_surf"],
                  ageweight=True, verbose=True):
 
         labels = ["mini", "eep", "feh", "afe"]
@@ -128,9 +130,24 @@ class MISTtracks(object):
         self.libparams.dtype.names = tuple(self.labels)
 
         cols = [rename[p] for p in self.predictions]
-        self.output = [np.concatenate([misth5[z][p] for z in misth5["index"]])
-                       for p in cols]
-        self.output = np.array(self.output).T
+        try:
+            # Assume all columns filled.
+            self.output = [np.concatenate([misth5[z][p]
+                                           for z in misth5["index"]])
+                           for p in cols]
+            self.output = np.array(self.output).T
+        except:
+            # If this fails, assume that [a/Fe] (afe_surf) is missing.
+            # Substitute in for [Fe/H] (feh_surf) and then fill in with zeros.
+            afe_surf_idx = np.where(rename["afe_surf"] == np.array(cols))[0][0]
+            cols[afe_surf_idx] = rename["feh_surf"]
+            self.output = [np.concatenate([misth5[z][p]
+                                           for z in misth5["index"]])
+                           for p in cols]
+            self.output = np.array(self.output).T
+            self.output[:, afe_surf_idx] *= 0.
+            pass
+
         if verbose:
             sys.stderr.write("done!\n")
 
@@ -401,7 +418,8 @@ class SEDmaker(MISTtracks):
     """
 
     def __init__(self, filters=None, nnfile=None, mistfile=None,
-                 predictions=["loga", "logl", "logt", "logg", "feh_surf"],
+                 predictions=["loga", "logl", "logt", "logg",
+                              "feh_surf", "afe_surf"],
                  ageweight=True, verbose=True):
 
         # Initialize filters.
@@ -539,7 +557,8 @@ class SEDmaker(MISTtracks):
             sed = self.FNNP.sed(logl=params["logl"], logt=params["logt"],
                                 logg=params["logg"],
                                 feh_surf=params["feh_surf"],
-                                afe=afe, av=av, rv=rv, dist=dist)
+                                afe=params["afe_surf"],
+                                av=av, rv=rv, dist=dist)
             # Add in unresolved binary component if we're on the Main Sequence.
             if smf > 0. and eep <= eep_binary_max and mini * smf >= mini_min:
                 # Generate predictions for secondary binary component.
@@ -559,7 +578,8 @@ class SEDmaker(MISTtracks):
                                      logt=params2["logt"],
                                      logg=params2["logg"],
                                      feh_surf=params2["feh_surf"],
-                                     afe=afe, av=av, rv=rv, dist=dist)
+                                     afe=params2["afe_surf"],
+                                     av=av, rv=rv, dist=dist)
                 # Combine primary and secondary components.
                 sed = add_mag(sed, sed2)
             elif smf > 0.:
@@ -1078,7 +1098,8 @@ class Isochrone(object):
     predictions : iterable of shape `(4)`, optional
         The names of the parameters to output at the request location in
         the `labels` parameter space. Default is
-        `["mini", "mass", "logl", "logt", "logr", "logg", "feh_surf"]`.
+        `["mini", "mass", "logl", "logt", "logr", "logg",`
+        ` "feh_surf", "afe_surf"]`.
         **Do not modify this unless you know what you're doing.**
 
     verbose : bool, optional
@@ -1101,7 +1122,7 @@ class Isochrone(object):
             mistfile = 'data/DATAFILES/MIST_1.2_iso_vvcrit0.0.h5'
         if predictions is None:
             predictions = ["mini", "mass", "logl", "logt",
-                           "logr", "logg", "feh_surf"]
+                           "logr", "logg", "feh_surf", "afe_surf"]
         self.predictions = predictions
 
         if verbose:
@@ -1434,7 +1455,8 @@ class Isochrone(object):
                                         logt=params["logt"][i],
                                         logg=params["logg"][i],
                                         feh_surf=params["feh_surf"][i],
-                                        afe=afe, av=av, rv=rv, dist=dist)
+                                        afe=params["afe_surf"][i],
+                                        av=av, rv=rv, dist=dist)
 
         # Add in binaries (if appropriate).
         params_arr2 = np.full_like(params_arr, np.nan)
@@ -1463,8 +1485,8 @@ class Isochrone(object):
                                              logt=params2["logt"][i],
                                              logg=params2["logg"][i],
                                              feh_surf=params2["feh_surf"][i],
-                                             afe=afe, av=av, rv=rv,
-                                             dist=dist)
+                                             afe=params2["afe_surf"][i],
+                                             av=av, rv=rv, dist=dist)
             seds = add_mag(seds, seds2)
         elif smf == 1.:
             seds[eep <= eep_binary_max] -= 2.5 * np.log10(2.)
