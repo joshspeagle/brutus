@@ -133,7 +133,7 @@ def ps1_MrLF_lnprior(Mr):
     except:
         # Read in file.
         path = os.path.dirname(os.path.realpath(__file__))
-        grid_Mr, grid_lnp = np.loadtxt(path+'/PSMrLF_lnprior.dat').T
+        grid_Mr, grid_lnp = np.loadtxt(path + '/PSMrLF_lnprior.dat').T
         # Construct prior.
         ps_lnprior = interp1d(grid_Mr, grid_lnp, fill_value='extrapolate')
         # Evaluate prior.
@@ -207,7 +207,7 @@ def scale_parallax_lnprior(scales, scale_errs, p_meas, p_err, snr_lim=4.):
 
     """
 
-    if np.isfinite(p_meas) and np.isfinite(p_err) and p_meas/p_err >= snr_lim:
+    if np.isfinite(p_meas) and np.isfinite(p_err) and p_meas / p_err > snr_lim:
         # Convert from `p` to `s=p**2` space assuming roughly Normal.
         s_mean, s_std = parallax_to_scale(p_meas, p_err)
 
@@ -250,7 +250,7 @@ def parallax_to_scale(p_meas, p_err, snr_lim=4.):
 
     """
 
-    if p_meas/p_err >= snr_lim:
+    if p_meas / p_err > snr_lim:
         # Convert from `p` to `s=p**2` space assuming roughly Normal.
         pm, pe = max(0., p_meas), p_err  # floor to 0
         s_mean = pm**2 + pe**2  # scale mean
@@ -611,8 +611,9 @@ def gal_lnprior(dists, coord, labels=None, R_solar=8.2, Z_solar=0.025,
 
     # Convert from observer-based coordinates to galactocentric cylindrical
     # coordinates.
-    l, b = np.full_like(dists, coord[0]), np.full_like(dists, coord[1])
-    coords = SkyCoord(l=l*units.deg, b=b*units.deg, distance=dists*units.kpc,
+    ell, b = np.full_like(dists, coord[0]), np.full_like(dists, coord[1])
+    coords = SkyCoord(l=ell * units.deg, b=b * units.deg,
+                      distance=dists * units.kpc,
                       frame='galactic')
     coords_cyl = coords.galactocentric.cartesian.represent_as(CylRep)
     R, Z = coords_cyl.rho.value, coords_cyl.z.value  # radius and height
@@ -946,8 +947,8 @@ def bin_pdfs_distred(data, cdf=False, ebv=False, dist_type='distance_modulus',
         xlims = dlims
     elif dist_type == 'distance_modulus':
         xlims = 5. * np.log10(dlims) + 10.
-    xbins = np.linspace(xlims[0], xlims[1], xbin+1)
-    ybins = np.linspace(ylims[0], ylims[1], ybin+1)
+    xbins = np.linspace(xlims[0], xlims[1], xbin + 1)
+    ybins = np.linspace(ylims[0], ylims[1], ybin + 1)
     dx, dy = xbins[1] - xbins[0], ybins[1] - ybins[0]
     xspan, yspan = xlims[1] - xlims[0], ylims[1] - ylims[0]
 
@@ -993,7 +994,8 @@ def bin_pdfs_distred(data, cdf=False, ebv=False, dist_type='distance_modulus',
         for i, (xs, ys) in enumerate(zip(xdraws, ydraws)):
             # Print progress.
             if verbose:
-                sys.stderr.write('\rBinning object {0}/{1}'.format(i+1, nobjs))
+                sys.stderr.write('\rBinning object {0}/{1}'
+                                 .format(i + 1, nobjs))
             H, xedges, yedges = np.histogram2d(xs, ys, bins=(xbins, ybins))
             binned_vals[i] = H / nsamps
     except:
@@ -1012,7 +1014,8 @@ def bin_pdfs_distred(data, cdf=False, ebv=False, dist_type='distance_modulus',
 
             # Print progress.
             if verbose:
-                sys.stderr.write('\rBinning object {0}/{1}'.format(i+1, nobjs))
+                sys.stderr.write('\rBinning object {0}/{1}'
+                                 .format(i + 1, nobjs))
 
             # Draw random samples.
             sdraws, adraws, rdraws = draw_sar(scales_obj, avs_obj, rvs_obj,

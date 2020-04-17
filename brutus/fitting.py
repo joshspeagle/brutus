@@ -964,7 +964,7 @@ class BruteForce():
                                  '[chi2/n: {:2.1f}/{:d}] '
                                  '(mean time: {:2.3f} s/obj, '
                                  'est. remaining: {:10.3f} s)    '
-                                 .format(i+2, Ndata, chi2min, Ndim,
+                                 .format(i + 2, Ndata, chi2min, Ndim,
                                          t_avg, t_est))
                 sys.stderr.flush()
 
@@ -1012,7 +1012,8 @@ class BruteForce():
                              '[chi2/n: {:2.1f}/{:d}] '
                              '(mean time: {:2.3f} s/obj, '
                              'est. time remaining: {:10.3f} s)    '
-                             .format(i+1, Ndata, chi2min, Ndim, t_avg, t_est))
+                             .format(i + 1, Ndata, chi2min, Ndim,
+                                     t_avg, t_est))
             sys.stderr.flush()
             sys.stderr.write('\n')
             sys.stderr.flush()
@@ -1235,11 +1236,11 @@ class BruteForce():
         data_mask_list = []
         counter_list = []
         while counter < Ndata:
-            data_list.append(data[counter:counter+self.nprocs])
-            data_err_list.append(data_err[counter:counter+self.nprocs])
-            data_mask_list.append(data_mask[counter:counter+self.nprocs])
+            data_list.append(data[counter:counter + self.nprocs])
+            data_err_list.append(data_err[counter:counter + self.nprocs])
+            data_mask_list.append(data_mask[counter:counter + self.nprocs])
             counter_list.append(np.arange(counter,
-                                          min(counter+self.nprocs, Ndata)))
+                                          min(counter + self.nprocs, Ndata)))
             counter += self.nprocs
 
         # Re-define log-likelihood to deal with zipped values.
@@ -1492,7 +1493,7 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
     # Apply rough parallax prior for clipping.
     if parallax is not None and parallax_err is not None:
         ds2 = icovs_sar[:, 0, 0]
-        scales_err = 1./np.sqrt(np.abs(ds2))  # approximate scale errors
+        scales_err = 1. / np.sqrt(np.abs(ds2))  # approximate scale errors
         lnprob = lnpost + scale_parallax_lnprior(scales, scales_err,
                                                  parallax, parallax_err)
     else:

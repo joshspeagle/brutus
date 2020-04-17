@@ -94,13 +94,13 @@ class DustMap(object):
         raise NotImplementedError("`DustMap.query` must be implemented by "
                                   "subclasses.")
 
-    def query_gal(self, l, b, d=None, **kwargs):
+    def query_gal(self, ell, b, d=None, **kwargs):
         """
         Query using Galactic coordinates.
 
         Parameters
         ----------
-        l : float
+        ell : float
             Galactic longitude in degrees or an `~astropy.unit.Quantity`.
 
         b : float
@@ -117,17 +117,17 @@ class DustMap(object):
 
         """
 
-        if not isinstance(l, units.Quantity):
-            l = l * units.deg
+        if not isinstance(ell, units.Quantity):
+            ell = ell * units.deg
         if not isinstance(b, units.Quantity):
             b = b * units.deg
 
         if d is None:
-            coords = coordinates.SkyCoord(l, b, frame='galactic')
+            coords = coordinates.SkyCoord(ell, b, frame='galactic')
         else:
             if not isinstance(d, units.Quantity):
                 d = d * units.kpc
-            coords = coordinates.SkyCoord(l, b, distance=d, frame='galactic')
+            coords = coordinates.SkyCoord(ell, b, distance=d, frame='galactic')
 
         return self.query(coords, **kwargs)
 

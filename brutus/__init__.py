@@ -3,7 +3,4 @@
 
 from __future__ import (division, print_function)
 
-from .fitting import *
-from .utils import *
-
-__version__ = "0.7.6"
+__version__ = "0.8.0"

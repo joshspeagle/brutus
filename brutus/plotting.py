@@ -247,7 +247,7 @@ def cornerplot(idxs, data, params, lndistprior=None, coord=None,
     parallax_kwargs['alpha'] = parallax_kwargs.get('alpha', 0.3)
 
     # Ignore age weights.
-    labels = [l for l in params.dtype.names if l != 'agewt']
+    labels = [x for x in params.dtype.names if x != 'agewt']
 
     # Deal with 1D results.
     with warnings.catch_warnings():
@@ -681,8 +681,8 @@ def dist_vs_red(data, ebv=None, dist_type='distance_modulus',
         xlabel = r'$\mu$'
         xlims = 5. * np.log10(dlims) + 10.
         x_min_smooth = dm_min_smooth
-    xbins = np.linspace(xlims[0], xlims[1], xbin+1)
-    ybins = np.linspace(ylims[0], ylims[1], ybin+1)
+    xbins = np.linspace(xlims[0], xlims[1], xbin + 1)
+    ybins = np.linspace(ylims[0], ylims[1], ybin + 1)
     dx, dy = xbins[1] - xbins[0], ybins[1] - ybins[0]
     xspan, yspan = xlims[1] - xlims[0], ylims[1] - ylims[0]
 
@@ -901,7 +901,8 @@ def posterior_predictive(models, idxs, reds, dreds, dists, weights=None,
     # Plot posterior predictive SED distribution.
     if np.any(weights != weights[0]):
         # If weights are non-uniform, sample indices proportional to weights.
-        idxs = rstate.choice(nsamps, p=weights/weights.sum(), size=nsamps*10)
+        idxs = rstate.choice(nsamps, p=weights / weights.sum(),
+                             size=nsamps * 10)
     else:
         idxs = np.arange(nsamps)
     parts = ax.violinplot(seds, positions=np.arange(nfilt),
@@ -918,7 +919,7 @@ def posterior_predictive(models, idxs, reds, dreds, dists, weights=None,
         else:
             m, e = magnitude(data[data_mask] * offset[data_mask],
                              data_err[data_mask] * offset[data_mask])
-        ax.errorbar(np.arange(nfilt)[data_mask], m, yerr=psig*e,
+        ax.errorbar(np.arange(nfilt)[data_mask], m, yerr=psig * e,
                     marker='o', color=pcolor, linestyle='none',
                     ms=7, lw=3)
     # Label axes.
@@ -1135,7 +1136,7 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
         ax[i].set_title(titles[i])
         ax[i].set_ylabel(r'$\Delta\,$mag')
     # Clear other axes.
-    for i in range(nfilt, nrows*ncols):
+    for i in range(nfilt, nrows * ncols):
         ax[i].set_frame_on(False)
         ax[i].set_xticks([])
         ax[i].set_yticks([])
@@ -1284,7 +1285,7 @@ def photometric_offsets_2d(phot, err, mask, models, idxs, reds, dreds, dists,
     if titles is None:
         titles = ['Band {0}'.format(i) for i in range(nfilt)]
     if show_off and offset is not None:
-        titles = [t+' ({:2.2}% offset)'.format(100.*(off-1.))
+        titles = [t + ' ({:2.2}% offset)'.format(100. * (off - 1.))
                   for t, off in zip(titles, offset)]
     if xlabel is None:
         xlabel = 'X'
@@ -1373,7 +1374,7 @@ def photometric_offsets_2d(phot, err, mask, models, idxs, reds, dreds, dists,
         ax[i].set_title(titles[i])
         plt.colorbar(img, ax=ax[i], label=r'$\Delta\,$mag')
     # Clear other axes.
-    for i in range(nfilt, nrows*ncols):
+    for i in range(nfilt, nrows * ncols):
         ax[i].set_frame_on(False)
         ax[i].set_xticks([])
         ax[i].set_yticks([])
@@ -1487,7 +1488,7 @@ def _hist2d(x, y, smooth=0.02, span=None, weights=None, levels=None,
     rgba_color = colorConverter.to_rgba(color)
     contour_cmap = [list(rgba_color) for l in levels] + [rgba_color]
     for i, l in enumerate(levels):
-        contour_cmap[i][-1] *= float(i) / (len(levels)+1)
+        contour_cmap[i][-1] *= float(i) / (len(levels) + 1)
 
     # Initialize smoothing.
     if (isinstance(smooth, int_type) or isinstance(smooth, float_type)):
@@ -1581,7 +1582,8 @@ def _hist2d(x, y, smooth=0.02, span=None, weights=None, levels=None,
         contourf_kwargs["colors"] = contourf_kwargs.get("colors", contour_cmap)
         contourf_kwargs["antialiased"] = contourf_kwargs.get("antialiased",
                                                              False)
-        ax.contourf(X2, Y2, H2.T, np.concatenate([[0], V, [H.max()*(1+1e-4)]]),
+        ax.contourf(X2, Y2, H2.T,
+                    np.concatenate([[0], V, [H.max() * (1 + 1e-4)]]),
                     **contourf_kwargs)
 
     # Plot the density map. This can't be plotted at the same time as the

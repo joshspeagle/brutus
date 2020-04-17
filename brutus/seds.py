@@ -53,16 +53,11 @@ class MISTtracks(object):
         The name of the HDF5 file containing the MIST tracks. Default is
         `MIST_1.2_EEPtrk.h5` and is extracted from `data/DATAFILES/`.
 
-    labels : iterable of shape `(3)`, optional
-        The names of the parameters on which to interpolate. This defaults to
-        `["mini", "eep", "feh"]`. **Change this only if you know what**
-        **you're doing.**
-
     predictions : iterable of shape `(4)`, optional
         The names of the parameters to output at the request location in
         the `labels` parameter space. Default is
-        `["loga", "logl", "logt", "logg"]`.  **Change this only if you know**
-        **what you're doing.**
+        `["loga", "logl", "logt", "logg"]`.
+        **Do not modify this unless you know what you're doing.**
 
     ageweight : bool, optional
         Whether to compute the associated d(age)/d(EEP) weights at each
@@ -74,9 +69,11 @@ class MISTtracks(object):
 
     """
 
-    def __init__(self, mistfile=None, labels=["mini", "eep", "feh"],
+    def __init__(self, mistfile=None,
                  predictions=["loga", "logl", "logt", "logg", "feh_surf"],
                  ageweight=True, verbose=True):
+
+        labels = ["mini", "eep", "feh", "afe"]
 
         # Initialize values.
         self.labels = list(np.array(labels))
@@ -180,16 +177,23 @@ class MISTtracks(object):
         ageweights = np.zeros(len(self.libparams))
         for i, m in enumerate(self.gridpoints["mini"]):
             for j, z in enumerate(self.gridpoints["feh"]):
-                if verbose:
-                    sys.stderr.write("\rComputing age weights for track "
-                                     "(mini, feh) = ({0}, {1})      "
-                                     .format(m, z))
-                    sys.stderr.flush()
-                # Get indices for this track.
-                inds = ((self.libparams["mini"] == m) &
-                        (self.libparams["feh"] == z))
-                # Store delta(ages). Assumes tracks are ordered by age.
-                ageweights[inds] = np.gradient(10**self.output[inds, age_ind])
+                for k, a in enumerate(self.gridpoints["afe"]):
+                    if verbose:
+                        sys.stderr.write("\rComputing age weights for track "
+                                         "(mini, feh, afe) = "
+                                         "({0}, {1}, {2})          "
+                                         .format(m, z, a))
+                        sys.stderr.flush()
+                    # Get indices for this track.
+                    inds = ((self.libparams["mini"] == m) &
+                            (self.libparams["feh"] == z) &
+                            (self.libparams["afe"] == a))
+                    # Store delta(ages). Assumes tracks are ordered by age.
+                    try:
+                        agewts = np.gradient(10**self.output[inds, age_ind])
+                        ageweights[inds] = agewts
+                    except:
+                        pass
 
         # Append results to outputs.
         self.output = np.hstack([self.output, ageweights[:, None]])
@@ -215,6 +219,20 @@ class MISTtracks(object):
         self.ygrid = np.zeros(self.grid_dims) + np.nan
         for x, y in zip(self.X, self.output):
             self.ygrid[tuple(x)] = y
+
+        # Check for singular afe value.
+        if self.grid_dims[-2] == 1:
+            # Pad afe value.
+            afe_val = self.xgrid[-1][0]
+            xgrid = list(self.xgrid)
+            xgrid[-1] = np.array([afe_val - 1e-5, afe_val + 1e-5])
+            self.xgrid = tuple(xgrid)
+            # Copy values over in predictions.
+            self.grid_dims[-2] += 1
+            ygrid = np.empty(self.grid_dims)
+            ygrid[:, :, :, 0, :] = np.array(self.ygrid[:, :, :, 0, :])  # left
+            ygrid[:, :, :, 1, :] = np.array(self.ygrid[:, :, :, 0, :])  # right
+            self.ygrid = np.array(ygrid)
 
         # Initialize interpolator.
         self.interpolator = RegularGridInterpolator(self.xgrid, self.ygrid,
@@ -366,11 +384,6 @@ class SEDmaker(MISTtracks):
         The name of the HDF5 file containing the MIST tracks. Default is
         `MIST_1.2_EEPtrk.h5` and is extracted from the `data/DATAFILES/`.
 
-    labels : iterable of shape `(3)`, optional
-        The names of the parameters over which to interpolate. This defaults to
-        `["mini", "eep", "feh"]`.
-        **Do not modify this unless you know what you're doing.**
-
     predictions : iterable of shape `(4)`, optional
         The names of the parameters to output at the request location in
         the `labels` parameter space. Default is
@@ -388,7 +401,6 @@ class SEDmaker(MISTtracks):
     """
 
     def __init__(self, filters=None, nnfile=None, mistfile=None,
-                 labels=["mini", "eep", "feh"],
                  predictions=["loga", "logl", "logt", "logg", "feh_surf"],
                  ageweight=True, verbose=True):
 
@@ -400,7 +412,7 @@ class SEDmaker(MISTtracks):
             sys.stderr.write('Filters: {}\n'.format(filters))
 
         # Initialize underlying MIST tracks.
-        super(SEDmaker, self).__init__(mistfile=mistfile, labels=labels,
+        super(SEDmaker, self).__init__(mistfile=mistfile,
                                        predictions=predictions,
                                        ageweight=ageweight,
                                        verbose=verbose)
@@ -409,7 +421,7 @@ class SEDmaker(MISTtracks):
         self.FNNP = FastNNPredictor(filters=filters, nnfile=nnfile,
                                     verbose=verbose)
 
-    def get_sed(self, mini=1., eep=350., feh=0., av=0., rv=3.3, smf=0.,
+    def get_sed(self, mini=1., eep=350., feh=0., afe=0., av=0., rv=3.3, smf=0.,
                 dist=1000., loga_max=10.14, eep_binary_max=480.,
                 tol=1e-3, mini_bound=0.5, apply_corr=True, corr_params=None,
                 eep2=None, return_eep2=False, return_dict=True, **kwargs):
@@ -429,6 +441,10 @@ class SEDmaker(MISTtracks):
 
         feh : float, optional
             Metallicity defined logarithmically in terms of solar metallicity.
+            Default is `0.`.
+
+        afe : float, optional
+            Alpha-enhancement defined logarithmically in terms of solar values.
             Default is `0.`.
 
         av : float, optional
@@ -502,7 +518,7 @@ class SEDmaker(MISTtracks):
         """
 
         # Grab input labels.
-        labels = {'mini': mini, 'eep': eep, 'feh': feh}  # establish dict
+        labels = {'mini': mini, 'eep': eep, 'feh': feh, 'afe': afe}
         labels = np.array([labels[l] for l in self.labels])  # reorder
 
         # Generate predictions.
@@ -523,7 +539,7 @@ class SEDmaker(MISTtracks):
             sed = self.FNNP.sed(logl=params["logl"], logt=params["logt"],
                                 logg=params["logg"],
                                 feh_surf=params["feh_surf"],
-                                alphafe=0., av=av, rv=rv, dist=dist)
+                                afe=afe, av=av, rv=rv, dist=dist)
             # Add in unresolved binary component if we're on the Main Sequence.
             if smf > 0. and eep <= eep_binary_max and mini * smf >= mini_min:
                 # Generate predictions for secondary binary component.
@@ -531,7 +547,8 @@ class SEDmaker(MISTtracks):
                     # Convert loga to EEP.
                     eep2 = self.get_eep(loga, mini=mini, eep=eep,
                                         feh=feh, smf=smf, tol=tol)
-                labels2 = {'mini': mini * smf, 'eep': eep2, 'feh': feh}
+                labels2 = {'mini': mini * smf, 'eep': eep2,
+                           'feh': feh, 'afe': afe}
                 labels2 = np.array([labels2[l] for l in self.labels])
                 params_arr2 = self.get_predictions(labels2,
                                                    apply_corr=apply_corr,
@@ -542,7 +559,7 @@ class SEDmaker(MISTtracks):
                                      logt=params2["logt"],
                                      logg=params2["logg"],
                                      feh_surf=params2["feh_surf"],
-                                     alphafe=0., av=av, rv=rv, dist=dist)
+                                     afe=afe, av=av, rv=rv, dist=dist)
                 # Combine primary and secondary components.
                 sed = add_mag(sed, sed2)
             elif smf > 0.:
@@ -558,7 +575,8 @@ class SEDmaker(MISTtracks):
         else:
             return sed, params, params2
 
-    def get_eep(self, loga, mini=1., eep=350., feh=0., smf=0., tol=1e-3):
+    def get_eep(self, loga, mini=1., eep=350., feh=0., afe=0., smf=1.,
+                tol=1e-3):
         """
         Compute the corresponding EEP for a particular age.
 
@@ -579,9 +597,13 @@ class SEDmaker(MISTtracks):
             Metallicity defined logarithmically in terms of solar metallicity.
             Default is `0.`.
 
+        afe : float, optional
+            Alpha-enhancement defined logarithmically in terms of solar values.
+            Default is `0.`.
+
         smf : float, optional
-            Secondary mass fraction for unresolved binary. Default is `0.`
-            (single stellar system).
+            Secondary mass fraction for unresolved binary. Default is `1.`
+            (equal-mass binary stellar system).
 
         tol : float, optional
             The tolerance in the `loga` solution for a given EEP.
@@ -593,7 +615,8 @@ class SEDmaker(MISTtracks):
 
         # Define loss function.
         def loss(x):
-            return (self.get_predictions([mini * smf, x, feh])[aidx] - loga)**2
+            loga_pred = self.get_predictions([mini * smf, x, feh, afe])[aidx]
+            return (loga_pred - loga)**2
         # Find best-fit age that minimizes loss.
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -607,7 +630,7 @@ class SEDmaker(MISTtracks):
         return eep2
 
     def make_grid(self, mini_grid=None, eep_grid=None, feh_grid=None,
-                  smf_grid=None, av_grid=None, av_wt=None,
+                  afe_grid=None, smf_grid=None, av_grid=None, av_wt=None,
                   rv_grid=None, rv_wt=None, dist=1000., loga_max=10.14,
                   eep_binary_max=480., mini_bound=0.5,
                   apply_corr=True, corr_params=None, verbose=True, **kwargs):
@@ -621,28 +644,30 @@ class SEDmaker(MISTtracks):
         ----------
         mini_grid : `~numpy.ndarray`, optional
             Grid in initial mass (in units of solar masses). If not provided,
-            the default is an adaptive grid with:
-            (1) resolution of 0.02 from 0.5 to 2.8,
-            (2) resolution of 0.1 from 2.8 to 3.0,
-            (3) resolution of 0.25 from 3.0 to 8.0, and
-            (4) resolution of 0.5 from 8.0 to 10.0.
+            the default is a grid from 0.5 to 2.5 with a resolution of 0.025.
 
         eep_grid : `~numpy.ndarray`, optional
             Grid in EEP. If not provided, the default is an adaptive grid with:
-            (1) resolution of 12 from 202 to 454 (on the Main Sequence) and
-            (2) resolution of 6 from 454 to 808 (off the Main Sequence).
+            (1) resolution of 14 from 202 to 454 (on the Main Sequence) and
+            (2) resolution of 8 from 454 to 806 (off the Main Sequence).
 
         feh_grid : `~numpy.ndarray`, optional
             Grid in metallicity (defined logarithmically in units of solar
-            metallicity). If not provided, the default is a grid from
-            -4 to 0.5 with a resolution of 0.06.
+            metallicity). If not provided, the default is an adaptive
+            grid with:
+            (1) resolution of 0.2 from -4.0 to -3.0,
+            (2) resolution of 0.1 from -3.0 to -2.0, and
+            (3) resolution of 0.07 from -2.0 to +0.045.
+
+        afe_grid : `~numpy.ndarray`, optional
+            Grid in alpha-enhancement (defined logarithmically in units of
+            solar values). If not provided, the default is a grid from
+            -0.2 to +0.55 with a resolution of 0.15.
 
         smf_grid : `~numpy.ndarray`, optional
             Grid in secondary mass fraction from `[0., 1.]` for computing
-            unresolved binaries. If not provided, the default is an adaptive
-            grid of `[0., 0.35, 0.6, 0.8, 0.9, 1.]`
-            optimized for observed changes in g-K color of roughly
-            0.1-0.15 magnitudes.
+            unresolved binaries. If not provided, the default is `[0.]`
+            (single star only).
 
         av_grid : `~numpy.ndarray`, optional
             Grid in dust attenuation defined in terms of reddened V-band
@@ -700,22 +725,21 @@ class SEDmaker(MISTtracks):
         """
 
         # Initialize grid.
-        labels = ['mini', 'eep', 'feh', 'smf']
+        labels = ['mini', 'eep', 'feh', 'afe', 'smf']
         ltype = np.dtype([(n, np.float) for n in labels])
         if mini_grid is None:  # initial mass
-            mini_grid = np.concatenate([np.arange(0.5, 2.8, 0.02),
-                                        np.arange(2.8, 3. + 1e-5, 0.1),
-                                        np.arange(3.25, 8., 0.25),
-                                        np.arange(8., 10. + 1e-5, 0.5)])
+            mini_grid = np.arange(0.5, 2.5 + 1e-3, 0.025)
         if eep_grid is None:  # EEP
-            eep_grid = np.concatenate([np.arange(202., 454., 12.),
-                                       np.arange(454., 808. + 1., 6.)])
-            eep_grid -= 1e-5
+            eep_grid = np.concatenate([np.arange(202., 454., 14.),
+                                       np.arange(454., 808., 8.)])
         if feh_grid is None:  # metallicity
-            feh_grid = np.arange(-4., 0.5 + 1e-5, 0.06)
-            feh_grid[-1] -= 1e-5
+            feh_grid = np.concatenate([np.arange(-4., -3., 0.2),
+                                       np.arange(-3., -2., 0.1),
+                                       np.arange(-2., 0.5, 0.07)])
+        if afe_grid is None:  # alpha-enhancement
+            afe_grid = np.arange(-0.2, 0.6 + 1e-5, 0.15)
         if smf_grid is None:  # binary secondary mass fraction
-            smf_grid = np.array([0., 0.35, 0.6, 0.8, 0.9, 1.])
+            smf_grid = np.array([0.])
         if av_grid is None:  # reddening
             av_grid = np.arange(0., 1.5 + 1e-5, 0.3)
             av_grid[-1] -= 1e-5
@@ -730,7 +754,8 @@ class SEDmaker(MISTtracks):
 
         # Create grid.
         self.grid_label = np.array(list(product(*[mini_grid, eep_grid,
-                                                  feh_grid, smf_grid])),
+                                                  feh_grid, afe_grid,
+                                                  smf_grid])),
                                    dtype=ltype)
         Ngrid = len(self.grid_label)
 
@@ -743,12 +768,12 @@ class SEDmaker(MISTtracks):
 
         percentage = -99
         ttot, t1 = 0., time.time()
-        for i, (mini, eep, feh, smf) in enumerate(self.grid_label):
+        for i, (mini, eep, feh, afe, smf) in enumerate(self.grid_label):
 
             # Compute model and parameter predictions.
             (sed, params,
              params2, eep2) = self.get_sed(mini=mini, eep=eep, feh=feh,
-                                           smf=smf, av=0., rv=3.3,
+                                           afe=afe, smf=smf, av=0., rv=3.3,
                                            dist=dist, loga_max=loga_max,
                                            eep_binary_max=eep_binary_max,
                                            return_dict=False, return_eep2=True,
@@ -767,7 +792,7 @@ class SEDmaker(MISTtracks):
             else:
                 # Compute fits for reddening.
                 seds = np.array([[self.get_sed(mini=mini, eep=eep, feh=feh,
-                                               smf=smf, eep2=eep2,
+                                               afe=afe, smf=smf, eep2=eep2,
                                                av=av, rv=rv,
                                                dist=dist, loga_max=loga_max,
                                                eep_binary_max=eep_binary_max,
@@ -792,16 +817,17 @@ class SEDmaker(MISTtracks):
             t1 = t2
 
             # Print progress.
-            new_percentage = int((i+1) / Ngrid * 1e5)
+            new_percentage = int((i + 1) / Ngrid * 1e5)
             if verbose and new_percentage != percentage:
                 percentage = new_percentage
                 sys.stderr.write('\rConstructing grid {:6.3f}% ({:d}/{:d}) '
-                                 '[mini={:6.3f}, eep={:6.3f}, feh={:6.3f} '
-                                 'smf={:6.3f}] (t/obj: {:3.3f} ms, '
+                                 '[mini={:6.3f}, eep={:6.3f}, feh={:6.3f}, '
+                                 'afe={:6.3f}, smf={:6.3f}] '
+                                 '(t/obj: {:3.3f} ms, '
                                  'est. remaining: {:10.3f} s)          '
-                                 .format(percentage / 1.0e3, i+1, Ngrid,
-                                         mini, eep, feh, smf,
-                                         tavg*1e3, test))
+                                 .format(percentage / 1.0e3, i + 1, Ngrid,
+                                         mini, eep, feh, afe, smf,
+                                         tavg * 1e3, test))
                 sys.stderr.flush()
 
         if verbose:
@@ -958,7 +984,7 @@ class FastNNPredictor(FastNN):
         super(FastNNPredictor, self).__init__(filters=filters, nnfile=nnfile,
                                               verbose=verbose)
 
-    def sed(self, logt=3.8, logg=4.4, feh_surf=0., logl=0., alphafe=0.,
+    def sed(self, logt=3.8, logg=4.4, feh_surf=0., logl=0., afe=0.,
             av=0., rv=3.3, dist=1000., filt_idxs=slice(None)):
         """
         Returns the SED predicted by neural networks for the input set of
@@ -984,8 +1010,8 @@ class FastNNPredictor(FastNN):
             The base-10 logarithm of the luminosity in solar luminosities.
             Default is `0.`.
 
-        alphafe : float, optional
-            The alpha enhancement in logarithmic units relative to solar
+        afe : float, optional
+            The alpha-enhancement in logarithmic units relative to solar
             values. Default is `0.`.
 
         av : float, optional
@@ -1014,7 +1040,7 @@ class FastNNPredictor(FastNN):
         mu = 5. * np.log10(dist) - 5.
 
         # Compute apparent magnitudes.
-        x = np.array([10.**logt, logg, feh_surf, alphafe, av, rv])
+        x = np.array([10.**logt, logg, feh_surf, afe, av, rv])
         if np.all(np.isfinite(x)) and np.all((x >= self.xmin) &
                                              (x <= self.xmax)):
             # Check whether we're within the bounds of the neural net.
@@ -1072,7 +1098,7 @@ class Isochrone(object):
         if nnfile is None:
             nnfile = 'data/DATAFILES/nnMIST_BC.h5'
         if mistfile is None:
-            mistfile = 'data/DATAFILES/MIST_1.2_iso.h5'
+            mistfile = 'data/DATAFILES/MIST_1.2_iso_vvcrit0.0.h5'
         if predictions is None:
             predictions = ["mini", "mass", "logl", "logt",
                            "logr", "logg", "feh_surf"]
@@ -1084,6 +1110,7 @@ class Isochrone(object):
         # Load file.
         with h5py.File(mistfile, "r") as f:
             self.feh_grid = f['feh'][:]
+            self.afe_grid = f['afe'][:]
             self.loga_grid = f['loga'][:]
             self.eep_grid = f['eep'][:]
             self.pred_grid = f['predictions'][:]
@@ -1110,22 +1137,44 @@ class Isochrone(object):
 
         # Set up grid.
         self.feh_u = np.unique(self.feh_grid)
+        self.afe_u = np.unique(self.afe_grid)
         self.loga_u = np.unique(self.loga_grid)
         self.eep_u = np.unique(self.eep_grid)
-        self.xgrid = (self.feh_u, self.loga_u, self.eep_u)
-        self.grid_dims = (len(self.xgrid[0]), len(self.xgrid[1]),
-                          len(self.xgrid[2]), len(self.pred_labels))
+        self.xgrid = (self.feh_u, self.afe_u, self.loga_u, self.eep_u)
+        self.grid_dims = np.array([len(self.xgrid[0]), len(self.xgrid[1]),
+                                   len(self.xgrid[2]), len(self.xgrid[3]),
+                                   len(self.pred_labels)], dtype='int')
 
-        # Fill in "holes".
+        # Fill in "holes" if possible.
         for i in range(len(self.feh_u)):
-            for j in range(len(self.loga_u)):
-                # Select values where predictions exist.
-                sel = np.all(np.isfinite(self.pred_grid[i, j]), axis=1)
-                # Linearly interpolate over built-in EEP grid.
-                pnew = np.array([np.interp(self.eep_u, self.eep_u[sel], par,
-                                           left=np.nan, right=np.nan)
-                                 for par in self.pred_grid[i, j, sel].T]).T
-                self.pred_grid[i, j] = pnew  # assign new predictions
+            for j in range(len(self.afe_u)):
+                for k in range(len(self.loga_u)):
+                    # Select values where predictions exist.
+                    sel = np.all(np.isfinite(self.pred_grid[i, j, k]), axis=1)
+                    try:
+                        # Linearly interpolate over built-in EEP grid.
+                        pnew = [np.interp(self.eep_u, self.eep_u[sel], par,
+                                          left=np.nan, right=np.nan)
+                                for par in self.pred_grid[i, j, k, sel].T]
+                        pnew = np.array(pnew).T  # copy and transpose
+                        self.pred_grid[i, j, k] = pnew  # assign predictions
+                    except:
+                        # Fail silently and give up.
+                        pass
+
+        # Check for singular afe value.
+        if self.grid_dims[1] == 1:
+            # Pad afe value.
+            afe_val = self.xgrid[1][0]
+            xgrid = list(self.xgrid)
+            xgrid[1] = np.array([afe_val - 1e-5, afe_val + 1e-5])
+            self.xgrid = tuple(xgrid)
+            # Copy values over in predictions.
+            self.grid_dims[1] += 1
+            ygrid = np.empty(self.grid_dims)
+            ygrid[:, 0, :, :, :] = np.array(self.pred_grid[:, 0, :, :, :])
+            ygrid[:, 1, :, :, :] = np.array(self.pred_grid[:, 0, :, :, :])
+            self.pred_grid = np.array(ygrid)
 
         # Initialize interpolator
         self.interpolator = RegularGridInterpolator(self.xgrid,
@@ -1142,7 +1191,7 @@ class Isochrone(object):
                                      'feh_surf')[0][0]
         self.mini_idx = np.where(np.array(self.predictions) == 'mini')[0][0]
 
-    def get_predictions(self, feh=0., loga=8.5, eep=None,
+    def get_predictions(self, feh=0., afe=0., loga=8.5, eep=None,
                         apply_corr=True, corr_params=None):
         """
         Returns physical predictions for a given metallicity, log(age), and
@@ -1152,6 +1201,10 @@ class Isochrone(object):
         ----------
         feh : float, optional
             Metallicity defined logarithmically in terms of solar metallicity.
+            Default is `0.`.
+
+        afe : float, optional
+            Alpha-enhancement defined logarithmically in terms of solar values.
             Default is `0.`.
 
         loga : float, optional
@@ -1185,8 +1238,9 @@ class Isochrone(object):
             eep = self.eep_u
         eep = np.array(eep, dtype='float')
         feh = np.full_like(eep, feh)
+        afe = np.full_like(eep, afe)
         loga = np.full_like(eep, loga)
-        labels = np.c_[feh, loga, eep]
+        labels = np.c_[feh, afe, loga, eep]
 
         # Generate predictions.
         preds = self.interpolator(labels)
@@ -1279,8 +1333,9 @@ class Isochrone(object):
 
         return corrs
 
-    def get_seds(self, feh=0., loga=8.5, eep=None, av=0., rv=3.3, smf=0.,
-                 dist=1000., mini_bound=0.5, eep_binary_max=480.,
+    def get_seds(self, feh=0., afe=0., loga=8.5, eep=None,
+                 av=0., rv=3.3, smf=0., dist=1000.,
+                 mini_bound=0.5, eep_binary_max=480.,
                  apply_corr=True, corr_params=None,
                  return_dict=True, **kwargs):
         """
@@ -1291,6 +1346,10 @@ class Isochrone(object):
         ----------
         feh : float, optional
             Metallicity defined logarithmically in terms of solar metallicity.
+            Default is `0.`.
+
+        afe : float, optional
+            Alpha-enhancement defined logarithmically in terms of solar values.
             Default is `0.`.
 
         loga : float, optional
@@ -1362,7 +1421,7 @@ class Isochrone(object):
         Neep = len(eep)
 
         # Generate predictions.
-        params_arr = self.get_predictions(feh=feh, loga=loga, eep=eep,
+        params_arr = self.get_predictions(feh=feh, afe=afe, loga=loga, eep=eep,
                                           apply_corr=apply_corr,
                                           corr_params=corr_params)
         params = dict(zip(self.predictions, params_arr.T))  # convert to dict
@@ -1375,7 +1434,7 @@ class Isochrone(object):
                                         logt=params["logt"][i],
                                         logg=params["logg"][i],
                                         feh_surf=params["feh_surf"][i],
-                                        alphafe=0., av=av, rv=rv, dist=dist)
+                                        afe=afe, av=av, rv=rv, dist=dist)
 
         # Add in binaries (if appropriate).
         params_arr2 = np.full_like(params_arr, np.nan)
@@ -1392,7 +1451,8 @@ class Isochrone(object):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 eep2[(eep2 > eep_binary_max) | (eep > eep_binary_max)] = np.nan
-            params_arr2 = self.get_predictions(feh=feh, loga=loga, eep=eep2,
+            params_arr2 = self.get_predictions(feh=feh, afe=afe,
+                                               loga=loga, eep=eep2,
                                                apply_corr=apply_corr,
                                                corr_params=corr_params)
             params2 = dict(zip(self.predictions, params_arr2.T))
@@ -1403,7 +1463,7 @@ class Isochrone(object):
                                              logt=params2["logt"][i],
                                              logg=params2["logg"][i],
                                              feh_surf=params2["feh_surf"][i],
-                                             alphafe=0., av=av, rv=rv,
+                                             afe=afe, av=av, rv=rv,
                                              dist=dist)
             seds = add_mag(seds, seds2)
         elif smf == 1.:

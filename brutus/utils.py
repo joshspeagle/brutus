@@ -67,7 +67,7 @@ def _adjoint3(A):
     AI = np.empty_like(A)
 
     for i in range(3):
-        AI[..., i, :] = np.cross(A[..., i-2, :], A[..., i-1, :])
+        AI[..., i, :] = np.cross(A[..., i - 2, :], A[..., i - 1, :])
 
     return AI
 
@@ -88,10 +88,10 @@ def _inverse_transpose3(A):
 
     """
 
-    I = _adjoint3(A)
-    det = _dot3(I, A).mean(axis=-1)
+    Id = _adjoint3(A)
+    det = _dot3(Id, A).mean(axis=-1)
 
-    return I / det[..., None, None]
+    return Id / det[..., None, None]
 
 
 def _inverse3(A):
@@ -172,7 +172,7 @@ def load_models(filepath, filters=None, labels=None,
         f = h5py.File(filepath, 'r')
         pass
     mag_coeffs = f['mag_coeffs']
-    
+
     models = np.zeros((len(mag_coeffs), len(filters), len(mag_coeffs[0][0])),
                       dtype='float32')
     for i, filt in enumerate(filters):
@@ -237,7 +237,7 @@ def load_models(filepath, filters=None, labels=None,
     if not include_binaries and 'smf' in labels2:
         try:
             sel *= combined_labels['smf'] == 0.
-            labels2 = [l for l in labels2 if l != 'smf']
+            labels2 = [x for x in labels2 if x != 'smf']
         except:
             pass
 
@@ -905,7 +905,7 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
             for j in range(Nmc):
                 if verbose:
                     sys.stderr.write('\rBand {0} ({1}/{2})     '
-                                     .format(i+1, j+1, Nmc))
+                                     .format(i + 1, j + 1, Nmc))
                     sys.stderr.flush()
                 # Resample objects.
                 ridx = rstate.choice(n, size=n, p=wt_obj)

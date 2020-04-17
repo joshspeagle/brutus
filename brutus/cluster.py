@@ -250,7 +250,7 @@ def isochrone_loglike(theta, isochrone, phot, err, cluster_params='free',
     # Read in multiplicative offsets.
     if offsets == 'free':
         # If no constraints are provided, read out list of all offsets.
-        Xb = theta[counter:counter+Nbands]
+        Xb = theta[counter:counter + Nbands]
         counter += Nbands
     elif offsets == 'fixed':
         Xb = np.ones(Nbands)
