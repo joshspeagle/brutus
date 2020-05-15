@@ -18,9 +18,8 @@ from astropy.coordinates import CylindricalRepresentation as CylRep
 from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter as norm_kde
 import copy
-from scipy.stats import truncnorm
 
-from .utils import draw_sar
+from .utils import draw_sar, _truncnorm_logpdf
 from .dust import Bayestar
 
 try:
@@ -459,7 +458,7 @@ def logp_age_from_feh(age, feh_mean=-0.2, max_age=13.8, min_age=0.,
     # Compute log-probability.
     a = (min_age - age_mean_pred) / age_sigma_pred
     b = (max_age - age_mean_pred) / age_sigma_pred
-    lnprior = truncnorm.logpdf(age, a, b,
+    lnprior = _truncnorm_logpdf(age, a, b,
                                loc=age_mean_pred, scale=age_sigma_pred)
 
     return lnprior

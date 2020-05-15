@@ -925,3 +925,109 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
         ratios_err = ratios_err * prior_std / np.sqrt(var_tot)
 
     return ratios, ratios_err, nratio
+
+def _truncnorm_pdf(x, a, b, loc=0.0, scale=1.0):
+    """
+    Compute pdf of a truncated normal distribution
+
+    The parent normal distribution has a mean of loc and standard deviation of scale.
+    The distribution is cut off at a and b
+    NOTE: This function replicates the scipy truncnorm.pdf function
+
+    Parameters
+    ----------
+    x : `~numpy.ndarray` of shape `(N)` or float
+        Input values
+
+    a : float
+        Lower cutoff of normal distribution
+
+    b : float
+        Upper cutoff of normal distribution
+
+    loc : float, optional
+        Mean of normal distribution, default 0
+
+    scale : float, optional
+        Standard deviation of normal distribution, default 0
+
+    Returns
+    -------
+    ans : `~numpy.ndarray` of shape `(N)`, the natural log pdf
+
+    """
+
+    _a = scale*a + loc
+    _b = scale*b + loc
+    xi    = (x - loc) / scale
+    alpha = (_a - loc) / scale
+    beta  = (_b - loc) / scale
+    
+    phix = np.exp(-0.5 * xi**2) / np.sqrt(2.*np.pi)
+    Phia = 0.5 *(1+erf(alpha/np.sqrt(2)))
+    Phib = 0.5 *(1+erf(beta/np.sqrt(2)))
+
+    ans = phix / (scale*(Phib-Phia))
+   
+    if not isinstance(x, (float,int)):
+        keys = np.logical_or(x < _a, x > _b)
+        ans[keys] = 0
+    else:
+        if x < _a or x > _b:
+            ans = 0
+    
+    return ans
+
+
+
+def _truncnorm_logpdf(x, a, b, loc=0.0, scale=1.0):
+    """
+    Compute logpdf of a truncated normal distribution
+
+    The parent normal distribution has a mean of loc and standard deviation of scale.
+    The distribution is cut off at a and b
+    NOTE: This function replicates the scipy truncnorm.logpdf function
+
+    Parameters
+    ----------
+    x : `~numpy.ndarray` of shape `(N)` or float
+        Input values
+
+    a : float
+        Lower cutoff of normal distribution
+
+    b : float
+        Upper cutoff of normal distribution
+
+    loc : float, optional
+        Mean of normal distribution, default 0
+
+    scale : float, optional
+        Standard deviation of normal distribution, default 0
+
+    Returns
+    -------
+    ans : `~numpy.ndarray` of shape `(N)`, the natural log pdf
+
+    """
+
+    _a = scale*a + loc
+    _b = scale*b + loc
+    
+    xi    = (x - loc) / scale
+    alpha = (_a - loc) / scale
+    beta  = (_b - loc) / scale
+    
+    lnphi = -np.log(np.sqrt(2*np.pi)) - 0.5 * np.square(xi)
+    lndenom = np.log(scale/2.0) + np.log(erf(beta/np.sqrt(2)) - erf(alpha/np.sqrt(2)))
+    
+    ans = np.subtract(lnphi, lndenom)
+    
+    if not isinstance(x, (float,int)):
+        keys = np.logical_or(x < _a, x > _b)
+        ans[keys] = -np.inf
+    else:
+        if x < _a or x > _b:
+            ans = -np.inf
+    
+    return ans
