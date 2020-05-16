@@ -217,8 +217,8 @@ def loglike(data, data_err, data_mask, mag_coeffs,
         init_sel = np.arange(Nmodels)
         chi2 = np.ones(Nmodels) + 1e300
         lnl = np.ones(Nmodels) - 1e300
-        av_new = np.array(av)
-        rv_new = np.array(rv)
+        av_new = np.array(av, order='F')
+        rv_new = np.array(rv, order='F')
 
     # Iterate until convergence.
     lnl_old, lerr = -1e300, 1e300
@@ -767,6 +767,12 @@ class BruteForce():
 
         """
 
+        # Reorder data to Fortran ordering
+        data        = np.asfortranarray(data)
+        data_err    = np.asfortranarray(data_err)
+        data_mask   = np.asfortranarray(data_mask)
+        data_labels = np.asfortranarray(data_labels)
+
         if logl_initthresh > ltol_subthresh:
             raise ValueError("The initial threshold must be smaller than "
                              "or equal to the convergence threshold in order "
@@ -1172,7 +1178,7 @@ class BruteForce():
                              "to be useful!")
 
         Ndata = len(data)
-        models = np.array(self.models)
+        models = np.array(self.models, order='F')
         if wt_thresh is None and cdf_thresh is None:
             wt_thresh = -np.inf  # default to no clipping/thresholding
         if rstate is None:
@@ -1529,7 +1535,7 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
             s_mc, a_mc, r_mc = np.array([mvn(np.array([s, a, r]), c,
                                          size=Nmc_prior)
                                          for s, a, r, c in zip(scale, av, rv,
-                                                               cov_sar)]).T
+                                                               cov_sar)], order='F').T
         if dlabels is not None:
             dlabels_mc = np.tile(dlabels[sel], Nmc_prior).reshape(-1, Nsel)
         else:

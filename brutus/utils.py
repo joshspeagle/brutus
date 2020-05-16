@@ -669,7 +669,7 @@ def get_seds(mag_coeffs, av=None, rv=None, return_flux=False,
     dr = mag_coeffs[:, :, 2]
 
     # Compute SEDs.
-    drvecs = np.array(dr)
+    drvecs = np.array(dr, order='F')
     rvecs = r0 + rv[:, None] * drvecs
     seds = mags + av[:, None] * rvecs
 
