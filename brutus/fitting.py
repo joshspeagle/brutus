@@ -789,7 +789,10 @@ class BruteForce():
         if wt_thresh is None and cdf_thresh is None:
             wt_thresh = -np.inf  # default to no clipping/thresholding
         if rstate is None:
-            rstate = np.random
+            try:
+                rstate = np.random_intel
+            except: # fall back to regular np.random
+                rstate = np.random
         if parallax is not None and parallax_err is None:
             raise ValueError("Must provide both `parallax` and "
                              "`parallax_err`.")
@@ -1189,7 +1192,10 @@ class BruteForce():
         if wt_thresh is None and cdf_thresh is None:
             wt_thresh = -np.inf  # default to no clipping/thresholding
         if rstate is None:
-            rstate = np.random
+            try:
+                rstate = np.random_intel
+            except: # fall back to regular np.random
+                rstate = np.random
         if parallax is not None and parallax_err is None:
             raise ValueError("Must provide both `parallax` and "
                              "`parallax_err`.")
@@ -1473,7 +1479,10 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
     if wt_thresh is None and cdf_thresh is None:
         wt_thresh = -np.inf  # default to no clipping/thresholding
     if rstate is None:
-        rstate = np.random
+        try:
+            rstate = np.random_intel
+        except: # fall back to regular np.random
+            rstate = np.random
     mvn = rstate.multivariate_normal
     if parallax is not None and parallax_err is None:
         raise ValueError("Must provide both `parallax` and "

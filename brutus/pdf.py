@@ -914,7 +914,10 @@ def bin_pdfs_distred(data, cdf=False, ebv=False, dist_type='distance_modulus',
     # Initialize values.
     nobjs, nsamps = data[0].shape
     if rstate is None:
-        rstate = np.random
+        try:
+            rstate = np.random_intel
+        except: # fall back to regular np.random
+            rstate = np.random
     if lndistprior is None:
         lndistprior = gal_lnprior
     if parallaxes is None:

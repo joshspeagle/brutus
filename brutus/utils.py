@@ -408,7 +408,10 @@ def draw_sar(scales, avs, rvs, covs_sar, ndraws=500, avlim=(0., 6.),
     """
 
     if rstate is None:
-        rstate = np.random
+        try:
+            rstate = np.random_intel
+        except: # fall back to regular np.random
+            rstate = np.random
 
     # Generate realizations for each (scale, av, cov_sa) set.
     nsamps = len(scales)
@@ -864,7 +867,10 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
     if old_offsets is None:
         old_offsets = np.ones(Nfilt)
     if rstate is None:
-        rstate = np.random
+        try:
+            rstate = np.random_intel
+        except: # fall back to regular np.random
+            rstate = np.random
 
     # Generate SEDs.
     seds = get_seds(models[idxs.flatten()], av=reds.flatten(),
