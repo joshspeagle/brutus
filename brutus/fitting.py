@@ -23,7 +23,7 @@ except ImportError:
 from .pdf import imf_lnprior, ps1_MrLF_lnprior
 from .pdf import parallax_lnprior, scale_parallax_lnprior
 from .pdf import gal_lnprior, dust_lnprior
-from .utils import _function_wrapper, _inverse3, magnitude, get_seds
+from .utils import _function_wrapper, _inverse3, magnitude, get_seds, sample_multivariate_normal
 
 __all__ = ["loglike", "_optimize_fit", "BruteForce", "_lnpost"]
 
@@ -1554,10 +1554,7 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
     if Nmc_prior > 0:
         # Use Monte Carlo integration to get an estimate of the
         # overlap integral.
-        s_mc, a_mc, r_mc = np.array([mvn(np.array([s, a, r]), c,
-                                     size=Nmc_prior)
-                                     for s, a, r, c in zip(scale, av, rv,
-                                                           cov_sar)]).T
+        s_mc, a_mc, r_mc = sample_multivariate_normal(np.transpose([scale, av, rv]), cov_sar, size=Nmc_prior, rstate=rstate)
         if dlabels is not None:
             dlabels_mc = np.tile(dlabels[sel], Nmc_prior).reshape(-1, Nsel)
         else:

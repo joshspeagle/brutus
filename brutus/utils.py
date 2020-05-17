@@ -1041,3 +1041,60 @@ def _truncnorm_logpdf(x, a, b, loc=0.0, scale=1.0):
             ans = -np.inf
     
     return ans
+
+def sample_multivariate_normal(mean, cov, size=1, eps=0.000001, rstate=None):
+    """
+    Draw samples from many multivariate normal distributions
+
+    Returns samples from an arbitrary number of multivariate distributions.
+    The multivariate distributions must all have the same dimension.
+    NOTE: Provided covariances must be positive semi-definite (can use `_isPSD` 
+    to check)
+
+    Parameters
+    ----------
+    mean : `~numpy.ndarray` of shape `(Ndist, dim)` or `(dim)`
+        Means of the various multivariate distributions, where
+        `Ndist` is the number of desired distributions and
+        `dim` is the dimension of the distributions
+
+    cov : `~numpy.ndarray` of shape `(Ndist, dim, dim)`
+        Covariances of the various multivariate distributions, where
+        `Ndist` is the number of desired distributions and
+        `dim` is the dimension of the distributions.
+    
+    size : float, optional
+        Number of samples to draw, by default `1`
+
+    eps : float, optional
+        Small factor added to covariances prior to cholesky decomposition,
+        aids in numerical stability of algorithm and should have no effect on
+        outcome. By default is set to `0.000001`
+
+    rstate : `~numpy.random.RandomState`, optional
+        `~numpy.random.RandomState` instance.
+
+    Returns
+    -------
+    samples : `~numpy.ndarray` of shape `(dim, size, Ndist)`
+        Sampled values
+
+    """
+    # if we have a single distribution just revert to numpy's implementation
+    if len(np.shape(mean))==1:
+        return rstate.multivariate_normal(mean, cov, size=size)
+
+    N, d = np.shape(mean)
+    K = cov + eps * np.full((N, d, d), np.identity(d))
+    L = np.linalg.cholesky(K)
+    
+    u = rstate.normal(loc=0, scale=1, size=d*size*N).reshape(N, d, size)
+
+    # ans = mean + L * u
+    ans = np.repeat(mean[:, :, np.newaxis], size, axis=2) + np.matmul(L, u)
+    
+    ans = np.swapaxes(ans, 0, 1)
+    ans = np.swapaxes(ans, 1, 2)
+
+    return ans
+
