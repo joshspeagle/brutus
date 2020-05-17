@@ -13,7 +13,6 @@ import warnings
 import numpy as np
 import h5py
 import time
-from scipy.stats import chi2 as chisquare
 
 try:
     from scipy.special import logsumexp
@@ -23,7 +22,7 @@ except ImportError:
 from .pdf import imf_lnprior, ps1_MrLF_lnprior
 from .pdf import parallax_lnprior, scale_parallax_lnprior
 from .pdf import gal_lnprior, dust_lnprior
-from .utils import _function_wrapper, _inverse3, magnitude, get_seds, sample_multivariate_normal
+from .utils import _function_wrapper, _inverse3, magnitude, get_seds, sample_multivariate_normal, _chisquare_logpdf
 
 __all__ = ["loglike", "_optimize_fit", "BruteForce", "_lnpost"]
 
@@ -161,7 +160,8 @@ def loglike(data, data_err, data_mask, mag_coeffs,
     # Subselect only clean observations.
     flux, fluxerr = data[data_mask], data_err[data_mask]  # mean, error
     mcoeffs = mag_coeffs[:, data_mask, :]  # model magnitude coefficients
-    tot_var = np.square(fluxerr) + np.zeros((Nmodels, Ndim))  # total variance
+    tot_var = np.square(fluxerr) # total variance
+    tot_var = np.repeat(tot_var[np.newaxis, :], Nmodels, axis=0)
 
     # Get started by fitting in magnitudes.
     with warnings.catch_warnings():
@@ -258,7 +258,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
     # Apply dimensionality prior.
     if dim_prior:
         # Compute logpdf of chi2 distribution.
-        lnl = chisquare.logpdf(chi2, Ndim - 3)
+        lnl = _chisquare_logpdf(chi2, Ndim - 3)
 
     if return_vals:
         return lnl, Ndim, chi2, scale, av, rv, icov_sar

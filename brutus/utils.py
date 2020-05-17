@@ -14,6 +14,8 @@ import numpy as np
 import h5py
 from scipy.special import xlogy, gammaln
 
+from math import log, gamma
+
 try:
     from scipy.special import logsumexp
 except ImportError:
@@ -1098,3 +1100,40 @@ def sample_multivariate_normal(mean, cov, size=1, eps=0.000001, rstate=None):
 
     return ans
 
+def _chisquare_logpdf(x, df, loc=0, scale=1):
+    """
+    Compute logpdf of a chisquared distribution
+
+    _chisquare_logpdf(x, df, loc, scale) is equal to
+    _chisquare_logpdf(y, df) - ln(scale), where y = (x-loc)/scale
+
+    Parameters
+    ----------
+    x : `~numpy.ndarray` of shape `(N)` or float
+        Input values
+
+    df : float
+        Degrees of freedom
+
+    loc : float, optional
+        Offset of distribution
+
+    scale : float, optional
+        Scaling of distribution
+
+    Returns
+    -------
+    ans : `~numpy.ndarray` of shape `(N)`, the natural log pdf
+
+    """
+
+    y = (x - loc)/scale
+    keys = y < 0
+    y[keys] = 0.1 # placeholder value, will actually return -np.inf
+    
+    ans = - log(2**(df/2.)*gamma(df/2.))
+    ans = ans + (df/2. - 1.) * np.log(y) - y/2. - log(scale)
+    
+    ans[keys] = -np.inf
+    
+    return ans
