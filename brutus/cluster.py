@@ -349,7 +349,7 @@ def isochrone_loglike(theta, isochrone, phot, err, cluster_params='free',
         # Compute mask so we don't waste time evaluating non-existent
         # or repeated models.
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+            warnings.simplefilter("ignore")  # ignore bad values
             if identical_models_computed:
                 # If the first set of models where binaries are disallowed
                 # have been computed, mask out those models in addition to
