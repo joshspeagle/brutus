@@ -58,3 +58,4 @@ data/*
 __pycache__
 *.dat
 
+*.npy
