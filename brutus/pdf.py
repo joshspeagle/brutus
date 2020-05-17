@@ -1068,7 +1068,7 @@ def bin_pdfs_distred(data, cdf=False, ebv=False, dist_type='distance_modulus',
             x_min_smooth = abs(np.diff(1. / p1sig)) / 2.
         elif dist_type == 'distance_modulus':
             with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
+                warnings.simplefilter("ignore")  # ignore bad values
                 x_min_smooth = abs(np.diff(5. * np.log10(1. / p1sig))) / 2.
         if np.isfinite(x_min_smooth):
             xsmooth_t = min(x_min_smooth, xsmooth)

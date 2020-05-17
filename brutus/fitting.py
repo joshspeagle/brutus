@@ -153,7 +153,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
 
     # Clean data (safety checks).
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
+        warnings.simplefilter("ignore")  # ignore bad values
         clean = np.isfinite(data) & np.isfinite(data_err) & (data_err > 0.)
         data_mask[~clean] = False
     Ndim = sum(data_mask)  # number of dimensions
@@ -165,7 +165,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
 
     # Get started by fitting in magnitudes.
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
+        warnings.simplefilter("ignore")  # ignore bad values
         # Convert to magnitudes.
         mags = -2.5 * np.log10(flux)
         mags_var = np.square(2.5 / np.log(10.)) * tot_var / np.square(flux)
@@ -196,7 +196,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
         if parallax is not None and parallax_err is not None:
             if np.isfinite(parallax) and np.isfinite(parallax_err):
                 with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
+                    warnings.simplefilter("ignore")  # ignore bad values
                     par = np.sqrt(scale)
                     chi2_p = (par - parallax)**2 / parallax_err**2
                     lnl_p = lnl - 0.5 * chi2_p
@@ -520,8 +520,8 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
     resid = data - models
 
     # Derive scale cross-terms.
-    sr_mix = np.sum(drvecs * (resid - models) / tot_var, axis=1)
-    sa_mix = np.sum(rvecs * (resid - models) / tot_var, axis=1)
+    sr_mix = np.sum(drvecs * (models - resid) / tot_var, axis=1)
+    sa_mix = np.sum(rvecs * (models - resid) / tot_var, axis=1)
 
     # Rescale reddening quantities.
     rvecs *= scale[:, None]
@@ -529,10 +529,17 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
     reddening *= scale[:, None]
 
     # Deriving reddening (cross-)terms.
-    ar_mix = np.sum(drvecs * (resid - reddening) / tot_var, axis=1)
+    ar_mix = np.sum(drvecs * (reddening - resid) / tot_var, axis=1)
     a_den = np.sum(np.square(rvecs) / tot_var, axis=1)
     r_den = np.sum(np.square(drvecs) / tot_var, axis=1)
+
+    # Add in priors.
+    a_den += 1. / Av_std**2  # add Av gaussian prior
     r_den += 1. / Rv_std**2  # add Rv gaussian prior
+
+    # Add in additional regularization to ensure solution well-behaved.
+    a_den += 1. / 0.05**2
+    r_den += 1. / 0.1**2
 
     # Construct precision matrices (inverse covariances).
     icov_sar = np.zeros((len(models), 3, 3))
@@ -855,7 +862,7 @@ class BruteForce():
 
         # Clean data to remove bad photometry user may not have masked.
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+            warnings.simplefilter("ignore")  # ignore bad values
             mag, err = magnitude(data, data_err)
             bad_mag = (mag > mag_max) | (err > merr_min)
             clean = np.isfinite(data) & np.isfinite(data_err) & (data_err > 0.)
@@ -1313,7 +1320,7 @@ class BruteForce():
                 # Add in parallax to chi2 and Ndim if provided.
                 if np.isfinite(p) and np.isfinite(pe):
                     with warnings.catch_warnings():
-                        warnings.simplefilter("ignore")
+                        warnings.simplefilter("ignore")  # ignore bad values
                         chi2 += (np.sqrt(scales) - p)**2 / pe**2
                         Ndim += 1
 
@@ -1323,7 +1330,7 @@ class BruteForce():
 
                 # Resample.
                 with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
+                    warnings.simplefilter("ignore")  # ignore bad values
                     wt = np.exp(lnpost - levid)
                     wt /= wt.sum()
                     idxs = rstate.choice(len(sel), size=Ndraws, p=wt)
@@ -1520,28 +1527,43 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
         cdf = np.cumsum(prob[idx_sort])
         sel = idx_sort[cdf <= (1. - cdf_thresh)]
     lnpost = lnpost[sel]
+    scale, av, rv = scales[sel], avs[sel], rvs[sel]
+    icov_sar = icovs_sar[sel]
     Nsel = len(sel)
 
     # Generate covariance matrices for the selected fits.
-    scale, av, rv = scales[sel], avs[sel], rvs[sel]
-    cov_sar = _inverse3(icovs_sar[sel])
+    cov_sar = _inverse3(icov_sar)
+
+    # Ensure final set of matrices are positive semidefinite.
+    not_psd = np.where(~np.all(np.linalg.eigvals(cov_sar) > 0, axis=1))[0]
+    count = 1
+    while len(not_psd) > 0:
+        # Regularize non-PSD matrices by adding Gaussian prior with 5% width.
+        # The amount of times this is added increases with each pass.
+        icov_sar[not_psd] += np.array([np.diag([count / sfrac**2,
+                                                count / 0.05**2,
+                                                count / 0.05**2])
+                                       for sfrac in scale[not_psd] * 0.05])
+        cov_sar[not_psd] = _inverse3(icov_sar[not_psd])
+        new_idx = np.where(~np.all(np.linalg.eigvals(cov_sar[not_psd]) > 0,
+                                   axis=1))[0]
+        not_psd = not_psd[new_idx]
+        count += 1
 
     # Now actually apply priors.
     if Nmc_prior > 0:
         # Use Monte Carlo integration to get an estimate of the
         # overlap integral.
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            s_mc, a_mc, r_mc = np.array([mvn(np.array([s, a, r]), c,
-                                         size=Nmc_prior)
-                                         for s, a, r, c in zip(scale, av, rv,
-                                                               cov_sar)], order='F').T
+        s_mc, a_mc, r_mc = np.array([mvn(np.array([s, a, r]), c,
+                                     size=Nmc_prior)
+                                     for s, a, r, c in zip(scale, av, rv,
+                                                           cov_sar)]).T
         if dlabels is not None:
             dlabels_mc = np.tile(dlabels[sel], Nmc_prior).reshape(-1, Nsel)
         else:
             dlabels_mc = None
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+            warnings.simplefilter("ignore")  # ignore bad values
             par_mc = np.sqrt(s_mc)
             dist_mc = 1. / par_mc
             # Evaluate distance prior.
@@ -1560,7 +1582,7 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
         Nmc_prior_eff = np.sum(inbounds, axis=0)
         # Compute integral.
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+            warnings.simplefilter("ignore")  # ignore bad values
             lnp = logsumexp(lnp_mc, axis=0) - np.log(Nmc_prior_eff)
             lnpost += lnp
     else:

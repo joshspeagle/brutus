@@ -251,7 +251,7 @@ def cornerplot(idxs, data, params, lndistprior=None, coord=None,
 
     # Deal with 1D results.
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
+        warnings.simplefilter("ignore")  # ignore bad values
         samples = params[idxs]
         samples = np.array([samples[l] for l in labels]).T
     samples = np.atleast_1d(samples)
@@ -644,7 +644,7 @@ def dist_vs_red(data, ebv=None, dist_type='distance_modulus',
     s_min_smooth = abs(np.diff(p1sig**2)) / 2.
     d_min_smooth = abs(np.diff(1. / p1sig)) / 2.
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
+        warnings.simplefilter("ignore")  # ignore bad values
         dm_min_smooth = abs(np.diff(5. * np.log10(1. / p1sig) + 10.)) / 2.
 
     # Set up axes and labels.
@@ -1077,7 +1077,7 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
 
     # Convert observed data to magnitudes.
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
+        warnings.simplefilter("ignore")  # ignore bad values
         if flux:
             magobs, mageobs = magnitude(phot * offset, err * offset)
         else:
@@ -1302,7 +1302,7 @@ def photometric_offsets_2d(phot, err, mask, models, idxs, reds, dreds, dists,
 
     # Convert observed data to magnitudes.
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
+        warnings.simplefilter("ignore")  # ignore bad values
         if flux:
             magobs, mageobs = magnitude(phot * offset, err * offset)
         else:
@@ -1340,7 +1340,7 @@ def photometric_offsets_2d(phot, err, mask, models, idxs, reds, dreds, dists,
              (np.all(np.isfinite(magobs), axis=1)))
         # Compute weights from ignoring current band.
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+            warnings.simplefilter("ignore")  # ignore bad values
             lnl = np.array([phot_loglike(mo, me, mt, mp, dim_prior=dim_prior)
                             for mo, me, mt, mp in zip(magobs, mageobs,
                                                       mtemp, mpred)])

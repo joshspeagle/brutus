@@ -216,7 +216,7 @@ def LOS_clouds_loglike_samples(theta, dsamps, rsamps, kernel='gauss',
     # Compute log-weights for samples along the LOS by evaluating reddening
     # samples within each segment against the associated centered kernel.
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
+        warnings.simplefilter("ignore")  # ignore bad values
         logw = np.array([kern(rs, kp) + np.log((ds >= xl) & (ds < xh))
                          for xl, xh, kp in zip(xedges[:-1], xedges[1:],
                                                kparams)])

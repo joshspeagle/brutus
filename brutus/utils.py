@@ -10,7 +10,6 @@ from __future__ import (print_function, division)
 from six.moves import range
 
 import sys
-import warnings
 import numpy as np
 import h5py
 from scipy.special import xlogy, gammaln
@@ -23,7 +22,7 @@ except ImportError:
 from .filters import FILTERS
 
 __all__ = ["_function_wrapper", "_adjoint3", "_inverse_transpose3",
-           "_inverse3", "_dot3", "load_models", "load_offsets",
+           "_inverse3", "_dot3", "_isPSD", "load_models", "load_offsets",
            "quantile", "draw_sar", "magnitude", "inv_magnitude",
            "luptitude", "inv_luptitude", "add_mag", "get_seds",
            "phot_loglike", "photometric_offsets"]
@@ -101,6 +100,19 @@ def _inverse3(A):
     """
 
     return np.swapaxes(_inverse_transpose3(A), -1, -2)
+
+
+def _isPSD(A):
+    """
+    Check if `A` is a positive semidefinite matrix.
+
+    """
+
+    try:
+        _ = np.linalg.cholesky(A)
+        return True
+    except np.linalg.LinAlgError:
+        return False
 
 
 def load_models(filepath, filters=None, labels=None,
@@ -404,10 +416,8 @@ def draw_sar(scales, avs, rvs, covs_sar, ndraws=500, avlim=(0., 6.),
         # Loop in case a significant chunk of draws are out-of-boudns.
         while len(s_temp) < ndraws:
             # Draw samples.
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                s_mc, a_mc, r_mc = rstate.multivariate_normal([s, a, r],
-                                                              c, size=ndraws).T
+            s_mc, a_mc, r_mc = rstate.multivariate_normal([s, a, r],
+                                                          c, size=ndraws).T
             # Flag draws that are out of bounds.
             inbounds = ((s_mc >= 0.) &
                         (a_mc >= avlim[0]) & (a_mc <= avlim[1]) &

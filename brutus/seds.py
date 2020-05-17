@@ -639,7 +639,7 @@ class SEDmaker(MISTtracks):
             return (loga_pred - loga)**2
         # Find best-fit age that minimizes loss.
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+            warnings.simplefilter("ignore")  # ignore bad values
             res = minimize(loss, eep)
         # Check against tolerance.
         if res['fun'] < tol:
@@ -664,25 +664,24 @@ class SEDmaker(MISTtracks):
         ----------
         mini_grid : `~numpy.ndarray`, optional
             Grid in initial mass (in units of solar masses). If not provided,
-            the default is a grid from 0.5 to 2.5 with a resolution of 0.025.
+            the default is a grid from 0.5 to 2.0 with a resolution of 0.025.
 
         eep_grid : `~numpy.ndarray`, optional
             Grid in EEP. If not provided, the default is an adaptive grid with:
-            (1) resolution of 14 from 202 to 454 (on the Main Sequence) and
-            (2) resolution of 8 from 454 to 806 (off the Main Sequence).
+            (1) resolution of 12 from 202 to 454 (on the Main Sequence) and
+            (2) resolution of 3 from 454 to 808 (off the Main Sequence).
 
         feh_grid : `~numpy.ndarray`, optional
             Grid in metallicity (defined logarithmically in units of solar
             metallicity). If not provided, the default is an adaptive
             grid with:
-            (1) resolution of 0.2 from -4.0 to -3.0,
-            (2) resolution of 0.1 from -3.0 to -2.0, and
-            (3) resolution of 0.07 from -2.0 to +0.045.
+            (1) resolution of 0.1 from -3.0 to -2.0, and
+            (3) resolution of 0.05 from -2.0 to +0.05.
 
         afe_grid : `~numpy.ndarray`, optional
             Grid in alpha-enhancement (defined logarithmically in units of
             solar values). If not provided, the default is a grid from
-            -0.2 to +0.55 with a resolution of 0.15.
+            -0.2 to +0.6 with a resolution of 0.2.
 
         smf_grid : `~numpy.ndarray`, optional
             Grid in secondary mass fraction from `[0., 1.]` for computing
@@ -748,16 +747,15 @@ class SEDmaker(MISTtracks):
         labels = ['mini', 'eep', 'feh', 'afe', 'smf']
         ltype = np.dtype([(n, np.float) for n in labels])
         if mini_grid is None:  # initial mass
-            mini_grid = np.arange(0.5, 2.5 + 1e-3, 0.025)
+            mini_grid = np.arange(0.5, 2.0 + 1e-5, 0.025)
         if eep_grid is None:  # EEP
-            eep_grid = np.concatenate([np.arange(202., 454., 14.),
-                                       np.arange(454., 808., 8.)])
+            eep_grid = np.concatenate([np.arange(202., 454., 6.),
+                                       np.arange(454., 808. + 1e-5, 2.)])
         if feh_grid is None:  # metallicity
-            feh_grid = np.concatenate([np.arange(-4., -3., 0.2),
-                                       np.arange(-3., -2., 0.1),
-                                       np.arange(-2., 0.5, 0.07)])
+            feh_grid = np.concatenate([np.arange(-3., -2., 0.1),
+                                       np.arange(-2., 0.5 + 1e-5, 0.05)])
         if afe_grid is None:  # alpha-enhancement
-            afe_grid = np.arange(-0.2, 0.6 + 1e-5, 0.15)
+            afe_grid = np.arange(-0.2, 0.6 + 1e-5, 0.2)
         if smf_grid is None:  # binary secondary mass fraction
             smf_grid = np.array([0.])
         if av_grid is None:  # reddening
@@ -1471,7 +1469,7 @@ class Isochrone(object):
             else:
                 eep2 = np.full_like(eep, np.nan)
             with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
+                warnings.simplefilter("ignore")  # ignore bad values
                 eep2[(eep2 > eep_binary_max) | (eep > eep_binary_max)] = np.nan
             params_arr2 = self.get_predictions(feh=feh, afe=afe,
                                                loga=loga, eep=eep2,
