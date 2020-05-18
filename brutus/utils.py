@@ -14,7 +14,7 @@ import numpy as np
 import h5py
 from scipy.special import xlogy, gammaln
 
-from math import log, gamma
+from math import log, gamma, erf, sqrt
 
 try:
     from scipy.special import logsumexp
@@ -1036,8 +1036,8 @@ def _truncnorm_logpdf(x, a, b, loc=0.0, scale=1.0):
     alpha = (_a - loc) / scale
     beta  = (_b - loc) / scale
     
-    lnphi = -np.log(np.sqrt(2*np.pi)) - 0.5 * np.square(xi)
-    lndenom = np.log(scale/2.0) + np.log(erf(beta/np.sqrt(2)) - erf(alpha/np.sqrt(2)))
+    lnphi = -log(sqrt(2*np.pi)) - 0.5 * np.square(xi)
+    lndenom = log(scale/2.0) + log(erf(beta/np.sqrt(2)) - erf(alpha/sqrt(2)))
     
     ans = np.subtract(lnphi, lndenom)
     
@@ -1132,14 +1132,22 @@ def _chisquare_logpdf(x, df, loc=0, scale=1):
     ans : `~numpy.ndarray` of shape `(N)`, the natural log pdf
 
     """
+    if isinstance(x, list):
+        x = np.asarray(x)
 
     y = (x - loc)/scale
-    keys = y < 0
-    y[keys] = 0.1 # placeholder value, will actually return -np.inf
-    
+    is_scalar = isinstance(y, (float, int))
+    if is_scalar:
+        if y <= 0:
+            return -np.inf
+    else:
+        keys = y <= 0
+        y[keys] = 0.1 # placeholder value, will actually return -np.inf
+        
     ans = - log(2**(df/2.)*gamma(df/2.))
     ans = ans + (df/2. - 1.) * np.log(y) - y/2. - log(scale)
     
-    ans[keys] = -np.inf
+    if not is_scalar:
+        ans[keys] = -np.inf
     
     return ans
