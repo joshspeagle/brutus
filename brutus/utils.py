@@ -14,6 +14,8 @@ import numpy as np
 import h5py
 from scipy.special import xlogy, gammaln
 
+from math import log, gamma, erf, sqrt
+
 try:
     from scipy.special import logsumexp
 except ImportError:
@@ -406,7 +408,10 @@ def draw_sar(scales, avs, rvs, covs_sar, ndraws=500, avlim=(0., 6.),
     """
 
     if rstate is None:
-        rstate = np.random
+        try:
+            rstate = np.random_intel
+        except: # fall back to regular np.random
+            rstate = np.random
 
     # Generate realizations for each (scale, av, cov_sa) set.
     nsamps = len(scales)
@@ -679,7 +684,7 @@ def get_seds(mag_coeffs, av=None, rv=None, return_flux=False,
     dr = mag_coeffs[:, :, 2]
 
     # Compute SEDs.
-    drvecs = np.array(dr)
+    drvecs = np.array(dr, order='F')
     rvecs = r0 + rv[:, None] * drvecs
     seds = mags + av[:, None] * rvecs
 
@@ -862,7 +867,10 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
     if old_offsets is None:
         old_offsets = np.ones(Nfilt)
     if rstate is None:
-        rstate = np.random
+        try:
+            rstate = np.random_intel
+        except: # fall back to regular np.random
+            rstate = np.random
 
     # Generate SEDs.
     seds = get_seds(models[idxs.flatten()], av=reds.flatten(),
@@ -935,3 +943,211 @@ def photometric_offsets(phot, err, mask, models, idxs, reds, dreds, dists,
         ratios_err = ratios_err * prior_std / np.sqrt(var_tot)
 
     return ratios, ratios_err, nratio
+
+def _truncnorm_pdf(x, a, b, loc=0.0, scale=1.0):
+    """
+    Compute pdf of a truncated normal distribution
+
+    The parent normal distribution has a mean of loc and standard deviation of scale.
+    The distribution is cut off at a and b
+    NOTE: This function replicates the scipy truncnorm.pdf function
+
+    Parameters
+    ----------
+    x : `~numpy.ndarray` of shape `(N)` or float
+        Input values
+
+    a : float
+        Lower cutoff of normal distribution
+
+    b : float
+        Upper cutoff of normal distribution
+
+    loc : float, optional
+        Mean of normal distribution, default 0
+
+    scale : float, optional
+        Standard deviation of normal distribution, default 0
+
+    Returns
+    -------
+    ans : `~numpy.ndarray` of shape `(N)`, the natural log pdf
+
+    """
+
+    _a = scale*a + loc
+    _b = scale*b + loc
+    xi    = (x - loc) / scale
+    alpha = (_a - loc) / scale
+    beta  = (_b - loc) / scale
+    
+    phix = np.exp(-0.5 * xi**2) / np.sqrt(2.*np.pi)
+    Phia = 0.5 *(1+erf(alpha/np.sqrt(2)))
+    Phib = 0.5 *(1+erf(beta/np.sqrt(2)))
+
+    ans = phix / (scale*(Phib-Phia))
+   
+    if not isinstance(x, (float,int)):
+        keys = np.logical_or(x < _a, x > _b)
+        ans[keys] = 0
+    else:
+        if x < _a or x > _b:
+            ans = 0
+    
+    return ans
+
+
+
+def _truncnorm_logpdf(x, a, b, loc=0.0, scale=1.0):
+    """
+    Compute logpdf of a truncated normal distribution
+
+    The parent normal distribution has a mean of loc and standard deviation of scale.
+    The distribution is cut off at a and b
+    NOTE: This function replicates the scipy truncnorm.logpdf function
+
+    Parameters
+    ----------
+    x : `~numpy.ndarray` of shape `(N)` or float
+        Input values
+
+    a : float
+        Lower cutoff of normal distribution
+
+    b : float
+        Upper cutoff of normal distribution
+
+    loc : float, optional
+        Mean of normal distribution, default 0
+
+    scale : float, optional
+        Standard deviation of normal distribution, default 0
+
+    Returns
+    -------
+    ans : `~numpy.ndarray` of shape `(N)`, the natural log pdf
+
+    """
+
+    _a = scale*a + loc
+    _b = scale*b + loc
+    
+    xi    = (x - loc) / scale
+    alpha = (_a - loc) / scale
+    beta  = (_b - loc) / scale
+    
+    lnphi = -log(sqrt(2*np.pi)) - 0.5 * np.square(xi)
+    lndenom = log(scale/2.0) + log(erf(beta/np.sqrt(2)) - erf(alpha/sqrt(2)))
+    
+    ans = np.subtract(lnphi, lndenom)
+    
+    if not isinstance(x, (float,int)):
+        keys = np.logical_or(x < _a, x > _b)
+        ans[keys] = -np.inf
+    else:
+        if x < _a or x > _b:
+            ans = -np.inf
+    
+    return ans
+
+def sample_multivariate_normal(mean, cov, size=1, eps=0.000001, rstate=None):
+    """
+    Draw samples from many multivariate normal distributions
+
+    Returns samples from an arbitrary number of multivariate distributions.
+    The multivariate distributions must all have the same dimension.
+    NOTE: Provided covariances must be positive semi-definite (can use `_isPSD` 
+    to check)
+
+    Parameters
+    ----------
+    mean : `~numpy.ndarray` of shape `(Ndist, dim)` or `(dim)`
+        Means of the various multivariate distributions, where
+        `Ndist` is the number of desired distributions and
+        `dim` is the dimension of the distributions
+
+    cov : `~numpy.ndarray` of shape `(Ndist, dim, dim)`
+        Covariances of the various multivariate distributions, where
+        `Ndist` is the number of desired distributions and
+        `dim` is the dimension of the distributions.
+    
+    size : float, optional
+        Number of samples to draw, by default `1`
+
+    eps : float, optional
+        Small factor added to covariances prior to cholesky decomposition,
+        aids in numerical stability of algorithm and should have no effect on
+        outcome. By default is set to `0.000001`
+
+    rstate : `~numpy.random.RandomState`, optional
+        `~numpy.random.RandomState` instance.
+
+    Returns
+    -------
+    samples : `~numpy.ndarray` of shape `(dim, size, Ndist)`
+        Sampled values
+
+    """
+    # if we have a single distribution just revert to numpy's implementation
+    if len(np.shape(mean))==1:
+        return rstate.multivariate_normal(mean, cov, size=size)
+
+    N, d = np.shape(mean)
+    K = cov + eps * np.full((N, d, d), np.identity(d))
+    L = np.linalg.cholesky(K)
+    
+    u = rstate.normal(loc=0, scale=1, size=d*size*N).reshape(N, d, size)
+
+    # ans = mean + L * u
+    ans = np.repeat(mean[:, :, np.newaxis], size, axis=2) + np.matmul(L, u)
+    
+    ans = np.swapaxes(ans, 0, 1)
+    ans = np.swapaxes(ans, 1, 2)
+
+    return ans
+
+def _chisquare_logpdf(x, df, loc=0, scale=1):
+    """
+    Compute logpdf of a chisquared distribution
+
+    _chisquare_logpdf(x, df, loc, scale) is equal to
+    _chisquare_logpdf(y, df) - ln(scale), where y = (x-loc)/scale
+
+    Parameters
+    ----------
+    x : `~numpy.ndarray` of shape `(N)` or float
+        Input values
+
+    df : float
+        Degrees of freedom
+
+    loc : float, optional
+        Offset of distribution
+
+    scale : float, optional
+        Scaling of distribution
+
+    Returns
+    -------
+    ans : `~numpy.ndarray` of shape `(N)`, the natural log pdf
+
+    """
+    if isinstance(x, list):
+        x = np.asarray(x)
+
+    y = (x - loc)/scale
+    is_scalar = isinstance(y, (float, int))
+    if is_scalar:
+        if y <= 0:
+            return -np.inf
+    else:
+        keys = y <= 0
+        y[keys] = 0.1 # placeholder value, will actually return -np.inf
+        
+    ans = - log(2**(df/2.)*gamma(df/2.))
+    ans = ans + (df/2. - 1.) * np.log(y) - y/2. - log(scale)
+    
+    if not is_scalar:
+        ans[keys] = -np.inf
+    
+    return ans

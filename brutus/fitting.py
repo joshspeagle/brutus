@@ -13,7 +13,6 @@ import warnings
 import numpy as np
 import h5py
 import time
-from scipy.stats import chi2 as chisquare
 
 try:
     from scipy.special import logsumexp
@@ -23,7 +22,7 @@ except ImportError:
 from .pdf import imf_lnprior, ps1_MrLF_lnprior
 from .pdf import parallax_lnprior, scale_parallax_lnprior
 from .pdf import gal_lnprior, dust_lnprior
-from .utils import _function_wrapper, _inverse3, magnitude, get_seds
+from .utils import _function_wrapper, _inverse3, magnitude, get_seds, sample_multivariate_normal, _chisquare_logpdf
 
 __all__ = ["loglike", "_optimize_fit", "BruteForce", "_lnpost"]
 
@@ -161,7 +160,8 @@ def loglike(data, data_err, data_mask, mag_coeffs,
     # Subselect only clean observations.
     flux, fluxerr = data[data_mask], data_err[data_mask]  # mean, error
     mcoeffs = mag_coeffs[:, data_mask, :]  # model magnitude coefficients
-    tot_var = np.square(fluxerr) + np.zeros((Nmodels, Ndim))  # total variance
+    tot_var = np.square(fluxerr) # total variance
+    tot_var = np.repeat(tot_var[np.newaxis, :], Nmodels, axis=0)
 
     # Get started by fitting in magnitudes.
     with warnings.catch_warnings():
@@ -217,8 +217,8 @@ def loglike(data, data_err, data_mask, mag_coeffs,
         init_sel = np.arange(Nmodels)
         chi2 = np.ones(Nmodels) + 1e300
         lnl = np.ones(Nmodels) - 1e300
-        av_new = np.array(av)
-        rv_new = np.array(rv)
+        av_new = np.array(av, order='F')
+        rv_new = np.array(rv, order='F')
 
     # Iterate until convergence.
     lnl_old, lerr = -1e300, 1e300
@@ -258,7 +258,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
     # Apply dimensionality prior.
     if dim_prior:
         # Compute logpdf of chi2 distribution.
-        lnl = chisquare.logpdf(chi2, Ndim - 3)
+        lnl = _chisquare_logpdf(chi2, Ndim - 3)
 
     if return_vals:
         return lnl, Ndim, chi2, scale, av, rv, icov_sar
@@ -774,6 +774,12 @@ class BruteForce():
 
         """
 
+        # Reorder data to Fortran ordering
+        data        = np.asfortranarray(data)
+        data_err    = np.asfortranarray(data_err)
+        data_mask   = np.asfortranarray(data_mask)
+        data_labels = np.asfortranarray(data_labels)
+
         if logl_initthresh > ltol_subthresh:
             raise ValueError("The initial threshold must be smaller than "
                              "or equal to the convergence threshold in order "
@@ -783,7 +789,10 @@ class BruteForce():
         if wt_thresh is None and cdf_thresh is None:
             wt_thresh = -np.inf  # default to no clipping/thresholding
         if rstate is None:
-            rstate = np.random
+            try:
+                rstate = np.random_intel
+            except: # fall back to regular np.random
+                rstate = np.random
         if parallax is not None and parallax_err is None:
             raise ValueError("Must provide both `parallax` and "
                              "`parallax_err`.")
@@ -1179,11 +1188,14 @@ class BruteForce():
                              "to be useful!")
 
         Ndata = len(data)
-        models = np.array(self.models)
+        models = np.array(self.models, order='F')
         if wt_thresh is None and cdf_thresh is None:
             wt_thresh = -np.inf  # default to no clipping/thresholding
         if rstate is None:
-            rstate = np.random
+            try:
+                rstate = np.random_intel
+            except: # fall back to regular np.random
+                rstate = np.random
         if parallax is not None and parallax_err is None:
             raise ValueError("Must provide both `parallax` and "
                              "`parallax_err`.")
@@ -1467,7 +1479,10 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
     if wt_thresh is None and cdf_thresh is None:
         wt_thresh = -np.inf  # default to no clipping/thresholding
     if rstate is None:
-        rstate = np.random
+        try:
+            rstate = np.random_intel
+        except: # fall back to regular np.random
+            rstate = np.random
     mvn = rstate.multivariate_normal
     if parallax is not None and parallax_err is None:
         raise ValueError("Must provide both `parallax` and "
@@ -1548,10 +1563,7 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
     if Nmc_prior > 0:
         # Use Monte Carlo integration to get an estimate of the
         # overlap integral.
-        s_mc, a_mc, r_mc = np.array([mvn(np.array([s, a, r]), c,
-                                     size=Nmc_prior)
-                                     for s, a, r, c in zip(scale, av, rv,
-                                                           cov_sar)]).T
+        s_mc, a_mc, r_mc = sample_multivariate_normal(np.transpose([scale, av, rv]), cov_sar, size=Nmc_prior, rstate=rstate)
         if dlabels is not None:
             dlabels_mc = np.tile(dlabels[sel], Nmc_prior).reshape(-1, Nsel)
         else:
