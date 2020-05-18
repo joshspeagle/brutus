@@ -459,7 +459,7 @@ def logp_age_from_feh(age, feh_mean=-0.2, max_age=13.8, min_age=0.,
     a = (min_age - age_mean_pred) / age_sigma_pred
     b = (max_age - age_mean_pred) / age_sigma_pred
     lnprior = _truncnorm_logpdf(age, a, b,
-                               loc=age_mean_pred, scale=age_sigma_pred)
+                                loc=age_mean_pred, scale=age_sigma_pred)
 
     return lnprior
 
@@ -915,8 +915,10 @@ def bin_pdfs_distred(data, cdf=False, ebv=False, dist_type='distance_modulus',
     nobjs, nsamps = data[0].shape
     if rstate is None:
         try:
+            # Attempt to use intel-specific version.
             rstate = np.random_intel
-        except: # fall back to regular np.random
+        except:
+            # Fall back to default if not present.
             rstate = np.random
     if lndistprior is None:
         lndistprior = gal_lnprior

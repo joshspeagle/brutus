@@ -57,5 +57,5 @@ data/*
 # some devel files from speed improvements
 __pycache__
 *.dat
-
+speed/*
 *.npy

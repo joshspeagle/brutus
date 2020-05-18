@@ -22,7 +22,8 @@ except ImportError:
 from .pdf import imf_lnprior, ps1_MrLF_lnprior
 from .pdf import parallax_lnprior, scale_parallax_lnprior
 from .pdf import gal_lnprior, dust_lnprior
-from .utils import _function_wrapper, _inverse3, magnitude, get_seds, sample_multivariate_normal, _chisquare_logpdf
+from .utils import (_function_wrapper, _inverse3, magnitude, get_seds,
+                    sample_multivariate_normal, _chisquare_logpdf)
 
 __all__ = ["loglike", "_optimize_fit", "BruteForce", "_lnpost"]
 
@@ -160,7 +161,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
     # Subselect only clean observations.
     flux, fluxerr = data[data_mask], data_err[data_mask]  # mean, error
     mcoeffs = mag_coeffs[:, data_mask, :]  # model magnitude coefficients
-    tot_var = np.square(fluxerr) # total variance
+    tot_var = np.square(fluxerr)  # total variance
     tot_var = np.repeat(tot_var[np.newaxis, :], Nmodels, axis=0)
 
     # Get started by fitting in magnitudes.
@@ -774,10 +775,10 @@ class BruteForce():
 
         """
 
-        # Reorder data to Fortran ordering
-        data        = np.asfortranarray(data)
-        data_err    = np.asfortranarray(data_err)
-        data_mask   = np.asfortranarray(data_mask)
+        # Reorder data to Fortran ordering.
+        data = np.asfortranarray(data)
+        data_err = np.asfortranarray(data_err)
+        data_mask = np.asfortranarray(data_mask)
         data_labels = np.asfortranarray(data_labels)
 
         if logl_initthresh > ltol_subthresh:
@@ -790,9 +791,12 @@ class BruteForce():
             wt_thresh = -np.inf  # default to no clipping/thresholding
         if rstate is None:
             try:
+                # Attempt to use intel-specific version.
                 rstate = np.random_intel
-            except: # fall back to regular np.random
+            except:
+                # Fall back to regular np.random if not present.
                 rstate = np.random
+                pass
         if parallax is not None and parallax_err is None:
             raise ValueError("Must provide both `parallax` and "
                              "`parallax_err`.")
@@ -1193,9 +1197,12 @@ class BruteForce():
             wt_thresh = -np.inf  # default to no clipping/thresholding
         if rstate is None:
             try:
+                # Attempt to use intel-specific version.
                 rstate = np.random_intel
-            except: # fall back to regular np.random
+            except:
+                # Fall back to regular np.random if not present.
                 rstate = np.random
+                pass
         if parallax is not None and parallax_err is None:
             raise ValueError("Must provide both `parallax` and "
                              "`parallax_err`.")
@@ -1480,10 +1487,13 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
         wt_thresh = -np.inf  # default to no clipping/thresholding
     if rstate is None:
         try:
+            # Attempt to use intel-specific version.
             rstate = np.random_intel
-        except: # fall back to regular np.random
+        except:
+            # Fall back to regular np.random if not present.
             rstate = np.random
-    mvn = rstate.multivariate_normal
+            pass
+    mvn = sample_multivariate_normal  # assign alias
     if parallax is not None and parallax_err is None:
         raise ValueError("Must provide both `parallax` and "
                          "`parallax_err`.")
@@ -1563,7 +1573,8 @@ def _lnpost(results, parallax=None, parallax_err=None, coord=None,
     if Nmc_prior > 0:
         # Use Monte Carlo integration to get an estimate of the
         # overlap integral.
-        s_mc, a_mc, r_mc = sample_multivariate_normal(np.transpose([scale, av, rv]), cov_sar, size=Nmc_prior, rstate=rstate)
+        s_mc, a_mc, r_mc = mvn(np.transpose([scale, av, rv]), cov_sar,
+                               size=Nmc_prior, rstate=rstate)
         if dlabels is not None:
             dlabels_mc = np.tile(dlabels[sel], Nmc_prior).reshape(-1, Nsel)
         else:
