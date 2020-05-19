@@ -13,6 +13,7 @@ import warnings
 import numpy as np
 import h5py
 import time
+from numba import jit
 
 try:
     from scipy.special import logsumexp
@@ -22,7 +23,7 @@ except ImportError:
 from .pdf import imf_lnprior, ps1_MrLF_lnprior
 from .pdf import parallax_lnprior, scale_parallax_lnprior
 from .pdf import gal_lnprior, dust_lnprior
-from .utils import (_function_wrapper, _inverse3, magnitude, get_seds,
+from .utils import (_function_wrapper, _inverse3, magnitude, scalar_get_seds,
                     sample_multivariate_normal, _chisquare_logpdf)
 
 __all__ = ["loglike", "_optimize_fit", "BruteForce", "_lnpost"]
@@ -174,8 +175,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
         mags[~mclean], mags_var[:, ~mclean] = 0., 1e50  # mask negative values
 
     # Compute unreddened photometry.
-    models, rvecs, drvecs = get_seds(mcoeffs, av=av_init, rv=rv_init,
-                                     return_rvec=True, return_drvec=True)
+    models, rvecs, drvecs = scalar_get_seds(mcoeffs, av_init, rv_init)
 
     # Compute initial magnitude fit.
     mtol = 2.5 * ltol
@@ -500,9 +500,7 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
         rv += drv
 
     # Recompute models with new Rv.
-    models, rvecs, drvecs = get_seds(mag_coeffs, av=av, rv=rv,
-                                     return_flux=True,
-                                     return_rvec=True, return_drvec=True)
+    models, rvecs, drvecs = scalar_get_seds(mag_coeffs, av, rv, return_flux=True)
 
     # Derive scale-factors (`scale`) between data and models.
     s_num = np.sum(models * data[None, :] / tot_var, axis=1)
