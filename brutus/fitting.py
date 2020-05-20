@@ -27,7 +27,8 @@ from .pdf import gal_lnprior, dust_lnprior
 from .utils import (_function_wrapper, _inverse3, magnitude, scalar_get_seds,
                     sample_multivariate_normal, _chisquare_logpdf)
 
-__all__ = ["loglike", "_optimize_fit", "BruteForce", "_lnpost"]
+__all__ = ["loglike", "_optimize_fit_mag", "_optimize_fit_flux",
+           "_get_sed_mle", "BruteForce", "_lnpost"]
 
 
 def loglike(data, data_err, data_mask, mag_coeffs,
@@ -176,16 +177,19 @@ def loglike(data, data_err, data_mask, mag_coeffs,
         mags[~mclean], mags_var[:, ~mclean] = 0., 1e50  # mask negative values
 
     # Compute unreddened photometry.
-    models, rvecs, drvecs = _get_seds(mcoeffs, av_init, rv_init)
+    models, rvecs, drvecs = _get_seds(mcoeffs, av_init, rv_init,
+                                      return_flux=False)
 
     # Compute initial magnitude fit.
     mtol = 2.5 * ltol
-    results = _optimize_fit(flux, tot_var, models, rvecs, drvecs,
-                            av_init, rv_init, mcoeffs,
-                            tol=mtol, init_thresh=init_thresh,
-                            resid=None, mags=mags, mags_var=mags_var,
-                            avlim=avlim, av_gauss=av_gauss,
-                            rvlim=rvlim, rv_gauss=rv_gauss)
+    resid = mags - models
+    stepsize = np.ones(Nmodels)
+    results = _optimize_fit_mag(flux, tot_var, models, rvecs, drvecs,
+                                av_init, rv_init, mcoeffs,
+                                resid, stepsize, mags, mags_var,
+                                tol=mtol, init_thresh=init_thresh,
+                                avlim=avlim, av_gauss=av_gauss,
+                                rvlim=rvlim, rv_gauss=rv_gauss)
     models, rvecs, drvecs, scale, av, rv, icov_sar, resid = results
 
     if init_thresh is not None:
@@ -228,11 +232,10 @@ def loglike(data, data_err, data_mask, mag_coeffs,
     while lerr > ltol:
 
         # Re-compute models.
-        results = _optimize_fit(flux, tot_var, models, rvecs, drvecs,
-                                av_new, rv_new, mcoeffs,
-                                avlim=avlim, av_gauss=av_gauss,
-                                rvlim=rvlim, rv_gauss=rv_gauss,
-                                resid=resid, stepsize=stepsize)
+        results = _optimize_fit_flux(flux, tot_var, models, rvecs, drvecs,
+                                     av_new, rv_new, mcoeffs, resid, stepsize,
+                                     avlim=avlim, av_gauss=av_gauss,
+                                     rvlim=rvlim, rv_gauss=rv_gauss)
         (models, rvecs, drvecs,
          scale_new, av_new, rv_new, icov_sar_new, resid) = results
 
@@ -268,14 +271,15 @@ def loglike(data, data_err, data_mask, mag_coeffs,
         return lnl, Ndim, chi2
 
 
-def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
-                  avlim=(0., 20.), av_gauss=(0., 1e6),
-                  rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
-                  resid=None, tol=0.05, init_thresh=5e-3, stepsize=1.,
-                  mags=None, mags_var=None):
+def _optimize_fit_mag(data, tot_var, models, rvecs, drvecs,
+                      av, rv, mag_coeffs, resid, stepsize,
+                      mags, mags_var,
+                      avlim=(0., 20.), av_gauss=(0., 1e6),
+                      rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
+                      tol=0.05, init_thresh=5e-3):
     """
     Optimize the distance and reddening between the models and the data using
-    the gradient.
+    the gradient in **magnitudes**. This executes multiple `(Av, Rv)` updates.
 
     Parameters
     ----------
@@ -305,6 +309,19 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
         Magnitude coefficients used to compute reddened photometry for a given
         model.
 
+    resid : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        Residuals between the data and models.
+
+    stepsize : float or `~numpy.ndarray`, optional
+        The stepsize (in units of the computed gradient).
+
+    mags : `~numpy.ndarray` of shape `(Nfilt)`
+        Observed data values in magnitudes.
+
+    mags_var : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        Associated (Normal) errors on the observed values compared to the
+        models in magnitudes.
+
     avlim : 2-tuple, optional
         The lower and upper bound where the reddened photometry is reliable.
         Default is `(0., 20.)`.
@@ -323,28 +340,13 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
         on R(V). The default is `(3.32, 0.18)` based on the results from
         Schlafly et al. (2016).
 
-    resid : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        Residuals between the data and models.
-        If not provided, this will be computed.
-
     tol : float, optional
         The maximum tolerance in the computed Av and Rv values used to
-        determine convergence during the magnitude fits. Default is `0.05`.
+        determine convergence. Default is `0.05`.
 
     init_thresh : bool, optional
         The weight threshold used to mask out fits after the initial
-        magnitude-based fit before transforming the results back to
-        flux density (and iterating until convergence). Default is `5e-3`.
-
-    stepsize : float or `~numpy.ndarray`, optional
-        The stepsize (in units of the computed gradient). Default is `1.`.
-
-    mags : `~numpy.ndarray` of shape `(Nfilt)`, optional
-        Observed data values in magnitudes.
-
-    mags_var : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`, optional
-        Associated (Normal) errors on the observed values compared to the
-        models in magnitudes.
+        magnitude-based fit when determining convergence. Default is `5e-3`.
 
     Returns
     -------
@@ -375,135 +377,314 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
 
     """
 
-    # Compute residuals.
-    if resid is None:
-        if mags is not None and mags_var is not None:
-            resid = mags - models
-        else:
-            resid = data - models
-
     Av_mean, Av_std = av_gauss
     Rv_mean, Rv_std = rv_gauss
 
-    if mags is not None and mags_var is not None:
-        # If magnitudes are provided, we can solve the linear system
-        # explicitly for `(s_ML, Av_ML, r_ML=Av_ML*Rv_ML)`. We opt to
-        # solve for Av and Rv in turn to so we can impose priors and bounds
-        # on both quantities.
+    # In magnitude space, we can solve a linear system
+    # explicitly for `(s_ML, Av_ML, r_ML=Av_ML*Rv_ML)`. We opt to
+    # solve for Av and Rv in turn to so we can impose priors and bounds
+    # on both quantities as well as additional regularization.
 
-        # Compute constants.
-        s_den = np.sum(1. / mags_var, axis=1)
-        rp_den = np.sum(np.square(drvecs) / mags_var, axis=1)
-        srp_mix = np.sum(drvecs / mags_var, axis=1)
+    # Compute constants.
+    s_den = np.sum(1. / mags_var, axis=1)
+    rp_den = np.sum(np.square(drvecs) / mags_var, axis=1)
+    srp_mix = np.sum(drvecs / mags_var, axis=1)
 
-        err = 1e300
-        while err > tol:
-            # Solve for Av.
-            # Derive partial derivatives.
-            a_den = np.sum(np.square(rvecs) / mags_var, axis=1)
-            sa_mix = np.sum(rvecs / mags_var, axis=1)
-            # Compute residual terms.
-            resid_s = np.sum(resid / mags_var, axis=1)
-            resid_a = np.sum(resid * rvecs / mags_var, axis=1)
-            # Add in Gaussian Av prior.
-            resid_a += (Av_mean - av) / Av_std**2
-            a_den += 1. / Av_std**2
-            # Compute determinants (normalization terms).
-            sa_idet = 1. / (s_den * a_den - sa_mix**2)
-            # Compute ML solution for Delta_Av.
-            dav = sa_idet * (s_den * resid_a - sa_mix * resid_s)
-
-            # Prevent Av from sliding off the provided bounds.
-            dav_low, dav_high = avlim[0] - av, avlim[1] - av
-            lsel, hsel = dav < dav_low, dav > dav_high
-            dav[lsel] = dav_low[lsel]
-            dav[hsel] = dav_high[hsel]
-
-            # Increment to new Av.
-            av += dav
-            # Update residuals.
-            resid -= dav[:, None] * rvecs  # update residuals
-
-            # Solve for Rv.
-            # Derive partial derivatives.
-            r_den = rp_den * av**2
-            sr_mix = srp_mix * av
-            # Compute residual terms.
-            resid_s = np.sum(resid / mags_var, axis=1)
-            resid_r = np.sum(resid * drvecs / mags_var, axis=1) * av
-            # Add in Gaussian Rv prior.
-            resid_r += (Rv_mean - rv) / Rv_std**2
-            r_den += 1. / Rv_std**2
-            # Compute determinants (normalization terms).
-            sr_idet = 1. / (s_den * r_den - sr_mix**2)
-            # Compute ML solution for Delta_Rv.
-            drv = sr_idet * (s_den * resid_r - sr_mix * resid_s)
-
-            # Prevent Rv from sliding off the provided bounds.
-            drv_low, drv_high = rvlim[0] - rv, rvlim[1] - rv
-            lsel, hsel = drv < drv_low, drv > drv_high
-            drv[lsel] = drv_low[lsel]
-            drv[hsel] = drv_high[hsel]
-
-            # Increment to new Rv.
-            rv += drv
-            # Update residuals.
-            resid -= (av * drv)[:, None] * drvecs
-            # Update reddening vector.
-            rvecs += drv[:, None] * drvecs
-
-            # Compute error based on best-fitting objects.
-            chi2 = np.sum(np.square(resid) / mags_var, axis=1)
-            logwt = -0.5 * chi2
-            init_sel = np.where(logwt > np.max(logwt) + np.log(init_thresh))[0]
-            err = np.max([np.abs(dav[init_sel]), np.abs(drv[init_sel])])
-    else:
-        # If our data is in flux densities, we can solve the linear system
-        # implicitly for `(s_ML, Av_ML, Rv_ML)`. However, the solution
-        # is not necessarily as numerically stable as one might hope
-        # due to the nature of our Taylor expansion in flux.
-        # Instead, it is easier to iterate in `(dAv, dRv)` from
-        # a good guess for `(s_ML, Av_ML, Rv_ML)`. We opt to solve both
-        # independently at fixed `(Av, Rv)` to avoid recomputing models.
-
-        # Derive ML Delta_Av (`dav`) between data and models.
-        a_num = np.sum(rvecs * resid / tot_var, axis=1)
-        a_den = np.sum(np.square(rvecs) / tot_var, axis=1)
-        a_num += (Av_mean - av) / Av_std**2  # add Av gaussian prior
-        a_den += 1. / Av_std**2  # add Av gaussian prior
-        dav = a_num / a_den
+    # Main loop.
+    err = 1e300  # intial error
+    while err > tol:
+        # Solve for Av.
+        # Derive partial derivatives.
+        a_den = np.sum(np.square(rvecs) / mags_var, axis=1)
+        sa_mix = np.sum(rvecs / mags_var, axis=1)
+        # Compute residual terms.
+        resid_s = np.sum(resid / mags_var, axis=1)
+        resid_a = np.sum(resid * rvecs / mags_var, axis=1)
+        # Add in Gaussian Av prior.
+        resid_a += (Av_mean - av) / Av_std**2
+        a_den += 1. / Av_std**2
+        # Compute determinants (normalization terms).
+        sa_idet = 1. / (s_den * a_den - sa_mix**2)
+        # Compute ML solution for Delta_Av.
+        dav = sa_idet * (s_den * resid_a - sa_mix * resid_s)
         # Adjust dAv based on the provided stepsize.
         dav *= stepsize
-
-        # Derive ML Delta_Rv (`drv`) between data and models.
-        r_num = np.sum(drvecs * resid / tot_var, axis=1)
-        r_den = np.sum(np.square(drvecs) / tot_var, axis=1)
-        r_num += (Rv_mean - rv) / Rv_std**2  # add Rv gaussian prior
-        r_den += 1. / Rv_std**2  # add Rv gaussian prior
-        drv = r_num / r_den
-        # Adjust dRv based on the provided stepsize.
-        drv *= stepsize
 
         # Prevent Av from sliding off the provided bounds.
         dav_low, dav_high = avlim[0] - av, avlim[1] - av
         lsel, hsel = dav < dav_low, dav > dav_high
         dav[lsel] = dav_low[lsel]
         dav[hsel] = dav_high[hsel]
+
         # Increment to new Av.
         av += dav
+        # Update residuals.
+        resid -= dav[:, None] * rvecs  # update residuals
+
+        # Solve for Rv.
+        # Derive partial derivatives.
+        r_den = rp_den * av**2
+        sr_mix = srp_mix * av
+        # Compute residual terms.
+        resid_s = np.sum(resid / mags_var, axis=1)
+        resid_r = np.sum(resid * drvecs / mags_var, axis=1) * av
+        # Add in Gaussian Rv prior.
+        resid_r += (Rv_mean - rv) / Rv_std**2
+        r_den += 1. / Rv_std**2
+        # Compute determinants (normalization terms).
+        sr_idet = 1. / (s_den * r_den - sr_mix**2)
+        # Compute ML solution for Delta_Rv.
+        drv = sr_idet * (s_den * resid_r - sr_mix * resid_s)
+        # Adjust dRv based on the provided stepsize.
+        drv *= stepsize
 
         # Prevent Rv from sliding off the provided bounds.
         drv_low, drv_high = rvlim[0] - rv, rvlim[1] - rv
         lsel, hsel = drv < drv_low, drv > drv_high
         drv[lsel] = drv_low[lsel]
         drv[hsel] = drv_high[hsel]
+
         # Increment to new Rv.
         rv += drv
+        # Update residuals.
+        resid -= (av * drv)[:, None] * drvecs
+        # Update reddening vector.
+        rvecs += drv[:, None] * drvecs
+
+        # Compute error based on best-fitting objects.
+        chi2 = np.sum(np.square(resid) / mags_var, axis=1)
+        logwt = -0.5 * chi2
+        init_sel = np.where(logwt > np.max(logwt) + np.log(init_thresh))[0]
+        err = np.max([np.abs(dav[init_sel]), np.abs(drv[init_sel])])
+
+    # Get MLE models and associated quantities.
+    (models, rvecs, drvecs, scale,
+     icov_sar, resid) = _get_sed_mle(data, tot_var, resid, mag_coeffs, av, rv,
+                                     av_gauss=av_gauss, rv_gauss=rv_gauss)
+
+    return models, rvecs, drvecs, scale, av, rv, icov_sar, resid
+
+
+def _optimize_fit_flux(data, tot_var, models, rvecs, drvecs,
+                       av, rv, mag_coeffs, resid, stepsize,
+                       avlim=(0., 20.), av_gauss=(0., 1e6),
+                       rvlim=(1., 8.), rv_gauss=(3.32, 0.18)):
+    """
+    Optimize the distance and reddening between the models and the data using
+    the gradient in **flux densities**. This executes **only one**
+    `(Av, Rv)` update.
+
+    Parameters
+    ----------
+    data : `~numpy.ndarray` of shape `(Nfilt)`
+        Observed data values.
+
+    tot_var : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        Associated (Normal) errors on the observed values compared to the
+        models.
+
+    models : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        Model predictions.
+
+    rvecs : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        Associated model reddening vectors.
+
+    drvecs : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        Associated differential model reddening vectors.
+
+    av : `~numpy.ndarray` of shape `(Nmodel,)`
+        Av values of the models.
+
+    rv : `~numpy.ndarray` of shape `(Nmodel,)`
+        Rv values of the models.
+
+    mag_coeffs : `~numpy.ndarray` of shape `(Nmodel, Nfilt, 3)`
+        Magnitude coefficients used to compute reddened photometry for a given
+        model.
+
+    resid : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        Residuals between the data and models.
+
+    stepsize : float or `~numpy.ndarray`, optional
+        The stepsize (in units of the computed gradient).
+
+    avlim : 2-tuple, optional
+        The lower and upper bound where the reddened photometry is reliable.
+        Default is `(0., 20.)`.
+
+    av_gauss : 2-tuple, optional
+        The mean and standard deviation of the Gaussian prior that is placed
+        on A(V). The default is `(0., 1e6)`, which is designed to be
+        essentially flat over `avlim`.
+
+    rvlim : 2-tuple, optional
+        The lower and upper bound where the reddening vector shape changes
+        are reliable. Default is `(1., 8.)`.
+
+    rv_gauss : 2-tuple, optional
+        The mean and standard deviation of the Gaussian prior that is placed
+        on R(V). The default is `(3.32, 0.18)` based on the results from
+        Schlafly et al. (2016).
+
+    Returns
+    -------
+    models_new : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        New model predictions. Always returned in flux densities.
+
+    rvecs_new : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        New reddening vectors. Always returned in flux densities.
+
+    drvecs_new : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        New differential reddening vectors. Always returned in flux densities.
+
+    scale : `~numpy.ndarray` of shape `(Nmodel)`, optional
+        The best-fit scale factor.
+
+    Av : `~numpy.ndarray` of shape `(Nmodel)`, optional
+        The best-fit reddening.
+
+    Rv : `~numpy.ndarray` of shape `(Nmodel)`, optional
+        The best-fit reddening shapes.
+
+    icov_sar : `~numpy.ndarray` of shape `(Nmodel, 3, 3)`, optional
+        The precision (inverse covariance) matrices expanded around
+        `(s_ML, Av_ML, Rv_ML)`.
+
+    resid : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        Residuals between the data and models.
+
+    """
+
+    Av_mean, Av_std = av_gauss
+    Rv_mean, Rv_std = rv_gauss
+
+    # In flux density space, we can solve the linear system
+    # implicitly for `(s_ML, Av_ML, Rv_ML)`. However, the solution
+    # is not necessarily as numerically stable as one might hope
+    # due to the nature of our Taylor expansion in flux.
+    # Instead, it is easier to iterate in `(dAv, dRv)` from
+    # a good guess for `(s_ML, Av_ML, Rv_ML)`. We opt to solve both
+    # independently at fixed `(Av, Rv)` to avoid recomputing models.
+
+    # Derive ML Delta_Av (`dav`) between data and models.
+    a_num = np.sum(rvecs * resid / tot_var, axis=1)
+    a_den = np.sum(np.square(rvecs) / tot_var, axis=1)
+    a_num += (Av_mean - av) / Av_std**2  # add Av gaussian prior
+    a_den += 1. / Av_std**2  # add Av gaussian prior
+    dav = a_num / a_den
+    # Adjust dAv based on the provided stepsize.
+    dav *= stepsize
+
+    # Derive ML Delta_Rv (`drv`) between data and models.
+    r_num = np.sum(drvecs * resid / tot_var, axis=1)
+    r_den = np.sum(np.square(drvecs) / tot_var, axis=1)
+    r_num += (Rv_mean - rv) / Rv_std**2  # add Rv gaussian prior
+    r_den += 1. / Rv_std**2  # add Rv gaussian prior
+    drv = r_num / r_den
+    # Adjust dRv based on the provided stepsize.
+    drv *= stepsize
+
+    # Prevent Av from sliding off the provided bounds.
+    dav_low, dav_high = avlim[0] - av, avlim[1] - av
+    lsel, hsel = dav < dav_low, dav > dav_high
+    dav[lsel] = dav_low[lsel]
+    dav[hsel] = dav_high[hsel]
+    # Increment to new Av.
+    av += dav
+
+    # Prevent Rv from sliding off the provided bounds.
+    drv_low, drv_high = rvlim[0] - rv, rvlim[1] - rv
+    lsel, hsel = drv < drv_low, drv > drv_high
+    drv[lsel] = drv_low[lsel]
+    drv[hsel] = drv_high[hsel]
+    # Increment to new Rv.
+    rv += drv
+
+    # Get MLE models and associated quantities.
+    (models, rvecs, drvecs, scale,
+     icov_sar, resid) = _get_sed_mle(data, tot_var, resid, mag_coeffs, av, rv,
+                                     av_gauss=av_gauss, rv_gauss=rv_gauss)
+
+    return models, rvecs, drvecs, scale, av, rv, icov_sar, resid
+
+
+def _get_sed_mle(data, tot_var, resid, mag_coeffs, av, rv,
+                 av_gauss=(0., 1e6), rv_gauss=(3.32, 0.18),
+                 av_reg=0.05, rv_reg=0.1):
+    """
+    Optimize the distance and reddening between the models and the data using
+    the gradient in **flux densities**. This executes **only one**
+    `(Av, Rv)` update.
+
+    Parameters
+    ----------
+    data : `~numpy.ndarray` of shape `(Nfilt)`
+        Observed data values.
+
+    tot_var : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        Associated (Normal) errors on the observed values compared to the
+        models.
+
+    resid : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        Residuals between the data and models.
+
+    mag_coeffs : `~numpy.ndarray` of shape `(Nmodel, Nfilt, 3)`
+        Magnitude coefficients used to compute reddened photometry for a given
+        model.
+
+    av : `~numpy.ndarray` of shape `(Nmodel,)`
+        Av values of the models.
+
+    rv : `~numpy.ndarray` of shape `(Nmodel,)`
+        Rv values of the models.
+
+    av_gauss : 2-tuple, optional
+        The mean and standard deviation of the Gaussian prior that is placed
+        on A(V). The default is `(0., 1e6)`, which is designed to be
+        essentially flat over `avlim`.
+
+    rv_gauss : 2-tuple, optional
+        The mean and standard deviation of the Gaussian prior that is placed
+        on R(V). The default is `(3.32, 0.18)` based on the results from
+        Schlafly et al. (2016).
+
+    av_reg : float, optional
+        The regularization applied to A(V), which functions as an effective
+        standard deviation. Default is `0.05`.
+
+    rv_reg : float, optional
+        The regularization applied to R(V), which functions as an effective
+        standard deviation. Default is `0.1`.
+
+    Returns
+    -------
+    models_new : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        New model predictions. Always returned in flux densities.
+
+    rvecs_new : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        New reddening vectors. Always returned in flux densities.
+
+    drvecs_new : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        New differential reddening vectors. Always returned in flux densities.
+
+    scale : `~numpy.ndarray` of shape `(Nmodel)`, optional
+        The best-fit scale factor.
+
+    icov_sar : `~numpy.ndarray` of shape `(Nmodel, 3, 3)`, optional
+        The precision (inverse covariance) matrices expanded around
+        `(s_ML, Av_ML, Rv_ML)`.
+
+    resid : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
+        Residuals between the data and models.
+
+    """
+
+    Av_mean, Av_std = av_gauss
+    Rv_mean, Rv_std = rv_gauss
 
     # Recompute models with new Rv.
-    models, rvecs, drvecs = get_seds(mag_coeffs, av=av, rv=rv,
-                                     return_flux=True,
-                                     return_rvec=True, return_drvec=True)
+    models, rvecs, drvecs = _get_seds(mag_coeffs, av, rv,
+                                      return_flux=True)
 
     # Derive scale-factors (`scale`) between data and models.
     s_num = np.sum(models * data[None, :] / tot_var, axis=1)
@@ -540,8 +721,8 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
     r_den += 1. / Rv_std**2  # add Rv gaussian prior
 
     # Add in additional regularization to ensure solution well-behaved.
-    a_den += 1. / 0.05**2
-    r_den += 1. / 0.1**2
+    a_den += 1. / av_reg**2
+    r_den += 1. / rv_reg**2
 
     # Construct precision matrices (inverse covariances).
     icov_sar = np.zeros((len(models), 3, 3))
@@ -555,7 +736,7 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
     icov_sar[:, 1, 2] = ar_mix  # Av-Rv cross-term
     icov_sar[:, 2, 1] = ar_mix  # Av-Rv cross-term
 
-    return models, rvecs, drvecs, scale, av, rv, icov_sar, resid
+    return models, rvecs, drvecs, scale, icov_sar, resid
 
 
 class BruteForce():
