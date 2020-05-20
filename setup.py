@@ -42,7 +42,7 @@ setup(
     long_description=long_description,
     package_data={"": ["README.md", "LICENSE", "AUTHORS.md"]},
     include_package_data=True,
-    install_requires=["numpy", "scipy", "matplotlib", "six", "h5py", "healpy"],
+    install_requires=["numpy", "scipy", "matplotlib", "six", "h5py", "healpy", "numba"],
     keywords=["brute force", "photometry", "bayesian", "stellar", "star",
               "cluster", "isochrone", "dust", "reddening",
               "parallax", "distance", "template fitting"],
