@@ -776,7 +776,7 @@ class BruteForce():
 
         lndustprior : func, optional
             The log-dust prior function to be applied. If not provided,
-            this will default to the 3-D dust map from Green et al. (2019).
+            this will default to the 3-D dust map from the `dustfile` provided.
 
         dustfile : str, optional
             The filepath to the 3-D dust map.
@@ -895,19 +895,23 @@ class BruteForce():
                         lngrad_label = np.log(np.gradient(ulabel))
                         lnprior += np.interp(label, ulabel, lngrad_label)
 
-        # Initialize distance log(prior).
+        # Initialize Galactic log(prior).
         if lngalprior is None and data_coords is None:
             raise ValueError("`data_coords` must be provided if using the "
                              "default Galactic model prior.")
         if lngalprior is None:
             lngalprior = gal_lnprior
 
-        # Initialize (distance-)dust log(prior).
-        if lndustprior is None and data_coords is None and av_gauss is None:
-            raise ValueError("`data_coords` must be provided if using the "
-                             "default dust prior.")
-        if lndustprior is None and av_gauss is None:
+        # Initialize 3-D dust log(prior).
+        if lndustprior is None and dustfile is not None:
+            # Use a 3-D dust map as a prior.
             lndustprior = dust_lnprior
+
+            # Check if `data_coords` are provided.
+            if data_coords is None:
+                raise ValueError("`data_coords` must be provided if using the "
+                                 "default dust prior.")
+
             # Check provided `dustfile` is valid.
             try:
                 # Try reading in parallel-friendly way if possible.
@@ -926,6 +930,9 @@ class BruteForce():
                             np.linspace(0, 100), dustfile=dustfile)
             except:
                 pass
+        elif lndustprior is None and av_gauss is None:
+            # If no prior is provided, default to flat Av prior.
+            av_gauss = (0, 1e6)
 
         # Fill data coordinates.
         if data_coords is None:
@@ -1202,10 +1209,10 @@ class BruteForce():
 
         lndustprior : func, optional
             The log-dust prior function to be applied. If not provided,
-            this will default to the 3-D dust map from Green et al. (2019).
+            this will default to the 3-D dust map from the `dustfile` provided.
 
         dustfile : str, optional
-            The filepath to the 3-D dust map. Default is `bayestar2017_v1.h5`.
+            The filepath to the 3-D dust map.
 
         apply_dlabels : bool, optional
             Whether to pass the model labels to the distance prior to
@@ -1280,19 +1287,23 @@ class BruteForce():
             lnprior = 0.
         self.lnprior = lnprior
 
-        # Initialize distance log(prior).
+        # Initialize Galactic log(prior).
         if lngalprior is None and data_coords is None:
             raise ValueError("`data_coords` must be provided if using the "
                              "default Galactic model prior.")
         if lngalprior is None:
             lngalprior = gal_lnprior
 
-        # Initialize (distance-)dust log(prior).
-        if lndustprior is None and data_coords is None and av_gauss is None:
-            raise ValueError("`data_coords` must be provided if using the "
-                             "default dust prior.")
-        if lndustprior is None and av_gauss is None:
+        # Initialize 3-D dust log(prior).
+        if lndustprior is None and dustfile is not None:
+            # Use a 3-D dust map as a prior.
             lndustprior = dust_lnprior
+
+            # Check if `data_coords` are provided.
+            if data_coords is None:
+                raise ValueError("`data_coords` must be provided if using the "
+                                 "default dust prior.")
+
             # Check provided `dustfile` is valid.
             try:
                 # Try reading in parallel-friendly way if possible.
@@ -1311,6 +1322,9 @@ class BruteForce():
                             np.linspace(0, 100), dustfile=dustfile)
             except:
                 pass
+        elif lndustprior is None and av_gauss is None:
+            # If no prior is provided, default to flat Av prior.
+            av_gauss = (0, 1e6)
 
         if data_coords is None:
             data_coords = np.zeros((Ndata, 2))
