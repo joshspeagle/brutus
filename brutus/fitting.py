@@ -14,6 +14,7 @@ import numpy as np
 import h5py
 import time
 from numba import jit
+from math import log
 
 try:
     from scipy.special import logsumexp
@@ -179,10 +180,11 @@ def loglike(data, data_err, data_mask, mag_coeffs,
 
     # Compute initial magnitude fit.
     mtol = 2.5 * ltol
+    stepsize = np.ones(len(models))
     results = _optimize_fit(flux, tot_var, models, rvecs, drvecs,
-                            av_init, rv_init, mcoeffs,
+                            av_init, rv_init, mcoeffs, stepsize,
                             tol=mtol, init_thresh=init_thresh,
-                            resid=None, mags=mags, mags_var=mags_var,
+                            input_resid=None, input_mags=mags, input_mags_var=mags_var,
                             avlim=avlim, av_gauss=av_gauss,
                             rvlim=rvlim, rv_gauss=rv_gauss)
     models, rvecs, drvecs, scale, av, rv, icov_sar, resid = results
@@ -228,10 +230,10 @@ def loglike(data, data_err, data_mask, mag_coeffs,
 
         # Re-compute models.
         results = _optimize_fit(flux, tot_var, models, rvecs, drvecs,
-                                av_new, rv_new, mcoeffs,
+                                av_new, rv_new, mcoeffs, stepsize,
                                 avlim=avlim, av_gauss=av_gauss,
                                 rvlim=rvlim, rv_gauss=rv_gauss,
-                                resid=resid, stepsize=stepsize)
+                                input_resid=resid)
         (models, rvecs, drvecs,
          scale_new, av_new, rv_new, icov_sar_new, resid) = results
 
@@ -267,11 +269,12 @@ def loglike(data, data_err, data_mask, mag_coeffs,
         return lnl, Ndim, chi2
 
 
-def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
+@jit(nopython=True, cache=True)
+def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs, stepsize,
                   avlim=(0., 20.), av_gauss=(0., 1e6),
                   rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
-                  resid=None, tol=0.05, init_thresh=5e-3, stepsize=1.,
-                  mags=None, mags_var=None):
+                  tol=0.05, init_thresh=5e-3,
+                  input_resid=None, input_mags=None, input_mags_var=None):
     """
     Optimize the distance and reddening between the models and the data using
     the gradient.
@@ -303,6 +306,9 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
     mag_coeffs : `~numpy.ndarray` of shape `(Nmodel, Nfilt, 3)`
         Magnitude coefficients used to compute reddened photometry for a given
         model.
+    
+    stepsize : `~numpy.ndarray` of shape `(Nmodel,)`
+        The stepsize (in units of the computed gradient).
 
     avlim : 2-tuple, optional
         The lower and upper bound where the reddened photometry is reliable.
@@ -335,13 +341,10 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
         magnitude-based fit before transforming the results back to
         flux density (and iterating until convergence). Default is `5e-3`.
 
-    stepsize : float or `~numpy.ndarray`, optional
-        The stepsize (in units of the computed gradient). Default is `1.`.
-
-    mags : `~numpy.ndarray` of shape `(Nfilt)`, optional
+    input_mags : `~numpy.ndarray` of shape `(Nfilt)`, optional
         Observed data values in magnitudes.
 
-    mags_var : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`, optional
+    input_mags_var : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`, optional
         Associated (Normal) errors on the observed values compared to the
         models in magnitudes.
 
@@ -374,88 +377,135 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
 
     """
 
+    if input_mags is not None and input_mags_var is not None:
+        mags     = np.copy(input_mags)
+        mags_var = np.copy(input_mags_var)
+
+    Nmodel, Nfilt = np.shape(models)
+
     # Compute residuals.
-    if resid is None:
-        if mags is not None and mags_var is not None:
+    if input_resid is not None:
+        resid = input_resid
+    else:
+        if input_mags is not None and input_mags_var is not None:
             resid = mags - models
         else:
             resid = data - models
 
     Av_mean, Av_std = av_gauss
     Rv_mean, Rv_std = rv_gauss
+    
+    Av_varinv, Rv_varinv = 1./Av_std**2, 1./Rv_std**2
+    
+    avmin, avmax = avlim
+    rvmin, rvmax = rvlim
+    log_init_thresh = log(init_thresh)
 
-    if mags is not None and mags_var is not None:
+    if input_mags is not None and input_mags_var is not None:
         # If magnitudes are provided, we can solve the linear system
         # explicitly for `(s_ML, Av_ML, r_ML=Av_ML*Rv_ML)`. We opt to
         # solve for Av and Rv in turn to so we can impose priors and bounds
         # on both quantities.
 
         # Compute constants.
-        s_den = np.sum(1. / mags_var, axis=1)
-        rp_den = np.sum(np.square(drvecs) / mags_var, axis=1)
-        srp_mix = np.sum(drvecs / mags_var, axis=1)
-
+        s_den, rp_den, srp_mix = np.zeros(Nmodel), np.zeros(Nmodel), np.zeros(Nmodel)
+        for i in range(Nmodel):
+            for j in range(Nfilt):
+                s_den[i] += 1./mags_var[i][j]
+                rp_den[i] += drvecs[i][j]*drvecs[i][j] / mags_var[i][j]
+                srp_mix[i] += drvecs[i][j] / mags_var[i][j]
+        
         err = 1e300
+        a_den, r_den, sa_mix, sr_mix = np.zeros(Nmodel), np.zeros(Nmodel), np.zeros(Nmodel), np.zeros(Nmodel)
+        chi2, logwt = np.zeros(Nmodel), np.zeros(Nmodel)
+        dav, drv = np.zeros(Nmodel), np.zeros(Nmodel)
+        resid_s, resid_a, resid_r = np.zeros(Nmodel), np.zeros(Nmodel), np.zeros(Nmodel)
         while err > tol:
-            # Solve for Av.
-            # Derive partial derivatives.
-            a_den = np.sum(np.square(rvecs) / mags_var, axis=1)
-            sa_mix = np.sum(rvecs / mags_var, axis=1)
-            # Compute residual terms.
-            resid_s = np.sum(resid / mags_var, axis=1)
-            resid_a = np.sum(resid * rvecs / mags_var, axis=1)
-            # Add in Gaussian Av prior.
-            resid_a += (Av_mean - av) / Av_std**2
-            a_den += 1. / Av_std**2
-            # Compute determinants (normalization terms).
-            sa_idet = 1. / (s_den * a_den - sa_mix**2)
-            # Compute ML solution for Delta_Av.
-            dav = sa_idet * (s_den * resid_a - sa_mix * resid_s)
-
-            # Prevent Av from sliding off the provided bounds.
-            dav_low, dav_high = avlim[0] - av, avlim[1] - av
-            lsel, hsel = dav < dav_low, dav > dav_high
-            dav[lsel] = dav_low[lsel]
-            dav[hsel] = dav_high[hsel]
-
-            # Increment to new Av.
-            av += dav
-            # Update residuals.
-            resid -= dav[:, None] * rvecs  # update residuals
-
-            # Solve for Rv.
-            # Derive partial derivatives.
-            r_den = rp_den * av**2
-            sr_mix = srp_mix * av
-            # Compute residual terms.
-            resid_s = np.sum(resid / mags_var, axis=1)
-            resid_r = np.sum(resid * drvecs / mags_var, axis=1) * av
-            # Add in Gaussian Rv prior.
-            resid_r += (Rv_mean - rv) / Rv_std**2
-            r_den += 1. / Rv_std**2
-            # Compute determinants (normalization terms).
-            sr_idet = 1. / (s_den * r_den - sr_mix**2)
-            # Compute ML solution for Delta_Rv.
-            drv = sr_idet * (s_den * resid_r - sr_mix * resid_s)
-
-            # Prevent Rv from sliding off the provided bounds.
-            drv_low, drv_high = rvlim[0] - rv, rvlim[1] - rv
-            lsel, hsel = drv < drv_low, drv > drv_high
-            drv[lsel] = drv_low[lsel]
-            drv[hsel] = drv_high[hsel]
-
-            # Increment to new Rv.
-            rv += drv
-            # Update residuals.
-            resid -= (av * drv)[:, None] * drvecs
-            # Update reddening vector.
-            rvecs += drv[:, None] * drvecs
-
-            # Compute error based on best-fitting objects.
-            chi2 = np.sum(np.square(resid) / mags_var, axis=1)
-            logwt = -0.5 * chi2
-            init_sel = np.where(logwt > np.max(logwt) + np.log(init_thresh))[0]
-            err = np.max([np.abs(dav[init_sel]), np.abs(drv[init_sel])])
+            for i in range(Nmodel):
+                a_den[i], sa_mix[i], resid_s[i], resid_a[i] = 0.0, 0.0, 0.0, 0.0
+                for j in range(Nfilt):
+                    # Solve for Av.
+                    # Derive partial derivatives.
+                    a_den[i] += rvecs[i][j]*rvecs[i][j] / mags_var[i][j]
+                    sa_mix[i] += rvecs[i][j] / mags_var[i][j]
+                    # Compute residual terms
+                    resid_s[i] += resid[i][j] / mags_var[i][j]
+                    resid_a[i] += resid[i][j] * rvecs[i][j] / mags_var[i][j]
+                # Add in Gaussian Av prior.
+                resid_a[i] += (Av_mean - av[i]) * Av_varinv
+                a_den[i] += Av_varinv
+                # Compute determinant (normalization terms).
+                sa_idet = 1. / (s_den[i] * a_den[i] - sa_mix[i]*sa_mix[i])
+                # Compute ML solution for Delta_Av.
+                dav[i] = sa_idet * (s_den[i] * resid_a[i] - sa_mix[i] * resid_s[i])
+                
+                # Prevent Av from sliding off the provided bounds.
+                if dav[i] < avmin - av[i]:
+                    dav[i] = avmin - av[i]
+                if dav[i] > avmax - av[i]:
+                    dav[i] = avmax - av[i]
+                
+                # Increment to new Av.
+                av[i] = av[i] + dav[i]
+                # Update residuals.
+                for j in range(Nfilt):
+                    resid[i][j] = resid[i][j] - dav[i] * rvecs[i][j]
+                
+                resid_s[i], resid_r[i] = 0.0, 0.0
+                # Solve for Rv.
+                # Derive partial derivatives.
+                r_den[i] = rp_den[i] * av[i] * av[i]
+                sr_mix[i] = srp_mix[i] * av[i]
+                for j in range(Nfilt):
+                    resid_s[i] += resid[i][j] / mags_var[i][j]
+                    resid_r[i] += resid[i][j] * drvecs[i][j] / mags_var[i][j] * av[i]
+                # Add in Gaussian Rv prior.
+                resid_r[i] += (Rv_mean - rv[i]) * Rv_varinv
+                r_den[i] += Rv_varinv
+                # Compute determinants (normalization terms).
+                sr_idet = 1. / (s_den[i] * r_den[i] - sr_mix[i] * sr_mix[i])
+                # Compute ML solution for Delta_Rv.
+                drv[i] = sr_idet * (s_den[i] * resid_r[i] - sr_mix[i] * resid_s[i])
+                
+                # Prevent Rv from sliding off the provided bounds.
+                if drv[i] < rvmin - rv[i]:
+                    drv[i] = rvmin - rv[i]
+                if drv[i] > rvmax - rv[i]:
+                    drv[i] = rvmax - rv[i]
+                
+                # Increment to new Rv.
+                rv[i] = rv[i] + drv[i]
+                # Update residuals and reddening vector.
+                for j in range(Nfilt):
+                    resid[i][j] = resid[i][j] - av[i] * drv[i] * drvecs[i][j]
+                    rvecs[i][j] = rvecs[i][j] + drv[i] * drvecs[i][j]
+                
+                # Compute error based on best-fitting objects.
+                chi2[i] = 0.0
+                for j in range(Nfilt):
+                    chi2[i] += resid[i][j] * resid[i][j] / mags_var[i][j]
+                logwt[i] = -0.5 * chi2[i]
+            
+            # Find max of logwt.
+            # max_logwt = np.max(logwt)
+            max_logwt = -1e300
+            for i in range(Nmodel):
+                if logwt[i] > max_logwt:
+                    max_logwt = logwt[i]
+            
+            # Find err based on good-fitting models.
+            # init_sel = np.where(logwt > max_logwt + log_init_thresh)[0]
+            # err1 = np.max(np.abs(dav[init_sel]))
+            # err2 = np.max(np.abs(drv[init_sel]))
+            # err = max(err1, err2)
+            err = -1e300
+            for i in range(Nmodel):
+                if logwt[i] > max_logwt + log_init_thresh:
+                    if abs(dav[i]) > err:
+                        err = abs(dav[i])
+                    if abs(drv[i]) > err:
+                        err = abs(drv[i])
+            
     else:
         # If our data is in flux densities, we can solve the linear system
         # implicitly for `(s_ML, Av_ML, Rv_ML)`. However, the solution
@@ -464,94 +514,110 @@ def _optimize_fit(data, tot_var, models, rvecs, drvecs, av, rv, mag_coeffs,
         # Instead, it is easier to iterate in `(dAv, dRv)` from
         # a good guess for `(s_ML, Av_ML, Rv_ML)`. We opt to solve both
         # independently at fixed `(Av, Rv)` to avoid recomputing models.
+        
+        a_num, a_den, dav = np.zeros(Nmodel), np.zeros(Nmodel), np.zeros(Nmodel)
+        r_num, r_den, drv = np.zeros(Nmodel), np.zeros(Nmodel), np.zeros(Nmodel)
 
-        # Derive ML Delta_Av (`dav`) between data and models.
-        a_num = np.sum(rvecs * resid / tot_var, axis=1)
-        a_den = np.sum(np.square(rvecs) / tot_var, axis=1)
-        a_num += (Av_mean - av) / Av_std**2  # add Av gaussian prior
-        a_den += 1. / Av_std**2  # add Av gaussian prior
-        dav = a_num / a_den
-        # Adjust dAv based on the provided stepsize.
-        dav *= stepsize
+        for i in range(Nmodel):
+            # Derive ML Delta_Av (`dav`) between data and models.
+            for j in range(Nfilt):
+                a_num[i] += rvecs[i][j] * resid[i][j] / tot_var[i][j]
+                a_den[i] += rvecs[i][j] * rvecs[i][j] / tot_var[i][j]
+            a_num[i] += (Av_mean - av[i]) * Av_varinv
+            a_den[i] += Av_varinv
+            dav[i] = a_num[i] / a_den[i]
+            dav[i] *= stepsize[i]
 
-        # Derive ML Delta_Rv (`drv`) between data and models.
-        r_num = np.sum(drvecs * resid / tot_var, axis=1)
-        r_den = np.sum(np.square(drvecs) / tot_var, axis=1)
-        r_num += (Rv_mean - rv) / Rv_std**2  # add Rv gaussian prior
-        r_den += 1. / Rv_std**2  # add Rv gaussian prior
-        drv = r_num / r_den
-        # Adjust dRv based on the provided stepsize.
-        drv *= stepsize
-
-        # Prevent Av from sliding off the provided bounds.
-        dav_low, dav_high = avlim[0] - av, avlim[1] - av
-        lsel, hsel = dav < dav_low, dav > dav_high
-        dav[lsel] = dav_low[lsel]
-        dav[hsel] = dav_high[hsel]
-        # Increment to new Av.
-        av += dav
-
-        # Prevent Rv from sliding off the provided bounds.
-        drv_low, drv_high = rvlim[0] - rv, rvlim[1] - rv
-        lsel, hsel = drv < drv_low, drv > drv_high
-        drv[lsel] = drv_low[lsel]
-        drv[hsel] = drv_high[hsel]
-        # Increment to new Rv.
-        rv += drv
-
+            # Derive ML Delta_Rv (`drv`) between data and models.
+            for j in range(Nfilt):
+                r_num[i] += drvecs[i][j] * resid[i][j] / tot_var[i][j]
+                r_den[i] += drvecs[i][j] * resid[i][j] / tot_var[i][j]
+            r_num[i] += (Rv_mean - rv[i]) * Rv_varinv
+            r_den[i] += Rv_varinv
+            drv[i] = r_num[i] / r_den[i]
+            drv[i] *= stepsize[i]
+            
+            # Prevent Av from sliding off the provided bounds.
+            if dav[i] < avmin - av[i]:
+                dav[i] = avmin - av[i]
+            if dav[i] > avmax - av[i]:
+                dav[i] = avmax - av[i]
+            
+            # Increment to new Av.
+            av[i] += dav[i]
+            
+            # Prevent Rv from sliding off the provided bounds.
+            if drv[i] < rvmin - rv[i]:
+                drv[i] = rvmin - rv[i]
+            if drv[i] > rvmax - rv[i]:
+                drv[i] = rvmax - rv[i]
+            
+            # Increment to new Rv.
+            rv[i] += drv[i]
+    
     # Recompute models with new Rv.
     models, rvecs, drvecs = scalar_get_seds(mag_coeffs, av, rv, return_flux=True)
 
     # Derive scale-factors (`scale`) between data and models.
-    s_num = np.sum(models * data[None, :] / tot_var, axis=1)
-    s_den = np.sum(np.square(models) / tot_var, axis=1)
-    scale = s_num / s_den  # ML scalefactor
-    scale[scale <= 1e-20] = 1e-20  # must be non-negative
+    s_num, s_den, scale = np.zeros(Nmodel), np.zeros(Nmodel), np.zeros(Nmodel)
+    for i in range(Nmodel):
+        for j in range(Nfilt):
+            s_num[i] += models[i][j] * data[j] / tot_var[i][j]
+            s_den[i] += models[i][j] * models[i][j] / tot_var[i][j]
+        scale[i] = s_num[i] / s_den[i]  # ML factor
+        if scale[i] <= 1e-20:
+            scale[i] = 1e-20
 
-    # Compute reddening effect.
-    models_int = 10**(-0.4 * mag_coeffs[:, :, 0])
-    reddening = models - models_int
+    sr_mix, sa_mix, a_den, r_den = np.zeros(Nmodel), np.zeros(Nmodel), np.zeros(Nmodel), np.zeros(Nmodel)
+    ar_mix = np.zeros(Nmodel)
+    a_den_reg, r_den_reg = 1. / 0.05**2, 1./0.1**2
+    for i in range(Nmodel):
+        for j in range(Nfilt):
+            # Compute reddening effect.
+            models_int = 10.**(-0.4 * mag_coeffs[i][j][0])
+            reddening = models[i][j] - models_int
 
-    # Rescale models.
-    models *= scale[:, None]
+            # Rescale models.
+            models[i][j] = models[i][j] * scale[i]
 
-    # Compute residuals.
-    resid = data - models
-
-    # Derive scale cross-terms.
-    sr_mix = np.sum(drvecs * (models - resid) / tot_var, axis=1)
-    sa_mix = np.sum(rvecs * (models - resid) / tot_var, axis=1)
-
-    # Rescale reddening quantities.
-    rvecs *= scale[:, None]
-    drvecs *= scale[:, None]
-    reddening *= scale[:, None]
-
-    # Deriving reddening (cross-)terms.
-    ar_mix = np.sum(drvecs * (reddening - resid) / tot_var, axis=1)
-    a_den = np.sum(np.square(rvecs) / tot_var, axis=1)
-    r_den = np.sum(np.square(drvecs) / tot_var, axis=1)
-
-    # Add in priors.
-    a_den += 1. / Av_std**2  # add Av gaussian prior
-    r_den += 1. / Rv_std**2  # add Rv gaussian prior
-
-    # Add in additional regularization to ensure solution well-behaved.
-    a_den += 1. / 0.05**2
-    r_den += 1. / 0.1**2
+            # Compute residuals.
+            resid[i][j] = data[j] - models[i][j]
+            
+            # Derive scale cross-terms.
+            sr_mix[i] += drvecs[i][j] * (models[i][j] - resid[i][j]) / tot_var[i][j]
+            sa_mix[i] += rvecs[i][j] * (models[i][j] - resid[i][j]) / tot_var[i][j]
+            
+            # Rescale reddening quantities.
+            rvecs[i][j] = rvecs[i][j] * scale[i]
+            drvecs[i][j] = drvecs[i][j] * scale[i]
+            reddening *= scale[i]
+            
+            # Derive reddening (cross-)terms
+            ar_mix[i] += drvecs[i][j] * (reddening - resid[i][j]) / tot_var[i][j]
+            a_den[i] += rvecs[i][j] * rvecs[i][j] / tot_var[i][j]
+            r_den[i] += drvecs[i][j] * drvecs[i][j] / tot_var[i][j]
+        
+        # Add in priors.
+        a_den[i] += Av_varinv
+        r_den[i] += Rv_varinv
+        
+        # Add in additional regularization to ensure solution well-behaved.
+        a_den[i] += a_den_reg
+        r_den[i] += r_den_reg
 
     # Construct precision matrices (inverse covariances).
-    icov_sar = np.zeros((len(models), 3, 3))
-    icov_sar[:, 0, 0] = s_den  # scale
-    icov_sar[:, 1, 1] = a_den  # Av
-    icov_sar[:, 2, 2] = r_den  # Rv
-    icov_sar[:, 0, 1] = sa_mix  # scale-Av cross-term
-    icov_sar[:, 1, 0] = sa_mix  # scale-Av cross-term
-    icov_sar[:, 0, 2] = sr_mix  # scale-Rv cross-term
-    icov_sar[:, 2, 0] = sr_mix  # scale-Rv cross-term
-    icov_sar[:, 1, 2] = ar_mix  # Av-Rv cross-term
-    icov_sar[:, 2, 1] = ar_mix  # Av-Rv cross-term
-
+    icov_sar = np.zeros((Nmodel, 3, 3))
+    for i in range(Nmodel):
+        icov_sar[i][0][0] = s_den[i]  # scale
+        icov_sar[i][1][1] = a_den[i]  # Av
+        icov_sar[i][2][2] = r_den[i]  # Rv
+        icov_sar[i][0][1] = sa_mix[i]  # scale-Av cross-term
+        icov_sar[i][1][0] = sa_mix[i]  # scale-Av cross-term
+        icov_sar[i][0][2] = sr_mix[i]  # scale-Rv cross-term
+        icov_sar[i][2][0] = sr_mix[i]  # scale-Rv cross-term
+        icov_sar[i][1][2] = ar_mix[i]  # Av-Rv cross-term
+        icov_sar[i][2][1] = ar_mix[i]  # Av-Rv cross-term
+    
     return models, rvecs, drvecs, scale, av, rv, icov_sar, resid
 
 
