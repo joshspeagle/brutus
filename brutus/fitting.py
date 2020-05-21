@@ -580,7 +580,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
             avlim=(0., 20.), av_gauss=(0., 1e6),
             rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
             av_init=None, rv_init=None,
-            dim_prior=True, ltol=3e-2, wt_thresh=1e-2, init_thresh=5e-3,
+            dim_prior=True, ltol=3e-2, ltol_subthresh=1e-2, init_thresh=5e-3,
             parallax=None, parallax_err=None,
             return_vals=False, *args, **kwargs):
     """
@@ -638,7 +638,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
         The weighted tolerance in the computed log-likelihoods used to
         determine convergence. Default is `3e-2`.
 
-    wt_thresh : float, optional
+    ltol_subthresh : float, optional
         The threshold used to sub-select the best-fit log-likelihoods used
         to determine convergence. Default is `1e-2`.
 
@@ -646,7 +646,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
         The weight threshold used to mask out fits after the initial
         magnitude-based fit before transforming the results back to
         flux density (and iterating until convergence). Default is `5e-3`.
-        **This must be smaller than or equal to `wt_thresh`.**
+        **This must be smaller than or equal to `ltol_subthresh`.**
 
     parallax : float, optional
         Parallax measurement. If provided and `init_thresh` is not `None`,
@@ -688,7 +688,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
 
     """
 
-    if init_thresh > wt_thresh:
+    if init_thresh > ltol_subthresh:
         raise ValueError("The initial threshold must be smaller than or equal "
                          "to the final threshold applied to be useful!")
 
@@ -777,6 +777,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
     # Iterate until convergence.
     lnl_old, lerr = -1e300, 1e300
     stepsize, rescaling = np.ones(Nmodels)[init_sel], 1.2
+    ln_ltol_subthresh = np.log(ltol_subthresh)
     while lerr > ltol:
 
         # Re-compute models.
@@ -794,7 +795,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
         lnl_new = -0.5 * chi2_new  # ignore constant
 
         # Compute stopping criterion.
-        lnl_sel = np.where(lnl_new > np.max(lnl_new) + np.log(wt_thresh))[0]
+        lnl_sel = np.where(lnl_new > np.max(lnl_new) + ln_ltol_subthresh)[0]
         lerr = np.max(np.abs(lnl_new - lnl_old)[lnl_sel])
 
         # Adjust stepsize.
@@ -1891,7 +1892,7 @@ class BruteForce():
                               avlim=avlim, av_gauss=av_gauss,
                               rvlim=rvlim, rv_gauss=rv_gauss,
                               dim_prior=logl_dim_prior, ltol=ltol,
-                              wt_thresh=ltol_subthresh,
+                              ltol_subthresh=ltol_subthresh,
                               init_thresh=logl_initthresh,
                               parallax=parallax[i],
                               parallax_err=parallax_err[i],
