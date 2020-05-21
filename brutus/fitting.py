@@ -378,7 +378,7 @@ def _optimize_fit_mag(data, tot_var, models, rvecs, drvecs,
 
     """
 
-    Nmodel, Nfilt = np.shape(models)
+    Nmodel, Nfilt = models.shape
 
     avmin, avmax = avlim
     rvmin, rvmax = rvlim
@@ -602,7 +602,7 @@ def _optimize_fit_flux(data, tot_var, models, rvecs, drvecs,
 
     """
 
-    Nmodel, Nfilt = np.shape(models)
+    Nmodel, Nfilt = models.shape
 
     avmin, avmax = avlim
     rvmin, rvmax = rvlim
@@ -745,7 +745,7 @@ def _get_sed_mle(data, tot_var, resid, mag_coeffs, av, rv,
     # Recompute models with new Rv.
     models, rvecs, drvecs = _get_seds(mag_coeffs, av, rv,
                                       return_flux=True)
-    Nmodel, Nfilt = np.shape(models)
+    Nmodel, Nfilt = models.shape
 
     # Derive scale-factors (`scale`) between data and models.
     s_num, s_den, scale = np.zeros(Nmodel), np.zeros(Nmodel), np.zeros(Nmodel)
