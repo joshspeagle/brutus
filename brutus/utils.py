@@ -13,6 +13,7 @@ import sys
 import numpy as np
 import h5py
 from scipy.special import xlogy, gammaln
+from numba import jit
 
 from math import log, gamma, erf, sqrt
 
@@ -25,7 +26,7 @@ from .filters import FILTERS
 
 __all__ = ["_function_wrapper", "_adjoint3", "_inverse_transpose3",
            "_inverse3", "_dot3", "_isPSD", "_chisquare_logpdf",
-           "_truncnorm_pdf", "_truncnorm_logpdf",
+           "_truncnorm_pdf", "_truncnorm_logpdf", "_get_seds",
            "load_models", "load_offsets",
            "quantile", "draw_sar", "sample_multivariate_normal",
            "magnitude", "inv_magnitude",
@@ -274,6 +275,70 @@ def _truncnorm_logpdf(x, a, b, loc=0.0, scale=1.0):
             ans = -np.inf
 
     return ans
+
+
+@jit(nopython=True, cache=True)
+def _get_seds(mag_coeffs, av, rv, return_flux=False):
+    """
+    Compute reddened SEDs from the provided magnitude coefficients.
+
+    Parameters
+    ----------
+    mag_coeffs : `~numpy.ndarray` of shape `(Nmodels, Nbands, 3)`
+        Array of `(mag, R, dR/dRv)` coefficients used to generate
+        reddened photometry in all bands. The first coefficient is the
+        unreddened photometry, the second is the A(V) reddening vector for
+        R(V)=0, and the third is the change in the reddening vector
+        as a function of R(V).
+
+    av : float or `~numpy.ndarray` of shape `(Nmodels)`
+        Array of A(V) dust attenuation values.
+
+    rv : float or `~numpy.ndarray` of shape `(Nmodels)`
+        Array of R(V) dust attenuation curve "shape" values.
+
+    return_flux : bool, optional
+        Whether to return SEDs as flux densities instead of magnitudes.
+        Default is `False`.
+
+    Returns
+    -------
+    seds : `~numpy.ndarray` of shape `(Nmodels, Nbands)`
+        Reddened SEDs.
+
+    rvecs : `~numpy.ndarray` of shape `(Nmodels, Nbands)`
+        Reddening vectors.
+
+    drvecs : `~numpy.ndarray` of shape `(Nmodels, Nbands)`
+        Differential reddening vectors.
+
+    """
+
+    Nmodels, Nbands, Ncoef = mag_coeffs.shape
+    seds = np.zeros((Nmodels, Nbands))
+    rvecs = np.zeros((Nmodels, Nbands))
+    drvecs = np.zeros((Nmodels, Nbands))
+
+    fac = -0.4 * log(10.)
+
+    for i in range(Nmodels):
+        for j in range(Nbands):
+            mags = mag_coeffs[i, j, 0]
+            r0 = mag_coeffs[i, j, 1]
+            dr = mag_coeffs[i, j, 2]
+
+            # Compute SEDs.
+            drvecs[i][j] = dr
+            rvecs[i][j] = r0 + rv[i] * dr
+            seds[i][j] = mags + av[i] * rvecs[i][j]
+
+            # Convert to flux.
+            if return_flux:
+                seds[i][j] = 10. ** (-0.4 * seds[i][j])
+                rvecs[i][j] *= fac * seds[i][j]
+                drvecs[i][j] *= fac * seds[i][j]
+
+    return seds, rvecs, drvecs
 
 
 def load_models(filepath, filters=None, labels=None,
@@ -847,6 +912,9 @@ def get_seds(mag_coeffs, av=None, rv=None, return_flux=False,
     """
     Compute reddened SEDs from the provided magnitude coefficients.
 
+    NOTE: This is a thin wrapper around `_get_seds` to preserve
+    old functionality.
+
     Parameters
     ----------
     mag_coeffs : `~numpy.ndarray` of shape `(Nmodels, Nbands, 3)`
@@ -899,23 +967,8 @@ def get_seds(mag_coeffs, av=None, rv=None, return_flux=False,
     elif isinstance(rv, (int, float)):
         rv = np.full(Nmodels, rv)
 
-    # Turn provided Av values into polynomial features.
-    mags = mag_coeffs[:, :, 0]
-    r0 = mag_coeffs[:, :, 1]
-    dr = mag_coeffs[:, :, 2]
-
-    # Compute SEDs.
-    drvecs = np.array(dr, order='F')
-    rvecs = r0 + rv[:, None] * drvecs
-    seds = mags + av[:, None] * rvecs
-
-    # Convert to flux.
-    if return_flux:
-        seds = 10**(-0.4 * seds)
-        if return_rvec:
-            rvecs *= -0.4 * np.log(10.) * seds
-        if return_drvec:
-            drvecs *= -0.4 * np.log(10.) * seds
+    seds, rvecs, drvecs = _get_seds(mag_coeffs, av, rv,
+                                    return_flux=return_flux)
 
     if return_rvec and return_drvec:
         return seds, rvecs, drvecs
