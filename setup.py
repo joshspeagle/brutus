@@ -30,7 +30,7 @@ except ImportError:
 
     
 setup(
-    name="brutus",
+    name="astro-brutus",
     url="https://github.com/joshspeagle/brutus",
     version=__version__,
     author="Joshua S Speagle",
