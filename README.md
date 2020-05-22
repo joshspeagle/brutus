@@ -10,9 +10,8 @@ utilities for modeling individual stars, star clusters, and
 stellar-based 3-D dust mapping.
 
 <p align="center">
-  <img src="https://faun.rc.fas.harvard.edu/czucker/Paper_Figures/brutus_logo.png" width="450" title="hover text">
+  <img src="https://github.com/joshspeagle/brutus/blob/master/brutus_logo.png?raw=true" width="450">
 </p>
-
 
 ### Documentation
 **Currently nonexistent.**
