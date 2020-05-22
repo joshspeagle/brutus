@@ -9,6 +9,11 @@ The package is designed to be highly modular, with current modules including
 utilities for modeling individual stars, star clusters, and
 stellar-based 3-D dust mapping.
 
+<p align="center">
+  <img src="https://faun.rc.fas.harvard.edu/czucker/Paper_Figures/brutus_logo.png" width="450" title="hover text">
+</p>
+
+
 ### Documentation
 **Currently nonexistent.**
 
