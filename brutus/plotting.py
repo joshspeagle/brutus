@@ -523,7 +523,7 @@ def cornerplot(idxs, data, params, lndistprior=None, coord=None,
 def dist_vs_red(data, ebv=None, dist_type='distance_modulus',
                 lndistprior=None, coord=None, avlim=(0., 6.), rvlim=(1., 8.),
                 weights=None, parallax=None, parallax_err=None, Nr=300,
-                cmap='Blues', bins=300, span=None, smooth=0.01,
+                cmap='Blues', bins=300, span=None, smooth=0.015,
                 plot_kwargs=None, truths=None, truth_color='red',
                 truth_kwargs=None, rstate=None):
     """
@@ -592,7 +592,7 @@ def dist_vs_red(data, ebv=None, dist_type='distance_modulus',
         marginalized posteriors. If an int is passed, the smoothing will
         be applied in units of the binning in that dimension. If a float
         is passed, it is expressed as a fraction of the span.
-        Default is `0.01` (1% smoothing).
+        Default is `0.015` (1.5% smoothing).
         **Cannot smooth by more than the provided parallax will allow.**
 
     plot_kwargs : dict, optional
