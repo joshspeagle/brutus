@@ -9,6 +9,7 @@ Utility functions.
 from __future__ import (print_function, division)
 from six.moves import range
 
+import os
 import sys
 import numpy as np
 import h5py
@@ -27,6 +28,8 @@ from .filters import FILTERS
 __all__ = ["_function_wrapper", "_adjoint3", "_inverse_transpose3",
            "_inverse3", "_dot3", "_isPSD", "_chisquare_logpdf",
            "_truncnorm_pdf", "_truncnorm_logpdf", "_get_seds",
+           "fetch_isos", "fetch_tracks", "fetch_dustmaps",
+           "fetch_grids", "fetch_offsets", "fetch_nns",
            "load_models", "load_offsets",
            "quantile", "draw_sar", "sample_multivariate_normal",
            "magnitude", "inv_magnitude",
@@ -339,6 +342,205 @@ def _get_seds(mag_coeffs, av, rv, return_flux=False):
                 drvecs[i][j] *= fac * seds[i][j]
 
     return seds, rvecs, drvecs
+
+
+def fetch_isos(target_dir='.', iso="MIST_1.2_vvcrit0.0"):
+    """
+    Download isochrone to target directory.
+
+    Parameters
+    ----------
+    target_dir : string, optional
+        The target directory the file should be downloaded to. If not
+        specified, the files will be downloaded to the current directory.
+
+    iso : string, optional
+        The desired isochrone file. This currently includes:
+        - 'MIST_1.2_vvcrit0.0' (default), the non-rotating MIST v1.2 isochrones
+        - 'MIST_1.2_vvcrit0.4', the rotating MIST v1.2 isochrones
+
+    """
+
+    if iso == 'MIST_1.2_vvcrit0.0':
+        url = ('https://dataverse.harvard.edu/api/access/datafile/' +
+               ':persistentId?persistentId=doi:10.7910/DVN/FZMFQY/BKAG41')
+        alias = '-O {}/MIST_1.2_iso_vvcrit0.0.h5'.format(target_dir)
+    elif iso == 'MIST_1.2_vvcrit0.4':
+        url = ('https://dataverse.harvard.edu/api/access/datafile/' +
+               ':persistentId?persistentId=doi:10.7910/DVN/FZMFQY/PRGJIP')
+        alias = '-O {}/MIST_1.2_iso_vvcrit0.4.h5'.format(target_dir)
+    else:
+        raise ValueError("The specified isochrone file does not exist!")
+
+    res = os.system('wget {} {}'.format(alias, url))
+
+    if res > 0:
+        raise RuntimeError("The file failed to download!")
+
+
+def fetch_tracks(target_dir='.', track="MIST_1.2_vvcrit0.0"):
+    """
+    Download evolutionary tracks to target directory.
+
+    Parameters
+    ----------
+    target_dir : string, optional
+        The target directory the file should be downloaded to. If not
+        specified, the files will be downloaded to the current directory.
+
+    track : string, optional
+        The desired track file. This currently includes:
+        - 'MIST_1.2_vvcrit0.0' (default), the non-rotating MIST v1.2 isochrones
+
+    """
+
+    if track == 'MIST_1.2_vvcrit0.0':
+        url = ('https://dataverse.harvard.edu/api/access/datafile/' +
+               ':persistentId?persistentId=doi:10.7910/DVN/JV866N/FJ5NNO')
+        alias = '-O {}/MIST_1.2_EEPtrk.h5'.format(target_dir)
+    else:
+        raise ValueError("The specified track file does not exist!")
+
+    res = os.system('wget {} {}'.format(alias, url))
+
+    if res > 0:
+        raise RuntimeError("The file failed to download!")
+
+
+def fetch_dustmaps(target_dir='.', dustmap="bayestar19"):
+    """
+    Download 3-D dust maps to target directory.
+
+    Parameters
+    ----------
+    target_dir : string, optional
+        The target directory the file should be downloaded to. If not
+        specified, the files will be downloaded to the current directory.
+
+    dustmap : string, optional
+        The desired dust map file. This currently includes:
+        - 'bayestar19' (default), the "Bayestar" map from Green et al. (2019)
+
+    """
+
+    if dustmap == 'bayestar19':
+        url = ('https://dataverse.harvard.edu/api/access/datafile/' +
+               ':persistentId?persistentId=doi:10.7910/DVN/G49MEI/Y9UZPG')
+        alias = '-O {}/bayestar2019_v1.h5'.format(target_dir)
+    else:
+        raise ValueError("The specified dustmap file does not exist!")
+
+    res = os.system('wget {} {}'.format(alias, url))
+
+    if res > 0:
+        raise RuntimeError("The file failed to download!")
+
+
+def fetch_grids(target_dir='.', grid="mist_v9"):
+    """
+    Download stellar model grids to target directory.
+
+    Parameters
+    ----------
+    target_dir : string, optional
+        The target directory the file should be downloaded to. If not
+        specified, the files will be downloaded to the current directory.
+
+    grid : string, optional
+        The desired grid file. This currently includes:
+        - 'mist_v9' (default), MIST v1.2 with empirical corrections (v9)
+        - 'mist_v8', MIST v1.2 with empirical corrections (v8)
+        - 'bayestar_v5', Bayestar models (v5)
+
+    """
+
+    if grid == 'mist_v9':
+        url = ('https://dataverse.harvard.edu/api/access/datafile/' +
+               ':persistentId?persistentId=doi:10.7910/DVN/7BA4ZG/Z7MGA7')
+        alias = '-O {}/grid_mist_v9.h5'.format(target_dir)
+    elif grid == 'mist_v8':
+        url = ('https://dataverse.harvard.edu/api/access/datafile/' +
+               ':persistentId?persistentId=doi:10.7910/DVN/7BA4ZG/NKVZFT')
+        alias = '-O {}/grid_mist_v8.h5'.format(target_dir)
+    elif grid == 'bayestar_v5':
+        url = ('https://dataverse.harvard.edu/api/access/datafile/' +
+               ':persistentId?persistentId=doi:10.7910/DVN/7BA4ZG/LLZP0B')
+        alias = '-O {}/grid_bayestar_v5.h5'.format(target_dir)
+    else:
+        raise ValueError("The specified grid file does not exist!")
+
+    res = os.system('wget {} {}'.format(alias, url))
+
+    if res > 0:
+        raise RuntimeError("The file failed to download!")
+
+
+def fetch_offsets(target_dir='.', grid="mist_v9"):
+    """
+    Download stellar model grids to target directory.
+
+    Parameters
+    ----------
+    target_dir : string, optional
+        The target directory the file should be downloaded to. If not
+        specified, the files will be downloaded to the current directory.
+
+    grid : string, optional
+        The associated grid file. This currently includes:
+        - 'mist_v9' (default), MIST v1.2 with empirical corrections (v9)
+        - 'mist_v8', MIST v1.2 with empirical corrections (v8)
+        - 'bayestar_v5', Bayestar models (v5)
+
+    """
+
+    if grid == 'mist_v9':
+        url = ('https://dataverse.harvard.edu/api/access/datafile/' +
+               ':persistentId?persistentId=doi:10.7910/DVN/L7D1FY/XXXXXX')
+        alias = '-O {}/offsets_mist_v9.txt'.format(target_dir)
+    elif grid == 'mist_v8':
+        url = ('https://dataverse.harvard.edu/api/access/datafile/' +
+               ':persistentId?persistentId=doi:10.7910/DVN/L7D1FY/QTNKKN')
+        alias = '-O {}/offsets_mist_v8.txt'.format(target_dir)
+    elif grid == 'bayestar_v5':
+        url = ('https://dataverse.harvard.edu/api/access/datafile/' +
+               ':persistentId?persistentId=doi:10.7910/DVN/L7D1FY/W4O6NJ')
+        alias = '-O {}/offsets_bs_v9.txt'.format(target_dir)
+    else:
+        raise ValueError("The specified grid file does not exist!")
+
+    res = os.system('wget {} {}'.format(alias, url))
+
+    if res > 0:
+        raise RuntimeError("The file failed to download!")
+
+
+def fetch_nns(target_dir='.', model="c3k"):
+    """
+    Download neural network (NN) files to target directory.
+
+    Parameters
+    ----------
+    target_dir : string, optional
+        The target directory the file should be downloaded to. If not
+        specified, the files will be downloaded to the current directory.
+
+    iso : string, optional
+        The desired neural network file. This currently includes:
+        - 'c3k' (default), trained over the "C3K" spectral models
+
+    """
+
+    if model == 'c3k':
+        url = ('https://dataverse.harvard.edu/api/access/datafile/' +
+               ':persistentId?persistentId=doi:10.7910/DVN/MSCY2O/XHU1VJ')
+        alias = '-O {}/nn_c3k.h5'.format(target_dir)
+    else:
+        raise ValueError("The specified isochrone file does not exist!")
+
+    res = os.system('wget {} {}'.format(alias, url))
+
+    if res > 0:
+        raise RuntimeError("The file failed to download!")
 
 
 def load_models(filepath, filters=None, labels=None,

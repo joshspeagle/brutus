@@ -36,5 +36,6 @@ parts of the code.
 
 ### Data
 
-Files needed to run different `brutus` modules can be downloaded
-**[here](https://www.dropbox.com/sh/ozq9tk8iyy8fhte/AAC_G0wA9eQ8shHbZzAKwLe-a?dl=0).**
+Files needed to run different `brutus` modules can be downloaded directly
+**[here](https://dataverse.harvard.edu/dataverse/astro-brutus)** or using
+built-in utility functions.
