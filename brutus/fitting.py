@@ -1376,7 +1376,8 @@ class BruteForce():
             phot_offsets=None, parallax=None, parallax_err=None,
             Nmc_prior=50, avlim=(0., 20.), av_gauss=None,
             rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
-            lnprior=None, wt_thresh=5e-3, cdf_thresh=2e-3, Ndraws=250,
+            lnprior=None, lnprior_ext=None,
+            wt_thresh=5e-3, cdf_thresh=2e-3, Ndraws=250,
             apply_agewt=True, apply_grad=True,
             lngalprior=None, lndustprior=None, dustfile=None,
             apply_dlabels=True, data_coords=None, logl_dim_prior=True,
@@ -1447,6 +1448,15 @@ class BruteForce():
             with secondary mass fractions of `'smf'` are treated as
             being drawn from a uniform prior from `smf=[0., 1.]`.
             **Be sure to check this behavior you are using custom models.**
+
+        lnprior_ext : dict with entries of shape `(Nobj, 2)`, optional
+            External prior constraints over input model labels. These must
+            be passed as a dictionary with entries that **exactly** correspond
+            to the input model labels (e.g., `feh`). Each entry must be an
+            iterable with shape `(Nobj, 2)`, which are taken to correspond
+            to the mean and standard deviation, respectively, of a Gaussian
+            prior. Unlike `lnprior`, which is applied to all objects,
+            `lnprior_ext` can vary on a per-object basis.
 
         wt_thresh : float, optional
             The threshold `wt_thresh * max(y_wt)` used to ignore models
@@ -1623,6 +1633,7 @@ class BruteForce():
                                               rv_gauss=rv_gauss,
                                               Nmc_prior=Nmc_prior,
                                               lnprior=lnprior,
+                                              lnprior_ext=lnprior_ext,
                                               wt_thresh=wt_thresh,
                                               cdf_thresh=cdf_thresh,
                                               Ndraws=Ndraws, rstate=rstate,
@@ -1736,7 +1747,8 @@ class BruteForce():
              parallax=None, parallax_err=None, Nmc_prior=100,
              avlim=(0., 20.), av_gauss=None,
              rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
-             lnprior=None, wt_thresh=5e-3, cdf_thresh=2e-3, Ndraws=250,
+             lnprior=None, lnprior_ext=None,
+             wt_thresh=5e-3, cdf_thresh=2e-3, Ndraws=250,
              lngalprior=None, lndustprior=None, dustfile=None,
              apply_dlabels=True, data_coords=None,
              return_distreds=True, logl_dim_prior=True, ltol=3e-2,
@@ -1787,6 +1799,15 @@ class BruteForce():
         lnprior : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`, optional
             Log-prior grid to be used. If not provided, will default
             to `0.`.
+
+        lnprior_ext : dict with entries of shape `(Nobj, 2)`, optional
+            External prior constraints over input model labels. These must
+            be passed as a dictionary with entries that **exactly** correspond
+            to the input model labels (e.g., `feh`). Each entry must be an
+            iterable with shape `(Nobj, 2)`, which are taken to correspond
+            to the mean and standard deviation, respectively, of a Gaussian
+            prior. Unlike `lnprior`, which is applied to all objects,
+            `lnprior_ext` can vary on a per-object basis.
 
         wt_thresh : float, optional
             The threshold `wt_thresh * max(y_wt)` used to ignore models
@@ -1882,6 +1903,13 @@ class BruteForce():
             dlabels = self.models_labels
         else:
             dlabels = None
+        if lnprior_ext is not None:
+            ext_keys = lnprior_ext.keys()  # external keys
+            for k in ext_keys:
+                if k not in self.models_labels.dtype.names:
+                    raise ValueError("Provided `lnprior_ext` has keys which "
+                                     "do not match the underlying model "
+                                     "labels.")
 
         # Main generator for fitting data.
         Ndata, Nfilt = data.shape
@@ -1898,6 +1926,23 @@ class BruteForce():
                               parallax_err=parallax_err[i],
                               return_vals=True)
             lnlike, Ndim, chi2, scales, avs, rvs, icovs_sar = results
+
+            # Apply external prior constraints.
+            if lnprior_ext is not None:
+                for k in ext_keys:
+                    # Grab Gaussian parameters for each external constraint.
+                    ext_mean, ext_std = lnprior_ext[k][i]
+                    if np.isfinite(ext_mean) and ext_std > 0:
+                        # Calculate chi2 and constant.
+                        ext_ivar = 1. / ext_std**2
+                        ext_chi2 = (self.models_labels[k] - ext_mean)**2
+                        ext_chi2 *= ext_ivar
+                        ext_const = np.log(2. * np.pi * ext_std**2)
+                        # Calculate external prior constraint.
+                        ext_lnp = -0.5 * (ext_chi2 + ext_const)
+                        # Add to directly log-likelihood.
+                        lnlike += ext_lnp
+                results = (lnlike, Ndim, chi2, scales, avs, rvs, icovs_sar)
 
             # Compute posteriors using Monte Carlo sampling and integration.
             presults = lnpost(results, parallax=parallax[i],
