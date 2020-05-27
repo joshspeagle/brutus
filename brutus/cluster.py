@@ -66,13 +66,14 @@ def isochrone_loglike(theta, isochrone, phot, err, cluster_params='free',
     cluster_params : iterable of shape `(6,)` or `'free'`, optional
         The parameters of the cluster, which include (in order):
         metallicity (`feh`), log(age) (`loga`), reddening in A(V) (`av`),
-        shape of the reddening curve in R(V) (`rv`), and the distance to the
-        cluster in pc (`dist`). If `'free'` is passed, all values will be
+        shape of the reddening curve in R(V) (`rv`), the distance to the
+        cluster in pc (`dist`), and the outlier fraction (`fout`).
+        If `'free'` is passed, all values will be
         included when reading `theta`. If an iterable is passed, any
         non-`None` value will be considered fixed and not included
         when reading in parameters from `theta`. For example, fixing the
-        log(age), distance, and R(V) would look like
-        `[None, 9.5, None, 3.3, 880.]`. Default is `'free'`.
+        log(age), R(V), and distance would look like
+        `[None, 9.5, None, 3.3, 880., None]`. Default is `'free'`.
 
     offsets : iterable of shape `(Nfilt,)`, `'free'`, or `'fixed'`, optional
         Flux offsets that are *multiplied* to the observed fluxes
@@ -245,7 +246,7 @@ def isochrone_loglike(theta, isochrone, phot, err, cluster_params='free',
                 # counter.
                 p[i] = c
         feh, loga, av, rv, dist, fout = np.array(p)
-    fout = max(min(1., fout), 0.)  # bound between [0., 1.]
+    fout = max(min(1. - 1e-10, fout), 1e-10)  # bound between [0., 1.]
 
     # Read in multiplicative offsets.
     if offsets == 'free':

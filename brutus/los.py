@@ -34,8 +34,9 @@ def LOS_clouds_priortransform(u, rlims=(0., 6.), dlims=(4., 19.),
     Parameters
     ----------
     u : `~numpy.ndarray` of shape `(Nparams)`
-        The `2 + 2 * Nclouds` values drawn from the unit cube.
-        Contains the portion of outliers `P_b`, followed by the smoothing `s`,
+        The `Nparams` values drawn from the unit cube.
+        Contains the portion of outliers `P_b`, followed by the
+        foreground smoothing `sfore` and background smoothing `sback`,
         followed by the foreground reddening `fred`, followed by a series of
         `(dist, red)` pairs for each "cloud" along the LOS.
 
@@ -117,7 +118,8 @@ def LOS_clouds_priortransform(u, rlims=(0., 6.), dlims=(4., 19.),
 
 def LOS_clouds_loglike_samples(theta, dsamps, rsamps, kernel='gauss',
                                rlims=(0., 6.), template_reds=None,
-                               Ndraws=25, additive_foreground=False):
+                               Ndraws=25, additive_foreground=False,
+                               monotonic=True):
     """
     Compute the log-likelihood for the cumulative reddening along the
     line of sight (LOS) parameterized by `theta`, given a set of input
@@ -162,6 +164,10 @@ def LOS_clouds_loglike_samples(theta, dsamps, rsamps, kernel='gauss',
         Whether the foreground is treated as just another value or added
         to all background values. Default is `False`.
 
+    monotonic : bool, optional
+        Whether to enforce monotonicity in the fits so that the values
+        must get larger with distance. Default is `True`.
+
     Returns
     -------
     loglike : float
@@ -187,6 +193,14 @@ def LOS_clouds_loglike_samples(theta, dsamps, rsamps, kernel='gauss',
     area = (rlims[1] - rlims[0])
     rsmooth = s * area
     rsmooth0 = s0 * area
+
+    # Check monotonicity.
+    if not np.all(np.sort(dists) == dists):
+        raise ValueError("Distances must be monotonically increasing.")
+    if monotonic:
+        if not np.all(np.sort(reds) == reds):
+            # If monotonicity is enforced, non-monotonic solutions disallowed.
+            return -np.inf
 
     # Define cloud edges ("distance bounds").
     xedges = np.concatenate(([0], dists, [1e10]))
