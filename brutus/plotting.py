@@ -778,7 +778,7 @@ def dist_vs_red(data, ebv=None, dist_type='distance_modulus',
 
 def posterior_predictive(models, idxs, reds, dreds, dists, weights=None,
                          flux=False, data=None, data_err=None, data_mask=None,
-                         offset=None, vcolor='blue', pcolor='black',
+                         offset=None, vcolor='black', pcolor='black',
                          labels=None, rstate=None, psig=2., fig=None):
     """
     Plot the posterior predictive SED.
@@ -828,7 +828,7 @@ def posterior_predictive(models, idxs, reds, dreds, dists, weights=None,
 
     vcolor : str, optional
         Color used when plotting the violin plots that comprise the
-        SED posterior predictive distribution. Default is `'blue'`.
+        SED posterior predictive distribution. Default is `'black'`.
 
     pcolor : str, optional
         Color used when plotting the provided data values.
