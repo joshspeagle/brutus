@@ -821,7 +821,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
 
 
 def lnpost(results, parallax=None, parallax_err=None, coord=None,
-           Nmc_prior=100, lnprior=None, wt_thresh=5e-3, cdf_thresh=2e-3,
+           Nmc_prior=100, lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-3,
            lngalprior=None, lndustprior=None, dustfile=None,
            dlabels=None, avlim=(0., 20.), rvlim=(1., 8.),
            rstate=None, apply_av_prior=True, *args, **kwargs):
@@ -859,7 +859,7 @@ def lnpost(results, parallax=None, parallax_err=None, coord=None,
     wt_thresh : float, optional
         The threshold `wt_thresh * max(y_wt)` used to ignore models
         with (relatively) negligible weights.
-        Default is `5e-3`.
+        Default is `1e-3`.
 
     cdf_thresh : float, optional
         The `1 - cdf_thresh` threshold of the (sorted) CDF used to ignore
@@ -963,22 +963,19 @@ def lnpost(results, parallax=None, parallax_err=None, coord=None,
     # Grab results.
     lnlike, Ndim, chi2, scales, avs, rvs, icovs_sar = results
 
-    # Compute initial log-posteriors.
-    lnp = lnlike + lnprior
-
     # Apply rough parallax prior for clipping.
     if parallax is not None and parallax_err is not None:
         ds2 = icovs_sar[:, 0, 0]
         scales_err = 1. / np.sqrt(np.abs(ds2))  # approximate scale errors
-        lnprob = lnp + scale_parallax_lnprior(scales, scales_err,
-                                              parallax, parallax_err)
+        lnprob = lnlike + scale_parallax_lnprior(scales, scales_err,
+                                                 parallax, parallax_err)
     else:
-        lnprob = lnp
+        lnprob = lnlike
     lnprob_mask = np.where(~np.isfinite(lnprob))[0]  # safety check
     if len(lnprob_mask) > 0:
         lnprob[lnprob_mask] = -1e300
 
-    # Apply thresholding.
+    # Apply likelihood thresholding.
     if wt_thresh is not None:
         # Use relative amplitude to threshold.
         lwt_min = np.log(wt_thresh) + np.max(lnprob)
@@ -989,7 +986,32 @@ def lnpost(results, parallax=None, parallax_err=None, coord=None,
         prob = np.exp(lnprob - logsumexp(lnprob))
         cdf = np.cumsum(prob[idx_sort])
         sel = idx_sort[cdf <= (1. - cdf_thresh)]
-    lnp = lnp[sel]
+    
+    # Apply priors based on MLE solution.
+    lnp = lnlike[sel]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # ignore bad values
+        # Add static prior.
+        lnp += lnprior[sel]
+        # Evaluate Galactic prior.
+        dist = 1. / np.sqrt(scales[sel])
+        lnp += lngalprior(dist, coord, labels=dlabels[sel])
+        # Evaluate dust prior.
+        if apply_av_prior:
+            lnp += lndustprior(dist, coord, avs[sel], dustfile=dustfile)
+    
+    # Apply posterior thresholding.
+    if wt_thresh is not None:
+        # Use relative amplitude to threshold.
+        lwt_min = np.log(wt_thresh) + np.max(lnp)
+        sel = sel[np.where(lnp > lwt_min)[0]]
+    else:
+        # Use CDF to threshold.
+        idx_sort = np.argsort(lnp)
+        prob = np.exp(lnp - logsumexp(lnp))
+        cdf = np.cumsum(prob[idx_sort])
+        sel = sel[idx_sort[cdf <= (1. - cdf_thresh)]]
+    lnp = lnlike[sel] + lnprior[sel]
     scale, av, rv = scales[sel], avs[sel], rvs[sel]
     icov_sar = icovs_sar[sel]
     Nsel = len(sel)
@@ -1093,7 +1115,7 @@ class BruteForce():
     def _setup(self, data, data_err, data_mask, data_labels=None,
                phot_offsets=None, parallax=None, parallax_err=None,
                av_gauss=None, lnprior=None,
-               wt_thresh=5e-3, cdf_thresh=2e-3,
+               wt_thresh=1e-3, cdf_thresh=2e-3,
                apply_agewt=True, apply_grad=True,
                lngalprior=None, lndustprior=None, dustfile=None,
                data_coords=None, ltol_subthresh=1e-2,
@@ -1146,7 +1168,7 @@ class BruteForce():
         wt_thresh : float, optional
             The threshold `wt_thresh * max(y_wt)` used to ignore models
             with (relatively) negligible weights when resampling.
-            Default is `5e-3`.
+            Default is `1e-3`.
 
         cdf_thresh : float, optional
             The `1 - cdf_thresh` threshold of the (sorted) CDF used to ignore
@@ -1377,7 +1399,7 @@ class BruteForce():
             Nmc_prior=50, avlim=(0., 20.), av_gauss=None,
             rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
             lnprior=None, lnprior_ext=None,
-            wt_thresh=5e-3, cdf_thresh=2e-3, Ndraws=250,
+            wt_thresh=1e-3, cdf_thresh=2e-3, Ndraws=250,
             apply_agewt=True, apply_grad=True,
             lngalprior=None, lndustprior=None, dustfile=None,
             apply_dlabels=True, data_coords=None, logl_dim_prior=True,
@@ -1461,7 +1483,7 @@ class BruteForce():
         wt_thresh : float, optional
             The threshold `wt_thresh * max(y_wt)` used to ignore models
             with (relatively) negligible weights when resampling.
-            Default is `5e-3`.
+            Default is `1e-3`.
 
         cdf_thresh : float, optional
             The `1 - cdf_thresh` threshold of the (sorted) CDF used to ignore
@@ -1748,7 +1770,7 @@ class BruteForce():
              avlim=(0., 20.), av_gauss=None,
              rvlim=(1., 8.), rv_gauss=(3.32, 0.18),
              lnprior=None, lnprior_ext=None,
-             wt_thresh=5e-3, cdf_thresh=2e-3, Ndraws=250,
+             wt_thresh=1e-3, cdf_thresh=2e-3, Ndraws=250,
              lngalprior=None, lndustprior=None, dustfile=None,
              apply_dlabels=True, data_coords=None,
              return_distreds=True, logl_dim_prior=True, ltol=3e-2,
@@ -1812,7 +1834,7 @@ class BruteForce():
         wt_thresh : float, optional
             The threshold `wt_thresh * max(y_wt)` used to ignore models
             with (relatively) negligible weights.
-            Default is `5e-3`.
+            Default is `1e-3`.
 
         cdf_thresh : float, optional
             The `1 - cdf_thresh` threshold of the (sorted) CDF used to ignore
