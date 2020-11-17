@@ -142,6 +142,9 @@ def _do_jeans_modelling(force_grid, RadialDispersionFactor, ro, vo):
     epi_gamma2 *= (4./R) * DPhi_R
     epi_gamma2 = epi_gamma2
 
+    epi_gamma2[0,:] = 0.0 # at R=0 above gives nans
+    VCircsq[0,0] = 0.0 # similar
+
     # Here, VelDispPhi is actually avg(v^2), not std(v)^2
     VelDispPhi_thin = VelDispRz_thin + (R/rho_thin) * DR_RhoVelDispRz_thin + VCircsq
     VelDispPhi_thick = VelDispRz_thick + (R/rho_thick) * DR_RhoVelDispRz_thick + VCircsq
@@ -158,8 +161,18 @@ def _do_jeans_modelling(force_grid, RadialDispersionFactor, ro, vo):
     VelDispPhi_thin = VelDispPhi_thin - VelStreamPhi_thin
     VelDispPhi_thick = VelDispPhi_thick - VelStreamPhi_thick
 
+
+    # fix nans and negatives
+    VelStreamPhi_thin[VelStreamPhi_thin < 0.0] = 0.0
+    VelStreamPhi_thick[VelStreamPhi_thick < 0.0] = 0.0
+    VelStreamPhi_thin[np.isnan(VelStreamPhi_thin)] = 0.0
+    VelStreamPhi_thick[np.isnan(VelStreamPhi_thick)] = 0.0
+
     VelStreamPhi_thin = np.sqrt(VelStreamPhi_thin)
     VelStreamPhi_thick = np.sqrt(VelStreamPhi_thick)
+
+    VelDispPhi_thin[np.isnan(VelDispPhi_thin)] = 0.0
+    VelDispPhi_thick[np.isnan(VelDispPhi_thick)] = 0.0
 
     # Now set other streaming velocities
     VelStreamR_thin = np.zeros(np.shape(VelStreamPhi_thin))
