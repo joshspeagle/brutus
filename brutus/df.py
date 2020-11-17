@@ -29,7 +29,7 @@ def _load_force_grid(fname):
 def _init_vel(R_solar=8.2, Z_solar=0.025, R_thin=2.6, Z_thin=0.3,
                  R_thick=2.0, Z_thick=0.9, fgas=0.1, Z_gas=0.15,
                  Mthin=3.5E10, Mthick=6E9,
-                 vcirc_solar=220, RadialDispersionFactor=1,
+                 vcirc_solar=220, RadialDispersionFactor=1.7,
                  Mhalo=1E12, Rhalo=26,
                  ro=8, vo=220,
                  RSIZE=512, ZSIZE=512, RMIN=0.002, ZMIN=0.002, RMAX=200, ZMAX=200):
