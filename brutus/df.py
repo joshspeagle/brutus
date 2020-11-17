@@ -15,10 +15,16 @@ from galpy.potential import DoubleExponentialDiskPotential, HernquistPotential
 from galpy.potential import evaluateDensities, evaluateRforces, evaluatezforces
 from galpy.potential import evaluateR2derivs, evaluateRzderivs
 from scipy.integrate import cumtrapz
+import pickle
 import time
 
 __all__ = []
 
+def _save_force_grid(fname, force_grid):
+    pickle.dump(force_grid, open(fname, 'wb'))
+
+def _load_force_grid(fname):
+    return pickle.load(force_grid, open(fname, 'rb'))
 
 def _init_vel(R_solar=8.2, Z_solar=0.025, R_thin=2.6, Z_thin=0.3,
                  R_thick=2.0, Z_thick=0.9, fgas=0.1, Z_gas=0.15,
