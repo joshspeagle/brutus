@@ -100,6 +100,9 @@ def _init_vel(R_solar=8.2, Z_solar=0.025, R_thin=2.6, Z_thin=0.3,
     # Now compute velocity moments.
     force_grid = _do_jeans_modelling(force_grid, RadialDispersionFactor, ro, vo)
 
+    # Now construct splines.
+    force_grid = _construct_spline(force_grid)
+
     return force_grid
 
 def _do_jeans_modelling(force_grid, RadialDispersionFactor, ro, vo):
@@ -198,6 +201,16 @@ def _do_jeans_modelling(force_grid, RadialDispersionFactor, ro, vo):
     force_grid['VelDispR_thick'] = RadialDispersionFactor * VelDispRz_thick
     force_grid['VelDispPhi_thick'] = VelDispPhi_thick
     force_grid['VelDispz_thick'] = VelDispRz_thick
+
+    return force_grid
+
+def _construct_spline(force_grid):
+    for key in ['Density_thin', 'Density_thick',
+                'VelStreamR_thin', 'VelStreamPhi_thin', 'VelStreamz_thin',
+                'VelDispR_thin', 'VelDispPhi_thin', 'VelDispz_thin' ,
+                'VelStreamR_thick', 'VelStreamPhi_thick', 'VelStreamz_thick',
+                'VelDispR_thick', 'VelDispPhi_thick', 'VelDispz_thick']:
+        force_grid['spline_'+key] = RectBivariateSpline(force_grid['Rlist'], force_grid['zlist'], force_grid[key])
 
     return force_grid
 
