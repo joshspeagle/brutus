@@ -1,0 +1,92 @@
+Some notes to Josh as I work on the DF stuff:
+
+Once the disk scale lengths and heights are set and the thick-to-thin
+density fraction at the sun is set, then the ratio of the thick to thin disk
+total mass is set. When I plug in the numbers, I get that MT/Mt ~ 4.6.
+Tkaing something like 3.5E10 Msun for the thin disk, this means the 
+thick disk is 1.6E11 Msun, which is clearly too massive.
+
+So, I am just setting the mass of the thick disk to be the value in BHG, i.e. 
+6E9 Msun
+but just a note that this is strictly inconsistent with the frho value of 0.04.
+
+-- 
+
+I am assuming Mgas = fgas * (Mthin + Mthick), where fgas is 0.1. I let fgas be
+the parameter here instead of Mgas. I set Rgas = Rthin, and zgas = 0.15 kpc
+
+ref for gas disk scale height (using cold gas) Kalberla, P. M. W., & Dedes, L. 2008, A&A, 487, 951
+
+--
+
+I followed closely the implementation in Springel, di Matteo, Hernquist 2005.
+Would be nice to cite it, although it's all pretty standard stuff and they
+are certainly not the first to do this.
+
+
+-- 
+
+The circular velocity curve is a good way to compare with data and assess in which regions
+the potential can be ~ trusted. With the current disk model, we see that
+at R < 5 kpc, the circular velocity (squared) shoots up above
+
+--
+
+ro, vo are the units for galpy to use. this should not affect the final answer
+
+RadialDispersionFactor is the value of sigma_vR^2 / sigma_vz^2. In the solar neighborhood, 
+this is something like 1.5-2.0ish. I've set the default to be 1.7, it is trivial to make a different
+RadialDispersionFactor for the thin and thick disk if you'd like
+
+NOTE: my radialdispersion factor is sigma_vR^2 / sigma_vz^2, most literature quotes sigma_vR / sigma_vz
+
+--
+
+BASIC USAGE:
+
+1. construct force grid (or load force grid)
+2. call with a list of R or z to get the first and second moments of the velocity DF
+
+so, e.g.
+
+force_grid = _init_vel()
+fcomp, mean, cov = get_velocity_ellipsoid(R, phi, z, force_grid)
+
+fcomp is a (3,N) matrix
+mean is a (3,3,N) matrix
+cov is a (3,3,3,N) matrix
+
+R, phi, z are vectors of length N, they are cylindrical radius, azimuth, and height
+at the moment, phi is unused since the DF model is axisymmetric, but this can be changed in the future.
+for phi, assume the sun is at phi=0 (you can just pass None for phi for now if you want)
+
+0th index is component, in order thin, thick, halo
+1st index for mean is R, phi, z (in that order)
+1st and 2nd index for cov is matrix indices (in R, phi, z order0)
+last index is the star/draw
+
+so, e.g. to get the covariance matrix for the thick component of the 12th draw
+
+my_cov_matrix = cov[1,:,:,11]
+
+the _init_vel function has tons of options, check the code for all of them
+
+some other scattered thoughts
+
+note that in jeans modelling, the DF is not assumed but the moments are computed. So, you can assume
+a Gaussian DF or heavy-tails or whatever
+
+a gaussian DF is a _terrible_ assumption to make, BUT it should allow you to qualitatively infer distances
+from proper motions and therefore distinguish between giant and dwarf solutions
+
+in some regions where the density of the thin and thick disk (i.e. large R and z) is small, this method will become
+unstable. you may want to exclude from the likelihood function this proper motion term in regions where rho
+is less than some critical value. not sure how this would be done in detail, but you have been warned!
+
+computing the grid for a reasonable gird size (e.g. 512x512) takes a looooong time, so there are routines for saivng and
+loading
+
+_save_force_grid
+_load_force_grid
+
+check code for usage, they are extremely simple
