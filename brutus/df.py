@@ -15,6 +15,7 @@ from galpy.potential import DoubleExponentialDiskPotential, HernquistPotential
 from galpy.potential import evaluateDensities, evaluateRforces, evaluatezforces
 from galpy.potential import evaluateR2derivs, evaluateRzderivs
 from scipy.integrate import cumtrapz
+from scipy.interpolate import RectBivariateSpline
 import pickle
 import time
 
@@ -235,7 +236,59 @@ def _construct_spline(force_grid):
 
     return force_grid
 
+def get_velocity_ellipsoid(R, z, force_grid):
+    N = len(R)
+    assert N==len(z), "R and z must have the same length"
+    
+    ans = {}
+    for key in ['Density_thin', 'Density_thick',
+                'VelStreamR_thin', 'VelStreamPhi_thin', 'VelStreamz_thin',
+                'VelDispR_thin', 'VelDispPhi_thin', 'VelDispz_thin' ,
+                'VelStreamR_thick', 'VelStreamPhi_thick', 'VelStreamz_thick',
+                'VelDispR_thick', 'VelDispPhi_thick', 'VelDispz_thick']:
+        ans[key] = force_grid['spline_'+key](R, z, grid=False)
+    
+    # now determine the prob of being in each component based on density.
+    tot_den = ans['Density_thin'] + ans['Density_thick']
+    fthin = ans['Density_thin'] / tot_den
+    fthick = ans['Density_thick'] / tot_den
+    fcomp = np.transpose([fthin, fthick])
+
+    # now put together the mean matrix
+    mean_vR_thin, mean_vPhi_thin, mean_vz_thin = ans['VelStreamR_thin'], ans['VelStreamPhi_thin'], ans['VelStreamz_thin']
+    mean_vR_thick, mean_vPhi_thick, mean_vz_thick = ans['VelStreamR_thick'], ans['VelStreamPhi_thick'], ans['VelStreamz_thick']
+
+    mean_mat = np.array([[mean_vR_thin, mean_vPhi_thin, mean_vz_thin], 
+                         [mean_vR_thick, mean_vPhi_thick, mean_vz_thick]])
+
+    # and put together the covariance matrix
+    # for now, it is assumed that the off-diagonal terms are zero, but they are included for now
+    # so that this assumption can be changed in the future.
+    disp_vR_thin, disp_vPhi_thin, disp_vz_thin = ans['VelDispR_thin'], ans['VelDispPhi_thin'], ans['VelDispz_thin']
+    disp_vR_thick, disp_vPhi_thick, disp_vz_thick = ans['VelDispR_thick'], ans['VelDispPhi_thick'], ans['VelDispz_thick']
+
+    # disp_vR_thin, disp_vPhi_thin, disp_vz_thin = np.random.rand(N), np.random.rand(N), np.random.rand(N)
+    # disp_vR_thick, disp_vPhi_thick, disp_vz_thick = np.random.rand(N), np.random.rand(N), np.random.rand(N)
+
+    disp_vRPhi_thin, disp_vPhiz_thin, disp_vzR_thin = np.zeros(N), np.zeros(N), np.zeros(N)
+    disp_vRPhi_thick, disp_vPhiz_thick, disp_vzR_thick = np.zeros(N), np.zeros(N), np.zeros(N)
+
+    cov_thin = np.array([[disp_vR_thin, disp_vRPhi_thin, disp_vzR_thin],
+                         [disp_vRPhi_thin, disp_vPhi_thin, disp_vPhiz_thin],
+                         [disp_vzR_thin, disp_vPhiz_thin, disp_vz_thin]])
+    
+    cov_thick = np.array([[disp_vR_thick, disp_vRPhi_thick, disp_vzR_thick],
+                          [disp_vRPhi_thick, disp_vPhi_thick, disp_vPhiz_thick],
+                          [disp_vzR_thick, disp_vPhiz_thick, disp_vz_thick]])
+    
+    cov = np.array([cov_thin, cov_thick])
+
+    return fcomp, mean_mat, cov
+
+
 
 if __name__ == '__main__':
-    force_grid = _init_vel(RSIZE=16)
+    force_grid = _init_vel(RSIZE=512)
+
+    fcomp, mean_mat, cov = get_velocity_ellipsoid(10.*np.random.rand(100), 10.*np.random.rand(100), force_grid)
 
