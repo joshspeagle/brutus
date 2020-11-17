@@ -139,6 +139,9 @@ def _do_jeans_modelling(force_grid, RadialDispersionFactor, ro, vo):
     DR_RhoVelDispRz_thick = cumtrapz(integrand, zlist/ro, initial=0, axis=1)
     DR_RhoVelDispRz_thick = np.transpose((DR_RhoVelDispRz_thick[:,-1] - np.transpose(DR_RhoVelDispRz_thick)))
 
+    DR_RhoVelDispRz_thin[0,:] = 0.0 # unstable at R=0
+    DR_RhoVelDispRz_thick[0,:] = 0.0 # unstable at R=0
+
     # Put it all together
     VCircsq = R * DPhi_R
     epi_gamma2 = 1./((3./R)*DPhi_R + DPhi2_R)
