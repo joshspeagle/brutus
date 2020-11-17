@@ -75,15 +75,15 @@ def _init_vel(R_solar=8.2, Z_solar=0.025, R_thin=2.6, Z_thin=0.3,
     t0 = time.time()
     # Now compute densities and forces.
 
-    force_grid['Density_Thin']   = evaluateDensities(pot_thin, force_grid['R'] * u.kpc, force_grid['z'] * u.kpc) # in Msun/pc^3
-    force_grid['Density_Thick']  = evaluateDensities(pot_thick, force_grid['R'] * u.kpc, force_grid['z'] * u.kpc) # in Msun/pc^3
-    force_grid['Density_Thin']  *= 1E9 # convert to Msun/kpc^3
-    force_grid['Density_Thick'] *= 1E9 # convert to Msun/kpc^3
+    force_grid['Density_thin']   = evaluateDensities(pot_thin, force_grid['R'] * u.kpc, force_grid['z'] * u.kpc) # in Msun/pc^3
+    force_grid['Density_thick']  = evaluateDensities(pot_thick, force_grid['R'] * u.kpc, force_grid['z'] * u.kpc) # in Msun/pc^3
+    force_grid['Density_thin']  *= 1E9 # convert to Msun/kpc^3
+    force_grid['Density_thick'] *= 1E9 # convert to Msun/kpc^3
 
 
     # NOTE: these functions are not general and depend on the radial surface density profile being exponential
-    force_grid['DR_Density_Thin']  =  (-1.0/R_thin) * force_grid['Density_Thin'] # in Msun/kpc^2
-    force_grid['DR_Density_Thick'] = (-1.0/R_thick) * force_grid['Density_Thick'] # in Msun/kpc^2
+    force_grid['DR_Density_thin']  =  (-1.0/R_thin) * force_grid['Density_thin'] # in Msun/kpc^2
+    force_grid['DR_Density_thick'] = (-1.0/R_thick) * force_grid['Density_thick'] # in Msun/kpc^2
 
     force_grid['DPhi_R'] = -evaluateRforces(pot, force_grid['R'] * u.kpc, force_grid['z'] * u.kpc)  # in km/s/Myr
     force_grid['DPhi_z'] = -evaluatezforces(pot, force_grid['R'] * u.kpc, force_grid['z'] * u.kpc)  # in km/s/Myr
@@ -103,8 +103,8 @@ def _init_vel(R_solar=8.2, Z_solar=0.025, R_thin=2.6, Z_thin=0.3,
     return force_grid
 
 def _do_jeans_modelling(force_grid, RadialDispersionFactor, ro, vo):
-    rho_thin, rho_thick = force_grid['Density_Thin'], force_grid['Density_Thick']
-    DR_rho_thin, DR_rho_thick = force_grid['DR_Density_Thin'], force_grid['DR_Density_Thick']
+    rho_thin, rho_thick = force_grid['Density_thin'], force_grid['Density_thick']
+    DR_rho_thin, DR_rho_thick = force_grid['DR_Density_thin'], force_grid['DR_Density_thick']
     DPhi_R, DPhi2_R, DPhi_z, DPhi2_Rz = force_grid['DPhi_R'], force_grid['DPhi2_R'], force_grid['DPhi_z'], force_grid['DPhi2_Rz']
     Rlist, zlist = force_grid['Rlist'], force_grid['zlist']
     R, z = force_grid['R'], force_grid['z']
