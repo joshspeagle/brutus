@@ -65,6 +65,8 @@ for phi, assume the sun is at phi=0 (you can just pass None for phi for now if y
 1st and 2nd index for cov is matrix indices (in R, phi, z order0)
 last index is the star/draw
 
+NOTE: at the moment, the 0th index is only length 2 since i haven't implemented the halo (yet..)
+
 so, e.g. to get the covariance matrix for the thick component of the 12th draw
 
 my_cov_matrix = cov[1,:,:,11]
