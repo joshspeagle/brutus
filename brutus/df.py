@@ -151,9 +151,27 @@ def _do_jeans_modelling(force_grid, RadialDispersionFactor, ro, vo):
     epi_gamma2[0,:] = 0.0 # at R=0 above gives nans
     VCircsq[0,0] = 0.0 # similar
 
+    # VCircsq[np.isnan(VCircsq)] = 0.0
+    # epi_gamma2[np.isnan(epi_gamma2)] = 0.0
+
     # Here, VelDispPhi is actually avg(v^2), not std(v)^2
     VelDispPhi_thin = VelDispRz_thin + (R/rho_thin) * DR_RhoVelDispRz_thin + VCircsq
     VelDispPhi_thick = VelDispRz_thick + (R/rho_thick) * DR_RhoVelDispRz_thick + VCircsq
+
+    # print('ISNAN=', len(np.where(np.isnan(epi_gamma2))[0]))
+    # print('ISNAN=', len(np.where(np.isnan((R/rho_thin)))[0]))
+    # print('ISNAN=', len(np.where(np.isnan(( DR_RhoVelDispRz_thin)))[0]))
+    # print('ISNAN=', len(np.where(np.isnan(VCircsq))[0]))
+
+    # print(np.where(np.isnan(DR_RhoVelDispRz_thin))[0])
+    # print(np.where(np.isnan(DR_RhoVelDispRz_thin))[1])
+
+    # print(np.where(np.isnan(VelDispPhi_thin))[0])
+    # print(np.where(np.isnan(VelDispPhi_thin))[1])
+
+    # VelDispPhi_thin[rho_thin < 1e-12] = 0.0
+    # VelDispPhi_thick[rho_thick < 1e-12] = 0.0
+
 
     VelStreamPhi_thin = VelDispPhi_thin - RadialDispersionFactor * VelDispRz_thin/epi_gamma2
     VelStreamPhi_thick = VelDispPhi_thick - RadialDispersionFactor * VelDispRz_thick/epi_gamma2
