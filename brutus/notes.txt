@@ -92,3 +92,13 @@ _save_force_grid
 _load_force_grid
 
 check code for usage, they are extremely simple
+
+
+---
+
+I added halo now, seems to work out of the box
+
+one minor issue is in the grid ive manually set the density of the halo to be 1E99 at R=z=0
+its formally infinite, but having it be np.inf causes issues with the RectBivariateSpline
+
+
