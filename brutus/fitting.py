@@ -898,30 +898,29 @@ def lnpost(results, parallax=None, parallax_err=None, coord=None,
     apply_av_prior : bool, optional
         Whether to apply the 3-D dust prior. Default is `True`.
 
-    return_distreds : bool, optional
-        Whether to return weighted distance and reddening draws (in units of
-        kpc and Av, respectively). Default is `True`.
-
     Returns
     -------
     sel : `~numpy.ndarray` of shape `(Nsel,)`
         Array of indices selecting out the subset of models with reasonable
         fits.
 
-    lnpost : `~numpy.ndarray` of shape `(Nsel,)`
+    cov_sar : `~numpy.ndarray` of shape `(Nsel, 3, 3)`
+        Regularized covariance matrices for the corresponding models.
+
+    lnp : `~numpy.ndarray` of shape `(Nsel,)`
         The modified log-posteriors for the subset of models with
         reasonable fits.
 
-    dists : `~numpy.ndarray` of shape `(Nsel, Nmc_prior)`, optional
+    dists : `~numpy.ndarray` of shape `(Nsel, Nmc_prior)`
         The dist draws for each selected model.
 
-    reds : `~numpy.ndarray` of shape `(Nsel, Nmc_prior)`, optional
+    reds : `~numpy.ndarray` of shape `(Nsel, Nmc_prior)`
        The reddening draws (Av) for each selected model.
 
-    dreds : `~numpy.ndarray` of shape `(Nsel, Nmc_prior)`, optional
+    dreds : `~numpy.ndarray` of shape `(Nsel, Nmc_prior)`
        The differential reddening draws (Rv) for each selected model.
 
-    logwts : `~numpy.ndarray` of shape `(Nsel, Nmc_prior)`, optional
+    logwts : `~numpy.ndarray` of shape `(Nsel, Nmc_prior)`
         The ln(weights) for each selected model.
 
     """
@@ -999,14 +998,24 @@ def lnpost(results, parallax=None, parallax_err=None, coord=None,
 
     # Ensure final set of matrices are positive semidefinite.
     not_psd = np.where(~np.all(np.linalg.eigvals(cov_sar) > 0, axis=1))[0]
+    width = 0.05  # 5% width for Gaussian prior
     count = 1
     while len(not_psd) > 0:
-        # Regularize non-PSD matrices by adding Gaussian prior with 5% width.
+        # Regularize non-PSD matrices by adding Gaussian prior.
         # The amount of times this is added increases with each pass.
-        icov_sar[not_psd] += np.array([np.diag([count / sfrac**2,
-                                                count / 0.05**2,
-                                                count / 0.05**2])
-                                       for sfrac in scale[not_psd] * 0.05])
+        # This is first applied to only non-positive entries before being
+        # applied to all values on the diagonals.
+        sfracs = scale[not_psd] * width
+        i1 = cov_sar[not_psd][:, 0, 0] <= 0  # flag (scale)
+        i2 = cov_sar[not_psd][:, 1, 1] <= 0  # flag (Av)
+        i3 = cov_sar[not_psd][:, 2, 2] <= 0  # flag (Rv)
+        s1 = i1 + (~i2 * ~i3)  # 0/1 multipliers that are 0 if the entry is
+        s2 = i2 + (~i1 * ~i3)  # is positive and 1 if negative, unless all
+        s3 = i3 + (~i1 * ~i2)  # entries are positive (which defaults to 1)
+        icov_sar[not_psd] += np.array([np.diag([count / sfrac**2 * s1[i],
+                                                count / width**2 * s2[i],
+                                                count / width**2 * s3[i]])
+                                       for i, sfrac in enumerate(sfracs)])
         cov_sar[not_psd] = _inverse3(icov_sar[not_psd])
         new_idx = np.where(~np.all(np.linalg.eigvals(cov_sar[not_psd]) > 0,
                                    axis=1))[0]
@@ -1053,7 +1062,7 @@ def lnpost(results, parallax=None, parallax_err=None, coord=None,
     if len(lnp_mask) > 0:
         lnp[lnp_mask] = -1e300
 
-    return sel, lnp, dist_mc.T, a_mc.T, r_mc.T, lnp_mc.T
+    return sel, cov_sar, lnp, dist_mc.T, a_mc.T, r_mc.T, lnp_mc.T
 
 
 class BruteForce():
@@ -1954,7 +1963,7 @@ class BruteForce():
                               dustfile=dustfile, dlabels=dlabels,
                               avlim=avlim, rvlim=rvlim,
                               rstate=rstate, apply_av_prior=apply_av_prior)
-            sel, lnprob, dists, reds, dreds, logwts = presults
+            sel, cov_sar, lnprob, dists, reds, dreds, logwts = presults
             Nsel = len(sel)
 
             # Add in parallax to chi2 and Ndim if provided.
@@ -1965,11 +1974,8 @@ class BruteForce():
                              / parallax_err[i]**2)
                     Ndim += 1
 
-            # Compute GOF metrics.
-            chi2min = np.min(chi2[sel])
-            levid = logsumexp(lnprob)
-
             # Resample.
+            levid = logsumexp(lnprob)
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")  # ignore bad values
                 wt = np.exp(lnprob - levid)
@@ -1979,8 +1985,11 @@ class BruteForce():
 
             # Grab/compute corresponding values.
             scales, avs, rvs = scales[sidxs], avs[sidxs], rvs[sidxs]
-            cov_sar = _inverse3(icovs_sar[sidxs])
+            cov_sar = cov_sar[idxs]
             lnprob = lnprob[idxs]
+
+            # Compute GOF metric.
+            chi2min = np.min(chi2[sidxs])
 
             if return_distreds:
                 # Draw distances and reddenings.

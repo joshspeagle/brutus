@@ -868,7 +868,7 @@ def draw_sar(scales, avs, rvs, covs_sar, ndraws=500, avlim=(0., 6.),
     return sdraws, adraws, rdraws
 
 
-def sample_multivariate_normal(mean, cov, size=1, eps=1e-6, rstate=None):
+def sample_multivariate_normal(mean, cov, size=1, eps=1e-30, rstate=None):
     """
     Draw samples from many multivariate normal distributions.
 
@@ -895,7 +895,7 @@ def sample_multivariate_normal(mean, cov, size=1, eps=1e-6, rstate=None):
     eps : float, optional
         Small factor added to covariances prior to Cholesky decomposition.
         Helps ensure numerical stability and should have no effect on the
-        outcome. Default is `1e-6`.
+        outcome. Default is `1e-30`.
 
     rstate : `~numpy.random.RandomState`, optional
         `~numpy.random.RandomState` instance.
@@ -906,6 +906,9 @@ def sample_multivariate_normal(mean, cov, size=1, eps=1e-6, rstate=None):
         Sampled values.
 
     """
+
+    if rstate is None:
+        rstate = np.random
 
     # If we have a single distribution, just revert to `numpy.random` version.
     if len(np.shape(mean)) == 1:
