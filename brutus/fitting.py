@@ -823,7 +823,7 @@ def loglike(data, data_err, data_mask, mag_coeffs,
 def lnpost(results, parallax=None, parallax_err=None, coord=None,
            Nmc_prior=100, lnprior=None, wt_thresh=1e-3, cdf_thresh=2e-3,
            lngalprior=None, lndustprior=None, dustfile=None,
-           dlabels=None, avlim=(0., 20.), rvlim=(1., 8.),
+           dlabels=None, avlim=(0., 20.), rvlim=(1., 8.), mem_lim=8000.,
            rstate=None, apply_av_prior=True, *args, **kwargs):
     """
     Internal function used to estimate posteriors from fits using the
@@ -892,6 +892,12 @@ def lnpost(results, parallax=None, parallax_err=None, coord=None,
         The lower and upper bound where the reddening vector shape changes
         are reliable. Default is `(1., 8.)`.
 
+    mem_lim : float, optional
+        The approximate maximum memory that will be used when running
+        over individual objects (i.e. ignoring overheads). This is in
+        units of MB and assumes 40 kB of additional memory required per
+        model to be fit per `Nmc_prior` realization. Default is `8000.`.
+
     rstate : `~numpy.random.RandomState`, optional
         `~numpy.random.RandomState` instance.
 
@@ -959,6 +965,10 @@ def lnpost(results, parallax=None, parallax_err=None, coord=None,
     if coord is None:
         coord = np.zeros(2)
 
+    # Compute maximum number of allowed models given memory limit.
+    mem_per_model = 4.0e-4  # memory per model per realization (in MB)
+    Nsel_max = int(mem_lim / Nmc_prior / mem_per_model)
+
     # Grab results.
     lnlike, Ndim, chi2, scales, avs, rvs, icovs_sar = results
 
@@ -985,7 +995,7 @@ def lnpost(results, parallax=None, parallax_err=None, coord=None,
         prob = np.exp(lnprob - logsumexp(lnprob))
         cdf = np.cumsum(prob[idx_sort])
         sel = idx_sort[cdf <= (1. - cdf_thresh)]
-    
+
     # Apply priors based on MLE solution.
     lnp = lnlike[sel]
     with warnings.catch_warnings():
@@ -998,7 +1008,7 @@ def lnpost(results, parallax=None, parallax_err=None, coord=None,
         # Evaluate dust prior.
         if apply_av_prior:
             lnp += lndustprior(dist, coord, avs[sel], dustfile=dustfile)
-    
+
     # Apply posterior thresholding.
     if wt_thresh is not None:
         # Use relative amplitude to threshold.
@@ -1015,12 +1025,22 @@ def lnpost(results, parallax=None, parallax_err=None, coord=None,
     icov_sar = icovs_sar[sel]
     Nsel = len(sel)
 
+    # Check if we need to do additional clipping to satisfy memory constraints.
+    if Nsel > Nsel_max:
+        idx_sort = np.argsort(lnp)[::-1]  # rank-order from best->worst lnp
+        idx_sort = idx_sort[:Nsel_max]  # limit to `Nsel_max` entries
+        lnp = lnp[idx_sort]
+        scale, av, rv = scale[idx_sort], av[idx_sort], rv[idx_sort]
+        icov_sar = icov_sar[idx_sort]
+        sel = sel[idx_sort]
+        Nsel = len(sel)
+
     # Generate covariance matrices for the selected fits.
     cov_sar = _inverse3(icov_sar)
 
     # Ensure final set of matrices are positive semidefinite.
     not_psd = np.where(~np.all(np.linalg.eigvals(cov_sar) > 0, axis=1))[0]
-    width = 0.05  # 5% width for Gaussian prior
+    width = 0.02  # 2% width for Gaussian prior
     count = 1
     while len(not_psd) > 0:
         # Regularize non-PSD matrices by adding Gaussian prior.
@@ -1042,7 +1062,7 @@ def lnpost(results, parallax=None, parallax_err=None, coord=None,
         new_idx = np.where(~np.all(np.linalg.eigvals(cov_sar[not_psd]) > 0,
                                    axis=1))[0]
         not_psd = not_psd[new_idx]
-        count += 1
+        count *= 2  # double the strength of the prior for the next pass
 
     # Now actually apply priors.
     if Nmc_prior > 0:
@@ -1414,7 +1434,7 @@ class BruteForce():
             apply_dlabels=True, data_coords=None, logl_dim_prior=True,
             ltol=3e-2, ltol_subthresh=1e-2, logl_initthresh=5e-3,
             mag_max=50., merr_max=0.25, rstate=None, save_dar_draws=True,
-            running_io=True, verbose=True):
+            running_io=True, mem_lim=8000., verbose=True):
         """
         Fit all input models to the input data to compute the associated
         log-posteriors.
@@ -1580,6 +1600,12 @@ class BruteForce():
             This may be better if working on a filesystem with slow I/O
             operations. Default is `True`.
 
+        mem_lim : float, optional
+            The approximate maximum memory that will be used when running
+            over individual objects (i.e. ignoring overheads). This is in
+            units of MB and assumes 40 kb of additional memory required per
+            model to be fit per `Nmc_prior` realization. Default is `8000.`.
+
         verbose : bool, optional
             Whether to print progress to `~sys.stderr`. Default is `True`.
 
@@ -1677,7 +1703,7 @@ class BruteForce():
                                               ltol_subthresh=ltol_subthresh,
                                               logl_dim_prior=logl_dim_prior,
                                               logl_initthresh=logl_initthresh,
-                                              ltol=ltol)):
+                                              ltol=ltol, mem_lim=mem_lim)):
 
             # Grab results.
             if save_dar_draws:
@@ -1783,7 +1809,8 @@ class BruteForce():
              lngalprior=None, lndustprior=None, dustfile=None,
              apply_dlabels=True, data_coords=None,
              return_distreds=True, logl_dim_prior=True, ltol=3e-2,
-             ltol_subthresh=1e-2, logl_initthresh=5e-3, rstate=None):
+             ltol_subthresh=1e-2, logl_initthresh=5e-3, mem_lim=8000.,
+             rstate=None):
         """
         Internal generator used to compute fits.
 
@@ -1903,6 +1930,12 @@ class BruteForce():
             set of fits but before optimizing them. Default is `5e-3`.
             **This must be smaller than or equal to `ltol_subthresh`.**
 
+        mem_lim : float, optional
+            The approximate maximum memory that will be used when running
+            over individual objects (i.e. ignoring overheads). This is in
+            units of MB and assumes 40 kb of additional memory required per
+            model to be fit per `Nmc_prior` realization. Default is `8000.`.
+
         rstate : `~numpy.random.RandomState`, optional
             `~numpy.random.RandomState` instance.
 
@@ -1983,7 +2016,7 @@ class BruteForce():
                               wt_thresh=wt_thresh, cdf_thresh=cdf_thresh,
                               lngalprior=lngalprior, lndustprior=lndustprior,
                               dustfile=dustfile, dlabels=dlabels,
-                              avlim=avlim, rvlim=rvlim,
+                              avlim=avlim, rvlim=rvlim, mem_lim=mem_lim,
                               rstate=rstate, apply_av_prior=apply_av_prior)
             sel, cov_sar, lnprob, dists, reds, dreds, logwts = presults
             Nsel = len(sel)
@@ -1997,7 +2030,8 @@ class BruteForce():
                     Ndim += 1
 
             # Resample.
-            levid = logsumexp(lnprob)
+            levid = logsumexp(lnprob)  # log(evidence) (up to normalization)
+            chi2min = np.min(chi2[sel])  # min(chi2)
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")  # ignore bad values
                 wt = np.exp(lnprob - levid)
@@ -2009,9 +2043,6 @@ class BruteForce():
             scales, avs, rvs = scales[sidxs], avs[sidxs], rvs[sidxs]
             cov_sar = cov_sar[idxs]
             lnprob = lnprob[idxs]
-
-            # Compute GOF metric.
-            chi2min = np.min(chi2[sidxs])
 
             if return_distreds:
                 # Draw distances and reddenings.
