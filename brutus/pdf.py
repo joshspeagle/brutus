@@ -260,7 +260,8 @@ def parallax_to_scale(p_meas, p_err, snr_lim=4.):
     return s_mean, s_std
 
 
-def logn_disk(R, Z, R_solar=8.2, Z_solar=0.025, R_scale=2.6, Z_scale=0.3):
+def logn_disk(R, Z, R_solar=8.2, Z_solar=0.025, R_scale=2.6, Z_scale=0.3, 
+              R_smooth=2.0):
     """
     Log-number density of stars in the disk component of the galaxy.
 
@@ -286,6 +287,10 @@ def logn_disk(R, Z, R_solar=8.2, Z_solar=0.025, R_scale=2.6, Z_scale=0.3):
     Z_scale : float, optional
         The scale height of the disk in kpc. Default is `0.3`.
 
+    R_smooth : float, optional
+        The smoothing radius in kpc used to avoid "spikes"
+        around the Galactic center. Default is `2.0`.
+
     Returns
     -------
     logn : `~numpy.ndarray` of shape (N)
@@ -293,13 +298,16 @@ def logn_disk(R, Z, R_solar=8.2, Z_solar=0.025, R_scale=2.6, Z_scale=0.3):
 
     """
 
-    rterm = (R - R_solar) / R_scale  # radius term
+    # Compute effective radius.
+    Reff = np.sqrt(R**2 + R_smooth**2)
+
+    rterm = (Reff - R_solar) / R_scale  # radius term
     zterm = (np.abs(Z) - np.abs(Z_solar)) / Z_scale  # height term
 
     return -(rterm + zterm)
 
 
-def logn_halo(R, Z, R_solar=8.2, Z_solar=0.025, R_smooth=1.0,
+def logn_halo(R, Z, R_solar=8.2, Z_solar=0.025, R_smooth=2.0,
               eta=4.2, q_ctr=0.2, q_inf=0.8, r_q=6.):
     """
     Log-number density of stars in the halo component of the galaxy.
@@ -322,7 +330,7 @@ def logn_halo(R, Z, R_solar=8.2, Z_solar=0.025, R_smooth=1.0,
 
     R_smooth : float, optional
         The smoothing radius in kpc used to avoid singularities
-        around the Galactic center. Default is `1.0`.
+        around the Galactic center. Default is `2.0`.
 
     eta : float, optional
         The (negative) power law index describing the number density.
@@ -360,7 +368,8 @@ def logn_halo(R, Z, R_solar=8.2, Z_solar=0.025, R_smooth=1.0,
     # Compute solar value for normalization.
     rp_solar = np.sqrt(R_solar**2 + Z_solar**2 + r_q**2)
     q_solar = q_inf - (q_inf - q_ctr) * np.exp(1. - rp_solar / r_q)
-    Reff_solar = np.sqrt(R_solar**2 + (Z_solar / q_solar) + R_smooth**2)
+    Reff_solar = np.sqrt(R_solar**2 + (Z_solar / q_solar)**2
+                         + R_smooth**2)
 
     # Compute inner component.
     logn = -eta * np.log(Reff / Reff_solar)
@@ -465,9 +474,9 @@ def logp_age_from_feh(age, feh_mean=-0.2, max_age=13.8, min_age=0.,
 
 
 def gal_lnprior(dists, coord, labels=None, R_solar=8.2, Z_solar=0.025,
-                R_thin=2.6, Z_thin=0.3,
-                R_thick=2.0, Z_thick=0.9, f_thick=0.04,
-                Rs_halo=1.0, q_halo_ctr=0.2, q_halo_inf=0.8, r_q_halo=6.0,
+                R_thin=2.6, Z_thin=0.3, Rs_thin=2.0, 
+                R_thick=2.0, Z_thick=0.9, f_thick=0.04, Rs_thick=2.0, 
+                Rs_halo=2.0, q_halo_ctr=0.2, q_halo_inf=0.8, r_q_halo=6.0,
                 eta_halo=4.2, f_halo=0.005,
                 feh_thin=-0.2, feh_thin_sigma=0.3,
                 feh_thick=-0.7, feh_thick_sigma=0.4,
@@ -509,6 +518,10 @@ def gal_lnprior(dists, coord, labels=None, R_solar=8.2, Z_solar=0.025,
     Z_thin : float, optional
         The scale height of the thin disk in kpc. Default is `0.3`.
 
+    Rs_thin : float, optional
+        The smoothing radius in kpc used to avoid "spikes"
+        around the Galactic center. Default is `2.0`.
+
     R_thick : float, optional
         The scale radius of the thin disk in kpc. Default is `2.0`.
 
@@ -520,9 +533,13 @@ def gal_lnprior(dists, coord, labels=None, R_solar=8.2, Z_solar=0.025,
         relative to the thin disk.
         Default is `0.04`.
 
+    Rs_thick : float, optional
+        The smoothing radius in kpc used to avoid "spikes"
+        around the Galactic center. Default is `2.0`.
+
     Rs_halo : float, optional
         The smoothing radius in kpc used to avoid singularities
-        around the galactic center. Default is `1.0`.
+        around the Galactic center. Default is `2.0`.
 
     q_halo_ctr : float, optional
         The nominal oblateness of the halo at Galactic center.
@@ -619,12 +636,14 @@ def gal_lnprior(dists, coord, labels=None, R_solar=8.2, Z_solar=0.025,
 
     # Get thin disk component.
     logp_thin = logn_disk(R, Z, R_solar=R_solar, Z_solar=Z_solar,
-                          R_scale=R_thin, Z_scale=Z_thin)
+                          R_scale=R_thin, Z_scale=Z_thin,
+                          R_smooth=Rs_thin)
     logp_thin += vol_factor
 
     # Get thick disk component.
     logp_thick = logn_disk(R, Z, R_solar=R_solar, Z_solar=Z_solar,
-                           R_scale=R_thick, Z_scale=Z_thick)
+                           R_scale=R_thick, Z_scale=Z_thick,
+                           R_smooth=Rs_thick)
     logp_thick += vol_factor + np.log(f_thick)
 
     # Get halo component.
