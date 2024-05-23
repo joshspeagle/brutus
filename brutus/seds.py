@@ -18,7 +18,10 @@ from copy import deepcopy
 from itertools import product
 import h5py
 from scipy.interpolate import RegularGridInterpolator
-from scipy import polyfit
+try:
+    from scipy import polyfit
+except ImportError:
+    from numpy import polyfit
 from scipy.optimize import minimize
 
 from .filters import FILTERS
@@ -635,6 +638,8 @@ class SEDmaker(MISTtracks):
 
         # Define loss function.
         def loss(x):
+            if isinstance(x, np.ndarray) and x.size == 1:
+                x = x[0]
             loga_pred = self.get_predictions([mini * smf, x, feh, afe])[aidx]
             return (loga_pred - loga)**2
         # Find best-fit age that minimizes loss.
