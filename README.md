@@ -10,9 +10,9 @@
 stellar properties from photometry.
 
 The package is designed to be highly modular, with current modules including
-utilities for modeling individual stars, star clusters, and 3-D dust mapping.
+utilities for modelling individual stars, star clusters, and 3-D dust mapping.
 
-Please contact Josh Speagle (jspeagle@cfa.harvard.edu) with any questions.
+Please contact Josh Speagle (j.speagle@utoronto.ca) with any questions.
 
 ### Installation
 The most recent stable release can be installed via `pip` by running
