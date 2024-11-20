@@ -6,17 +6,20 @@ Utility functions.
 
 """
 
-from __future__ import (print_function, division)
-from six.moves import range
+from __future__ import division, print_function
 
+import pathlib
 import os
 import sys
-import numpy as np
-import h5py
-from scipy.special import xlogy, gammaln
-from numba import jit
+from math import erf, gamma, log, sqrt
 
-from math import log, gamma, erf, sqrt
+import h5py
+import numpy as np
+from numba import jit
+from scipy.special import gammaln, xlogy
+from six.moves import range
+
+from .data import strato
 
 try:
     from scipy.special import logsumexp
@@ -344,7 +347,20 @@ def _get_seds(mag_coeffs, av, rv, return_flux=False):
     return seds, rvecs, drvecs
 
 
-def fetch_isos(target_dir='.', iso="MIST_1.2_vvcrit0.0"):
+def _fetch(name, symlink_dir):
+    """Fetch name using Pooch, making a symlink at symlink_dir."""
+    fpath = strato.fetch(name, progressbar=True)
+    fpath = pathlib.Path(fpath)
+
+    target_path = pathlib.Path(symlink_dir).resolve() / name
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    if not target_path.exists():
+        target_path.symlink_to(fpath)
+
+    return target_path
+
+
+def fetch_isos(target_dir=".", iso="MIST_1.2_vvcrit0.0"):
     """
     Download isochrone to target directory.
 
@@ -361,24 +377,17 @@ def fetch_isos(target_dir='.', iso="MIST_1.2_vvcrit0.0"):
 
     """
 
-    if iso == 'MIST_1.2_vvcrit0.0':
-        url = ('https://dataverse.harvard.edu/api/access/datafile/' +
-               ':persistentId?persistentId=doi:10.7910/DVN/FZMFQY/BKAG41')
-        alias = '-O {}/MIST_1.2_iso_vvcrit0.0.h5'.format(target_dir)
-    elif iso == 'MIST_1.2_vvcrit0.4':
-        url = ('https://dataverse.harvard.edu/api/access/datafile/' +
-               ':persistentId?persistentId=doi:10.7910/DVN/FZMFQY/PRGJIP')
-        alias = '-O {}/MIST_1.2_iso_vvcrit0.4.h5'.format(target_dir)
+    if iso == "MIST_1.2_vvcrit0.0":
+        name = "MIST_1.2_iso_vvcrit0.0.h5"
+    elif iso == "MIST_1.2_vvcrit0.4":
+        name = "MIST_1.2_iso_vvcrit0.4.h5"
     else:
         raise ValueError("The specified isochrone file does not exist!")
 
-    res = os.system('wget {} {}'.format(alias, url))
-
-    if res > 0:
-        raise RuntimeError("The file failed to download!")
+    return _fetch(name, target_dir)
 
 
-def fetch_tracks(target_dir='.', track="MIST_1.2_vvcrit0.0"):
+def fetch_tracks(target_dir=".", track="MIST_1.2_vvcrit0.0"):
     """
     Download evolutionary tracks to target directory.
 
@@ -393,21 +402,15 @@ def fetch_tracks(target_dir='.', track="MIST_1.2_vvcrit0.0"):
         - 'MIST_1.2_vvcrit0.0' (default), the non-rotating MIST v1.2 isochrones
 
     """
-
-    if track == 'MIST_1.2_vvcrit0.0':
-        url = ('https://dataverse.harvard.edu/api/access/datafile/' +
-               ':persistentId?persistentId=doi:10.7910/DVN/JV866N/FJ5NNO')
-        alias = '-O {}/MIST_1.2_EEPtrk.h5'.format(target_dir)
+    if track == "MIST_1.2_vvcrit0.0":
+        name = "MIST_1.2_EEPtrk.h5"
     else:
         raise ValueError("The specified track file does not exist!")
 
-    res = os.system('wget {} {}'.format(alias, url))
-
-    if res > 0:
-        raise RuntimeError("The file failed to download!")
+    return _fetch(name, target_dir)
 
 
-def fetch_dustmaps(target_dir='.', dustmap="bayestar19"):
+def fetch_dustmaps(target_dir=".", dustmap="bayestar19"):
     """
     Download 3-D dust maps to target directory.
 
@@ -422,21 +425,15 @@ def fetch_dustmaps(target_dir='.', dustmap="bayestar19"):
         - 'bayestar19' (default), the "Bayestar" map from Green et al. (2019)
 
     """
-
-    if dustmap == 'bayestar19':
-        url = ('https://dataverse.harvard.edu/api/access/datafile/' +
-               ':persistentId?persistentId=doi:10.7910/DVN/G49MEI/Y9UZPG')
-        alias = '-O {}/bayestar2019_v1.h5'.format(target_dir)
+    if dustmap == "bayestar19":
+        name = "bayestar2019_v1.h5"
     else:
         raise ValueError("The specified dustmap file does not exist!")
 
-    res = os.system('wget {} {}'.format(alias, url))
-
-    if res > 0:
-        raise RuntimeError("The file failed to download!")
+    return _fetch(name, target_dir)
 
 
-def fetch_grids(target_dir='.', grid="mist_v9"):
+def fetch_grids(target_dir=".", grid="mist_v9"):
     """
     Download stellar model grids to target directory.
 
@@ -454,28 +451,19 @@ def fetch_grids(target_dir='.', grid="mist_v9"):
 
     """
 
-    if grid == 'mist_v9':
-        url = ('https://dataverse.harvard.edu/api/access/datafile/' +
-               ':persistentId?persistentId=doi:10.7910/DVN/7BA4ZG/Z7MGA7')
-        alias = '-O {}/grid_mist_v9.h5'.format(target_dir)
-    elif grid == 'mist_v8':
-        url = ('https://dataverse.harvard.edu/api/access/datafile/' +
-               ':persistentId?persistentId=doi:10.7910/DVN/7BA4ZG/NKVZFT')
-        alias = '-O {}/grid_mist_v8.h5'.format(target_dir)
-    elif grid == 'bayestar_v5':
-        url = ('https://dataverse.harvard.edu/api/access/datafile/' +
-               ':persistentId?persistentId=doi:10.7910/DVN/7BA4ZG/LLZP0B')
-        alias = '-O {}/grid_bayestar_v5.h5'.format(target_dir)
+    if grid == "mist_v9":
+        name = "grid_mist_v9.h5"
+    elif grid == "mist_v8":
+        name = "grid_mist_v8.h5"
+    elif grid == "bayestar_v5":
+        name = "grid_bayestar_v5.h5"
     else:
         raise ValueError("The specified grid file does not exist!")
 
-    res = os.system('wget {} {}'.format(alias, url))
-
-    if res > 0:
-        raise RuntimeError("The file failed to download!")
+    return _fetch(name, target_dir)
 
 
-def fetch_offsets(target_dir='.', grid="mist_v9"):
+def fetch_offsets(target_dir=".", grid="mist_v9"):
     """
     Download stellar model grids to target directory.
 
@@ -493,28 +481,19 @@ def fetch_offsets(target_dir='.', grid="mist_v9"):
 
     """
 
-    if grid == 'mist_v9':
-        url = ('https://dataverse.harvard.edu/api/access/datafile/' +
-               ':persistentId?persistentId=doi:10.7910/DVN/L7D1FY/XXXXXX')
-        alias = '-O {}/offsets_mist_v9.txt'.format(target_dir)
-    elif grid == 'mist_v8':
-        url = ('https://dataverse.harvard.edu/api/access/datafile/' +
-               ':persistentId?persistentId=doi:10.7910/DVN/L7D1FY/QTNKKN')
-        alias = '-O {}/offsets_mist_v8.txt'.format(target_dir)
-    elif grid == 'bayestar_v5':
-        url = ('https://dataverse.harvard.edu/api/access/datafile/' +
-               ':persistentId?persistentId=doi:10.7910/DVN/L7D1FY/W4O6NJ')
-        alias = '-O {}/offsets_bs_v9.txt'.format(target_dir)
+    if grid == "mist_v9":
+        name = "offsets_mist_v9.txt"
+    elif grid == "mist_v8":
+        name = "offsets_mist_v8.txt"
+    elif grid == "bayestar_v5":
+        name = "offsets_bs_v9.txt"
     else:
         raise ValueError("The specified grid file does not exist!")
 
-    res = os.system('wget {} {}'.format(alias, url))
-
-    if res > 0:
-        raise RuntimeError("The file failed to download!")
+    return _fetch(name, target_dir)
 
 
-def fetch_nns(target_dir='.', model="c3k"):
+def fetch_nns(target_dir=".", model="c3k"):
     """
     Download neural network (NN) files to target directory.
 
@@ -530,17 +509,12 @@ def fetch_nns(target_dir='.', model="c3k"):
 
     """
 
-    if model == 'c3k':
-        url = ('https://dataverse.harvard.edu/api/access/datafile/' +
-               ':persistentId?persistentId=doi:10.7910/DVN/MSCY2O/XHU1VJ')
-        alias = '-O {}/nn_c3k.h5'.format(target_dir)
+    if model == "c3k":
+        name = "nn_c3k.h5"
     else:
         raise ValueError("The specified isochrone file does not exist!")
 
-    res = os.system('wget {} {}'.format(alias, url))
-
-    if res > 0:
-        raise RuntimeError("The file failed to download!")
+    return _fetch(name, target_dir)
 
 
 def load_models(filepath, filters=None, labels=None,
