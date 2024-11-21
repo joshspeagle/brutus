@@ -1232,7 +1232,7 @@ class Isochrone(object):
             Default is `0.`.
 
         loga : float, optional
-            Log(age) where age is in years. Default is `8.5`.
+            Log10(age) where age is in years. Default is `8.5`.
 
         eep : `~numpy.ndarray` of shape `(Neep)`, optional
             Equivalent evolutionary point(s) (EEPs). See the MIST documentation
@@ -1377,7 +1377,7 @@ class Isochrone(object):
             Default is `0.`.
 
         loga : float, optional
-            Log(age) where age is in years. Default is `8.5`.
+            Log10(age) where age is in years. Default is `8.5`.
 
         eep : `~numpy.ndarray` of shape `(Neep)`, optional
             Equivalent evolutionary point(s) (EEPs). See the MIST documentation
