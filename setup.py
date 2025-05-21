@@ -2,15 +2,14 @@
 # -*- coding: utf-8 -*-
 
 import os
-import sys
 import re
-import glob
+
 try:
     from setuptools import setup
-    setup
+
 except ImportError:
     from distutils.core import setup
-    setup
+
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 
@@ -42,8 +41,16 @@ setup(
     long_description=long_description,
     package_data={"": ["README.md", "LICENSE", "AUTHORS.md"]},
     include_package_data=True,
-    install_requires=["numpy", "scipy", "matplotlib", "six", "h5py",
-                      "healpy", "numba"],
+    install_requires=[
+        "numpy",
+        "scipy",
+        "matplotlib",
+        "six",
+        "h5py",
+        "healpy",
+        "numba",
+        "pooch>=1.4",
+    ],
     keywords=["brute force", "photometry", "bayesian", "stellar", "star",
               "cluster", "isochrone", "dust", "reddening",
               "parallax", "distance", "template fitting"],
