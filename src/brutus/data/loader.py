@@ -90,19 +90,46 @@ def load_models(
     ValueError
         If neither main sequence nor post-main sequence models are included.
 
+    Notes
+    -----
+    The `label_mask` return value is a boolean structured array indicating which
+    labels are ancillary (derived from the grid) vs. those used to generate
+    the grid. For example, if luminosity is predicted from mass/age/metallicity,
+    this mask would be False for luminosity. Used internally by StarGrid to
+    determine which parameters to marginalize over during fitting.
+
     Examples
     --------
-    >>> from brutus.data import load_models
-    >>> models, labels, mask = load_models('./data/DATAFILES/grid_mist_v9.h5')
-    >>> print(f"Loaded {len(models)} models with {models.shape[1]} filters")
+    Basic usage with default settings:
 
-    >>> # Load only main sequence models
-    >>> ms_models, ms_labels, _ = load_models('./data/DATAFILES/grid_mist_v9.h5',
-    ...                                       include_postms=False)
+    >>> from brutus.data import load_models, fetch_grids
+    >>> fetch_grids()  # Download data (first time only)
+    >>> models, labels, label_mask = load_models('grid_mist_v9.h5')
+    >>> print(f"Loaded {len(labels)} stellar models")
+    >>> print(f"Available labels: {labels.dtype.names}")
 
-    >>> # Load specific filters
-    >>> gri_models, _, _ = load_models('./data/DATAFILES/grid_mist_v9.h5',
-    ...                                filters=['g', 'r', 'i'])
+    Loading specific filters only:
+
+    >>> models, labels, mask = load_models(
+    ...     'grid_mist_v9.h5',
+    ...     filters=['g', 'r', 'i', 'z', 'y']
+    ... )
+
+    Loading only main sequence stars:
+
+    >>> models, labels, mask = load_models(
+    ...     'grid_mist_v9.h5',
+    ...     include_ms=True,
+    ...     include_postms=False
+    ... )
+
+    Using with StarGrid for fitting:
+
+    >>> from brutus.core import StarGrid
+    >>> from brutus.analysis import BruteForce
+    >>> models, labels, mask = load_models('grid_mist_v9.h5')
+    >>> grid = StarGrid(models, labels, mask)
+    >>> fitter = BruteForce(grid)
     """
     # Initialize values.
     if filters is None:

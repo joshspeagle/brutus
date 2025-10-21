@@ -59,6 +59,7 @@ Core dependencies that will be automatically installed:
 - ``healpy`` (≥1.14) - HEALPix utilities for incorporating dust maps
 - ``numba`` (≥0.53) - Just-in-time compilation for performance
 - ``pooch`` (≥1.4) - Data downloading and management
+- ``tqdm`` (≥4.50) - Progress bars and live tracking
 
 Testing the Installation
 -------------------------

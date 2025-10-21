@@ -38,7 +38,7 @@ pip install astro-brutus
 
 ### Requirements
 
-- **Python**: 3.9 or higher (support for Python 3.8 or earlier was deprecated as of v1)
+- **Python**: 3.8 or higher
 - **Operating System**: Linux, macOS, or Windows with WSL (see Windows note below)
 
 ### Quick Install
@@ -82,7 +82,7 @@ Core dependencies that will be automatically installed:
 - `healpy` (≥1.14) - HEALPix utilities for incorporating dust maps
 - `numba` (≥0.53) - Just-in-time compilation for performance
 - `pooch` (≥1.4) - Data downloading and management
-- `tqdm` (>=4.5) - Progress bars and live tracking
+- `tqdm` (≥4.50) - Progress bars and live tracking
 
 ## Data
 
@@ -105,7 +105,7 @@ Alternately, you can download them manually from the [Harvard Dataverse](https:/
 
 ## Contributing
 
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+We welcome contributions! Please see the [contribution guide](https://brutus.readthedocs.io/en/latest/contributing.html) for guidelines.
 
 ### Development Setup
 
