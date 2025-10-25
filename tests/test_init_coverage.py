@@ -58,36 +58,6 @@ def test_all_attribute():
         assert item in brutus.__all__
 
 
-def test_quick_star_fit_not_implemented():
-    """Test that quick_star_fit raises NotImplementedError."""
-    import brutus
-
-    with pytest.raises(
-        NotImplementedError,
-        match="Convenience functions will be implemented in Phase 2",
-    ):
-        brutus.quick_star_fit()
-
-    # Test with arguments too
-    with pytest.raises(NotImplementedError):
-        brutus.quick_star_fit(arg1="test", kwarg1="value")
-
-
-def test_quick_cluster_fit_not_implemented():
-    """Test that quick_cluster_fit raises NotImplementedError."""
-    import brutus
-
-    with pytest.raises(
-        NotImplementedError,
-        match="Convenience functions will be implemented in Phase 2",
-    ):
-        brutus.quick_cluster_fit()
-
-    # Test with arguments too
-    with pytest.raises(NotImplementedError):
-        brutus.quick_cluster_fit(arg1="test", kwarg1="value")
-
-
 def test_import_error_fallback():
     """Test the ImportError fallback behavior."""
     # We need to test the exception handling in the __init__.py
@@ -141,25 +111,6 @@ def test_backward_compatibility_imports():
     assert callable(magnitude)
 
 
-def test_convenience_functions_exist():
-    """Test that convenience functions exist but are not implemented."""
-    import brutus
-
-    # Functions should exist
-    assert hasattr(brutus, "quick_star_fit")
-    assert hasattr(brutus, "quick_cluster_fit")
-
-    # They should be callable
-    assert callable(brutus.quick_star_fit)
-    assert callable(brutus.quick_cluster_fit)
-
-    # But they should raise NotImplementedError
-    with pytest.raises(NotImplementedError):
-        brutus.quick_star_fit()
-    with pytest.raises(NotImplementedError):
-        brutus.quick_cluster_fit()
-
-
 def test_module_level_constants():
     """Test module-level constants and attributes."""
     import brutus
@@ -176,8 +127,6 @@ def test_module_level_constants():
         "EEPTracks",
         "fetch_grids",
         "load_models",
-        "quick_star_fit",
-        "quick_cluster_fit",
     ]
 
     for attr in expected_attrs:
@@ -203,24 +152,3 @@ class TestImportErrorScenarios:
 
         # This should always be true regardless of import success/failure
         assert "__version__" in brutus.__all__
-
-
-def test_functions_with_various_arguments():
-    """Test convenience functions with different argument patterns."""
-    import brutus
-
-    # Test with positional arguments
-    with pytest.raises(NotImplementedError):
-        brutus.quick_star_fit(1, 2, 3)
-
-    # Test with keyword arguments
-    with pytest.raises(NotImplementedError):
-        brutus.quick_star_fit(param1=1, param2="test")
-
-    # Test with mixed arguments
-    with pytest.raises(NotImplementedError):
-        brutus.quick_star_fit(1, 2, param3="test")
-
-    # Same for cluster fit
-    with pytest.raises(NotImplementedError):
-        brutus.quick_cluster_fit(arg="value")
