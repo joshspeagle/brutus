@@ -3,31 +3,33 @@ Quick Start Guide
 
 This guide provides a quick introduction to using brutus for common workflows.
 
-Individual Star Fitting
-------------------------
+Individual Star Modeling
+-------------------------
 
-The most common use case is fitting stellar parameters for individual stars:
+Generate photometry for individual stars using evolutionary tracks:
 
 .. code-block:: python
 
    import numpy as np
-   from brutus import BruteForce, StarGrid, load_models
+   from brutus.core import EEPTracks, StarEvolTrack
 
-   # Load stellar models
-   models, labels = load_models('path/to/models.h5')
+   # Initialize stellar evolutionary tracks
+   tracks = EEPTracks()
 
-   # Create a StarGrid
-   star_grid = StarGrid(models, labels)
+   # Create photometry generator for specific filters
+   star = StarEvolTrack(tracks=tracks, filters=['g', 'r', 'i'])
 
-   # Set up the fitter
-   fitter = BruteForce(star_grid)
+   # Generate SED for a 1 solar mass star
+   seds, params1, params2 = star.get_seds(
+       mini=1.0,     # Initial mass (solar masses)
+       eep=400,      # Equivalent evolutionary point
+       feh=0.0,      # Metallicity [Fe/H]
+       afe=0.0,      # Alpha enhancement [α/Fe]
+       av=0.5,       # Visual extinction (mag)
+       dist=1000.0   # Distance (pc)
+   )
 
-   # Your photometry data (flux units)
-   photometry = np.array([1.2e-3, 0.8e-3, 0.6e-3])  # g, r, i bands
-   errors = np.array([1e-5, 1e-5, 1e-5])
-
-   # Fit the star
-   results = fitter.fit(photometry, errors, parallax=2.5, parallax_err=0.1)
+For large-scale fitting with pre-computed grids, see :doc:`tutorials` and :doc:`api/analysis`.
 
 Isochrone Generation
 --------------------

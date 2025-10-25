@@ -85,6 +85,68 @@ The reddened magnitude for any (:math:`A_V`, :math:`R_V`) is then:
 
 This parameterization allows brutus to model arbitrary extinction without storing separate grids for each :math:`A_V` value, reducing storage by factors of 100-1000.
 
+Available Pre-Computed Grids
+-----------------------------
+
+brutus provides several pre-computed grids for common filter combinations. These can be downloaded using ``fetch_grids()`` and are stored in ``~/.brutus/data/`` by default.
+
+Standard Grids
+^^^^^^^^^^^^^^
+
+The following grids are available via ``fetch_grids()``:
+
+- **grid_mist_v9.h5**: Default MIST v1.2 grid with standard filter set
+   - Filters: Comprehensive optical and near-IR coverage
+   - Size: ~1-2 GB
+   - Recommended for most applications
+
+- **grid_gaiadr3_2mass.h5**: Gaia DR3 + 2MASS
+   - Filters: G, BP, RP, J, H, Ks (6 bands)
+   - Size: ~500 MB - 1 GB
+   - Optimal for Gaia + 2MASS photometry
+
+- **grid_gaiadr3_2mass_wise.h5**: Gaia DR3 + 2MASS + WISE
+   - Filters: G, BP, RP, J, H, Ks, W1, W2 (8 bands)
+   - Size: ~1-1.5 GB
+   - Full optical to mid-IR coverage
+
+Usage Example
+^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   from brutus.data import fetch_grids, load_models
+   from brutus.core import StarGrid
+   from brutus.analysis import BruteForce
+
+   # Download grids (first time only)
+   fetch_grids()
+
+   # Load a specific grid
+   models, labels, label_mask = load_models('grid_gaiadr3_2mass.h5')
+
+   # Create StarGrid for fitting
+   grid = StarGrid(models, labels, label_mask)
+   fitter = BruteForce(grid)
+
+   # Ready to fit stars with Gaia + 2MASS photometry
+
+Grid Naming Convention
+^^^^^^^^^^^^^^^^^^^^^^
+
+Pre-computed grid files follow the naming pattern:
+
+   ``grid_<source>_<version>.h5``
+
+Where:
+   - ``<source>`` indicates the photometric system(s) (e.g., ``gaiadr3_2mass``)
+   - ``<version>`` indicates the stellar model version (e.g., ``v9`` for MIST v1.2)
+
+Custom Grids
+^^^^^^^^^^^^
+
+If the pre-computed grids don't match your filter combination, you can create custom grids (see next section).
+
 Creating Model Grids
 ---------------------
 

@@ -87,10 +87,20 @@ Individual Star Models
    :undoc-members:
    :show-inheritance:
 
+.. autoclass:: StarEvolTrack
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 Population Models
 -----------------
 
 .. autoclass:: Isochrone
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. autoclass:: StellarPop
    :members:
    :undoc-members:
    :show-inheritance:

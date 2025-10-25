@@ -49,7 +49,13 @@ try:
     # Core stellar evolution models (refactored)
     # Analysis and fitting
     from .analysis import BruteForce  # noqa: F401
-    from .core import EEPTracks, Isochrone, StarGrid  # noqa: F401
+    from .core import (  # noqa: F401
+        EEPTracks,
+        Isochrone,
+        StarEvolTrack,
+        StarGrid,
+        StellarPop,
+    )
 
     # Data management (refactored)
     from .data import fetch_dustmaps, fetch_grids, fetch_isos, load_models  # noqa: F401
@@ -75,6 +81,8 @@ try:
         "Isochrone",
         "EEPTracks",
         "StarGrid",
+        "StarEvolTrack",
+        "StellarPop",
         # Analysis classes
         "BruteForce",
         # Data utilities (refactored)
@@ -100,59 +108,3 @@ except ImportError as e:
 
     # Minimal fallback
     __all__ = ["__version__"]
-
-
-# Convenience functions for common workflows
-# These will be implemented in later phases
-def quick_star_fit(*args, **kwargs):
-    """
-    Convenience function for quick individual star fitting.
-
-    This function will provide a simplified interface for common
-    individual star fitting workflows.
-
-    Notes
-    -----
-    This functionality is planned for Phase 2 of the refactoring.
-    Currently, please use the core classes directly:
-
-    >>> from brutus.core import EEPTracks, StarEvolTrack
-    >>> tracks = EEPTracks()
-    >>> star = StarEvolTrack(tracks=tracks)
-
-    Raises
-    ------
-    NotImplementedError
-        Function not yet implemented in current refactoring phase.
-    """
-    raise NotImplementedError(
-        "Convenience functions will be implemented in Phase 2. "
-        "Please use EEPTracks and StarEvolTrack classes directly for now."
-    )
-
-
-def quick_cluster_fit(*args, **kwargs):
-    """
-    Convenience function for quick cluster fitting.
-
-    This function will provide a simplified interface for common
-    stellar cluster fitting workflows.
-
-    Notes
-    -----
-    This functionality is planned for Phase 2 of the refactoring.
-    Currently, please use the core classes directly:
-
-    >>> from brutus.core import Isochrone, StellarPop
-    >>> iso = Isochrone()
-    >>> pop = StellarPop(isochrone=iso)
-
-    Raises
-    ------
-    NotImplementedError
-        Function not yet implemented in current refactoring phase.
-    """
-    raise NotImplementedError(
-        "Convenience functions will be implemented in Phase 2. "
-        "Please use Isochrone and StellarPop classes directly for now."
-    )

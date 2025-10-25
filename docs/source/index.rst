@@ -73,28 +73,39 @@ Install brutus from PyPI:
 
    pip install astro-brutus
 
-For individual star fitting:
+For individual star modeling:
 
 .. code-block:: python
 
-   import numpy as np
-   from brutus import BruteForce, StarGrid, load_models
+   from brutus.core import EEPTracks, StarEvolTrack
 
-   # Load stellar models
-   models, labels = load_models('path/to/models.h5')
+   # Initialize stellar evolutionary tracks
+   tracks = EEPTracks()
 
-   # Create a StarGrid
-   star_grid = StarGrid(models, labels)
+   # Create photometry generator
+   star = StarEvolTrack(tracks=tracks, filters=['g', 'r', 'i'])
 
-   # Set up the fitter
-   fitter = BruteForce(star_grid)
+   # Generate SED for a star
+   seds, params1, params2 = star.get_seds(
+       mini=1.0, eep=400, feh=0.0, av=0.5, dist=1000.0
+   )
 
-   # Your photometry data (flux units)
-   photometry = np.array([1.2e-3, 0.8e-3, 0.6e-3])  # g, r, i bands
-   errors = np.array([1e-5, 1e-5, 1e-5])
+For stellar population modeling:
 
-   # Fit the star
-   results = fitter.fit(photometry, errors, parallax=2.5, parallax_err=0.1)
+.. code-block:: python
+
+   from brutus.core import Isochrone, StellarPop
+
+   # Initialize isochrone
+   iso = Isochrone()
+
+   # Create population generator
+   pop = StellarPop(isochrone=iso, filters=['g', 'r', 'i'])
+
+   # Generate population photometry
+   seds, params1, params2 = pop.get_seds(
+       feh=0.0, afe=0.0, loga=9.0, av=0.5, dist=2000.0
+   )
 
 Indices and tables
 ==================
