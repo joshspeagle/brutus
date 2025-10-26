@@ -51,6 +51,9 @@ old/*
 work/*
 config/*
 
+# tutorial scratch/development files
+tutorials/scratch/
+
 # data
 data/*
 
