@@ -259,8 +259,14 @@ class Isochrone(object):
                                 for par in self.pred_grid[i, j, k, sel].T
                             ]
                             self.pred_grid[i, j, k] = np.array(pnew).T
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            warnings.warn(
+                                f"Gap filling failed for grid cell "
+                                f"(feh={self.feh_u[i]}, afe={self.afe_u[j]}, "
+                                f"loga={self.loga_u[k]}): {e}",
+                                RuntimeWarning,
+                                stacklevel=2,
+                            )
 
         # Handle singular alpha enhancement dimension
         if self.grid_dims[1] == 1:
@@ -723,8 +729,13 @@ class StellarPop(object):
                         rv=rv,
                         dist=dist,
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    warnings.warn(
+                        f"Primary SED generation failed for EEP index {i} "
+                        f"(mini={params['mini'][i]:.3f}): {e}",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
 
         # Initialize secondary parameters
         params_arr2 = np.full_like(params_arr, np.nan)
@@ -816,8 +827,12 @@ class StellarPop(object):
                 corr_params=corr_params,
             ).T
             params2.update(dict(zip(self.isochrone.predictions, params_arr2)))
-        except Exception:
-            pass
+        except Exception as e:
+            warnings.warn(
+                f"Secondary parameter generation failed for binary population: {e}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
         # Generate secondary SEDs
         seds2 = np.full_like(seds, np.nan)
@@ -834,8 +849,13 @@ class StellarPop(object):
                         rv=rv,
                         dist=dist,
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    warnings.warn(
+                        f"Secondary SED generation failed for EEP index {i} "
+                        f"(mini2={params2['mini'][i]:.3f}): {e}",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
 
         # Combine primary and secondary SEDs
         seds[:] = add_mag(seds, seds2)

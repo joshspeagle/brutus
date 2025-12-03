@@ -95,6 +95,21 @@ __all__ = ["BruteForce"]
 
 
 # ============================================================================
+# Numerical constants
+# ============================================================================
+
+# Proxy for log(0) or negative infinity in log-probability calculations.
+# Used instead of -np.inf to avoid numerical issues with arithmetic operations.
+LOG_ZERO = -1e300
+
+# Minimum allowed scale factor to prevent division by zero or log(0).
+MIN_SCALE = 1e-20
+
+# Small epsilon for numerical stability in matrix operations and comparisons.
+EPS_NUMERIC = 1e-10
+
+
+# ============================================================================
 # Grid-based optimization functions
 # ============================================================================
 
@@ -1226,13 +1241,13 @@ class BruteForce:
         else:
             # Keep all models
             init_sel = np.arange(Nmodels)
-            chi2 = np.ones(Nmodels) + 1e300
-            lnl = np.ones(Nmodels) - 1e300
+            chi2 = np.ones(Nmodels) - LOG_ZERO  # Large positive value
+            lnl = np.ones(Nmodels) + LOG_ZERO  # Large negative value
             av_new = np.array(av, order="F")
             rv_new = np.array(rv, order="F")
 
         # Iterate until convergence
-        lnl_old, lerr = -1e300, 1e300
+        lnl_old, lerr = LOG_ZERO, -LOG_ZERO  # -inf, +inf proxies
         stepsize, rescaling = np.ones(Nmodels)[init_sel], 1.2
         ln_ltol_subthresh = np.log(ltol_subthresh)
         while lerr > ltol:
@@ -1452,10 +1467,10 @@ class BruteForce:
         # Compute integrated posterior (VECTORIZED)
         lnp = logsumexp(lnp_mc, axis=0) - np.log(Nmc)
 
-        # Safety check
+        # Safety check - replace non-finite values with log(0) proxy
         lnp_mask = np.where(~np.isfinite(lnp))[0]
         if len(lnp_mask) > 0:
-            lnp[lnp_mask] = -1e300
+            lnp[lnp_mask] = LOG_ZERO
 
         return sel, cov_sar, lnp, dist_mc.T, a_mc.T, r_mc.T, lnp_mc.T
 

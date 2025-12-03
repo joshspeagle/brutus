@@ -1040,8 +1040,12 @@ class StarEvolTrack(object):
                     rv=rv,
                     dist=dist,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                warnings.warn(
+                    f"Primary SED generation failed for (mini={mini}, eep={eep}): {e}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
 
             # Add binary companion if requested
             if smf > 0.0 and eep <= eep_binary_max and mini * smf >= mini_min:
@@ -1077,8 +1081,13 @@ class StarEvolTrack(object):
 
                     sed = add_mag(sed, sed2)
 
-                except Exception:
-                    pass
+                except Exception as e:
+                    warnings.warn(
+                        f"Secondary SED generation failed for binary "
+                        f"(mini={mini}, smf={smf}, eep2={eep2}): {e}",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
 
         # Format output
         if not return_dict:
@@ -1134,6 +1143,11 @@ class StarEvolTrack(object):
             L(EEP_2) = (\\log_{10} age(M_2, EEP_2) - \\log_{10} age_{\\rm target})^2
 
         where :math:`M_2 = M_1 \\times smf` is the secondary mass.
+
+        The alpha enhancement parameter is currently fixed to solar ([α/Fe] = 0.0)
+        for secondary stars, regardless of the primary's value. This is intentional
+        because the current MIST model grids do not include α-enhanced tracks.
+        The `afe` parameter is accepted for API consistency but not used.
         """
         # Get age index from tracks
         aidx = self.tracks.predictions.index("loga")
@@ -1162,7 +1176,13 @@ class StarEvolTrack(object):
             else:
                 eep2 = np.nan
 
-        except Exception:
+        except Exception as e:
+            warnings.warn(
+                f"EEP optimization failed for secondary star "
+                f"(mini={mini}, smf={smf}): {e}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
             eep2 = np.nan
 
         return eep2
