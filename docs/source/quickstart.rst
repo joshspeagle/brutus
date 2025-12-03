@@ -3,6 +3,10 @@ Quick Start Guide
 
 This guide provides a quick introduction to using brutus for common workflows.
 
+.. note::
+   Before using brutus, download the required data files using ``fetch_grids()``,
+   ``fetch_isos()``, and/or ``fetch_dustmaps()``. See :ref:`data-management` below.
+
 Individual Star Modeling
 -------------------------
 
@@ -50,10 +54,12 @@ Generate stellar parameters for stellar populations:
        loga=9.0        # 1 Gyr age (log10(age/yr))
    )
 
+.. _data-management:
+
 Data Management
 ---------------
 
-Download and manage stellar evolution data:
+Download and manage stellar evolution data (grids can be 1-5 GB):
 
 .. code-block:: python
 

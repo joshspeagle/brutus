@@ -41,11 +41,14 @@ Alternative Windows installation options:
 Conda Installation
 ------------------
 
-If you use conda, you can install from conda-forge:
+If you use conda, you may be able to install from conda-forge (availability varies):
 
 .. code-block:: bash
 
    conda install -c conda-forge astro-brutus
+
+.. note::
+   If the conda-forge package is unavailable, use ``pip install astro-brutus`` instead.
 
 Dependencies
 ------------
@@ -61,6 +64,21 @@ Core dependencies that will be automatically installed:
 - ``pooch`` (≥1.4) - Data downloading and management
 - ``tqdm`` (≥4.50) - Progress bars and live tracking
 
+Data Files
+----------
+
+After installing brutus, you need to download model data files before fitting:
+
+.. code-block:: python
+
+   from brutus import fetch_grids, fetch_isos, fetch_dustmaps
+
+   fetch_grids()     # ~1-5 GB for stellar model grids
+   fetch_isos()      # ~100 MB for isochrone tables
+   fetch_dustmaps()  # ~1 GB for 3D dust maps (optional)
+
+Files are cached in your user data directory and only downloaded once.
+
 Testing the Installation
 -------------------------
 
@@ -72,5 +90,5 @@ To verify your installation works correctly:
    print(f"brutus version: {brutus.__version__}")
 
    # Test core functionality
-   from brutus import Isochrone, load_models
+   from brutus import Isochrone
    print("Installation successful!")

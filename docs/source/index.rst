@@ -67,11 +67,17 @@ Key Features
 Quick Start
 ===========
 
-Install brutus from PyPI:
+Install brutus from PyPI and download required data:
 
 .. code-block:: bash
 
    pip install astro-brutus
+
+.. code-block:: python
+
+   from brutus import fetch_grids, fetch_isos
+   fetch_grids()  # Download stellar model grids (~1-5 GB)
+   fetch_isos()   # Download isochrone data (~100 MB)
 
 For individual star modeling:
 
