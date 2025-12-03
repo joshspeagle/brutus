@@ -137,17 +137,26 @@ Prior Configuration
 Enabling/Disabling Priors
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Control which priors are applied:
+Priors are controlled via parameters to ``fit()``, not constructor parameters:
 
 .. code-block:: python
 
    from brutus.analysis import BruteForce
 
-   fitter = BruteForce(
-       grid,
-       use_galactic_prior=True,   # Galactic structure prior (default: True)
-       use_dust_prior=True,        # 3-D dust map prior (default: True)
-       use_imf_prior=True          # IMF prior (default: True)
+   fitter = BruteForce(grid)
+
+   # Fit with default priors (Galactic structure + dust map)
+   fitter.fit(
+       data, data_err, data_mask, labels, save_file='results.h5',
+       data_coords=coords,         # Required for Galactic prior
+       dustfile='bayestar19.h5',   # Enables dust map prior
+   )
+
+   # Fit with uniform priors (disable Galactic and dust priors)
+   fitter.fit(
+       data, data_err, data_mask, labels, save_file='results_uniform.h5',
+       lngalprior=lambda *args: 0.0,  # Uniform Galactic prior
+       lndustprior=lambda *args: 0.0, # Uniform dust prior
    )
 
 **When to disable priors**:
@@ -162,24 +171,28 @@ Control which priors are applied:
 Custom Prior Functions
 ^^^^^^^^^^^^^^^^^^^^^^
 
-Advanced users can provide custom prior functions:
+Provide custom prior functions via ``lngalprior`` and ``lndustprior``:
 
 .. code-block:: python
 
    import numpy as np
+   from brutus.priors import logp_galactic_structure
 
-   def custom_distance_prior(dist, gal_l, gal_b):
+   def custom_galactic_prior(dist, gal_l, gal_b, dlabels=None):
        """Custom distance prior for specific region."""
        # Example: Uniform in distance for Local Bubble
-       if dist < 100.0:  # Within 100 pc
+       if dist < 0.1:  # Within 100 pc (dist is in kpc)
            return 0.0  # Log-prior (uniform)
        else:
            # Fall back to default Galactic prior
-           from brutus.priors.galactic import logp_galactic_structure
-           return logp_galactic_structure(dist, gal_l, gal_b)
+           return logp_galactic_structure(dist, gal_l, gal_b, dlabels)
 
-   # Apply custom prior (requires modifying BruteForce internals)
-   # See API documentation for details
+   # Apply custom prior
+   fitter.fit(
+       data, data_err, data_mask, labels, save_file='results.h5',
+       data_coords=coords,
+       lngalprior=custom_galactic_prior,
+   )
 
 Dust Map Selection
 ^^^^^^^^^^^^^^^^^^
@@ -209,25 +222,27 @@ Optimization Settings
 Distance and Extinction Bounds
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Set bounds for optimization:
+Set bounds for extinction and R_V:
 
 .. code-block:: python
 
    fitter = BruteForce(grid)
 
-   results = fitter.fit(
-       phot, phot_err,
+   output_file = fitter.fit(
+       data, data_err, data_mask, labels, save_file='results.h5',
        parallax=parallax, parallax_err=parallax_err,
-       dist_bounds=(10.0, 10000.0),     # Distance range in pc
-       av_max=5.0,                       # Maximum extinction in mag
-       rv_bounds=(2.0, 6.0)              # R_V range
+       data_coords=coords,
+       avlim=(0.0, 5.0),     # A_V bounds (default: 0.0 to 20.0)
+       rvlim=(2.0, 6.0),     # R_V bounds (default: 1.0 to 8.0)
    )
 
 **Guidelines**:
 
-- **dist_bounds**: Set lower bound > 0 (default: 10 pc). Upper bound should exceed maximum plausible distance
-- **av_max**: Use dust map maximum + margin (default: 10 mag)
-- **rv_bounds**: Standard range is (2.0, 6.0). Narrow for well-understood sight lines
+- **avlim**: Set based on expected extinction range. Use dust map maximum + margin
+- **rvlim**: Standard range is (2.0, 6.0). Default (1.0, 8.0) is very broad
+
+Note: Distance bounds are implicit in the model grid - the grid covers specific
+parameter ranges, and distances are derived from the flux scale factor.
 
 Likelihood Formulation
 ^^^^^^^^^^^^^^^^^^^^^^
@@ -236,83 +251,52 @@ Choose between different likelihood models:
 
 .. code-block:: python
 
-   results = fitter.fit(
-       phot, phot_err,
-       dim_prior=True    # Use chi-square formulation (default: True)
+   output_file = fitter.fit(
+       data, data_err, data_mask, labels, save_file='results.h5',
+       logl_dim_prior=True    # Use chi-square formulation (default: True)
    )
 
-**dim_prior=True** (chi-square with implicit distance prior):
+**logl_dim_prior=True** (chi-square with implicit distance prior):
+Appropriate for most individual star fitting. Includes geometric volume factor.
 
-.. math::
-
-   \mathcal{L} \propto \exp(-\chi^2/2) \times d^2
-
-✓ Appropriate for most individual star fitting
-✓ Includes geometric volume factor
-
-**dim_prior=False** (pure Gaussian):
-
-.. math::
-
-   \mathcal{L} \propto \exp(-\chi^2/2)
-
-✓ Use when distance prior is explicitly included elsewhere
-✓ Cluster fitting sometimes uses this
+**logl_dim_prior=False** (pure Gaussian):
+Use when distance prior is explicitly included elsewhere.
 
 Convergence Tolerances
 ^^^^^^^^^^^^^^^^^^^^^^^
 
-Adjust optimization tolerances:
+Control likelihood convergence with ``ltol``:
 
 .. code-block:: python
 
-   results = fitter.fit(
-       phot, phot_err,
-       ftol=1e-4,    # Function tolerance (default: 1e-4)
-       maxiter=1000  # Maximum iterations (default: 1000)
+   output_file = fitter.fit(
+       data, data_err, data_mask, labels, save_file='results.h5',
+       ltol=3e-2,           # Convergence tolerance (default: 3e-2)
+       ltol_subthresh=1e-2, # Sub-threshold tolerance (default: 1e-2)
    )
-
-**When to adjust**:
-
-- **Increase maxiter**: If "optimization did not converge" warnings appear
-- **Relax ftol**: For faster fitting with slightly less precision
 
 Sampling Parameters
 -------------------
 
-Number of Posterior Samples
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Number of Posterior Draws
+^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Control the number of posterior samples returned:
+Control the number of posterior draws saved per object:
 
 .. code-block:: python
 
-   results = fitter.fit(
-       phot, phot_err,
-       n_samples=10000  # Number of posterior samples (default: 10000)
+   output_file = fitter.fit(
+       data, data_err, data_mask, labels, save_file='results.h5',
+       Ndraws=250  # Number of posterior draws (default: 250)
    )
 
 **Trade-offs**:
 
-- **More samples** (50k-100k): Smoother posteriors, better tail coverage, slower
-- **Fewer samples** (1k-5k): Faster, sufficient for medians but less precise percentiles
+- **More draws** (500-1000): Better posterior characterization, larger output files
+- **Fewer draws** (100-250): Faster I/O, smaller files, sufficient for summary statistics
 
-Importance Sampling
-^^^^^^^^^^^^^^^^^^^
-
-brutus uses importance sampling to draw from the posterior. The sampling is weighted by posterior probability, so regions of high probability are sampled more densely.
-
-**No user configuration needed** for standard use. Advanced users can access the raw grid likelihoods:
-
-.. code-block:: python
-
-   # Get log-likelihoods for all grid points
-   lnl_grid = fitter.compute_lnlike_grid(phot, phot_err)
-   lnprior_grid = fitter.compute_lnprior_grid(gal_l, gal_b)
-   lnpost_grid = lnl_grid + lnprior_grid
-
-   # Custom sampling or analysis
-   # ...
+The draws are importance-sampled from the posterior, weighted by probability.
+No additional user configuration is needed for the sampling scheme.
 
 Performance Tuning
 ------------------
@@ -537,43 +521,46 @@ Decision Tree: Configuration Quick Reference
 
 .. code-block:: python
 
-   # Standard configuration
-   grid = StarGrid(models, labels, params)
-   fitter = BruteForce(
-       grid,
-       use_galactic_prior=True,
-       use_dust_prior=True
-   )
-   results = fitter.fit(
-       phot, phot_err,
+   from brutus.data import load_models
+   from brutus.core import StarGrid
+   from brutus.analysis import BruteForce
+
+   models, labels, mask = load_models('grid_mist_v9.h5')
+   grid = StarGrid(models, labels, mask)
+   fitter = BruteForce(grid)
+
+   output_file = fitter.fit(
+       data=flux, data_err=flux_err,
+       data_mask=mask, data_labels=obj_ids,
+       save_file='results.h5',
        parallax=parallax, parallax_err=parallax_err,
-       dim_prior=True,
-       n_samples=10000
+       data_coords=coords,          # Galactic (l, b) for prior
+       dustfile='bayestar19.h5',    # 3D dust map
+       Ndraws=250,
    )
 
 **For stellar clusters**:
 
 .. code-block:: python
 
-   # MCMC approach
+   from brutus.core import Isochrone, StellarPop
+   from brutus.analysis.populations import isochrone_population_loglike
+   import emcee
+
    iso = Isochrone()
    pop = StellarPop(isochrone=iso)
 
    def lnprob(theta):
-       feh, loga, av, rv, dist, field_frac = theta
+       # theta = [feh, loga, av, rv, dist]
        return isochrone_population_loglike(
-           feh=feh, loga=loga, av=av, rv=rv, dist=dist,
-           field_fraction=field_frac,
-           stellarpop=pop,
-           obs_flux=flux, obs_err=flux_err,
+           theta, pop, flux, flux_err,
            parallax=plx, parallax_err=plx_err,
-           cluster_prob=0.9,
-           dim_prior=True,
-           outlier_model='chisquare'
+           cluster_prob=0.9, dim_prior=True,
        )
 
+   ndim, nwalkers = 5, 32
    sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob)
-   sampler.run_mcmc(pos, nsteps, progress=True)
+   sampler.run_mcmc(initial_pos, 5000, progress=True)
 
 **For large surveys** (millions of stars):
 

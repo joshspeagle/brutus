@@ -68,32 +68,73 @@ Download and manage stellar evolution data:
    # Download 3D dust maps
    fetch_dustmaps()
 
-Working with Results
---------------------
+Fitting Stars with BruteForce
+-----------------------------
 
-Brutus provides comprehensive posterior distributions for all fitted parameters:
+The main workflow for fitting stellar parameters:
 
 .. code-block:: python
 
-   # Access posterior samples
-   distances = results['dist_samples']
-   extinctions = results['av_samples']
-   stellar_params = results['stellar_params']
+   import numpy as np
+   import h5py
+   from brutus.data import load_models
+   from brutus.core import StarGrid
+   from brutus.analysis import BruteForce
 
-   # Plot results
-   from brutus.plotting import cornerplot
-   cornerplot(results, show_titles=True)
+   # Load pre-computed model grid
+   models, labels, label_mask = load_models('grid_mist_v9.h5')
+   grid = StarGrid(models, labels, label_mask)
+
+   # Create fitter
+   fitter = BruteForce(grid)
+
+   # Fit data (saves results to HDF5 file)
+   output_file = fitter.fit(
+       data=flux,              # (Nstars, Nfilters) flux densities
+       data_err=flux_err,      # (Nstars, Nfilters) errors
+       data_mask=mask,         # (Nstars, Nfilters) validity mask
+       data_labels=obj_ids,    # (Nstars, Nlabels) object identifiers
+       save_file='results.h5',
+       parallax=plx,           # (Nstars,) parallax in mas
+       parallax_err=plx_err,
+       data_coords=coords,     # (Nstars, 2) galactic (l, b) in degrees
+   )
+
+Working with Results
+--------------------
+
+Results are saved to an HDF5 file. Access posterior samples directly:
+
+.. code-block:: python
+
+   import h5py
+   import numpy as np
+
+   # Read results from HDF5
+   with h5py.File('results.h5', 'r') as f:
+       distances = f['samps_dist'][:]    # (Nstars, Ndraws) in kpc
+       av_values = f['samps_red'][:]     # (Nstars, Ndraws) A_V
+       rv_values = f['samps_dred'][:]    # (Nstars, Ndraws) R_V
+       log_weights = f['samps_logp'][:]  # (Nstars, Ndraws) log-weights
+       model_idx = f['model_idx'][:]     # (Nstars, Ndraws) model indices
+       log_evidence = f['obj_log_evid'][:] # (Nstars,) log-evidence
+
+   # Compute summary statistics
+   dist_median = np.median(distances, axis=1)
+   dist_16, dist_84 = np.percentile(distances, [16, 84], axis=1)
+
+   print(f"Distance: {dist_median[0]*1000:.0f} pc "
+         f"(+{(dist_84[0]-dist_median[0])*1000:.0f} "
+         f"/-{(dist_median[0]-dist_16[0])*1000:.0f})")
 
 Common Workflows
 ----------------
 
-For typical research workflows:
-
-1. **Download data** using ``fetch_*`` functions
-2. **Load models** using ``load_models``
-3. **Create fitting objects** (``BruteForce``, ``Isochrone``)
-4. **Fit your data** and analyze results
-5. **Visualize results** using plotting utilities
+1. **Download data**: ``fetch_grids()``, ``fetch_isos()``, ``fetch_dustmaps()``
+2. **Load models**: ``load_models('grid_file.h5')``
+3. **Create fitter**: ``BruteForce(StarGrid(models, labels, mask))``
+4. **Fit data**: ``fitter.fit(data, data_err, data_mask, labels, save_file, ...)``
+5. **Analyze**: Read HDF5 output, compute statistics, visualize
 
 Next Steps
 ----------

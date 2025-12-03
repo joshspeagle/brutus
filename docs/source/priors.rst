@@ -53,11 +53,11 @@ This two-part power law reflects the observed mass distribution in stellar popul
 
 The IMF is **independent of location** in the Galaxy—it appears to be universal across different environments (clusters, field, nearby galaxies).
 
-**Implementation**: See :func:`brutus.priors.stellar.logp_imf`
+**Implementation**: See :func:`brutus.priors.logp_imf`
 
 .. code-block:: python
 
-   from brutus.priors.stellar import logp_imf
+   from brutus.priors import logp_imf
    import numpy as np
 
    # Compute IMF prior for range of masses
@@ -121,7 +121,7 @@ The stellar halo contains ancient, metal-poor stars in a roughly spherical distr
 
 where the 3-D position :math:`(R, z, r)` is computed from distance :math:`d` and sky position :math:`(\ell, b)`.
 
-**Implementation**: See :func:`brutus.priors.galactic.logp_galactic_structure`
+**Implementation**: See :func:`brutus.priors.logp_galactic_structure`
 
 3-D Metallicity Distribution
 -----------------------------
@@ -169,7 +169,7 @@ Halo Metallicity
 
 where :math:`w_i = \rho_i / \sum_j \rho_j` are the fractional densities.
 
-**Implementation**: See :func:`brutus.priors.galactic.logp_metallicity`
+**Implementation**: See :func:`brutus.priors.logp_feh`
 
 3-D Age Distribution
 ---------------------
@@ -205,7 +205,7 @@ The age prior is complicated by the fact that age is not directly an input param
 
 where :math:`dt/d{\rm EEP}` is the age-weight Jacobian.
 
-**Implementation**: See :func:`brutus.priors.galactic.logp_age`
+**Implementation**: See :func:`brutus.priors.logp_age_from_feh`
 
 3-D Dust Extinction
 -------------------
@@ -236,11 +236,11 @@ where :math:`\mu_{A_V}` and :math:`\sigma_{A_V}` are the mean and uncertainty fr
 - **Intermediate** (100 pc < d < 5 kpc): Extinction increases with distance through disk
 - **Distant** (d > 5 kpc): Saturates at cumulative Galactic extinction
 
-**Implementation**: See :func:`brutus.priors.extinction.logp_extinction` and :mod:`brutus.dust.maps`
+**Implementation**: See :func:`brutus.priors.logp_extinction` and :mod:`brutus.dust`
 
 .. code-block:: python
 
-   from brutus.priors.extinction import logp_extinction
+   from brutus.priors import logp_extinction
    from brutus.dust.maps import get_dust_prior
 
    # Get extinction prior for specific sight line and distance
@@ -271,7 +271,7 @@ brutus uses a **truncated Gaussian prior**:
 
 This reflects empirical measurements of :math:`R_V` variation in the Galaxy while preventing unphysical values.
 
-**Implementation**: See :func:`brutus.priors.extinction.logp_rv`
+**Implementation**: R_V prior is built into the ``rv_gauss`` parameter of ``BruteForce.fit()``
 
 Customizing Priors
 ------------------
@@ -285,7 +285,7 @@ All prior functions accept arrays and return log-probabilities:
 
 .. code-block:: python
 
-   from brutus.priors.stellar import logp_imf
+   from brutus.priors import logp_imf
 
    def custom_imf(masses, alpha=-2.0):
        """Custom single power-law IMF."""
@@ -301,17 +301,26 @@ All prior functions accept arrays and return log-probabilities:
 Turning Off Priors
 ^^^^^^^^^^^^^^^^^^
 
-For diagnostic purposes, you can disable specific priors:
+For diagnostic purposes, you can disable specific priors by passing uniform
+(constant) prior functions to ``fit()``:
 
 .. code-block:: python
 
    from brutus.analysis import BruteForce
 
-   # Fit without Galactic structure prior (uniform in distance)
-   fitter = BruteForce(grid, use_galactic_prior=False)
+   fitter = BruteForce(grid)
 
-   # Fit without dust map prior (uniform in A_V up to max)
-   fitter = BruteForce(grid, use_dust_prior=False)
+   # Fit without Galactic structure prior (uniform in distance)
+   fitter.fit(
+       data, data_err, data_mask, labels, save_file='results.h5',
+       lngalprior=lambda *args: 0.0,  # Uniform prior
+   )
+
+   # Fit without dust map prior (uniform in A_V)
+   fitter.fit(
+       data, data_err, data_mask, labels, save_file='results.h5',
+       lndustprior=lambda *args: 0.0,  # Uniform prior
+   )
 
 **Warning**: Disabling priors can lead to highly degenerate parameter estimates. Use with caution and only when you understand the implications.
 
@@ -345,17 +354,28 @@ Prior impact depends on data quality:
 
 .. code-block:: python
 
+   import h5py
+   import numpy as np
+   import matplotlib.pyplot as plt
+
+   fitter = BruteForce(grid)
+
    # Fit with full priors
-   results_full = fitter.fit(phot, phot_err, parallax=plx, parallax_err=plx_err)
+   fitter.fit(data, data_err, data_mask, labels, save_file='with_prior.h5',
+              data_coords=coords, dustfile='bayestar19.h5')
 
    # Fit without Galactic prior
-   fitter_no_gal = BruteForce(grid, use_galactic_prior=False)
-   results_no_gal = fitter_no_gal.fit(phot, phot_err, parallax=plx, parallax_err=plx_err)
+   fitter.fit(data, data_err, data_mask, labels, save_file='no_prior.h5',
+              lngalprior=lambda *args: 0.0)
 
    # Compare posteriors
-   import matplotlib.pyplot as plt
-   plt.hist(results_full['dist_samples'], alpha=0.5, label='With Gal prior')
-   plt.hist(results_no_gal['dist_samples'], alpha=0.5, label='No Gal prior')
+   with h5py.File('with_prior.h5', 'r') as f:
+       dist_with = f['samps_dist'][0] * 1000  # pc
+   with h5py.File('no_prior.h5', 'r') as f:
+       dist_without = f['samps_dist'][0] * 1000  # pc
+
+   plt.hist(dist_with, alpha=0.5, label='With Gal prior')
+   plt.hist(dist_without, alpha=0.5, label='No Gal prior')
    plt.legend()
    plt.show()
 

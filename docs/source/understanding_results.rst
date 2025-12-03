@@ -6,61 +6,68 @@ This page explains how to interpret brutus output, diagnose potential issues, an
 Output Structure
 ----------------
 
-brutus fitting functions return dictionaries containing posterior samples and summary statistics. The exact contents depend on the fitting mode (individual star vs cluster), but typical outputs include:
+``BruteForce.fit()`` saves results to an **HDF5 file** and returns the file path.
+Results are accessed by reading the HDF5 file directly.
 
 Individual Star Fitting (``BruteForce.fit()``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. code-block:: python
 
-   results = {
-       # Posterior samples
-       'dist_samples': array,      # Distance samples (pc), shape (n_samples,)
-       'av_samples': array,        # Extinction samples (mag), shape (n_samples,)
-       'rv_samples': array,        # R_V samples, shape (n_samples,)
-       'mass_samples': array,      # Initial mass samples (Msun), shape (n_samples,)
-       'age_samples': array,       # Age samples (yr), shape (n_samples,)
-       'feh_samples': array,       # Metallicity samples (dex), shape (n_samples,)
-       'teff_samples': array,      # Effective temperature samples (K), shape (n_samples,)
-       'logg_samples': array,      # Surface gravity samples (cgs), shape (n_samples,)
-       'lum_samples': array,       # Luminosity samples (Lsun), shape (n_samples,)
-       'radius_samples': array,    # Radius samples (Rsun), shape (n_samples,)
+   import h5py
+   import numpy as np
 
-       # Summary statistics
-       'dist_median': float,       # Median distance
-       'dist_std': float,          # Standard deviation
-       'dist_16': float,           # 16th percentile (lower 1-sigma)
-       'dist_84': float,           # 84th percentile (upper 1-sigma)
-       # Similar stats for av, mass, age, etc.
+   # fit() returns the path to the output file
+   output_file = fitter.fit(data, data_err, data_mask, labels, save_file='results.h5', ...)
 
-       # Best-fit information
-       'best_fit_idx': int,        # Grid index of maximum posterior
-       'best_fit_mags': array,     # Model magnitudes at best fit
-       'chi2_best': float,         # Chi-square at best fit
-       'lnL_max': float,           # Maximum log-likelihood
+   # Read results from HDF5
+   with h5py.File(output_file, 'r') as f:
+       # Posterior draws (Nstars, Ndraws) - default Ndraws=250
+       distances = f['samps_dist'][:]    # Distance in kpc
+       av_values = f['samps_red'][:]     # A_V extinction (mag)
+       rv_values = f['samps_dred'][:]    # R_V values
+       log_weights = f['samps_logp'][:]  # Log-weights for each draw
 
-       # Diagnostic information
-       'n_grid_points': int,       # Number of grid points evaluated
-       'converged': bool,          # Whether optimization converged
-   }
+       # Model information
+       model_idx = f['model_idx'][:]     # Grid model indices (Nstars, Ndraws)
+       ml_scale = f['ml_scale'][:]       # ML scale factors
+       ml_av = f['ml_av'][:]             # ML A_V values
+       ml_rv = f['ml_rv'][:]             # ML R_V values
+       ml_cov = f['ml_cov_sar'][:]       # Covariance matrices (Nstars, Ndraws, 3, 3)
+
+       # Per-object diagnostics
+       log_evidence = f['obj_log_evid'][:]  # Log-evidence (Nstars,)
+       chi2_min = f['obj_chi2min'][:]       # Minimum chi-squared (Nstars,)
+       n_bands = f['obj_Nbands'][:]         # Number of bands used (Nstars,)
+       log_post = f['obj_log_post'][:]      # Log-posteriors (Nstars, Ndraws)
+
+       # Object labels
+       obj_labels = f['labels'][:]          # Your input labels (Nstars, Nlabels)
+
+   # Compute summary statistics yourself
+   dist_median = np.median(distances, axis=1)
+   dist_16, dist_84 = np.percentile(distances, [16, 84], axis=1)
+   av_median = np.median(av_values, axis=1)
+
+To access stellar parameters (mass, age, Teff, etc.), use the ``model_idx`` to look up
+values in the model grid labels that were loaded with ``load_models()``.
 
 Cluster Fitting (``isochrone_population_loglike()``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-When used with MCMC (e.g., ``emcee``), the sampler contains:
+Cluster fitting uses MCMC (e.g., ``emcee``) with the likelihood function.
+The sampler directly contains the population parameter chains:
 
 .. code-block:: python
 
-   # Extract chain from emcee sampler
+   # theta = [feh, loga, av, rv, dist] for isochrone_population_loglike
    samples = sampler.get_chain(discard=1000, thin=10, flat=True)
-
-   # samples shape: (n_samples, n_params)
-   # where n_params = [feh, loga, av, rv, dist, field_frac, ...]
 
    feh_samples = samples[:, 0]
    loga_samples = samples[:, 1]  # log10(age in years)
    av_samples = samples[:, 2]
-   # etc.
+   rv_samples = samples[:, 3]
+   dist_samples = samples[:, 4]
 
 Posterior Distributions
 -----------------------
@@ -74,48 +81,47 @@ Visualizing Posteriors
 
 .. code-block:: python
 
+   import h5py
    import matplotlib.pyplot as plt
    import numpy as np
 
-   # Plot distance posterior
+   # Load results
+   with h5py.File('results.h5', 'r') as f:
+       distances = f['samps_dist'][0]  # First star, all draws (in kpc)
+
+   # Compute summary statistics
+   dist_median = np.median(distances)
+   dist_16, dist_84 = np.percentile(distances, [16, 84])
+
+   # Plot distance posterior (convert kpc to pc)
    plt.figure(figsize=(8, 5))
-   plt.hist(results['dist_samples'], bins=50, density=True, alpha=0.7)
-   plt.axvline(results['dist_median'], color='r', linestyle='--',
-               label=f"Median: {results['dist_median']:.1f} pc")
-   plt.axvline(results['dist_16'], color='orange', linestyle=':',
-               label=f"16-84%: [{results['dist_16']:.1f}, {results['dist_84']:.1f}]")
-   plt.axvline(results['dist_84'], color='orange', linestyle=':')
+   plt.hist(distances * 1000, bins=50, density=True, alpha=0.7)
+   plt.axvline(dist_median * 1000, color='r', linestyle='--',
+               label=f"Median: {dist_median*1000:.0f} pc")
+   plt.axvline(dist_16 * 1000, color='orange', linestyle=':')
+   plt.axvline(dist_84 * 1000, color='orange', linestyle=':',
+               label=f"16-84%: [{dist_16*1000:.0f}, {dist_84*1000:.0f}]")
    plt.xlabel('Distance (pc)')
    plt.ylabel('Probability Density')
    plt.legend()
-   plt.title('Distance Posterior Distribution')
    plt.show()
 
-**Corner plots** show joint distributions and correlations:
+**Corner plots** for distance, extinction, and R_V:
 
 .. code-block:: python
 
    import corner
 
-   # Select parameters for corner plot
-   params_to_plot = np.column_stack([
-       results['dist_samples'],
-       results['av_samples'],
-       results['mass_samples'],
-       results['age_samples'] / 1e9,  # Convert to Gyr
-       results['feh_samples']
-   ])
+   with h5py.File('results.h5', 'r') as f:
+       dist = f['samps_dist'][0] * 1000  # Convert to pc
+       av = f['samps_red'][0]
+       rv = f['samps_dred'][0]
 
-   labels = ['Distance (pc)', r'$A_V$ (mag)', r'Mass ($M_\odot$)',
-             'Age (Gyr)', '[Fe/H] (dex)']
+   samples = np.column_stack([dist, av, rv])
+   labels = ['Distance (pc)', r'$A_V$ (mag)', r'$R_V$']
 
-   fig = corner.corner(
-       params_to_plot,
-       labels=labels,
-       quantiles=[0.16, 0.5, 0.84],
-       show_titles=True,
-       title_fmt='.2f'
-   )
+   fig = corner.corner(samples, labels=labels, quantiles=[0.16, 0.5, 0.84],
+                       show_titles=True)
    plt.show()
 
 Interpreting Posterior Shapes
@@ -192,9 +198,14 @@ Distance-Extinction Degeneracy
 
 .. code-block:: python
 
-   # Check correlation
+   import h5py
    import numpy as np
-   correlation = np.corrcoef(results['dist_samples'], results['av_samples'])[0, 1]
+
+   with h5py.File('results.h5', 'r') as f:
+       distances = f['samps_dist'][0]  # First star
+       av_values = f['samps_red'][0]
+
+   correlation = np.corrcoef(distances, av_values)[0, 1]
    print(f"Distance-extinction correlation: {correlation:.2f}")
 
    # Strong positive correlation (r > 0.7) indicates degeneracy
@@ -243,12 +254,18 @@ Check the quality of the best-fit model:
 
 .. code-block:: python
 
-   # Compute reduced chi-square
-   n_data = len(phot)  # Number of photometric bands
-   n_params = 6  # Distance, extinction, mass, age, metallicity, alpha
-   dof = n_data - n_params
+   import h5py
+   import numpy as np
 
-   chi2_reduced = results['chi2_best'] / dof
+   with h5py.File('results.h5', 'r') as f:
+       chi2_min = f['obj_chi2min'][0]  # Minimum chi-squared for first star
+       n_bands = f['obj_Nbands'][0]    # Number of bands used
+
+   # Compute reduced chi-square
+   n_params = 3  # Distance, A_V, R_V (model parameters are fixed from grid)
+   dof = n_bands - n_params
+
+   chi2_reduced = chi2_min / dof
 
    print(f"Reduced χ²: {chi2_reduced:.2f}")
 
@@ -259,37 +276,6 @@ Check the quality of the best-fit model:
    else:
        print("Good fit quality")
 
-Residual Analysis
-^^^^^^^^^^^^^^^^^
-
-Examine residuals between data and best-fit model:
-
-.. code-block:: python
-
-   # Observed vs model magnitudes
-   obs_mags = -2.5 * np.log10(phot)
-   model_mags = results['best_fit_mags']
-   residuals = obs_mags - model_mags
-
-   # Plot residuals
-   bands = ['g', 'r', 'i', 'z', 'y']
-   plt.figure()
-   plt.errorbar(range(len(bands)), residuals, yerr=phot_err/phot*1.0857,
-                fmt='o', capsize=5)
-   plt.axhline(0, color='k', linestyle='--')
-   plt.xticks(range(len(bands)), bands)
-   plt.ylabel('Residual (mag)')
-   plt.xlabel('Band')
-   plt.title('Photometric Residuals')
-   plt.show()
-
-   # Check for systematic trends
-   if np.all(np.abs(residuals) < 0.1):
-       print("Residuals look good (< 0.1 mag)")
-   else:
-       problematic = np.where(np.abs(residuals) > 0.1)[0]
-       print(f"Large residuals in bands: {[bands[i] for i in problematic]}")
-
 Parallax Consistency
 ^^^^^^^^^^^^^^^^^^^^
 
@@ -297,15 +283,24 @@ If parallax was used, check consistency between photometric and parallax-based d
 
 .. code-block:: python
 
+   import h5py
+   import numpy as np
+
    # Parallax-implied distance
-   parallax_dist = 1000.0 / parallax  # pc (for parallax in mas)
+   parallax = 2.5  # mas (your measured parallax)
+   parallax_err = 0.1  # mas
+   parallax_dist = 1000.0 / parallax  # pc
    parallax_dist_err = 1000.0 * parallax_err / parallax**2
 
    # Brutus distance estimate
-   brutus_dist = results['dist_median']
-   brutus_dist_err = (results['dist_84'] - results['dist_16']) / 2.0
+   with h5py.File('results.h5', 'r') as f:
+       distances = f['samps_dist'][0] * 1000  # Convert kpc to pc
 
-   # Consistency check (within 2-sigma?)
+   brutus_dist = np.median(distances)
+   dist_16, dist_84 = np.percentile(distances, [16, 84])
+   brutus_dist_err = (dist_84 - dist_16) / 2.0
+
+   # Consistency check
    diff = abs(brutus_dist - parallax_dist)
    combined_err = np.sqrt(brutus_dist_err**2 + parallax_dist_err**2)
 
@@ -315,42 +310,41 @@ If parallax was used, check consistency between photometric and parallax-based d
 
    if diff / combined_err > 2.0:
        print("WARNING: Parallax and photometric distances inconsistent")
-       print("Possible issues: bad parallax, photometric errors, binarity")
 
 Prior Sensitivity
 ^^^^^^^^^^^^^^^^^
 
-Test how results change with/without priors:
+Test how results change with different prior settings by passing different
+``lngalprior`` and ``lndustprior`` functions to ``fit()``:
 
 .. code-block:: python
 
+   import h5py
+   import numpy as np
    from brutus.analysis import BruteForce
 
-   # Fit with full priors
-   fitter_with_priors = BruteForce(grid,
-                                   use_galactic_prior=True,
-                                   use_dust_prior=True)
-   results_with = fitter_with_priors.fit(phot, phot_err,
-                                          parallax=plx, parallax_err=plx_err)
+   fitter = BruteForce(grid)
 
-   # Fit without priors
-   fitter_no_priors = BruteForce(grid,
-                                 use_galactic_prior=False,
-                                 use_dust_prior=False)
-   results_without = fitter_no_priors.fit(phot, phot_err,
-                                          parallax=plx, parallax_err=plx_err)
+   # Fit with default priors (Galactic structure + dust map)
+   fitter.fit(data, data_err, data_mask, labels, save_file='with_priors.h5',
+              parallax=plx, parallax_err=plx_err,
+              data_coords=coords, dustfile='bayestar19.h5')
 
-   # Compare
-   print("With priors:", results_with['dist_median'], "±",
-         results_with['dist_std'], "pc")
-   print("Without priors:", results_without['dist_median'], "±",
-         results_without['dist_std'], "pc")
+   # Fit with uniform priors (pass None to disable)
+   fitter.fit(data, data_err, data_mask, labels, save_file='no_priors.h5',
+              parallax=plx, parallax_err=plx_err,
+              lngalprior=lambda *args: 0.0,  # Uniform Galactic prior
+              lndustprior=lambda *args: 0.0) # Uniform dust prior
 
-   # If results change significantly, data is prior-dominated
-   fractional_change = abs(results_with['dist_median'] - results_without['dist_median']) / results_with['dist_median']
+   # Compare results
+   with h5py.File('with_priors.h5', 'r') as f:
+       dist_with = np.median(f['samps_dist'][0]) * 1000  # pc
+   with h5py.File('no_priors.h5', 'r') as f:
+       dist_without = np.median(f['samps_dist'][0]) * 1000  # pc
+
+   fractional_change = abs(dist_with - dist_without) / dist_with
    if fractional_change > 0.3:
        print("WARNING: Results strongly prior-dependent (>30% change)")
-       print("Data may be insufficient to constrain parameters")
 
 Reliability Indicators
 ----------------------
@@ -394,15 +388,20 @@ brutus provides Bayesian **credible intervals** (not frequentist confidence inte
 
 .. code-block:: python
 
+   import h5py
+   import numpy as np
+
+   with h5py.File('results.h5', 'r') as f:
+       distances = f['samps_dist'][0] * 1000  # First star, convert kpc to pc
+
    # 68% credible interval (analogous to 1-sigma)
-   dist_lower = results['dist_16']
-   dist_upper = results['dist_84']
-   print(f"Distance: {results['dist_median']:.1f} (+{dist_upper - results['dist_median']:.1f} / -{results['dist_median'] - dist_lower:.1f}) pc")
+   dist_median = np.median(distances)
+   dist_16, dist_84 = np.percentile(distances, [16, 84])
+   print(f"Distance: {dist_median:.0f} (+{dist_84-dist_median:.0f} / -{dist_median-dist_16:.0f}) pc")
 
    # 95% credible interval
-   dist_025 = np.percentile(results['dist_samples'], 2.5)
-   dist_975 = np.percentile(results['dist_samples'], 97.5)
-   print(f"95% interval: [{dist_025:.1f}, {dist_975:.1f}] pc")
+   dist_025, dist_975 = np.percentile(distances, [2.5, 97.5])
+   print(f"95% interval: [{dist_025:.0f}, {dist_975:.0f}] pc")
 
 **Interpretation**: "There is a 68% probability that the true distance lies in [dist_16, dist_84] given the data and priors."
 
@@ -420,51 +419,67 @@ brutus uncertainties are primarily **statistical** (measurement errors + paramet
 
 .. code-block:: python
 
-   # Statistical uncertainty from brutus
-   dist_err_stat = (results['dist_84'] - results['dist_16']) / 2.0
+   # Statistical uncertainty from posterior samples
+   dist_err_stat = (dist_84 - dist_16) / 2.0
 
    # Add 10% systematic floor
-   dist_err_sys = 0.10 * results['dist_median']
+   dist_err_sys = 0.10 * dist_median
 
    # Total uncertainty
    dist_err_total = np.sqrt(dist_err_stat**2 + dist_err_sys**2)
 
-   print(f"Distance: {results['dist_median']:.1f} ± {dist_err_total:.1f} pc")
+   print(f"Distance: {dist_median:.0f} ± {dist_err_total:.0f} pc")
 
 Derived Quantities
 ------------------
 
-brutus provides direct samples of physical parameters, enabling straightforward propagation of uncertainties to derived quantities.
+Use the distance and extinction samples to propagate uncertainties to derived quantities.
 
 Absolute Magnitude
 ^^^^^^^^^^^^^^^^^^
 
 .. code-block:: python
 
+   import h5py
+   import numpy as np
+
+   with h5py.File('results.h5', 'r') as f:
+       distances = f['samps_dist'][0]  # kpc
+       av_values = f['samps_red'][0]
+
    # Absolute magnitude from distance and apparent magnitude
-   app_mag_g = obs_mags[0]  # g-band
-   dist_modulus_samples = 5.0 * np.log10(results['dist_samples']) - 5.0
-   abs_mag_g_samples = app_mag_g - dist_modulus_samples - results['av_samples'] * results['R_g']
+   app_mag_g = 16.5  # Observed g-band magnitude
+   R_g = 3.518  # Extinction coefficient for g-band (approximate)
 
-   abs_mag_g_median = np.median(abs_mag_g_samples)
-   abs_mag_g_err = np.std(abs_mag_g_samples)
+   dist_modulus = 5.0 * np.log10(distances * 1000) - 5.0  # Convert kpc to pc
+   abs_mag_g = app_mag_g - dist_modulus - av_values * R_g
 
-   print(f"M_g = {abs_mag_g_median:.2f} ± {abs_mag_g_err:.2f} mag")
+   print(f"M_g = {np.median(abs_mag_g):.2f} ± {np.std(abs_mag_g):.2f} mag")
 
-Luminosity
-^^^^^^^^^^
+Stellar Parameters from Model Grid
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+To get stellar parameters (mass, age, Teff, luminosity, etc.), use the model
+indices to look up values in the grid:
 
 .. code-block:: python
 
-   # Already provided in results['lum_samples'], but can also compute:
-   M_bol_sun = 4.74  # Solar bolometric magnitude
-   M_bol_samples = results['M_bol_samples']  # From brutus
-   lum_samples = 10**((M_bol_sun - M_bol_samples) / 2.5)  # In solar units
+   from brutus.data import load_models
 
-   lum_median = np.median(lum_samples)
-   lum_16, lum_84 = np.percentile(lum_samples, [16, 84])
+   # Load the same grid used for fitting
+   models, grid_labels, mask = load_models('grid_mist_v9.h5')
 
-   print(f"Luminosity: {lum_median:.3f} (+{lum_84-lum_median:.3f} / -{lum_median-lum_16:.3f}) L_sun")
+   with h5py.File('results.h5', 'r') as f:
+       model_idx = f['model_idx'][0]  # Model indices for first star
+
+   # Get stellar parameters for each posterior draw
+   masses = grid_labels['mini'][model_idx]
+   log_ages = grid_labels['loga'][model_idx]
+   log_teffs = grid_labels['logt'][model_idx]
+
+   print(f"Mass: {np.median(masses):.2f} Msun")
+   print(f"Age: {10**np.median(log_ages)/1e9:.2f} Gyr")
+   print(f"Teff: {10**np.median(log_teffs):.0f} K")
 
 Galactic Coordinates
 ^^^^^^^^^^^^^^^^^^^^
@@ -474,18 +489,17 @@ Galactic Coordinates
    from astropy.coordinates import SkyCoord
    import astropy.units as u
 
-   # Sky position
-   coord = SkyCoord(ra=ra*u.deg, dec=dec*u.deg, frame='icrs')
+   with h5py.File('results.h5', 'r') as f:
+       distances = f['samps_dist'][0]  # kpc
 
-   # Add distance samples
+   # Create 3D coordinates for each posterior sample
    coords_3d = SkyCoord(
-       ra=ra*u.deg,
-       dec=dec*u.deg,
-       distance=results['dist_samples']*u.pc,
+       ra=ra*u.deg, dec=dec*u.deg,
+       distance=distances*u.kpc,
        frame='icrs'
    )
 
-   # Transform to Galactic coordinates
+   # Transform to Galactocentric coordinates
    coords_gal = coords_3d.galactocentric
 
    X_samples = coords_gal.x.to(u.kpc).value
