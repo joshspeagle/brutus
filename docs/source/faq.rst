@@ -152,16 +152,26 @@ How sensitive are results to prior choices?
 
 .. code-block:: python
 
+   import h5py
+   import numpy as np
+
+   fitter = BruteForce(grid)
+
    # Fit with default priors
-   results_default = fitter.fit(phot, phot_err, parallax=plx, parallax_err=plx_err)
+   fitter.fit(data, data_err, data_mask, labels, save_file='with_prior.h5',
+              data_coords=coords)
 
    # Fit without Galactic prior
-   fitter_no_gal = BruteForce(grid, use_galactic_prior=False)
-   results_no_gal = fitter_no_gal.fit(phot, phot_err, parallax=plx, parallax_err=plx_err)
+   fitter.fit(data, data_err, data_mask, labels, save_file='no_prior.h5',
+              lngalprior=lambda *args: 0.0)
 
    # Compare
-   dist_change = abs(results_default['dist_median'] - results_no_gal['dist_median'])
-   dist_change_pct = 100 * dist_change / results_default['dist_median']
+   with h5py.File('with_prior.h5', 'r') as f:
+       dist_default = np.median(f['samps_dist'][0])
+   with h5py.File('no_prior.h5', 'r') as f:
+       dist_no_gal = np.median(f['samps_dist'][0])
+
+   dist_change_pct = 100 * abs(dist_default - dist_no_gal) / dist_default
    print(f"Distance changed by {dist_change_pct:.1f}% without Galactic prior")
 
 **Interpretation**:
@@ -211,12 +221,13 @@ Fitting is very slow. How can I speed it up?
 
    .. code-block:: python
 
-      # Reduce grid resolution
+      import numpy as np
+
+      # Reduce grid resolution by using coarser arrays
       generator.make_grid(
-          'fast_grid.h5',
-          mini_range=(0.1, 10.0),  # Limit mass range
-          n_mini=150,              # Fewer mass points (vs 300)
-          n_eep=100                # Fewer EEP points (vs 200)
+          output_file='fast_grid.h5',
+          mini_grid=np.linspace(0.1, 10.0, 100),  # Fewer mass points
+          eep_grid=np.linspace(200, 600, 80),     # Fewer EEP points
       )
 
 2. **Limit parameter space**:
@@ -224,10 +235,11 @@ Fitting is very slow. How can I speed it up?
    .. code-block:: python
 
       # Tighter bounds if you have prior knowledge
-      results = fitter.fit(
-          phot, phot_err,
-          dist_bounds=(100, 5000),  # Narrower distance range
-          av_max=2.0                 # Lower extinction ceiling
+      output_file = fitter.fit(
+          data, data_err, data_mask, labels,
+          save_file='results.h5',
+          avlim=(0.0, 2.0),   # Limit extinction range
+          rvlim=(2.5, 4.5)    # Limit R_V range
       )
 
 3. **Parallelize across stars**:
@@ -243,7 +255,8 @@ Fitting is very slow. How can I speed it up?
 
    .. code-block:: python
 
-      results = fitter.fit(phot, phot_err, n_samples=1000)  # vs default 10000
+      output_file = fitter.fit(data, data_err, data_mask, labels,
+                               save_file='results.h5', Ndraws=100)  # vs default 250
 
 How much memory does brutus use?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -261,15 +274,9 @@ How much memory does brutus use?
 
 **Solutions for memory issues**:
 
-1. **Memory-mapped grids**:
+1. **Use smaller grids**: Limit parameter ranges or use coarser spacing during grid generation
 
-   .. code-block:: python
-
-      models, labels, params = load_models('grid.h5', memmap=True)
-
-2. **Reduce grid size**: Limit parameter ranges or use coarser spacing
-
-3. **Batch processing**: Process stars in batches, saving results to disk between batches
+2. **Process in batches**: Split large catalogs into batches, save results between batches
 
 Can I run brutus on a cluster?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -342,7 +349,8 @@ What do I do if distance and parallax disagree?
    # - Systematic trends suggest wrong stellar type
 
    # Try fitting without parallax
-   results_no_plx = fitter.fit(phot, phot_err)
+   fitter.fit(data, data_err, data_mask, labels,
+              save_file='no_plx.h5')  # Omit parallax arguments
    # If photometric distance matches parallax distance without using parallax,
    # the disagreement is real (not a degeneracy issue)
 
@@ -478,16 +486,16 @@ The ``field_fraction`` parameter represents the fraction of observed stars that 
 Error Messages
 --------------
 
-"Optimization did not converge"
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+"No valid models found"
+^^^^^^^^^^^^^^^^^^^^^^^^
 
-**Cause**: Gradient-based optimizer in flux space failed to find minimum.
+**Cause**: No grid models produce reasonable likelihoods for the observed photometry.
 
 **Solutions**:
 
 1. Check photometry for bad data (negative fluxes, unrealistic errors)
-2. Increase maxiter: ``fitter.fit(..., maxiter=2000)``
-3. Widen parameter bounds
+2. Verify photometric system matches grid filters
+3. Widen parameter limits: increase ``avlim`` or ``rvlim`` bounds
 4. If persistent, star may be outside model grid coverage
 
 "Grid does not cover observed star"
@@ -501,11 +509,13 @@ Error Messages
 
    .. code-block:: python
 
+      import numpy as np
+
       generator.make_grid(
-          'extended_grid.h5',
-          mini_range=(0.08, 300.0),  # Extend mass range
-          feh_range=(-4.0, 1.0),     # Extend metallicity range
-          eep_range=(150, 900)       # Extend evolutionary range
+          output_file='extended_grid.h5',
+          mini_grid=np.linspace(0.1, 100.0, 300),   # Wider mass range
+          feh_grid=np.linspace(-3.0, 0.5, 20),      # Wider [Fe/H] range
+          eep_grid=np.linspace(150, 800, 200)       # Wider EEP range
       )
 
 2. Check if star is exotic object outside MIST coverage (WD, BD, etc.)

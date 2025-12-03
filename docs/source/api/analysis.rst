@@ -30,37 +30,43 @@ For **individual field stars** with photometry and parallax:
    from brutus.core import StarGrid
    from brutus.data import load_models
    import numpy as np
+   import h5py
 
    # Load pre-computed grid
-   models, labels, params = load_models('grid_file.h5')
-   grid = StarGrid(models, labels, params)
+   models, labels, label_mask = load_models('grid_file.h5')
+   grid = StarGrid(models, labels, label_mask)
 
-   # Initialize fitter with Galactic priors
+   # Initialize fitter
    fitter = BruteForce(grid)
 
-   # Observed data
-   phot = np.array([16.5, 15.2, 14.8, 13.5, 13.1])  # g,r,i,z,y mags
-   phot_err = np.array([0.01, 0.01, 0.02, 0.03, 0.03])
-   parallax = 2.5  # mas
-   parallax_err = 0.1  # mas
+   # Observed data (Nstars=1 in this example)
+   flux = np.array([[16.5, 15.2, 14.8, 13.5, 13.1]])  # shape (1, 5)
+   flux_err = np.array([[0.01, 0.01, 0.02, 0.03, 0.03]])
+   mask = np.array([[True, True, True, True, True]])
+   obj_ids = np.array([[1]])
+   parallax = np.array([2.5])  # mas
+   parallax_err = np.array([0.1])  # mas
 
-   # Fit and get posterior samples
-   results = fitter.fit(
-       phot, phot_err,
-       parallax=parallax,
-       parallax_err=parallax_err,
-       n_samples=10000
+   # Fit and save results to HDF5
+   output_file = fitter.fit(
+       data=flux, data_err=flux_err, data_mask=mask,
+       data_labels=obj_ids, save_file='results.h5',
+       parallax=parallax, parallax_err=parallax_err,
+       Ndraws=250
    )
 
-   # Results contain posterior samples for all parameters
-   print(f"Distance: {results['dist_median']:.1f} ± {results['dist_std']:.1f} pc")
-   print(f"Extinction: {results['av_median']:.2f} ± {results['av_std']:.2f} mag")
+   # Read posterior samples from HDF5
+   with h5py.File(output_file, 'r') as f:
+       dist = f['samps_dist'][0]  # (Ndraws,) distances in kpc
+       av = f['samps_red'][0]     # (Ndraws,) A_V values
+   print(f"Distance: {np.median(dist)*1000:.0f} pc")
+   print(f"Extinction: {np.median(av):.2f} mag")
 
 For **stellar clusters** with MCMC:
 
 .. code-block:: python
 
-   from brutus.analysis.populations import isochrone_population_loglike
+   from brutus.analysis import isochrone_population_loglike
    from brutus.core import Isochrone, StellarPop
    import emcee
    import numpy as np
@@ -82,8 +88,7 @@ For **stellar clusters** with MCMC:
            stellarpop=pop,
            obs_flux=obs_flux,
            obs_err=obs_err,
-           cluster_prob=0.9,  # External membership prior
-           dim_prior=True
+           cluster_prob=0.9  # External membership prior
        )
 
    # Run MCMC
