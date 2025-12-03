@@ -14,17 +14,17 @@ This file tracks issues found during the documentation audit and serves as a che
 |------|---------|--------------|---------|
 | `index.rst` | [x] | 5 | [ ] |
 | `installation.rst` | [x] | 3 | [ ] |
-| `quickstart.rst` | [x] | 7 | [ ] |
+| `quickstart.rst` | [x] | 7 | [x] Stage 1 |
 | `scientific_background.rst` | [x] | 2 | [ ] |
 | `stellar_models.rst` | [x] | 5 | [ ] |
-| `priors.rst` | [x] | 8 | [ ] |
+| `priors.rst` | [x] | 8 | [x] Stage 1 |
 | `grid_generation.rst` | [x] | 6 | [ ] |
 | `cluster_modeling.rst` | [x] | 5 | [ ] |
-| `understanding_results.rst` | [x] | 10 | [ ] |
-| `choosing_options.rst` | [x] | 12 | [ ] |
-| `faq.rst` | [x] | 12 | [ ] |
+| `understanding_results.rst` | [x] | 10 | [x] Stage 1 |
+| `choosing_options.rst` | [x] | 12 | [x] Stage 1 |
+| `faq.rst` | [x] | 12 | [x] Stage 1 |
 | `api/core.rst` | [x] | 3 | [ ] |
-| `api/analysis.rst` | [x] | 4 | [ ] |
+| `api/analysis.rst` | [x] | 4 | [x] Stage 1 |
 | `api/data.rst` | [x] | 1 | [ ] |
 | `api/priors.rst` | [x] | 1 | [ ] |
 | `api/plotting.rst` | [x] | 1 | [ ] |
@@ -356,24 +356,24 @@ These issues appear across multiple documentation files:
 ## Priority Order for Revisions
 
 ### 1. **Critical** (blocks basic usage):
-- [ ] **G1**: Fix fabricated output format in all files - document actual HDF5 structure
-- [ ] **G2**: Remove or fix non-existent BruteForce constructor parameters
-- [ ] **quickstart.rst**: Fix fundamentally wrong "Working with Results" section
+- [x] **G1**: Fix fabricated output format in all files - document actual HDF5 structure ✓ Stage 1
+- [x] **G2**: Remove or fix non-existent BruteForce constructor parameters ✓ Stage 1
+- [x] **quickstart.rst**: Fix fundamentally wrong "Working with Results" section ✓ Stage 1
 
 ### 2. **High** (affects common workflows):
-- [ ] **G3**: Verify and fix all fit() parameters across docs
-- [ ] **priors.rst**: Fix incorrect function references and reduce length
-- [ ] **understanding_results.rst**: Complete rewrite of output format section
-- [ ] **choosing_options.rst**: Remove non-existent parameters, reduce length by 50%
+- [x] **G3**: Verify and fix all fit() parameters across docs ✓ Stage 1
+- [x] **priors.rst**: Fix incorrect function references ✓ Stage 1 (reduction pending)
+- [x] **understanding_results.rst**: Complete rewrite of output format section ✓ Stage 1
+- [x] **choosing_options.rst**: Remove non-existent parameters ✓ Stage 1 (50% reduction pending)
 
 ### 3. **Medium** (improves clarity):
 - [ ] **G4/G5**: Reduce verbosity and remove duplication across all user guides
-- [ ] **faq.rst**: Massive reduction from 691 to ~300 lines
+- [ ] **faq.rst**: Massive reduction from 691 to ~300 lines (Stage 1 fixed params, reduction pending)
 - [ ] **cluster_modeling.rst**: Remove theory duplication, focus on API usage
 - [ ] **grid_generation.rst**: Consolidate with stellar_models.rst discussion
 
 ### 4. **Low** (nice to have):
-- [ ] **G6**: Fix import path references in priors.rst
+- [x] **G6**: Fix import path references in priors.rst ✓ Stage 1
 - [ ] **G7**: Add data download notes to getting started docs
 - [ ] **API docs**: Verify autodoc generates correctly
 - [ ] **installation.rst**: Verify conda-forge availability
