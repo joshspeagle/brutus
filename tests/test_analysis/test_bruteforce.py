@@ -1206,5 +1206,429 @@ class TestBruteForceMathematicalValidation:
         print(f"✅ Cross-term computation produces mathematically valid results")
 
 
+@pytest.fixture
+def mock_fitter(mock_grid):
+    """Create BruteForce instance with mock grid for tests that don't need real data."""
+    return BruteForce(mock_grid, verbose=False)
+
+
+@pytest.fixture
+def mock_synthetic_observation(mock_grid):
+    """Create synthetic observation from mock grid."""
+    np.random.seed(42)
+    true_idx = 13  # Pick a model from the mock grid
+    true_model = mock_grid.models[true_idx, :, 0]  # Base magnitudes
+
+    # Convert to flux - NO NOISE for deterministic testing
+    true_flux = 10 ** (-0.4 * true_model)
+    flux = true_flux
+    flux_err = true_flux * 0.05  # 5% error bars
+
+    # All bands observed
+    mask = np.ones(len(flux), dtype=bool)
+
+    return flux, flux_err, mask, true_idx
+
+
+class TestBruteForceFitMethod:
+    """Tests for the complete fit() method with HDF5 I/O."""
+
+    def test_fit_basic_streaming_io(self, mock_fitter, tmp_path):
+        """Test basic fit with streaming I/O mode."""
+        # Create small test dataset
+        ndata = 3
+        nfilters = 5
+
+        # Create synthetic photometry
+        np.random.seed(42)
+        data = 10 ** (-0.4 * (15 + np.random.randn(ndata, nfilters) * 0.5))
+        data_err = data * 0.05
+        data_mask = np.ones((ndata, nfilters), dtype=bool)
+
+        # Labels for each object
+        data_labels = np.array([(i, i * 100, i * 0.1) for i in range(ndata)],
+                               dtype=[("id", "i4"), ("ra", "f4"), ("dec", "f4")])
+
+        # Galactic coordinates
+        data_coords = np.array([[120.0, 45.0], [130.0, 50.0], [140.0, 55.0]])
+
+        # Output file
+        save_file = str(tmp_path / "test_fit_streaming")
+
+        # Run fit with streaming I/O
+        result_file = mock_fitter.fit(
+            data,
+            data_err,
+            data_mask,
+            data_labels,
+            save_file,
+            data_coords=data_coords,
+            Ndraws=10,
+            Nmc_prior=5,
+            wt_thresh=0.1,
+            running_io=True,
+            save_dar_draws=True,
+            verbose=False,
+        )
+
+        # Verify output file exists and has correct structure
+        assert result_file.endswith(".h5")
+        with h5py.File(result_file, "r") as f:
+            # Check all required datasets exist
+            assert "labels" in f
+            assert "model_idx" in f
+            assert "ml_scale" in f
+            assert "ml_av" in f
+            assert "ml_rv" in f
+            assert "ml_cov_sar" in f
+            assert "obj_log_post" in f
+            assert "obj_log_evid" in f
+            assert "obj_chi2min" in f
+            assert "obj_Nbands" in f
+
+            # Check distance/reddening draws are saved
+            assert "samps_dist" in f
+            assert "samps_red" in f
+            assert "samps_dred" in f
+            assert "samps_logp" in f
+
+            # Verify shapes
+            assert f["model_idx"].shape == (ndata, 10)
+            assert f["ml_scale"].shape == (ndata, 10)
+            assert f["ml_cov_sar"].shape == (ndata, 10, 3, 3)
+            assert f["obj_log_evid"].shape == (ndata,)
+            assert f["samps_dist"].shape == (ndata, 10)
+
+            # Verify data values are reasonable
+            assert np.all(f["model_idx"][:] >= -99)  # -99 is sentinel for invalid
+            assert np.all(np.isfinite(f["obj_log_evid"][:]))
+            assert np.all(f["obj_Nbands"][:] > 0)
+
+    def test_fit_batch_io(self, mock_fitter, tmp_path):
+        """Test fit with batch I/O mode (accumulate in memory, write at end)."""
+        ndata = 2
+        nfilters = 5
+
+        np.random.seed(123)
+        data = 10 ** (-0.4 * (14.5 + np.random.randn(ndata, nfilters) * 0.3))
+        data_err = data * 0.03
+        data_mask = np.ones((ndata, nfilters), dtype=bool)
+        data_labels = np.array([(i,) for i in range(ndata)], dtype=[("id", "i4")])
+        data_coords = np.array([[100.0, 30.0], [110.0, 35.0]])
+
+        save_file = str(tmp_path / "test_fit_batch")
+
+        result_file = mock_fitter.fit(
+            data,
+            data_err,
+            data_mask,
+            data_labels,
+            save_file,
+            data_coords=data_coords,
+            Ndraws=5,
+            Nmc_prior=3,
+            wt_thresh=0.2,
+            running_io=False,  # Batch mode
+            save_dar_draws=True,
+            verbose=False,
+        )
+
+        # Verify output
+        with h5py.File(result_file, "r") as f:
+            assert f["model_idx"].shape == (ndata, 5)
+            assert f["ml_scale"].shape == (ndata, 5)
+            assert f["samps_dist"].shape == (ndata, 5)
+
+            # Compare streaming vs batch - both should work
+            assert np.all(np.isfinite(f["obj_chi2min"][:]))
+
+    def test_fit_without_dar_draws(self, mock_fitter, tmp_path):
+        """Test fit without saving distance/reddening draws."""
+        ndata = 2
+        nfilters = 5
+
+        np.random.seed(456)
+        data = 10 ** (-0.4 * (15 + np.random.randn(ndata, nfilters) * 0.4))
+        data_err = data * 0.04
+        data_mask = np.ones((ndata, nfilters), dtype=bool)
+        data_labels = np.array([(i,) for i in range(ndata)], dtype=[("id", "i4")])
+        data_coords = np.array([[90.0, 20.0], [95.0, 25.0]])
+
+        save_file = str(tmp_path / "test_fit_no_dar")
+
+        result_file = mock_fitter.fit(
+            data,
+            data_err,
+            data_mask,
+            data_labels,
+            save_file,
+            data_coords=data_coords,
+            Ndraws=5,
+            Nmc_prior=3,
+            wt_thresh=0.2,
+            save_dar_draws=False,  # Don't save distance/reddening draws
+            verbose=False,
+        )
+
+        with h5py.File(result_file, "r") as f:
+            # Core datasets should exist
+            assert "model_idx" in f
+            assert "ml_scale" in f
+
+            # Distance/reddening draws should NOT exist
+            assert "samps_dist" not in f
+            assert "samps_red" not in f
+            assert "samps_dred" not in f
+            assert "samps_logp" not in f
+
+    def test_fit_with_parallax(self, mock_fitter, tmp_path):
+        """Test fit with parallax constraints."""
+        ndata = 2
+        nfilters = 5
+
+        np.random.seed(789)
+        data = 10 ** (-0.4 * (14 + np.random.randn(ndata, nfilters) * 0.3))
+        data_err = data * 0.03
+        data_mask = np.ones((ndata, nfilters), dtype=bool)
+        data_labels = np.array([(i,) for i in range(ndata)], dtype=[("id", "i4")])
+        data_coords = np.array([[80.0, 10.0], [85.0, 15.0]])
+
+        # Parallax constraints
+        parallax = np.array([1.0, 0.5])  # mas
+        parallax_err = np.array([0.1, 0.05])
+
+        save_file = str(tmp_path / "test_fit_parallax")
+
+        result_file = mock_fitter.fit(
+            data,
+            data_err,
+            data_mask,
+            data_labels,
+            save_file,
+            data_coords=data_coords,
+            parallax=parallax,
+            parallax_err=parallax_err,
+            Ndraws=5,
+            Nmc_prior=3,
+            wt_thresh=0.2,
+            verbose=False,
+        )
+
+        with h5py.File(result_file, "r") as f:
+            # Results should be valid
+            assert np.all(np.isfinite(f["obj_log_evid"][:]))
+            # Nbands should include parallax contribution
+            assert np.all(f["obj_Nbands"][:] >= 5)
+
+    def test_fit_file_extension_handling(self, mock_fitter, tmp_path):
+        """Test that .h5 extension is added if not present."""
+        ndata = 1
+        nfilters = 5
+
+        data = 10 ** (-0.4 * np.ones((ndata, nfilters)) * 15)
+        data_err = data * 0.05
+        data_mask = np.ones((ndata, nfilters), dtype=bool)
+        data_labels = np.array([(0,)], dtype=[("id", "i4")])
+        data_coords = np.array([[100.0, 40.0]])
+
+        # Save without .h5 extension
+        save_file = str(tmp_path / "test_no_extension")
+
+        result_file = mock_fitter.fit(
+            data,
+            data_err,
+            data_mask,
+            data_labels,
+            save_file,
+            data_coords=data_coords,
+            Ndraws=3,
+            Nmc_prior=2,
+            wt_thresh=0.3,
+            verbose=False,
+        )
+
+        # Should add .h5 extension
+        assert result_file.endswith(".h5")
+        assert (tmp_path / "test_no_extension.h5").exists()
+
+    def test_internal_fit_returns_correct_tuple(
+        self, mock_fitter, mock_synthetic_observation
+    ):
+        """Test that _fit returns the correct tuple format."""
+        flux, flux_err, mask, true_idx = mock_synthetic_observation
+
+        # Test with return_distreds=True (default)
+        results = mock_fitter._fit(
+            flux,
+            flux_err,
+            mask,
+            coord=(120.0, 45.0),
+            Nmc_prior=5,
+            Ndraws=10,
+            wt_thresh=0.1,
+            return_distreds=True,
+        )
+
+        # Should return 13-element tuple
+        assert len(results) == 13
+        (
+            idxs, scales, avs, rvs, covs_sar,
+            Ndim, lnprob, levid, chi2min,
+            dists, reds, dreds, logwts
+        ) = results
+
+        # Verify shapes
+        assert idxs.shape == (10,)
+        assert scales.shape == (10,)
+        assert avs.shape == (10,)
+        assert rvs.shape == (10,)
+        assert covs_sar.shape == (10, 3, 3)
+        assert lnprob.shape == (10,)
+        assert dists.shape == (10,)
+        assert reds.shape == (10,)
+        assert dreds.shape == (10,)
+        assert logwts.shape == (10,)
+
+        # Verify scalar outputs
+        assert isinstance(Ndim, (int, np.integer))
+        assert isinstance(levid, (float, np.floating))
+        assert isinstance(chi2min, (float, np.floating))
+
+        # Verify values are reasonable
+        assert np.all(idxs >= 0)
+        assert np.all(scales > 0)
+        assert np.all(avs >= 0)
+        assert np.all(rvs > 0)
+        assert np.all(dists > 0)
+
+    def test_internal_fit_without_distreds(
+        self, mock_fitter, mock_synthetic_observation
+    ):
+        """Test _fit with return_distreds=False."""
+        flux, flux_err, mask, true_idx = mock_synthetic_observation
+
+        results = mock_fitter._fit(
+            flux,
+            flux_err,
+            mask,
+            coord=(120.0, 45.0),
+            Nmc_prior=5,
+            Ndraws=10,
+            wt_thresh=0.1,
+            return_distreds=False,
+        )
+
+        # Should return 9-element tuple
+        assert len(results) == 9
+        idxs, scales, avs, rvs, covs_sar, Ndim, lnprob, levid, chi2min = results
+
+        # Verify shapes
+        assert idxs.shape == (10,)
+        assert covs_sar.shape == (10, 3, 3)
+
+    def test_fit_verbose_output(self, mock_fitter, tmp_path, capsys):
+        """Test verbose progress output."""
+        ndata = 2
+        nfilters = 5
+
+        data = 10 ** (-0.4 * np.ones((ndata, nfilters)) * 15)
+        data_err = data * 0.05
+        data_mask = np.ones((ndata, nfilters), dtype=bool)
+        data_labels = np.array([(i,) for i in range(ndata)], dtype=[("id", "i4")])
+        data_coords = np.array([[100.0, 40.0], [105.0, 45.0]])
+
+        save_file = str(tmp_path / "test_verbose")
+
+        # Run with verbose=True - output goes to stderr
+        import sys
+        from io import StringIO
+
+        old_stderr = sys.stderr
+        sys.stderr = StringIO()
+
+        mock_fitter.fit(
+            data,
+            data_err,
+            data_mask,
+            data_labels,
+            save_file,
+            data_coords=data_coords,
+            Ndraws=3,
+            Nmc_prior=2,
+            wt_thresh=0.3,
+            verbose=True,
+        )
+
+        stderr_output = sys.stderr.getvalue()
+        sys.stderr = old_stderr
+
+        # Check progress was printed
+        assert "Fitting object" in stderr_output
+        assert "chi2" in stderr_output.lower() or "total:" in stderr_output
+
+
+class TestBruteForceFitIntegration:
+    """Integration tests for the complete fitting pipeline using mock grid."""
+
+    def test_fit_produces_valid_results(self, mock_fitter, mock_grid, tmp_path):
+        """Test that fit() produces valid results with reasonable quality metrics."""
+        fitter = mock_fitter
+
+        # Create observation from a known model in the grid
+        true_idx = 10  # Pick a model from the mock grid
+        true_model = mock_grid.models[true_idx]
+
+        # Convert to flux (using zero extinction for simplicity)
+        true_mags = true_model[:, 0]  # Base magnitudes
+        true_flux = 10 ** (-0.4 * true_mags)
+        flux_err = true_flux * 0.03  # 3% errors
+
+        # Create dataset with single object
+        ndata = 1
+        data = true_flux.reshape(1, -1)
+        data_err = flux_err.reshape(1, -1)
+        data_mask = np.ones((ndata, fitter.nfilters), dtype=bool)
+        data_labels = np.array([(0,)], dtype=[("id", "i4")])
+        data_coords = np.array([[120.0, 45.0]])
+
+        save_file = str(tmp_path / "test_recovery")
+
+        result_file = fitter.fit(
+            data,
+            data_err,
+            data_mask,
+            data_labels,
+            save_file,
+            data_coords=data_coords,
+            Ndraws=50,
+            Nmc_prior=20,
+            wt_thresh=0.01,  # Tight threshold
+            verbose=False,
+        )
+
+        # Verify results file has valid structure and values
+        with h5py.File(result_file, "r") as f:
+            sampled_indices = f["model_idx"][0, :]
+
+            # Should have sampled valid model indices
+            assert np.all(sampled_indices >= 0)
+            assert np.all(sampled_indices < fitter.nmodels)
+
+            # Chi2 should be reasonable (not wildly off)
+            chi2min = f["obj_chi2min"][0]
+            nbands = f["obj_Nbands"][0]
+            reduced_chi2 = chi2min / max(nbands - 3, 1)
+            assert reduced_chi2 < 100, f"Reduced chi2 unreasonably high: {reduced_chi2}"
+
+            # Log-evidence should be finite
+            assert np.isfinite(f["obj_log_evid"][0])
+
+            # Scale factors should be positive
+            assert np.all(f["ml_scale"][0, :] > 0)
+
+            # Distances should be positive
+            assert np.all(f["samps_dist"][0, :] > 0)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
