@@ -12,9 +12,9 @@ This file tracks issues found during the documentation audit and serves as a che
 
 | File | Audited | Issues Found | Revised |
 |------|---------|--------------|---------|
-| `index.rst` | [x] | 5 | [ ] |
-| `installation.rst` | [x] | 3 | [ ] |
-| `quickstart.rst` | [x] | 7 | [x] Stage 1 |
+| `index.rst` | [x] | 5 | [x] Stage 2 |
+| `installation.rst` | [x] | 3 | [x] Stage 2 |
+| `quickstart.rst` | [x] | 7 | [x] Stage 1+2 |
 | `scientific_background.rst` | [x] | 2 | [ ] |
 | `stellar_models.rst` | [x] | 5 | [ ] |
 | `priors.rst` | [x] | 8 | [x] Stage 1 |
@@ -374,9 +374,9 @@ These issues appear across multiple documentation files:
 
 ### 4. **Low** (nice to have):
 - [x] **G6**: Fix import path references in priors.rst ✓ Stage 1
-- [ ] **G7**: Add data download notes to getting started docs
+- [x] **G7**: Add data download notes to getting started docs ✓ Stage 2
 - [ ] **API docs**: Verify autodoc generates correctly
-- [ ] **installation.rst**: Verify conda-forge availability
+- [x] **installation.rst**: Mark conda-forge availability as varies ✓ Stage 2
 - [ ] **scientific_background.rst**: Minor condensing
 
 ---
