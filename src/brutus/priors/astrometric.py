@@ -50,6 +50,10 @@ import numpy as np
 
 __all__ = ["logp_parallax", "logp_parallax_scale", "convert_parallax_to_scale"]
 
+# Numerical constants for uninformative prior bounds
+SCALE_MIN = 1e-20  # Minimum scale factor (essentially zero)
+SCALE_MAX = 1e20   # Maximum scale factor (essentially infinity)
+
 
 def logp_parallax(parallaxes, p_meas, p_err):
     r"""
@@ -217,6 +221,6 @@ def convert_parallax_to_scale(p_meas, p_err, snr_lim=4.0):
         s_std = np.sqrt(2 * p_err**4 + 4 * p_positive**2 * p_err**2)
     else:
         # Uninformative prior for low SNR measurements
-        s_mean, s_std = 1e-20, 1e20
+        s_mean, s_std = SCALE_MIN, SCALE_MAX
 
     return s_mean, s_std

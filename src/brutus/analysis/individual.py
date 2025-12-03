@@ -64,6 +64,8 @@ Basic usage with grid-based fitting:
 ... )
 """
 
+import sys
+import time
 import warnings
 from math import log
 
@@ -92,6 +94,21 @@ from ..utils.photometry import magnitude
 from ..utils.sampling import sample_multivariate_normal
 
 __all__ = ["BruteForce"]
+
+
+# ============================================================================
+# Numerical constants
+# ============================================================================
+
+# Proxy for log(0) or negative infinity in log-probability calculations.
+# Used instead of -np.inf to avoid numerical issues with arithmetic operations.
+LOG_ZERO = -1e300
+
+# Minimum allowed scale factor to prevent division by zero or log(0).
+MIN_SCALE = 1e-20
+
+# Small epsilon for numerical stability in matrix operations and comparisons.
+EPS_NUMERIC = 1e-10
 
 
 # ============================================================================
@@ -1160,11 +1177,18 @@ class BruteForce:
             mclean = np.isfinite(mags)
             mags[~mclean], mags_var[:, ~mclean] = 0.0, 1e50
 
+        # Set default Gaussian priors if not provided
+        # These defaults are essentially flat over the allowed range
+        if av_gauss is None:
+            av_gauss = (0.0, 1e6)
+        if rv_gauss is None:
+            rv_gauss = (3.32, 1e6)
+
         # Initialize values
         if av_init is None:
-            av_init = np.zeros(Nmodels) + (av_gauss[0] if av_gauss else 0.0)
+            av_init = np.zeros(Nmodels) + av_gauss[0]
         if rv_init is None:
-            rv_init = np.zeros(Nmodels) + (rv_gauss[0] if rv_gauss else 3.3)
+            rv_init = np.zeros(Nmodels) + rv_gauss[0]
 
         # Compute unreddened photometry
         models, rvecs, drvecs = _get_seds(mcoeffs, av_init, rv_init, return_flux=False)
@@ -1226,13 +1250,13 @@ class BruteForce:
         else:
             # Keep all models
             init_sel = np.arange(Nmodels)
-            chi2 = np.ones(Nmodels) + 1e300
-            lnl = np.ones(Nmodels) - 1e300
+            chi2 = np.ones(Nmodels) - LOG_ZERO  # Large positive value
+            lnl = np.ones(Nmodels) + LOG_ZERO  # Large negative value
             av_new = np.array(av, order="F")
             rv_new = np.array(rv, order="F")
 
         # Iterate until convergence
-        lnl_old, lerr = -1e300, 1e300
+        lnl_old, lerr = LOG_ZERO, -LOG_ZERO  # -inf, +inf proxies
         stepsize, rescaling = np.ones(Nmodels)[init_sel], 1.2
         ln_ltol_subthresh = np.log(ltol_subthresh)
         while lerr > ltol:
@@ -1452,10 +1476,10 @@ class BruteForce:
         # Compute integrated posterior (VECTORIZED)
         lnp = logsumexp(lnp_mc, axis=0) - np.log(Nmc)
 
-        # Safety check
+        # Safety check - replace non-finite values with log(0) proxy
         lnp_mask = np.where(~np.isfinite(lnp))[0]
         if len(lnp_mask) > 0:
-            lnp[lnp_mask] = -1e300
+            lnp[lnp_mask] = LOG_ZERO
 
         return sel, cov_sar, lnp, dist_mc.T, a_mc.T, r_mc.T, lnp_mc.T
 
@@ -1475,7 +1499,6 @@ class BruteForce:
         rvlim=(1.0, 8.0),
         rv_gauss=(3.32, 0.18),
         lnprior=None,
-        lnprior_ext=None,
         wt_thresh=1e-3,
         cdf_thresh=2e-3,
         Ndraws=250,
@@ -1502,16 +1525,180 @@ class BruteForce:
         Fit all input models to the input data to compute log-posteriors.
 
         This is the main interface for fitting stellar parameters using
-        grid-based Bayesian inference.
+        grid-based Bayesian inference. Results are saved to an HDF5 file.
 
-        Parameters match the original BruteForce.fit() interface.
+        Parameters
+        ----------
+        data : numpy.ndarray of shape (Ndata, Nfilt)
+            Observed flux densities for each object.
+
+        data_err : numpy.ndarray of shape (Ndata, Nfilt)
+            Associated errors on the flux densities.
+
+        data_mask : numpy.ndarray of shape (Ndata, Nfilt)
+            Binary mask (0/1) indicating whether each measurement is valid.
+
+        data_labels : numpy.ndarray of shape (Ndata, Nlabels)
+            Labels for each object to be stored in the output file.
+
+        save_file : str
+            Path to the output HDF5 file. The '.h5' extension will be added
+            if not present.
+
+        phot_offsets : numpy.ndarray of shape (Nfilt,), optional
+            Multiplicative photometric offsets applied to data and errors.
+
+        parallax : numpy.ndarray of shape (Ndata,), optional
+            Parallax measurements in mas for each object.
+
+        parallax_err : numpy.ndarray of shape (Ndata,), optional
+            Errors on parallax measurements. Required if parallax is provided.
+
+        Nmc_prior : int, optional
+            Number of Monte Carlo samples for prior integration. Default is 50.
+
+        avlim : tuple, optional
+            (min, max) bounds on A(V). Default is (0.0, 20.0).
+
+        av_gauss : tuple, optional
+            (mean, std) for Gaussian prior on A(V). If provided, this is used
+            instead of the distance-reddening prior during fitting.
+
+        rvlim : tuple, optional
+            (min, max) bounds on R(V). Default is (1.0, 8.0).
+
+        rv_gauss : tuple, optional
+            (mean, std) for Gaussian prior on R(V). Default is (3.32, 0.18)
+            based on Schlafly et al. (2016).
+
+        lnprior : numpy.ndarray of shape (Nmodel,), optional
+            Log-prior for each model. If not provided, defaults to Kroupa IMF
+            prior on initial mass (for MIST models) or PS1 luminosity function
+            prior (for Bayestar models).
+
+        wt_thresh : float, optional
+            Threshold `wt_thresh * max(weight)` for model selection.
+            Default is 1e-3.
+
+        cdf_thresh : float, optional
+            CDF threshold for model selection (used if wt_thresh is None).
+            Default is 2e-3.
+
+        Ndraws : int, optional
+            Number of posterior draws to save per object. Default is 250.
+
+        apply_agewt : bool, optional
+            Whether to apply age weighting from MIST models. Default is True.
+
+        apply_grad : bool, optional
+            Whether to apply grid spacing corrections. Default is True.
+
+        lngalprior : callable, optional
+            Galactic structure prior function. If not provided, uses the
+            default Galactic model from Green et al. (2014).
+
+        lndustprior : callable, optional
+            Dust prior function. If not provided and dustfile is given,
+            uses the 3D dust map prior.
+
+        dustfile : str, optional
+            Path to the 3D dust map file.
+
+        apply_dlabels : bool, optional
+            Whether to pass model labels to Galactic prior. Default is True.
+
+        data_coords : numpy.ndarray of shape (Ndata, 2), optional
+            Galactic (l, b) coordinates for each object in degrees.
+            Required if using default Galactic prior.
+
+        logl_dim_prior : bool, optional
+            Whether to apply dimensional correction to log-likelihood.
+            Default is True.
+
+        ltol : float, optional
+            Convergence tolerance for likelihood optimization. Default is 3e-2.
+
+        ltol_subthresh : float, optional
+            Sub-threshold for convergence. Default is 1e-2.
+
+        logl_initthresh : float, optional
+            Initial likelihood threshold for model culling. Default is 5e-3.
+
+        mag_max : float, optional
+            Maximum allowed magnitude for valid data. Default is 50.0.
+
+        merr_max : float, optional
+            Maximum allowed magnitude error. Default is 0.25.
+
+        rstate : numpy.random.RandomState, optional
+            Random state for reproducibility.
+
+        save_dar_draws : bool, optional
+            Whether to save distance, A(V), and R(V) draws. Default is True.
+
+        running_io : bool, optional
+            If True, writes results to disk after each object (safer for long
+            runs). If False, accumulates results in memory and writes at end
+            (faster for slow filesystems). Default is True.
+
+        mem_lim : float, optional
+            Memory limit in MB for Monte Carlo sampling. Default is 8000.0.
+
+        verbose : bool, optional
+            Whether to print progress to stderr. Default is True.
+
+        Returns
+        -------
+        str
+            Path to the output HDF5 file.
+
+        Notes
+        -----
+        The output HDF5 file contains the following datasets:
+
+        - ``labels``: Object labels (Ndata, Nlabels)
+        - ``model_idx``: Resampled model indices (Ndata, Ndraws)
+        - ``ml_scale``: Maximum likelihood scale factors (Ndata, Ndraws)
+        - ``ml_av``: Maximum likelihood A(V) values (Ndata, Ndraws)
+        - ``ml_rv``: Maximum likelihood R(V) values (Ndata, Ndraws)
+        - ``ml_cov_sar``: Covariance matrices (Ndata, Ndraws, 3, 3)
+        - ``obj_log_post``: Log-posteriors (Ndata, Ndraws)
+        - ``obj_log_evid``: Log-evidence per object (Ndata,)
+        - ``obj_chi2min``: Minimum chi-squared per object (Ndata,)
+        - ``obj_Nbands``: Number of bands used per object (Ndata,)
+
+        If save_dar_draws=True, also includes:
+
+        - ``samps_dist``: Distance draws in kpc (Ndata, Ndraws)
+        - ``samps_red``: A(V) draws (Ndata, Ndraws)
+        - ``samps_dred``: R(V) draws (Ndata, Ndraws)
+        - ``samps_logp``: Log-weights for draws (Ndata, Ndraws)
+
+        Examples
+        --------
+        >>> from brutus.analysis import BruteForce
+        >>> from brutus.core import StarGrid
+        >>> from brutus.data import load_models
+        >>>
+        >>> # Load model grid
+        >>> models, labels, params = load_models('grid.h5')
+        >>> grid = StarGrid(models, labels, params)
+        >>> fitter = BruteForce(grid)
+        >>>
+        >>> # Fit photometry
+        >>> results_file = fitter.fit(
+        ...     phot, phot_err, phot_mask, obj_labels,
+        ...     save_file='results.h5',
+        ...     parallax=parallax, parallax_err=parallax_err,
+        ...     data_coords=coords
+        ... )
         """
-        # Setup data and priors
+        # Pre-process data and initialize priors
         setup_results = self._setup(
             data,
             data_err,
             data_mask,
-            data_labels,
+            data_labels=data_labels,
             phot_offsets=phot_offsets,
             parallax=parallax,
             parallax_err=parallax_err,
@@ -1541,26 +1728,106 @@ class BruteForce:
             lndustprior_proc,
         ) = setup_results
 
-        # Initialize output file
-        if running_io:
-            f = h5py.File(save_file, "w")
-            # Create datasets...
-            # (Implementation abbreviated for brevity)
+        Ndata, Nfilt = data.shape
 
-        # Main fitting loop
-        Ndata = len(data)
+        # Initialize random state
+        if rstate is None:
+            rstate = np.random.RandomState()
+
+        # Ensure save_file has .h5 extension
+        if not save_file.endswith(".h5"):
+            save_file = f"{save_file}.h5"
+
+        # Check whether to apply A(V) prior from dustfile
+        apply_av_prior = av_gauss is None
+
+        # Get model labels for priors
+        dlabels = self.models_labels if apply_dlabels else None
+
+        # Initialize results file
+        out = h5py.File(save_file, "w")
+        out.create_dataset("labels", data=data_labels)
+
+        if running_io:
+            # Streaming mode: create datasets upfront, write as we go
+            out.create_dataset(
+                "model_idx", data=np.full((Ndata, Ndraws), -99, dtype="int32")
+            )
+            out.create_dataset(
+                "ml_scale", data=np.ones((Ndata, Ndraws), dtype="float32")
+            )
+            out.create_dataset(
+                "ml_av", data=np.zeros((Ndata, Ndraws), dtype="float32")
+            )
+            out.create_dataset(
+                "ml_rv", data=np.zeros((Ndata, Ndraws), dtype="float32")
+            )
+            out.create_dataset(
+                "ml_cov_sar", data=np.zeros((Ndata, Ndraws, 3, 3), dtype="float32")
+            )
+            out.create_dataset(
+                "obj_log_post", data=np.zeros((Ndata, Ndraws), dtype="float32")
+            )
+            out.create_dataset(
+                "obj_log_evid", data=np.zeros(Ndata, dtype="float32")
+            )
+            out.create_dataset(
+                "obj_chi2min", data=np.zeros(Ndata, dtype="float32")
+            )
+            out.create_dataset(
+                "obj_Nbands", data=np.zeros(Ndata, dtype="int16")
+            )
+            if save_dar_draws:
+                out.create_dataset(
+                    "samps_dist", data=np.ones((Ndata, Ndraws), dtype="float32")
+                )
+                out.create_dataset(
+                    "samps_red", data=np.ones((Ndata, Ndraws), dtype="float32")
+                )
+                out.create_dataset(
+                    "samps_dred", data=np.ones((Ndata, Ndraws), dtype="float32")
+                )
+                out.create_dataset(
+                    "samps_logp", data=np.ones((Ndata, Ndraws), dtype="float32")
+                )
+        else:
+            # Batch mode: accumulate in memory, write at end
+            idxs_arr = np.full((Ndata, Ndraws), -99, dtype="int32")
+            scale_arr = np.ones((Ndata, Ndraws), dtype="float32")
+            av_arr = np.zeros((Ndata, Ndraws), dtype="float32")
+            rv_arr = np.zeros((Ndata, Ndraws), dtype="float32")
+            cov_arr = np.zeros((Ndata, Ndraws, 3, 3), dtype="float32")
+            logpost_arr = np.zeros((Ndata, Ndraws), dtype="float32")
+            logevid_arr = np.zeros(Ndata, dtype="float32")
+            chi2best_arr = np.zeros(Ndata, dtype="float32")
+            nbands_arr = np.zeros(Ndata, dtype="int16")
+            if save_dar_draws:
+                dist_arr = np.ones((Ndata, Ndraws), dtype="float32")
+                red_arr = np.ones((Ndata, Ndraws), dtype="float32")
+                dred_arr = np.ones((Ndata, Ndraws), dtype="float32")
+                logp_arr = np.ones((Ndata, Ndraws), dtype="float32")
+
+        # Fit data
+        if verbose:
+            t1 = time.time()
+            t = 0.0
+            sys.stderr.write(f"\rFitting object 1/{Ndata}  ")
+            sys.stderr.flush()
+
         for i in range(Ndata):
-            if verbose and i % 100 == 0:
-                print(f"Fitting object {i+1}/{Ndata}...")
+            # Get parallax for this object
+            par_i = parallax[i] if parallax is not None else None
+            par_err_i = parallax_err[i] if parallax_err is not None else None
+            coord_i = data_coords[i] if data_coords is not None else None
 
             # Fit individual object
-            _ = self._fit(  # Results stored in self.results, not needed here
+            results = self._fit(
                 data_proc[i],
                 data_err_proc[i],
                 data_mask_proc[i],
-                parallax=parallax[i] if parallax is not None else None,
-                parallax_err=parallax_err[i] if parallax_err is not None else None,
-                coord=data_coords[i] if data_coords is not None else None,
+                parallax=par_i,
+                parallax_err=par_err_i,
+                coord=coord_i,
                 Nmc_prior=Nmc_prior,
                 avlim=avlim,
                 av_gauss=av_gauss,
@@ -1573,22 +1840,127 @@ class BruteForce:
                 lngalprior=lngalprior_proc,
                 lndustprior=lndustprior_proc,
                 dustfile=dustfile,
-                dlabels=self.models_labels if apply_dlabels else None,
+                dlabels=dlabels,
                 logl_dim_prior=logl_dim_prior,
                 ltol=ltol,
                 ltol_subthresh=ltol_subthresh,
                 logl_initthresh=logl_initthresh,
                 mem_lim=mem_lim,
                 rstate=rstate,
+                return_distreds=save_dar_draws,
             )
+
+            # Unpack results
+            if save_dar_draws:
+                (
+                    idxs,
+                    scales,
+                    avs,
+                    rvs,
+                    covs_sar,
+                    Ndim,
+                    lpost,
+                    levid,
+                    chi2min,
+                    dists,
+                    reds,
+                    dreds,
+                    logwt,
+                ) = results
+            else:
+                (
+                    idxs,
+                    scales,
+                    avs,
+                    rvs,
+                    covs_sar,
+                    Ndim,
+                    lpost,
+                    levid,
+                    chi2min,
+                ) = results
+
+            # Print progress
+            if verbose and i < Ndata - 1:
+                t2 = time.time()
+                dt = t2 - t1
+                t1 = t2
+                t += dt
+                t_avg = t / (i + 1)
+                t_est = t_avg * (Ndata - i - 1)
+                sys.stderr.write(
+                    f"\rFitting object {i + 2}/{Ndata} "
+                    f"[chi2/n: {chi2min:.1f}/{Ndim}] "
+                    f"(mean time: {t_avg:.3f} s/obj, "
+                    f"est. remaining: {t_est:.3f} s)    "
+                )
+                sys.stderr.flush()
 
             # Save results
             if running_io:
-                # Save to HDF5...
-                pass
+                out["model_idx"][i] = idxs
+                out["ml_scale"][i] = scales
+                out["ml_av"][i] = avs
+                out["ml_rv"][i] = rvs
+                out["ml_cov_sar"][i] = covs_sar
+                out["obj_Nbands"][i] = Ndim
+                out["obj_log_post"][i] = lpost
+                out["obj_log_evid"][i] = levid
+                out["obj_chi2min"][i] = chi2min
+                if save_dar_draws:
+                    out["samps_dist"][i] = dists
+                    out["samps_red"][i] = reds
+                    out["samps_dred"][i] = dreds
+                    out["samps_logp"][i] = logwt
+            else:
+                idxs_arr[i] = idxs
+                scale_arr[i] = scales
+                av_arr[i] = avs
+                rv_arr[i] = rvs
+                cov_arr[i] = covs_sar
+                logpost_arr[i] = lpost
+                logevid_arr[i] = levid
+                chi2best_arr[i] = chi2min
+                nbands_arr[i] = Ndim
+                if save_dar_draws:
+                    dist_arr[i] = dists
+                    red_arr[i] = reds
+                    dred_arr[i] = dreds
+                    logp_arr[i] = logwt
 
-        if running_io:
-            f.close()
+        # Final progress update
+        if verbose:
+            t2 = time.time()
+            dt = t2 - t1
+            t += dt
+            t_avg = t / Ndata
+            sys.stderr.write(
+                f"\rFitting object {Ndata}/{Ndata} "
+                f"[chi2/n: {chi2min:.1f}/{Ndim}] "
+                f"(mean time: {t_avg:.3f} s/obj, "
+                f"total: {t:.3f} s)    \n"
+            )
+            sys.stderr.flush()
+
+        # Dump results to disk if using batch mode
+        if not running_io:
+            out.create_dataset("model_idx", data=idxs_arr)
+            out.create_dataset("ml_scale", data=scale_arr)
+            out.create_dataset("ml_av", data=av_arr)
+            out.create_dataset("ml_rv", data=rv_arr)
+            out.create_dataset("ml_cov_sar", data=cov_arr)
+            out.create_dataset("obj_log_post", data=logpost_arr)
+            out.create_dataset("obj_log_evid", data=logevid_arr)
+            out.create_dataset("obj_chi2min", data=chi2best_arr)
+            out.create_dataset("obj_Nbands", data=nbands_arr)
+            if save_dar_draws:
+                out.create_dataset("samps_dist", data=dist_arr)
+                out.create_dataset("samps_red", data=red_arr)
+                out.create_dataset("samps_dred", data=dred_arr)
+                out.create_dataset("samps_logp", data=logp_arr)
+
+        # Close output file
+        out.close()
 
         return save_file
 
@@ -1619,8 +1991,94 @@ class BruteForce:
         logl_initthresh=5e-3,
         mem_lim=8000.0,
         rstate=None,
+        return_distreds=True,
     ):
-        """Perform internal fitting for a single object."""
+        """
+        Perform internal fitting for a single object.
+
+        Parameters
+        ----------
+        data : numpy.ndarray
+            Photometric flux densities for a single object.
+        data_err : numpy.ndarray
+            Photometric errors.
+        data_mask : numpy.ndarray
+            Binary mask for valid data.
+        parallax : float, optional
+            Parallax measurement in mas.
+        parallax_err : float, optional
+            Parallax error in mas.
+        coord : tuple, optional
+            Galactic (l, b) coordinates in degrees.
+        Nmc_prior : int, optional
+            Number of Monte Carlo samples for prior integration.
+        avlim : tuple, optional
+            (min, max) bounds on A(V).
+        av_gauss : tuple, optional
+            (mean, std) for Gaussian prior on A(V).
+        rvlim : tuple, optional
+            (min, max) bounds on R(V).
+        rv_gauss : tuple, optional
+            (mean, std) for Gaussian prior on R(V).
+        lnprior : numpy.ndarray, optional
+            Log-prior for each model.
+        wt_thresh : float, optional
+            Threshold for weight-based model selection.
+        cdf_thresh : float, optional
+            CDF threshold for model selection.
+        Ndraws : int, optional
+            Number of posterior draws to return.
+        lngalprior : callable, optional
+            Galactic structure prior function.
+        lndustprior : callable, optional
+            Dust prior function.
+        dustfile : str, optional
+            Path to 3D dust map file.
+        dlabels : numpy.ndarray, optional
+            Model labels for prior evaluation.
+        logl_dim_prior : bool, optional
+            Whether to apply dimensional prior correction.
+        ltol : float, optional
+            Convergence tolerance.
+        ltol_subthresh : float, optional
+            Sub-threshold for convergence.
+        logl_initthresh : float, optional
+            Initial likelihood threshold.
+        mem_lim : float, optional
+            Memory limit in MB.
+        rstate : numpy.random.RandomState, optional
+            Random state for reproducibility.
+        return_distreds : bool, optional
+            Whether to return distance/reddening draws. Default is True.
+
+        Returns
+        -------
+        tuple
+            If return_distreds=True:
+                (idxs, scales, avs, rvs, covs_sar, Ndim, lnprob, levid, chi2min,
+                 dists, reds, dreds, logwts)
+            If return_distreds=False:
+                (idxs, scales, avs, rvs, covs_sar, Ndim, lnprob, levid, chi2min)
+
+            Where:
+            - idxs: Resampled model indices (Ndraws,)
+            - scales: Scale factors for resampled models (Ndraws,)
+            - avs: A(V) values for resampled models (Ndraws,)
+            - rvs: R(V) values for resampled models (Ndraws,)
+            - covs_sar: Covariance matrices (Ndraws, 3, 3)
+            - Ndim: Number of photometric bands used
+            - lnprob: Log-posteriors for resampled models (Ndraws,)
+            - levid: Log-evidence (scalar)
+            - chi2min: Minimum chi-squared (scalar)
+            - dists: Distance draws in kpc (Ndraws,)
+            - reds: A(V) draws (Ndraws,)
+            - dreds: R(V) draws (Ndraws,)
+            - logwts: Log-weights for draws (Ndraws,)
+        """
+        # Initialize random state
+        if rstate is None:
+            rstate = np.random.RandomState()
+
         # Compute grid likelihoods
         loglike_results = self.loglike_grid(
             data,
@@ -1638,6 +2096,9 @@ class BruteForce:
             parallax_err=parallax_err,
             return_vals=True,
         )
+
+        # Unpack likelihood results
+        lnlike, Ndim, chi2, scales_all, avs_all, rvs_all, icovs_sar_all = loglike_results
 
         # Compute grid posteriors
         logpost_results = self.logpost_grid(
@@ -1659,7 +2120,92 @@ class BruteForce:
             rstate=rstate,
         )
 
-        return logpost_results
+        # Unpack posterior results
+        # sel: selected model indices, cov_sar: covariances for selected models
+        # lnp: log-posteriors, dist_mc/a_mc/r_mc: MC samples, lnp_mc: MC log-posteriors
+        sel, cov_sar_sel, lnp, dist_mc, a_mc, r_mc, lnp_mc = logpost_results
+        Nsel = len(sel)
+
+        # Add parallax contribution to chi2 and Ndim if provided
+        Ndim_out = Ndim
+        chi2_with_par = chi2.copy()
+        if parallax is not None and parallax_err is not None:
+            if np.isfinite(parallax) and np.isfinite(parallax_err):
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    par_pred = np.sqrt(scales_all)
+                    chi2_with_par += (par_pred - parallax) ** 2 / parallax_err**2
+                    Ndim_out += 1
+
+        # Compute goodness-of-fit metrics
+        chi2min = np.min(chi2_with_par[sel])
+        levid = logsumexp(lnp)
+
+        # Resample from posterior
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            wt = np.exp(lnp - levid)
+            wt_sum = wt.sum()
+            if wt_sum > 0:
+                wt /= wt_sum
+            else:
+                wt = np.ones(Nsel) / Nsel
+            idxs_local = rstate.choice(Nsel, size=Ndraws, p=wt)
+            sidxs = sel[idxs_local]
+
+        # Extract values for resampled models
+        scales = scales_all[sidxs]
+        avs = avs_all[sidxs]
+        rvs = rvs_all[sidxs]
+        covs_sar = cov_sar_sel[idxs_local]
+        lnprob = lnp[idxs_local]
+
+        if return_distreds:
+            # Draw distance and reddening samples from MC integration
+            # For each resampled model, pick one MC sample weighted by its contribution
+            dists = np.zeros(Ndraws, dtype="float32")
+            reds = np.zeros(Ndraws, dtype="float32")
+            dreds = np.zeros(Ndraws, dtype="float32")
+            logwts = np.zeros(Ndraws, dtype="float32")
+
+            for i, idx_local in enumerate(idxs_local):
+                # Get MC samples for this model
+                mc_logwts = lnp_mc[idx_local]  # Shape: (Nmc,)
+                mc_logwts_max = np.max(mc_logwts)
+
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    mc_wt = np.exp(mc_logwts - mc_logwts_max)
+                    mc_wt_sum = mc_wt.sum()
+                    if mc_wt_sum > 0:
+                        mc_wt /= mc_wt_sum
+                    else:
+                        mc_wt = np.ones(len(mc_logwts)) / len(mc_logwts)
+
+                # Draw one MC sample
+                imc = rstate.choice(len(mc_logwts), p=mc_wt)
+                dists[i] = dist_mc[idx_local, imc]
+                reds[i] = a_mc[idx_local, imc]
+                dreds[i] = r_mc[idx_local, imc]
+                logwts[i] = mc_logwts[imc]
+
+            return (
+                sidxs,
+                scales,
+                avs,
+                rvs,
+                covs_sar,
+                Ndim_out,
+                lnprob,
+                levid,
+                chi2min,
+                dists,
+                reds,
+                dreds,
+                logwts,
+            )
+        else:
+            return (sidxs, scales, avs, rvs, covs_sar, Ndim_out, lnprob, levid, chi2min)
 
     def __repr__(self):
         """Return string representation of BruteForce object."""
