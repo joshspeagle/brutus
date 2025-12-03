@@ -30,7 +30,7 @@ where :math:`\Theta = ([{\rm Fe/H}], \log_{10}({\rm age}), A_V, R_V, d)` are pop
 
 This properly down-weights field contaminants during mass marginalization, preventing biases in age, metallicity, and distance estimates.
 
-For detailed derivation, see Speagle et al. (2025) §3.
+For detailed derivation, see Speagle et al. (2025) §5.
 
 Core Functions
 --------------

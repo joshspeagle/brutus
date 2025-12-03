@@ -138,7 +138,7 @@ Common Workflows
 
 1. **Download data**: ``fetch_grids()``, ``fetch_isos()``, ``fetch_dustmaps()``
 2. **Load models**: ``load_models('grid_file.h5')``
-3. **Create fitter**: ``BruteForce(StarGrid(models, labels, mask))``
+3. **Create fitter**: ``BruteForce(StarGrid(models, labels, label_mask))``
 4. **Fit data**: ``fitter.fit(data, data_err, data_mask, labels, save_file, ...)``
 5. **Analyze**: Read HDF5 output, compute statistics, visualize
 

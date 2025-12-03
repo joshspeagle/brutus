@@ -104,7 +104,7 @@ For non-uniform spacing (e.g., finer resolution for low-mass stars):
 The Fitting Algorithm
 ----------------------
 
-``BruteForce`` implements a multi-stage optimization strategy. For details, see Speagle et al. (2025) §2.
+``BruteForce`` implements a multi-stage optimization strategy. For details, see Speagle et al. (2025) §3.
 
 **Stage 1: Magnitude Space Approximation**
    Quickly eliminates poor fits using analytical least-squares in magnitude space. Keeps only grid points with reasonable :math:`\chi^2`.
