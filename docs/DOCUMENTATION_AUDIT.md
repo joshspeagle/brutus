@@ -15,9 +15,9 @@ This file tracks issues found during the documentation audit and serves as a che
 | `index.rst` | [x] | 5 | [x] Stage 2 |
 | `installation.rst` | [x] | 3 | [x] Stage 2 |
 | `quickstart.rst` | [x] | 7 | [x] Stage 1+2 |
-| `scientific_background.rst` | [x] | 2 | [ ] |
-| `stellar_models.rst` | [x] | 5 | [ ] |
-| `priors.rst` | [x] | 8 | [x] Stage 1 |
+| `scientific_background.rst` | [x] | 2 | [x] Stage 3 |
+| `stellar_models.rst` | [x] | 5 | [x] Stage 3 |
+| `priors.rst` | [x] | 8 | [x] Stage 1+3 (59% reduction) |
 | `grid_generation.rst` | [x] | 6 | [ ] |
 | `cluster_modeling.rst` | [x] | 5 | [ ] |
 | `understanding_results.rst` | [x] | 10 | [x] Stage 1 |
@@ -377,7 +377,7 @@ These issues appear across multiple documentation files:
 - [x] **G7**: Add data download notes to getting started docs ✓ Stage 2
 - [ ] **API docs**: Verify autodoc generates correctly
 - [x] **installation.rst**: Mark conda-forge availability as varies ✓ Stage 2
-- [ ] **scientific_background.rst**: Minor condensing
+- [x] **scientific_background.rst**: Minor condensing ✓ Stage 3
 
 ---
 
