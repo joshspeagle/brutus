@@ -6,6 +6,20 @@ This page provides an overview of the scientific foundations and statistical fra
 .. tip::
    For quick definitions of key terms (EEP, R_V, isochrone, etc.), see the :doc:`glossary`.
 
+Scientific Context
+------------------
+
+brutus was developed to address a central challenge in Galactic astronomy: converting the 2-D projected positions of billions of stars into 3-D maps that reveal the structure and history of the Milky Way.
+
+Large photometric surveys like Gaia and SDSS have revolutionized our understanding of the Galaxy. Recent discoveries enabled by distance and extinction measurements include:
+
+- **Gaia-Enceladus merger remnant**: Evidence of a major accretion event ~10 Gyr ago that deposited stars with distinct kinematics and chemistry into the Galactic halo
+- **Phase-space spirals**: Dynamical signatures of past perturbations (possibly the Sagittarius dwarf passage) visible in stellar velocity distributions
+- **Stellar streams**: Tidally disrupted satellite galaxies and globular clusters that trace the dark matter halo and Galactic potential
+- **3-D dust maps**: The detailed distribution of interstellar dust throughout the Galaxy, essential for correcting photometry and understanding star formation
+
+These discoveries require robust inference of stellar distances, extinctions, and physical properties from photometry and astrometry. brutus provides this capability using Bayesian inference with physically-motivated priors, systematically exploring parameter space to handle the inherent degeneracies in photometric data.
+
 What brutus Does
 ----------------
 
@@ -155,7 +169,14 @@ Limitations and Caveats
    The stellar models assume non-rotating single stars with solar-scaled abundance patterns (except for α-enhancement). Real stars may have rotation, exotic abundances, or binary companions that violate these assumptions.
 
 **Systematic Uncertainties**
-   Theoretical stellar models have systematic errors, particularly for low-mass and pre-main-sequence stars. brutus includes empirical calibration corrections (see :doc:`photometric_offsets`) but residual systematics remain.
+   While brutus provides full posterior distributions capturing statistical uncertainties, systematic errors can dominate for well-measured stars:
+
+   - *Stellar evolution models* (~5-20%): MIST assumes non-rotating single stars. Magnetic activity causes 100-300 K temperature offsets and 5-20% radius inflation for low-mass stars.
+   - *Stellar atmospheres* (~2-5%): Missing molecular opacities and 1-D/LTE approximations cause 0.02-0.05 mag errors in bolometric corrections.
+   - *Dust extinction*: R_V varies from ~2 (dense clouds) to ~5 (diffuse ISM). 3-D dust maps have resolution limits.
+   - *Data calibration* (~2%): Photometric zero-points vary across surveys. Gaia parallaxes have ~20-30 μas systematic offsets.
+
+   Consider adding ~10% systematic floor to distance uncertainties. See :doc:`photometric_offsets` for empirical calibration procedures.
 
 **Prior Dependence**
    Results can be sensitive to prior choices, especially for faint or poorly measured stars. It's important to check that priors are appropriate for your science case and consider how prior assumptions affect conclusions.

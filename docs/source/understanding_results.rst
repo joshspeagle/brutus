@@ -76,7 +76,11 @@ Interpreting Posterior Shapes
 Common Degeneracies
 -------------------
 
-**Distance-Extinction**: A faint reddened star looks like a nearby red star. Check correlation:
+Understanding degeneracies helps interpret results and identify when additional data would help.
+
+**Distance-Extinction Degeneracy**
+
+A distant star with low extinction can produce identical photometry to a nearby star with high extinction. Physically: increasing distance dims a star, while increasing extinction both dims and reddens it. In optical-only data, these effects partially cancel.
 
 .. code-block:: python
 
@@ -86,11 +90,25 @@ Common Degeneracies
    if abs(corr) > 0.7:
        print("Strong distance-extinction degeneracy")
 
-**Solutions**: Add parallax, use multi-band photometry (esp. near-IR), enable dust priors.
+**Breaking this degeneracy**: (1) Parallax provides direct distance constraint; (2) Near-IR photometry probes where extinction is weaker (A_K ~ 0.1 A_V); (3) 3-D dust maps constrain extinction along the line of sight.
 
-**Mass-Age-Metallicity**: Different (M, age, [Fe/H]) can produce similar Teff/L. **Solutions**: Add spectroscopy or asteroseismology; Galactic priors help.
+**Dwarf-Giant Degeneracy**
 
-**Binaries**: Unresolved companions add flux, biasing parameters. Affects ~50% of stars.
+A nearby M dwarf and a distant K giant can have identical colors despite vastly different luminosities (factor of ~1000). Without parallax, optical photometry alone cannot distinguish them.
+
+**Breaking this degeneracy**: (1) Parallax eliminates the distance ambiguity; (2) Galactic priors favor dwarfs at small distances and giants at large distances; (3) Look for bimodal posteriors indicating both solutions are viable.
+
+**Mass-Age-Metallicity Degeneracy**
+
+Different combinations of (M, age, [Fe/H]) produce similar effective temperatures and luminosities. Older metal-rich stars can mimic younger metal-poor stars.
+
+**Breaking this degeneracy**: (1) Galactic priors encode the age-metallicity relation (older populations are more metal-poor); (2) Spectroscopy provides independent metallicity; (3) Asteroseismology constrains mass and evolutionary state.
+
+**Binary Stars**
+
+Unresolved companions add flux, making systems appear brighter and potentially bluer. This biases inferred distances (too close) and masses (too high). Approximately 50% of field stars have companions.
+
+**Indicators**: Gaia RUWE > 1.4 suggests astrometric excess noise from binarity. See :doc:`cluster_modeling` for binary fraction modeling.
 
 Diagnostic Checks
 -----------------
