@@ -573,9 +573,19 @@ class TestBruteForceInternal:
 
         # _fit returns 13 values with return_distreds=True (default)
         (
-            idxs, scales, avs, rvs, covs_sar,
-            Ndim, lnprob, levid, chi2min,
-            dists, reds, dreds, logwts
+            idxs,
+            scales,
+            avs,
+            rvs,
+            covs_sar,
+            Ndim,
+            lnprob,
+            levid,
+            chi2min,
+            dists,
+            reds,
+            dreds,
+            logwts,
         ) = results
 
         # Check basic outputs
@@ -1251,8 +1261,10 @@ class TestBruteForceFitMethod:
         data_mask = np.ones((ndata, nfilters), dtype=bool)
 
         # Labels for each object
-        data_labels = np.array([(i, i * 100, i * 0.1) for i in range(ndata)],
-                               dtype=[("id", "i4"), ("ra", "f4"), ("dec", "f4")])
+        data_labels = np.array(
+            [(i, i * 100, i * 0.1) for i in range(ndata)],
+            dtype=[("id", "i4"), ("ra", "f4"), ("dec", "f4")],
+        )
 
         # Galactic coordinates
         data_coords = np.array([[120.0, 45.0], [130.0, 50.0], [140.0, 55.0]])
@@ -1477,9 +1489,19 @@ class TestBruteForceFitMethod:
         # Should return 13-element tuple
         assert len(results) == 13
         (
-            idxs, scales, avs, rvs, covs_sar,
-            Ndim, lnprob, levid, chi2min,
-            dists, reds, dreds, logwts
+            idxs,
+            scales,
+            avs,
+            rvs,
+            covs_sar,
+            Ndim,
+            lnprob,
+            levid,
+            chi2min,
+            dists,
+            reds,
+            dreds,
+            logwts,
         ) = results
 
         # Verify shapes

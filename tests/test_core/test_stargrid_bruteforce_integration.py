@@ -161,9 +161,19 @@ class TestStarGridBruteForceIntegration:
 
         # _fit returns 13 values with return_distreds=True (default)
         (
-            idxs, scales, avs, rvs, covs_sar,
-            Ndim, lnprob, levid, chi2min,
-            dists, reds, dreds, logwts
+            idxs,
+            scales,
+            avs,
+            rvs,
+            covs_sar,
+            Ndim,
+            lnprob,
+            levid,
+            chi2min,
+            dists,
+            reds,
+            dreds,
+            logwts,
         ) = results
 
         # Check results are reasonable
@@ -258,7 +268,10 @@ class TestStarGridBruteForceIntegration:
 
         # Different stars should prefer different models
         # _fit returns 13 values: (idxs, scales, avs, rvs, covs_sar, Ndim, lnprob, levid, chi2min, dists, reds, dreds, logwts)
-        best_models = [idxs[np.argmax(lnprob)] for idxs, _, _, _, _, _, lnprob, _, _, _, _, _, _ in results]
+        best_models = [
+            idxs[np.argmax(lnprob)]
+            for idxs, _, _, _, _, _, lnprob, _, _, _, _, _, _ in results
+        ]
         assert len(set(best_models)) > 1  # Not all the same
 
     def test_prior_effects_on_posteriors(self, mist_grid):
@@ -456,9 +469,19 @@ class TestRealWorldScenarios:
 
         # _fit returns 13 values with return_distreds=True (default)
         (
-            idxs, scales, avs, rvs, covs_sar,
-            Ndim, lnprob, levid, chi2min,
-            dists, reds, dreds, logwts
+            idxs,
+            scales,
+            avs,
+            rvs,
+            covs_sar,
+            Ndim,
+            lnprob,
+            levid,
+            chi2min,
+            dists,
+            reds,
+            dreds,
+            logwts,
         ) = results
 
         # Should get reasonable posterior samples
@@ -497,9 +520,19 @@ class TestRealWorldScenarios:
 
         # _fit returns 13 values with return_distreds=True (default)
         (
-            idxs, scales, avs, rvs, covs_sar,
-            Ndim, lnprob, levid, chi2min,
-            dists, reds, dreds, logwts
+            idxs,
+            scales,
+            avs,
+            rvs,
+            covs_sar,
+            Ndim,
+            lnprob,
+            levid,
+            chi2min,
+            dists,
+            reds,
+            dreds,
+            logwts,
         ) = results
 
         # Should recover reasonable extinction (allowing some tolerance for fitting)

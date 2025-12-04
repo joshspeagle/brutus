@@ -1738,9 +1738,6 @@ class BruteForce:
         if not save_file.endswith(".h5"):
             save_file = f"{save_file}.h5"
 
-        # Check whether to apply A(V) prior from dustfile
-        apply_av_prior = av_gauss is None
-
         # Get model labels for priors
         dlabels = self.models_labels if apply_dlabels else None
 
@@ -1756,27 +1753,17 @@ class BruteForce:
             out.create_dataset(
                 "ml_scale", data=np.ones((Ndata, Ndraws), dtype="float32")
             )
-            out.create_dataset(
-                "ml_av", data=np.zeros((Ndata, Ndraws), dtype="float32")
-            )
-            out.create_dataset(
-                "ml_rv", data=np.zeros((Ndata, Ndraws), dtype="float32")
-            )
+            out.create_dataset("ml_av", data=np.zeros((Ndata, Ndraws), dtype="float32"))
+            out.create_dataset("ml_rv", data=np.zeros((Ndata, Ndraws), dtype="float32"))
             out.create_dataset(
                 "ml_cov_sar", data=np.zeros((Ndata, Ndraws, 3, 3), dtype="float32")
             )
             out.create_dataset(
                 "obj_log_post", data=np.zeros((Ndata, Ndraws), dtype="float32")
             )
-            out.create_dataset(
-                "obj_log_evid", data=np.zeros(Ndata, dtype="float32")
-            )
-            out.create_dataset(
-                "obj_chi2min", data=np.zeros(Ndata, dtype="float32")
-            )
-            out.create_dataset(
-                "obj_Nbands", data=np.zeros(Ndata, dtype="int16")
-            )
+            out.create_dataset("obj_log_evid", data=np.zeros(Ndata, dtype="float32"))
+            out.create_dataset("obj_chi2min", data=np.zeros(Ndata, dtype="float32"))
+            out.create_dataset("obj_Nbands", data=np.zeros(Ndata, dtype="int16"))
             if save_dar_draws:
                 out.create_dataset(
                     "samps_dist", data=np.ones((Ndata, Ndraws), dtype="float32")
@@ -2098,7 +2085,9 @@ class BruteForce:
         )
 
         # Unpack likelihood results
-        lnlike, Ndim, chi2, scales_all, avs_all, rvs_all, icovs_sar_all = loglike_results
+        lnlike, Ndim, chi2, scales_all, avs_all, rvs_all, icovs_sar_all = (
+            loglike_results
+        )
 
         # Compute grid posteriors
         logpost_results = self.logpost_grid(

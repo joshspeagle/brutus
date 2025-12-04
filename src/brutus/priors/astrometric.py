@@ -52,7 +52,7 @@ __all__ = ["logp_parallax", "logp_parallax_scale", "convert_parallax_to_scale"]
 
 # Numerical constants for uninformative prior bounds
 SCALE_MIN = 1e-20  # Minimum scale factor (essentially zero)
-SCALE_MAX = 1e20   # Maximum scale factor (essentially infinity)
+SCALE_MAX = 1e20  # Maximum scale factor (essentially infinity)
 
 
 def logp_parallax(parallaxes, p_meas, p_err):
