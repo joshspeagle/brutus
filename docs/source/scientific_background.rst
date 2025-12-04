@@ -3,6 +3,9 @@ Scientific Background
 
 This page provides an overview of the scientific foundations and statistical framework underlying **brutus**. For detailed mathematical derivations and methodological choices, see `Speagle et al. (2025) <https://arxiv.org/abs/2503.02227>`_.
 
+.. tip::
+   For quick definitions of key terms (EEP, R_V, isochrone, etc.), see the :doc:`glossary`.
+
 What brutus Does
 ----------------
 
@@ -152,7 +155,14 @@ Limitations and Caveats
    The stellar models assume non-rotating single stars with solar-scaled abundance patterns (except for α-enhancement). Real stars may have rotation, exotic abundances, or binary companions that violate these assumptions.
 
 **Systematic Uncertainties**
-   Theoretical stellar models have systematic errors, particularly for low-mass and pre-main-sequence stars. brutus includes empirical calibration corrections (see :doc:`photometric_offsets`) but residual systematics remain.
+   While brutus provides full posterior distributions capturing statistical uncertainties, systematic errors can dominate for well-measured stars:
+
+   - *Stellar evolution models* (~5-20%): MIST assumes non-rotating single stars. Magnetic activity causes 100-300 K temperature offsets and 5-20% radius inflation for low-mass stars.
+   - *Stellar atmospheres* (~2-5%): Missing molecular opacities and 1-D/LTE approximations cause 0.02-0.05 mag errors in bolometric corrections.
+   - *Dust extinction*: R_V varies from ~2 (dense clouds) to ~5 (diffuse ISM). 3-D dust maps have resolution limits.
+   - *Data calibration* (~2%): Photometric zero-points vary across surveys. Gaia parallaxes have ~20-30 μas systematic offsets.
+
+   For well-measured stars, systematic uncertainties may dominate statistical errors. See :doc:`photometric_offsets` for empirical calibration procedures.
 
 **Prior Dependence**
    Results can be sensitive to prior choices, especially for faint or poorly measured stars. It's important to check that priors are appropriate for your science case and consider how prior assumptions affect conclusions.

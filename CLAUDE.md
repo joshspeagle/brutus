@@ -141,5 +141,5 @@ from brutus import Isochrone, StellarPop
 
 iso = Isochrone()
 pop = StellarPop(isochrone=iso)
-seds, params, params2 = pop.synthesize(feh=0.0, loga=9.0)
+seds, params, params2 = pop.get_seds(feh=0.0, loga=9.0)
 ```

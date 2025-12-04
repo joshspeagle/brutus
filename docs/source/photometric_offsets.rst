@@ -247,156 +247,33 @@ This captures systematic trends across the HR diagram. Implementation:
 Estimating Offsets for Your Data
 ---------------------------------
 
-If published offsets are unavailable for your photometric system, you can derive your own:
+If published offsets are unavailable for your photometric system, you can derive your own using this general procedure:
 
-Step-by-Step Procedure
-^^^^^^^^^^^^^^^^^^^^^^^
+1. **Select calibration sample**: Query nearby stars (d < 100 pc) with accurate Gaia parallaxes (σ_π/π < 10%), low extinction, and good photometry. Filter for RUWE < 1.4 to avoid binaries.
 
-1. **Select calibration sample**:
+2. **Cross-match**: Match your survey photometry to the Gaia calibration sample.
 
-   .. code-block:: python
+3. **Fit with brutus**: Run ``BruteForce.fit()`` on each calibration star using the Gaia parallax as a constraint.
 
-      # Query Gaia for nearby stars with accurate parallax
-      query = """
-      SELECT source_id, ra, dec, parallax, parallax_error,
-             phot_g_mean_mag, phot_bp_mean_mag, phot_rp_mean_mag
-      FROM gaiadr3.gaia_source
-      WHERE parallax > 10.0 AND parallax_error/parallax < 0.1
-        AND phot_g_mean_mag < 15.0
-        AND ruwe < 1.4
-      """
+4. **Compute residuals**: For each star, calculate Δm = m_observed - m_model in each band.
 
-2. **Cross-match with your photometry**:
+5. **Analyze trends**: Bin residuals by color (e.g., BP-RP) and compute median offsets. Look for systematic trends with stellar type.
 
-   .. code-block:: python
+6. **Parameterize**: Fit a polynomial (typically linear or quadratic in color) to the median offsets.
 
-      # Cross-match Gaia sources with Pan-STARRS, 2MASS, etc.
-      from astroquery.gaia import Gaia
-      from astropy.coordinates import SkyCoord
-      import astropy.units as u
-
-      coords = SkyCoord(ra, dec, unit='deg')
-      # Cross-match procedure...
-
-3. **Fit each star with brutus**:
-
-   .. code-block:: python
-
-      from brutus.analysis import BruteForce
-      from brutus.data import load_models
-      from brutus.core import StarGrid
-
-      models, labels, params = load_models('grid_file.h5')
-      grid = StarGrid(models, labels, params)
-      fitter = BruteForce(grid)
-
-      residuals = []
-      for i, star in enumerate(calibration_sample):
-          result = fitter.fit(
-              star['phot'], star['phot_err'],
-              parallax=star['parallax'],
-              parallax_err=star['parallax_err']
-          )
-
-          # Get best-fit model
-          best_model_mag = result['best_fit_mags']
-
-          # Compute residuals
-          resid = star['phot'] - best_model_mag
-          residuals.append(resid)
-
-4. **Analyze residuals**:
-
-   .. code-block:: python
-
-      import numpy as np
-      import matplotlib.pyplot as plt
-
-      residuals = np.array(residuals)
-      colors = gaia_bp - gaia_rp  # Example color
-
-      # Plot residuals vs color
-      for iband, band_name in enumerate(['g', 'r', 'i', 'z', 'y']):
-          plt.figure()
-          plt.scatter(colors, residuals[:, iband], alpha=0.3)
-          plt.axhline(0, color='k', linestyle='--')
-          plt.xlabel('BP - RP (mag)')
-          plt.ylabel(f'{band_name} residual (mag)')
-
-          # Compute median offset in bins
-          color_bins = np.linspace(0, 3, 20)
-          offsets = []
-          for j in range(len(color_bins)-1):
-              mask = (colors > color_bins[j]) & (colors < color_bins[j+1])
-              if np.sum(mask) > 10:
-                  offsets.append(np.median(residuals[mask, iband]))
-              else:
-                  offsets.append(np.nan)
-
-          plt.plot(0.5*(color_bins[:-1] + color_bins[1:]), offsets,
-                   'r-', linewidth=2, label='Median offset')
-          plt.legend()
-          plt.title(f'{band_name}-band photometric offset')
-          plt.show()
-
-5. **Parameterize offsets**:
-
-   .. code-block:: python
-
-      from scipy.optimize import curve_fit
-
-      def offset_model(color, a0, a1, a2):
-          return a0 + a1*color + a2*color**2
-
-      # Fit polynomial to median offsets
-      popt, pcov = curve_fit(offset_model, bin_centers, median_offsets)
-
-      print(f"Offset model: {popt[0]:.3f} + {popt[1]:.3f}*color + {popt[2]:.3f}*color^2")
+.. tip::
+   See the ``tutorials/`` notebooks for worked examples of offset derivation with real data.
 
 Validating Calibrations
 ------------------------
 
-After deriving corrections, validate them:
+After deriving corrections, validate them using independent data:
 
-Cluster Tests
-^^^^^^^^^^^^^
+- **Open clusters**: Fit well-studied clusters with and without corrections. Compare derived distances and ages to literature values.
+- **Eclipsing binaries**: Compare brutus mass/radius estimates to model-independent EB measurements from radial velocities and eclipse modeling.
+- **Benchmark stars**: Use stars with interferometric radii or asteroseismic constraints.
 
-Fit well-studied clusters with and without corrections:
-
-.. code-block:: python
-
-   # Fit cluster without corrections
-   results_raw = fit_cluster(cluster_data, corr_params=None)
-
-   # Fit cluster with corrections
-   results_corr = fit_cluster(cluster_data, corr_params=corr_params)
-
-   # Compare to literature values
-   print(f"Distance (no corr): {results_raw['dist']:.0f} pc (lit: 500 pc)")
-   print(f"Distance (corr): {results_corr['dist']:.0f} pc (lit: 500 pc)")
-   print(f"Age (no corr): {results_raw['age']:.2f} Gyr (lit: 1.0 Gyr)")
-   print(f"Age (corr): {results_corr['age']:.2f} Gyr (lit: 1.0 Gyr)")
-
-Eclipsing Binary Tests
-^^^^^^^^^^^^^^^^^^^^^^^
-
-Eclipsing binaries provide model-independent masses and radii. Compare brutus estimates to EB parameters:
-
-.. code-block:: python
-
-   # Fit eclipsing binary components
-   eb_results = fitter.fit(eb_photometry, eb_phot_err,
-                           parallax=eb_parallax, parallax_err=eb_plx_err)
-
-   # Compare to measured EB properties
-   mass_true = 0.95  # Msun from radial velocities
-   radius_true = 0.91  # Rsun from eclipse modeling
-
-   mass_brutus = eb_results['mass_median']
-   radius_brutus = eb_results['radius_median']
-
-   print(f"Mass error: {(mass_brutus - mass_true)/mass_true * 100:.1f}%")
-   print(f"Radius error: {(radius_brutus - radius_true)/radius_true * 100:.1f}%")
+Good corrections should reduce scatter and systematic offsets relative to these independent constraints.
 
 When to Apply Corrections
 --------------------------

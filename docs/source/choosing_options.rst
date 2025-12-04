@@ -157,6 +157,41 @@ More draws (500-1000) improve posterior characterization but increase file size.
 Performance
 -----------
 
+Expected Runtimes
+^^^^^^^^^^^^^^^^^
+
+Approximate runtimes for common workflows (highly dependent on hardware, grid size, and data quality):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 30 30
+
+   * - Task
+     - Serial (approx)
+     - Parallel (8 cores)
+   * - Single star (BruteForce)
+     - seconds to ~1 min
+     - —
+   * - 100 stars
+     - minutes to ~1 hour
+     - minutes
+   * - 1,000 stars
+     - ~1 hour to several hours
+     - ~10-30 minutes
+   * - 10,000 stars
+     - many hours
+     - ~1-4 hours
+   * - Cluster MCMC (500 stars, 5000 steps)
+     - hours
+     - —
+
+.. note::
+   These are rough estimates. Actual runtimes vary significantly with grid resolution, extinction parameter ranges, and number of photometric bands. Profile your specific use case.
+
+**Factors affecting speed**: Grid size (larger = slower), number of bands (more = slower), data quality (poor S/N = more iterations), extinction range (wider = slower).
+
+**If fitting is slow** (>30 sec/star): Use coarser grid, narrow ``avlim``/``rvlim``, or parallelize.
+
 Parallelization
 ^^^^^^^^^^^^^^^
 
@@ -222,14 +257,22 @@ MCMC with emcee: Use 2-4× ndim walkers, check acceptance fraction (target 0.2-0
 Empirical Calibration
 ---------------------
 
-Include empirical corrections when generating grids:
+Include empirical corrections when generating grids to fix systematic offsets in theoretical stellar models:
 
 .. code-block:: python
 
-   corr_params = [dtdm, drdm, msto_smooth, feh_scale]
+   # corr_params = [dtdm, drdm, msto_smooth, feh_scale]
+   corr_params = [100.0, 0.08, 0.05, 1.0]  # Example values
    generator.make_grid('grid_corrected.h5', corr_params=corr_params)
 
-Apply corrections for main-sequence stars; may not apply to giants or very metal-poor stars. See :doc:`photometric_offsets`.
+**Parameters**:
+
+- ``dtdm``: Temperature correction slope (K per solar mass relative to turnoff)
+- ``drdm``: Radius correction slope (R_sun per solar mass relative to turnoff)
+- ``msto_smooth``: Smoothing scale near turnoff (solar masses) to avoid discontinuities
+- ``feh_scale``: Metallicity-dependent scaling factor for corrections
+
+Apply corrections for main-sequence stars; may not apply to giants or very metal-poor stars. See :doc:`photometric_offsets` for derivation and typical values.
 
 Quick Reference
 ---------------

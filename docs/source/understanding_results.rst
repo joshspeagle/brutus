@@ -76,7 +76,11 @@ Interpreting Posterior Shapes
 Common Degeneracies
 -------------------
 
-**Distance-Extinction**: A faint reddened star looks like a nearby red star. Check correlation:
+Understanding degeneracies helps interpret results and identify when additional data would help.
+
+**Distance-Extinction Degeneracy**
+
+A distant star with low extinction can produce identical photometry to a nearby star with high extinction. Physically: increasing distance dims a star, while increasing extinction both dims and reddens it. In optical-only data, these effects partially cancel.
 
 .. code-block:: python
 
@@ -86,11 +90,25 @@ Common Degeneracies
    if abs(corr) > 0.7:
        print("Strong distance-extinction degeneracy")
 
-**Solutions**: Add parallax, use multi-band photometry (esp. near-IR), enable dust priors.
+**Breaking this degeneracy**: (1) Parallax provides direct distance constraint; (2) Near-IR photometry probes where extinction is weaker (A_K ~ 0.1 A_V); (3) 3-D dust maps constrain extinction along the line of sight.
 
-**Mass-Age-Metallicity**: Different (M, age, [Fe/H]) can produce similar Teff/L. **Solutions**: Add spectroscopy or asteroseismology; Galactic priors help.
+**Dwarf-Giant Degeneracy**
 
-**Binaries**: Unresolved companions add flux, biasing parameters. Affects ~50% of stars.
+A nearby M dwarf and a distant K giant can have identical colors despite vastly different luminosities (factor of ~1000). Without parallax, optical photometry alone cannot distinguish them.
+
+**Breaking this degeneracy**: (1) Parallax eliminates the distance ambiguity; (2) Galactic priors favor dwarfs at small distances and giants at large distances; (3) Look for bimodal posteriors indicating both solutions are viable.
+
+**Mass-Age-Metallicity Degeneracy**
+
+Different combinations of (M, age, [Fe/H]) produce similar effective temperatures and luminosities. Older metal-rich stars can mimic younger metal-poor stars.
+
+**Breaking this degeneracy**: (1) Galactic priors encode the age-metallicity relation (older populations are more metal-poor); (2) Spectroscopy provides independent metallicity; (3) Asteroseismology constrains mass and evolutionary state.
+
+**Binary Stars**
+
+Unresolved companions add flux, making systems appear brighter and potentially bluer. This biases inferred distances (too close) and masses (too high). Approximately 50% of field stars have companions.
+
+**Indicators**: Gaia RUWE > 1.4 suggests astrometric excess noise from binarity. See :doc:`cluster_modeling` for binary fraction modeling.
 
 Diagnostic Checks
 -----------------
@@ -106,9 +124,30 @@ Diagnostic Checks
 
    chi2_reduced = chi2_min / (n_bands - 3)  # 3 free params: dist, A_V, R_V
 
-   # Good: χ² ~ 1
-   # χ² < 0.5: errors overestimated
-   # χ² > 3: poor fit or underestimated errors
+**Interpreting χ² values:**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 15 25 60
+
+   * - χ² (reduced)
+     - Assessment
+     - Likely Cause / Action
+   * - < 0.5
+     - Errors overestimated
+     - Photometric uncertainties may be too large; consider recalibrating
+   * - 0.8 - 1.2
+     - **Good fit**
+     - Model matches data within uncertainties
+   * - 1.2 - 2.0
+     - Acceptable
+     - Minor tension; check individual band residuals
+   * - 2.0 - 3.0
+     - Marginal
+     - Investigate: possible binary, variability, or calibration issue
+   * - > 3.0
+     - Poor fit
+     - Check data quality, verify star is within model coverage, or consider unmodeled physics (binary, rotation)
 
 Parallax Consistency
 ^^^^^^^^^^^^^^^^^^^^
@@ -157,7 +196,7 @@ brutus provides **Bayesian credible intervals**:
    dist_16, dist_84 = np.percentile(dist, [16, 84])
    print(f"Distance: {dist_median:.0f} (+{dist_84-dist_median:.0f} / -{dist_median-dist_16:.0f}) pc")
 
-**Note**: Uncertainties are statistical only. Consider adding ~10% systematic floor for distances.
+**Note**: These uncertainties are statistical only. For well-measured stars, systematic uncertainties (stellar models, calibration) may be comparable or larger. See :doc:`scientific_background` for discussion.
 
 Derived Quantities
 ------------------

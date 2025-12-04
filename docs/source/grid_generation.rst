@@ -6,14 +6,29 @@ This page explains the **grid-based "brute force" approach** that gives brutus i
 The Brute-Force Philosophy
 ---------------------------
 
-Unlike traditional MCMC methods, brutus evaluates likelihood at all points on a pre-computed model grid, then marginalizes to get the posterior. This approach:
+Why evaluate on a grid rather than use MCMC sampling? The stellar parameter inference problem has characteristics that make grid-based evaluation attractive:
 
-- Has no convergence issues (no burn-in, local minima)
+**Multi-modal posteriors**: A single set of photometric observations can be consistent with multiple stellar solutions (e.g., dwarf vs giant). MCMC samplers can get trapped in one mode, while grid evaluation naturally captures all solutions.
+
+**High-dimensional parameter space**: With ~7 parameters (mass, EEP, [Fe/H], [α/Fe], distance, A_V, R_V), MCMC convergence diagnostics are difficult. Grid evaluation guarantees complete coverage.
+
+**Repeated structure**: The same stellar models apply to millions of stars. Pre-computing the grid once amortizes the cost across all targets.
+
+**Advantages over MCMC**:
+
+- No convergence issues (no burn-in, local minima, or chain diagnostics)
 - Guarantees systematic parameter space coverage
-- Is embarrassingly parallelizable
-- Reuses the same grid for millions of stars
+- Embarrassingly parallelizable across stars
+- Reproducible results (no stochastic variation)
 
-The trade-off is computational cost, addressed through pre-computation, efficient multi-stage optimization, and adaptive grid resolution.
+**The trade-off**: Computational cost scales with grid size. brutus addresses this through pre-computation, multi-stage optimization (coarse-to-fine), and efficient vectorization.
+
+.. note::
+   **No interpolation**: brutus evaluates likelihoods at discrete grid points only. It does not interpolate between grid models. This means:
+
+   - Posterior distributions have inherent discreteness matching grid resolution
+   - Finer grids yield smoother posteriors but larger files and slower fitting
+   - For most applications, 1-3M model grids provide adequate resolution
 
 Grid Structure
 --------------

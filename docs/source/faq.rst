@@ -32,7 +32,7 @@ Model Selection
 StarGrid vs StarEvolTrack?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-- ``StarGrid`` (with ``BruteForce``): Fast (1-10 sec/star), for large samples with standard filters
+- ``StarGrid`` (with ``BruteForce``): Fast, for large samples with standard filters
 - ``StarEvolTrack``: Flexible (any filters), for small samples or prototyping
 
 See :doc:`choosing_options` for details.
@@ -190,8 +190,9 @@ Getting Help
 ------------
 
 1. Read the documentation: :doc:`quickstart`, :doc:`tutorials`
-2. GitHub Issues: https://github.com/joshspeagle/brutus/issues
-3. Email: j.speagle@utoronto.ca
+2. Check the :doc:`glossary` for unfamiliar terms
+3. GitHub Issues: https://github.com/joshspeagle/brutus/issues
+4. Email: j.speagle@utoronto.ca
 
 When reporting issues, include: brutus version, Python version, minimal reproducible example, full error traceback.
 

@@ -193,8 +193,8 @@ Computing full spectral synthesis for every model evaluation would be prohibitiv
 
 The neural networks are trained on a grid of MIST atmosphere models and provide:
 
-- **Speed**: 1000× faster than spectral synthesis
-- **Accuracy**: Sub-millimagnitude errors in bolometric corrections
+- **Speed**: Orders of magnitude faster than full spectral synthesis
+- **Accuracy**: Typical errors of a few millimagnitudes in bolometric corrections
 - **Flexibility**: Support arbitrary filter combinations
 
 The ``FastNNPredictor`` class handles loading trained networks and predicting bolometric corrections:

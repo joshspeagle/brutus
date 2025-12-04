@@ -161,11 +161,25 @@ Available Prior Functions
 
 .. currentmodule:: brutus.priors
 
-- :func:`logp_imf` - Initial mass function (Kroupa)
-- :func:`logp_galactic_structure` - 3-D stellar density
-- :func:`logp_feh` - Metallicity distribution
-- :func:`logp_age_from_feh` - Age distribution
-- :func:`logp_parallax` - Parallax prior with scale conversion
+**Stellar Priors**:
+
+- :func:`logp_imf` - Initial mass function (Kroupa two-part power law)
+- :func:`logp_ps1_luminosity_function` - Pan-STARRS r-band luminosity function
+
+**Galactic Priors**:
+
+- :func:`logp_galactic_structure` - 3-D stellar density (thin disk + thick disk + halo)
+- :func:`logp_feh` - Metallicity distribution by Galactic component
+- :func:`logp_age_from_feh` - Age distribution conditioned on metallicity
+
+**Astrometric Priors**:
+
+- :func:`logp_parallax` - Parallax prior with distance-to-parallax conversion
+- :func:`logp_parallax_scale` - Parallax prior with systematic scale factor
+
+**Extinction Priors**:
+
+- :func:`logp_extinction` - 3-D dust extinction from Bayestar maps
 
 Next Steps
 ----------

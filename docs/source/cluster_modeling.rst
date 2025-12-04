@@ -91,13 +91,33 @@ This function:
 Binary Stars
 ------------
 
-Binaries are modeled via **Secondary Mass Fraction (SMF)**:
+Binaries are modeled via **Secondary Mass Fraction (SMF)**, also called ``binary_fraction``:
 
-- **SMF = 0**: Single star
+- **SMF = 0**: Single star (default)
 - **SMF = 0.5**: Companion with half the primary mass
 - **SMF = 1**: Equal-mass binary
 
-Combined photometry is the sum of fluxes from both components. Binary companions are only modeled for main-sequence stars (EEP ≤ 480).
+**Key assumptions**:
+
+1. Binary companions share the same age and metallicity as primaries
+2. Combined photometry is the sum of fluxes from both components
+3. Binaries are only modeled for main-sequence stars (EEP ≤ ``eep_binary_max``, default 480)
+4. Post-MS stars are treated as single regardless of SMF setting
+
+**Usage in StellarPop**:
+
+.. code-block:: python
+
+   # Single stars
+   seds, params, params2 = pop.get_seds(feh=0.0, loga=9.0, binary_fraction=0.0)
+
+   # Binary population with 40% mass ratio
+   seds, params, params2 = pop.get_seds(feh=0.0, loga=9.0, binary_fraction=0.4)
+
+   # Equal-mass binaries
+   seds, params, params2 = pop.get_seds(feh=0.0, loga=9.0, binary_fraction=1.0)
+
+**Interpreting params2**: When ``binary_fraction > 0``, the ``params2`` return value contains secondary component parameters. For single stars, these are NaN.
 
 Complete Example: MCMC Fitting
 ------------------------------
