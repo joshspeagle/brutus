@@ -50,6 +50,36 @@ brutus Documentation
    changelog
    contributing
 
+Choose Your Workflow
+====================
+
+Not sure where to start? Use this guide to find the right approach for your use case.
+
+**I want to fit stellar parameters to photometry:**
+
+- **Large sample (>100 stars) with standard filters** → Use ``BruteForce`` + ``StarGrid``
+
+  *Fastest approach. Pre-computed grids enable fitting thousands of stars quickly.* See :doc:`quickstart` § "Fitting with BruteForce".
+
+- **Small sample or custom filters** → Use ``StarEvolTrack``
+
+  *More flexible but slower. Computes photometry on-the-fly for any filter set.* See :doc:`quickstart` § "Individual Star Modeling".
+
+**I want to model a stellar cluster:**
+
+- Use ``Isochrone`` + ``StellarPop`` with MCMC
+
+  *Fits shared age, metallicity, distance, and extinction for coeval populations.* See :doc:`cluster_modeling`.
+
+**I want to generate synthetic photometry:**
+
+- For individual stars → Use ``StarEvolTrack.get_seds()``
+- For populations → Use ``StellarPop.get_seds()``
+
+  *Useful for simulations, testing, or understanding model predictions.* See :doc:`stellar_models`.
+
+**Still unsure?** Start with the :doc:`quickstart` guide or check the :doc:`faq`.
+
 Key Features
 ============
 
