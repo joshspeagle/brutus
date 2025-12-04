@@ -16,6 +16,7 @@ brutus Documentation
    installation
    quickstart
    tutorials
+   glossary
 
 .. toctree::
    :maxdepth: 2
