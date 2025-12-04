@@ -3,6 +3,9 @@ Scientific Background
 
 This page provides an overview of the scientific foundations and statistical framework underlying **brutus**. For detailed mathematical derivations and methodological choices, see `Speagle et al. (2025) <https://arxiv.org/abs/2503.02227>`_.
 
+.. tip::
+   For quick definitions of key terms (EEP, R_V, isochrone, etc.), see the :doc:`glossary`.
+
 What brutus Does
 ----------------
 
