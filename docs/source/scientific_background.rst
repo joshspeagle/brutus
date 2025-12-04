@@ -6,20 +6,6 @@ This page provides an overview of the scientific foundations and statistical fra
 .. tip::
    For quick definitions of key terms (EEP, R_V, isochrone, etc.), see the :doc:`glossary`.
 
-Scientific Context
-------------------
-
-brutus was developed to address a central challenge in Galactic astronomy: converting the 2-D projected positions of billions of stars into 3-D maps that reveal the structure and history of the Milky Way.
-
-Large photometric surveys like Gaia and SDSS have revolutionized our understanding of the Galaxy. Recent discoveries enabled by distance and extinction measurements include:
-
-- **Gaia-Enceladus merger remnant**: Evidence of a major accretion event ~10 Gyr ago that deposited stars with distinct kinematics and chemistry into the Galactic halo
-- **Phase-space spirals**: Dynamical signatures of past perturbations (possibly the Sagittarius dwarf passage) visible in stellar velocity distributions
-- **Stellar streams**: Tidally disrupted satellite galaxies and globular clusters that trace the dark matter halo and Galactic potential
-- **3-D dust maps**: The detailed distribution of interstellar dust throughout the Galaxy, essential for correcting photometry and understanding star formation
-
-These discoveries require robust inference of stellar distances, extinctions, and physical properties from photometry and astrometry. brutus provides this capability using Bayesian inference with physically-motivated priors, systematically exploring parameter space to handle the inherent degeneracies in photometric data.
-
 What brutus Does
 ----------------
 
