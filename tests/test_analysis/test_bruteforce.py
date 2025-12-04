@@ -571,11 +571,16 @@ class TestBruteForceInternal:
             wt_thresh=0.01,
         )
 
-        sel, cov, lnp, dist_mc, av_mc, rv_mc, lnp_mc = results
+        # _fit returns 13 values with return_distreds=True (default)
+        (
+            idxs, scales, avs, rvs, covs_sar,
+            Ndim, lnprob, levid, chi2min,
+            dists, reds, dreds, logwts
+        ) = results
 
         # Check basic outputs
-        assert len(sel) > 0
-        assert np.all(np.isfinite(lnp))
+        assert len(idxs) > 0
+        assert np.all(np.isfinite(lnprob))
 
     def test_repr_method(self, bruteforce_fitter):
         """Test string representation."""

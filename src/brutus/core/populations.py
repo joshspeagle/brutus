@@ -825,8 +825,8 @@ class StellarPop(object):
                 eep=eep2,
                 apply_corr=apply_corr,
                 corr_params=corr_params,
-            ).T
-            params2.update(dict(zip(self.isochrone.predictions, params_arr2)))
+            )
+            params2.update(dict(zip(self.isochrone.predictions, params_arr2.T)))
         except Exception as e:
             warnings.warn(
                 f"Secondary parameter generation failed for binary population: {e}",
