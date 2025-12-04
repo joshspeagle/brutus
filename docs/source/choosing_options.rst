@@ -157,6 +157,38 @@ More draws (500-1000) improve posterior characterization but increase file size.
 Performance
 -----------
 
+Expected Runtimes
+^^^^^^^^^^^^^^^^^
+
+Typical runtimes for common workflows (on a modern multi-core workstation):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 30 30
+
+   * - Task
+     - Serial
+     - Parallel (8 cores)
+   * - Single star (BruteForce)
+     - 1-10 seconds
+     - —
+   * - 100 stars
+     - 2-15 minutes
+     - 30 sec - 3 min
+   * - 1,000 stars
+     - 20 min - 3 hours
+     - 3-20 minutes
+   * - 10,000 stars
+     - 3-30 hours
+     - 30 min - 4 hours
+   * - Cluster MCMC (500 stars, 5000 steps)
+     - 1-8 hours
+     - —
+
+**Factors affecting speed**: Grid size (larger = slower), number of bands (more = slower), data quality (poor S/N = more iterations), extinction range (wider = slower).
+
+**If fitting is slow** (>30 sec/star): Use coarser grid, narrow ``avlim``/``rvlim``, or parallelize.
+
 Parallelization
 ^^^^^^^^^^^^^^^
 

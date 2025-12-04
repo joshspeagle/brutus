@@ -106,9 +106,30 @@ Diagnostic Checks
 
    chi2_reduced = chi2_min / (n_bands - 3)  # 3 free params: dist, A_V, R_V
 
-   # Good: χ² ~ 1
-   # χ² < 0.5: errors overestimated
-   # χ² > 3: poor fit or underestimated errors
+**Interpreting χ² values:**
+
+.. list-table::
+   :header-rows: 1
+   :widths: 15 25 60
+
+   * - χ² (reduced)
+     - Assessment
+     - Likely Cause / Action
+   * - < 0.5
+     - Errors overestimated
+     - Photometric uncertainties may be too large; consider recalibrating
+   * - 0.8 - 1.2
+     - **Good fit**
+     - Model matches data within uncertainties
+   * - 1.2 - 2.0
+     - Acceptable
+     - Minor tension; check individual band residuals
+   * - 2.0 - 3.0
+     - Marginal
+     - Investigate: possible binary, variability, or calibration issue
+   * - > 3.0
+     - Poor fit
+     - Check data quality, verify star is within model coverage, or consider unmodeled physics (binary, rotation)
 
 Parallax Consistency
 ^^^^^^^^^^^^^^^^^^^^
