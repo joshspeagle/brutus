@@ -160,30 +160,33 @@ Performance
 Expected Runtimes
 ^^^^^^^^^^^^^^^^^
 
-Typical runtimes for common workflows (on a modern multi-core workstation):
+Approximate runtimes for common workflows (highly dependent on hardware, grid size, and data quality):
 
 .. list-table::
    :header-rows: 1
    :widths: 40 30 30
 
    * - Task
-     - Serial
+     - Serial (approx)
      - Parallel (8 cores)
    * - Single star (BruteForce)
-     - 1-10 seconds
+     - seconds to ~1 min
      - —
    * - 100 stars
-     - 2-15 minutes
-     - 30 sec - 3 min
+     - minutes to ~1 hour
+     - minutes
    * - 1,000 stars
-     - 20 min - 3 hours
-     - 3-20 minutes
+     - ~1 hour to several hours
+     - ~10-30 minutes
    * - 10,000 stars
-     - 3-30 hours
-     - 30 min - 4 hours
+     - many hours
+     - ~1-4 hours
    * - Cluster MCMC (500 stars, 5000 steps)
-     - 1-8 hours
+     - hours
      - —
+
+.. note::
+   These are rough estimates. Actual runtimes vary significantly with grid resolution, extinction parameter ranges, and number of photometric bands. Profile your specific use case.
 
 **Factors affecting speed**: Grid size (larger = slower), number of bands (more = slower), data quality (poor S/N = more iterations), extinction range (wider = slower).
 

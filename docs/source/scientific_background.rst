@@ -176,7 +176,7 @@ Limitations and Caveats
    - *Dust extinction*: R_V varies from ~2 (dense clouds) to ~5 (diffuse ISM). 3-D dust maps have resolution limits.
    - *Data calibration* (~2%): Photometric zero-points vary across surveys. Gaia parallaxes have ~20-30 μas systematic offsets.
 
-   Consider adding ~10% systematic floor to distance uncertainties. See :doc:`photometric_offsets` for empirical calibration procedures.
+   For well-measured stars, systematic uncertainties may dominate statistical errors. See :doc:`photometric_offsets` for empirical calibration procedures.
 
 **Prior Dependence**
    Results can be sensitive to prior choices, especially for faint or poorly measured stars. It's important to check that priors are appropriate for your science case and consider how prior assumptions affect conclusions.

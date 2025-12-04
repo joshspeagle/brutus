@@ -67,7 +67,7 @@ This is the main workflow for deriving stellar parameters from photometry.
        data_coords=coords,     # (Nstars, 2) galactic (l, b) in degrees
    )
 
-**Expected runtime**: 1-10 seconds per star with good data.
+**Typical runtime**: Seconds to minutes per star, depending on grid size and data quality.
 
 Step 3: Working with Results
 ----------------------------

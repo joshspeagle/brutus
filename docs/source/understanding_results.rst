@@ -196,7 +196,7 @@ brutus provides **Bayesian credible intervals**:
    dist_16, dist_84 = np.percentile(dist, [16, 84])
    print(f"Distance: {dist_median:.0f} (+{dist_84-dist_median:.0f} / -{dist_median-dist_16:.0f}) pc")
 
-**Note**: Uncertainties are statistical only. Consider adding ~10% systematic floor for distances.
+**Note**: These uncertainties are statistical only. For well-measured stars, systematic uncertainties (stellar models, calibration) may be comparable or larger. See :doc:`scientific_background` for discussion.
 
 Derived Quantities
 ------------------

@@ -32,7 +32,7 @@ Model Selection
 StarGrid vs StarEvolTrack?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-- ``StarGrid`` (with ``BruteForce``): Fast (1-10 sec/star), for large samples with standard filters
+- ``StarGrid`` (with ``BruteForce``): Fast, for large samples with standard filters
 - ``StarEvolTrack``: Flexible (any filters), for small samples or prototyping
 
 See :doc:`choosing_options` for details.
