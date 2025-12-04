@@ -45,8 +45,8 @@ For **large samples** requiring speed:
    from brutus.data import load_models
 
    # Load pre-computed grid
-   models, labels, params = load_models('grid_file.h5')
-   grid = StarGrid(models, labels, params)
+   models, labels, label_mask = load_models('grid_file.h5')
+   grid = StarGrid(models, labels, label_mask)
 
    # Fast photometry lookup (no re-computation)
    # Use with BruteForce fitter for thousands to millions of stars

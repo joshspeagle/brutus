@@ -258,8 +258,8 @@ Pre-computed Grids (``StarGrid``)
    from brutus.data import load_models
 
    # Load pre-computed grid
-   models, labels, params = load_models('grid_mist_v9.h5')
-   grid = StarGrid(models, labels, params)
+   models, labels, label_mask = load_models('grid_mist_v9.h5')
+   grid = StarGrid(models, labels, label_mask)
 
 On-the-Fly Models (``StarEvolTrack``, ``StellarPop``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

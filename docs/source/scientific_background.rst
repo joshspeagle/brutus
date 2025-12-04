@@ -131,19 +131,7 @@ where :math:`\ell,b` are Galactic longitude and latitude. The priors include:
 Why Bayesian Inference?
 ------------------------
 
-The Bayesian framework offers several advantages for stellar parameter estimation:
-
-**Breaking Degeneracies**
-   Photometry alone cannot uniquely determine stellar properties—a faint red star could be either a nearby cool dwarf or a distant reddened giant. Priors on Galactic structure help resolve these ambiguities by incorporating knowledge about where different types of stars are likely to be found.
-
-**Proper Uncertainty Quantification**
-   The posterior distribution provides full probabilistic uncertainties that account for both measurement errors and model limitations. This is critical for propagating uncertainties into derived quantities.
-
-**Incorporating Diverse Information**
-   Bayesian inference naturally combines multiple data types (photometry, parallax, proper motions) and prior knowledge (Galactic models, dust maps, stellar physics) into a coherent probabilistic framework.
-
-**Handling Missing Data**
-   The framework gracefully handles missing photometric bands or parallax measurements by marginalizing over unobserved quantities.
+The Bayesian framework is well-suited for stellar parameter estimation because it: (1) **breaks degeneracies** between different stellar types by incorporating Galactic structure priors; (2) provides **full posterior distributions** for proper uncertainty quantification; (3) **combines diverse data** (photometry, parallax, dust maps) coherently; and (4) **handles missing data** by marginalization.
 
 Common Use Cases
 ----------------
