@@ -40,7 +40,7 @@ Basic stellar population modeling:
 >>>
 >>> # Create population synthesizer for photometry
 >>> pop_synth = StellarPop(isochrone=iso)
->>> seds, params, params2 = pop_synth.synthesize(
+>>> seds, params, params2 = pop_synth.get_seds(
 ...     feh=0.0, afe=0.0, loga=9.0,
 ...     av=0.1, dist=1000.0
 ... )
@@ -48,7 +48,7 @@ Basic stellar population modeling:
 Advanced usage with binary populations:
 
 >>> # Model binary stellar populations
->>> seds, params, params2 = pop_synth.synthesize(
+>>> seds, params, params2 = pop_synth.get_seds(
 ...     feh=-0.5, afe=0.3, loga=10.0,
 ...     binary_fraction=0.4,  # 40% mass ratio binaries
 ...     av=0.2, dist=2000.0
@@ -325,7 +325,7 @@ class Isochrone(object):
 
         See Also
         --------
-        StellarPop.synthesize : Uses these predictions for photometry generation
+        StellarPop.get_seds : Uses these predictions for photometry generation
         brutus.core.EEPTracks.get_predictions : Similar function for individual stars
 
         Notes
@@ -681,13 +681,13 @@ class StellarPop(object):
         --------
         Simple stellar population:
 
-        >>> seds, params, params2 = pop_synth.synthesize(
+        >>> seds, params, params2 = pop_synth.get_seds(
         ...     feh=0.0, loga=9.0, av=0.1, dist=1000.0
         ... )
 
         Binary population:
 
-        >>> seds, params, params2 = pop_synth.synthesize(
+        >>> seds, params, params2 = pop_synth.get_seds(
         ...     feh=-0.5, loga=10.0, binary_fraction=0.4,
         ...     av=0.2, dist=2000.0
         ... )

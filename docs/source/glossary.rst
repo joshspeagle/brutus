@@ -87,6 +87,21 @@ Methods and Algorithms
 **BruteForce**
    The main fitting class in brutus. Takes a StarGrid and observed data, returns posterior samples for distance, extinction, and stellar parameters.
 
+Empirical Calibration
+---------------------
+
+**dtdm**
+   Temperature correction slope for empirical calibration: ΔT_eff = dtdm × (M - M_TO), in K per solar mass relative to turnoff. Typical values ~100-300 K/M_sun.
+
+**drdm**
+   Radius correction slope: ΔR = drdm × (M - M_TO), in R_sun per solar mass relative to turnoff. Typical values ~0.05-0.15 R_sun/M_sun.
+
+**msto_smooth**
+   Smoothing scale (in solar masses) applied near the main sequence turnoff to avoid discontinuities in empirical corrections.
+
+**feh_scale**
+   Metallicity-dependent scaling factor for empirical corrections. Allows corrections to vary with [Fe/H].
+
 Model Coverage
 --------------
 

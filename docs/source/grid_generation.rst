@@ -15,6 +15,13 @@ Unlike traditional MCMC methods, brutus evaluates likelihood at all points on a 
 
 The trade-off is computational cost, addressed through pre-computation, efficient multi-stage optimization, and adaptive grid resolution.
 
+.. note::
+   **No interpolation**: brutus evaluates likelihoods at discrete grid points only. It does not interpolate between grid models. This means:
+
+   - Posterior distributions have inherent discreteness matching grid resolution
+   - Finer grids yield smoother posteriors but larger files and slower fitting
+   - For most applications, 1-3M model grids provide adequate resolution
+
 Grid Structure
 --------------
 

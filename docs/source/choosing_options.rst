@@ -254,14 +254,22 @@ MCMC with emcee: Use 2-4× ndim walkers, check acceptance fraction (target 0.2-0
 Empirical Calibration
 ---------------------
 
-Include empirical corrections when generating grids:
+Include empirical corrections when generating grids to fix systematic offsets in theoretical stellar models:
 
 .. code-block:: python
 
-   corr_params = [dtdm, drdm, msto_smooth, feh_scale]
+   # corr_params = [dtdm, drdm, msto_smooth, feh_scale]
+   corr_params = [100.0, 0.08, 0.05, 1.0]  # Example values
    generator.make_grid('grid_corrected.h5', corr_params=corr_params)
 
-Apply corrections for main-sequence stars; may not apply to giants or very metal-poor stars. See :doc:`photometric_offsets`.
+**Parameters**:
+
+- ``dtdm``: Temperature correction slope (K per solar mass relative to turnoff)
+- ``drdm``: Radius correction slope (R_sun per solar mass relative to turnoff)
+- ``msto_smooth``: Smoothing scale near turnoff (solar masses) to avoid discontinuities
+- ``feh_scale``: Metallicity-dependent scaling factor for corrections
+
+Apply corrections for main-sequence stars; may not apply to giants or very metal-poor stars. See :doc:`photometric_offsets` for derivation and typical values.
 
 Quick Reference
 ---------------
