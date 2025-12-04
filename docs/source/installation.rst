@@ -67,17 +67,51 @@ Core dependencies that will be automatically installed:
 Data Files
 ----------
 
-After installing brutus, you need to download model data files before fitting:
+.. warning::
+
+   **You must download data files before using brutus.** The package will not work without them.
+
+After installing brutus, download the required model data:
+
+.. list-table:: Data Download Checklist
+   :header-rows: 1
+   :widths: 15 15 50 20
+
+   * - Data
+     - Size
+     - Purpose
+     - Required?
+   * - ``fetch_grids()``
+     - 1-5 GB
+     - Pre-computed stellar model grids for fast fitting
+     - **Yes**
+   * - ``fetch_isos()``
+     - ~100 MB
+     - Isochrone tables for stellar evolution
+     - **Yes**
+   * - ``fetch_dustmaps()``
+     - ~1 GB
+     - 3D dust maps (Bayestar) for extinction priors
+     - Optional
+
+**Minimum setup** (required for all fitting):
+
+.. code-block:: python
+
+   from brutus import fetch_grids, fetch_isos
+   fetch_grids()   # Required - stellar model grids
+   fetch_isos()    # Required - isochrone data
+
+**Full setup** (adds 3D dust priors):
 
 .. code-block:: python
 
    from brutus import fetch_grids, fetch_isos, fetch_dustmaps
+   fetch_grids()
+   fetch_isos()
+   fetch_dustmaps()  # Optional - needed for dust map priors
 
-   fetch_grids()     # ~1-5 GB for stellar model grids
-   fetch_isos()      # ~100 MB for isochrone tables
-   fetch_dustmaps()  # ~1 GB for 3D dust maps (optional)
-
-Files are cached in your user data directory and only downloaded once.
+Files are cached in your user data directory (``~/.brutus/`` or platform equivalent) and only downloaded once. Total disk space needed: **2-7 GB** depending on options.
 
 Testing the Installation
 -------------------------
