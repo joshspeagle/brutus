@@ -7,11 +7,11 @@ The data module manages all external data dependencies for brutus, including MIS
 
 brutus requires several types of external data:
 
-1. **MIST Grids**: HDF5 files with stellar evolutionary tracks (~500 MB - 2 GB)
-2. **MIST Isochrones**: Tabulated isochrones for population synthesis (~100 MB)
+1. **MIST Grids**: HDF5 files with stellar evolutionary tracks (~750 MB)
+2. **MIST Isochrones**: Tabulated isochrones for population synthesis (~250 MB)
 3. **Dust Maps**: HEALPix 3-D extinction maps (Bayestar19, ~2 GB)
-4. **Neural Networks**: Trained weights for bolometric corrections (~10 MB)
-5. **Photometric Offsets**: Empirical calibration tables (~1 MB)
+4. **Neural Networks**: Trained weights for bolometric corrections (~250 KB)
+5. **Photometric Offsets**: Empirical calibration tables (<1 KB)
 
 **Automatic Data Management:**
 
@@ -32,7 +32,7 @@ Data files are automatically downloaded on first use and cached locally. The def
    fetch_isos()
 
    # Download 3-D dust maps
-   fetch_dustmaps()  # Downloads Bayestar19 by default
+   fetch_dustmaps(dustmap='bayestar19')
 
 **Loading data for fitting**:
 
@@ -63,9 +63,8 @@ Data files are automatically downloaded on first use and cached locally. The def
 
 **Storage Requirements:**
 
-- Minimal installation (single grid): ~1-2 GB
-- Full installation (all grids + dust maps): ~10-15 GB
-- Custom grids only: ~1-5 GB depending on resolution
+- Minimal installation (grid + isochrones): ~1 GB
+- Full installation (with dust maps): ~3 GB
 
 **See Also:**
 

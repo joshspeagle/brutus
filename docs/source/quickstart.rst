@@ -20,17 +20,18 @@ Before using brutus, download the required data files:
 
 .. code-block:: python
 
-   from brutus import fetch_grids, fetch_isos
+   from brutus.data import fetch_grids, fetch_isos, fetch_offsets
 
-   fetch_grids()   # Required: stellar model grids (~1-5 GB)
-   fetch_isos()    # Required: isochrone tables (~100 MB)
+   fetch_grids()    # Required: stellar model grids (~750 MB)
+   fetch_isos()     # Required: isochrone tables (~250 MB)
+   fetch_offsets()  # Recommended: photometric calibration
 
 Optional: download 3D dust maps for extinction priors:
 
 .. code-block:: python
 
-   from brutus import fetch_dustmaps
-   fetch_dustmaps()  # Optional: ~1 GB
+   from brutus.data import fetch_dustmaps
+   fetch_dustmaps(dustmap='bayestar19')  # Optional: ~2 GB
 
 Files are cached and only downloaded once. See :doc:`installation` for details.
 

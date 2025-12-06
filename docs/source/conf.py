@@ -33,6 +33,8 @@ extensions = [
     "sphinx.ext.mathjax",
     "sphinx.ext.githubpages",
     "numpydoc",
+    "sphinx_design",
+    "sphinx_copybutton",
 ]
 
 # Add any paths that contain templates here, relative to this directory.
@@ -47,12 +49,13 @@ exclude_patterns = []
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
-html_theme = "sphinx_rtd_theme"
+html_theme = "sphinx_book_theme"
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ["_static"]
+html_css_files = ["custom.css"]
 
 # -- Extension configuration -------------------------------------------------
 
@@ -97,31 +100,44 @@ intersphinx_mapping = {
     "healpy": ("https://healpy.readthedocs.io/en/latest/", None),
 }
 
+# sphinx-copybutton configuration
+copybutton_prompt_text = r">>> |\.\.\. |\$ |In \[\d*\]: | {2,5}\.\.\.: | {5,8}: "
+copybutton_prompt_is_regexp = True
+copybutton_remove_prompts = True
+
 # -- HTML theme options ------------------------------------------------------
 
 html_theme_options = {
-    "canonical_url": "",
-    "analytics_id": "",
-    "logo_only": False,
-    "prev_next_buttons_location": "bottom",
-    "style_external_links": False,
-    "vcs_pageview_mode": "",
-    "style_nav_header_background": "#2980B9",
-    # Toc options
-    "collapse_navigation": True,
-    "sticky_navigation": True,
-    "navigation_depth": 4,
-    "includehidden": True,
-    "titles_only": False,
+    "repository_url": "https://github.com/joshspeagle/brutus",
+    "use_repository_button": True,
+    "use_download_button": False,
+    "use_fullscreen_button": False,
+    "repository_branch": "master",
+    "path_to_docs": "docs/source",
+    "show_navbar_depth": 1,
+    "show_toc_level": 2,
+    "navigation_with_keys": True,
+    "logo": {
+        "image_light": "_static/brutus_logo.png",
+        "image_dark": "_static/brutus_logo.png",
+        "text": "brutus",
+    },
+    "icon_links": [
+        {
+            "name": "PyPI",
+            "url": "https://pypi.org/project/astro-brutus/",
+            "icon": "fa-brands fa-python",
+            "type": "fontawesome",
+        },
+    ],
 }
 
 # HTML context
 html_context = {
-    "display_github": True,
     "github_user": "joshspeagle",
     "github_repo": "brutus",
     "github_version": "master",
-    "conf_py_path": "/docs/source/",
+    "doc_path": "docs/source",
 }
 
 html_title = "brutus Documentation"
@@ -132,9 +148,7 @@ html_favicon = None
 html_use_smartypants = True
 html_last_updated_fmt = "%b %d, %Y"
 html_split_index = False
-html_sidebars = {
-    "**": ["searchbox.html", "localtoc.html", "sourcelink.html"],
-}
+# sphinx_book_theme handles sidebars automatically
 html_additional_pages = {}
 html_domain_indices = True
 html_use_index = True

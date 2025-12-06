@@ -1,0 +1,63 @@
+/* Custom styles for brutus documentation */
+
+/* Hero section styling */
+.hero-section {
+    text-align: center;
+    padding: 2rem 0;
+}
+
+/* Force transparent background on hero logo */
+.hero-section img,
+.hero-section .image-reference,
+.hero-section a.reference,
+.hero-section a.reference.internal,
+.hero-section .align-center,
+.hero-section figure {
+    background: transparent !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+}
+
+/* Also target the specific image reference wrapper */
+a.reference.internal.image-reference {
+    background: transparent !important;
+}
+
+.hero-section h1 {
+    font-size: 3rem;
+    margin-bottom: 0.5rem;
+}
+
+.hero-section .tagline {
+    font-size: 1.25rem;
+    color: var(--color-foreground-muted);
+    font-style: italic;
+}
+
+/* Feature card hover effects */
+.sd-card {
+    transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+}
+
+.sd-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+}
+
+/* Version badge */
+.version-badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    background: var(--color-brand-primary);
+    color: white;
+    border-radius: 1rem;
+    font-size: 0.875rem;
+}
+
+/* Dark mode version badge fallback */
+html[data-theme="dark"] .version-badge {
+    background: #6c9bd1;
+}

@@ -10,7 +10,7 @@ Requirements
 Quick Install
 -------------
 
-For most users, install from PyPI:
+Install the latest stable release from `PyPI <https://pypi.org/project/astro-brutus/>`_:
 
 .. code-block:: bash
 
@@ -19,7 +19,13 @@ For most users, install from PyPI:
 Development Install
 -------------------
 
-For development or to get the latest features:
+Install the development version (v\ |version|) directly from GitHub:
+
+.. code-block:: bash
+
+   pip install git+https://github.com/joshspeagle/brutus.git
+
+Or clone for local development:
 
 .. code-block:: bash
 
@@ -27,28 +33,20 @@ For development or to get the latest features:
    cd brutus
    pip install -e ".[dev]"
 
-Windows Users - Important Note
--------------------------------
+Windows Users
+-------------
 
-⚠️ **Windows Compatibility**: Due to the ``healpy`` dependency (required for dust mapping), brutus does not work reliably on native Windows. **Windows users should install and run brutus in WSL (Windows Subsystem for Linux)**.
+.. warning::
 
-Alternative Windows installation options:
+   Due to the ``healpy`` dependency (required for dust mapping), brutus does not
+   work on native Windows. **Windows users must use WSL (Windows Subsystem for Linux)**.
 
-- **WSL (Recommended)**: Install Ubuntu or another Linux distribution via WSL and use the standard installation
-- **Conda**: Try ``conda install -c conda-forge astro-brutus`` which may have pre-compiled Windows wheels
-- **Docker**: Use a Linux-based Docker container
+To install on Windows:
 
-Conda Installation
-------------------
+1. Install `WSL <https://learn.microsoft.com/en-us/windows/wsl/install>`_ with Ubuntu or another Linux distribution
+2. Open a WSL terminal and follow the standard installation instructions above
 
-If you use conda, you may be able to install from conda-forge (availability varies):
-
-.. code-block:: bash
-
-   conda install -c conda-forge astro-brutus
-
-.. note::
-   If the conda-forge package is unavailable, use ``pip install astro-brutus`` instead.
+Alternatively, use a Linux-based Docker container.
 
 Dependencies
 ------------
@@ -75,46 +73,66 @@ After installing brutus, download the required model data:
 
 .. list-table:: Data Download Checklist
    :header-rows: 1
-   :widths: 15 15 50 20
+   :widths: 20 14 46 20
 
-   * - Data
+   * - Function
      - Size
      - Purpose
      - Required?
    * - ``fetch_grids()``
-     - 1-5 GB
+     - ~750 MB
      - Pre-computed stellar model grids for fast fitting
      - **Yes**
    * - ``fetch_isos()``
-     - ~100 MB
-     - Isochrone tables for stellar evolution
+     - ~250 MB
+     - Isochrone tables for stellar populations
      - **Yes**
+   * - ``fetch_offsets()``
+     - <1 KB
+     - Photometric calibration offsets for improved accuracy
+     - Recommended
    * - ``fetch_dustmaps()``
-     - ~1 GB
+     - ~2 GB
      - 3D dust maps (Bayestar) for extinction priors
      - Optional
 
-**Minimum setup** (required for all fitting):
+**Recommended setup**:
 
 .. code-block:: python
 
-   from brutus import fetch_grids, fetch_isos
-   fetch_grids()   # Required - stellar model grids
-   fetch_isos()    # Required - isochrone data
+   from brutus.data import fetch_grids, fetch_isos, fetch_offsets
 
-**Full setup** (adds 3D dust priors):
+   # Download stellar model grid (~750 MB)
+   grid_path = fetch_grids(grid='mist_v9')
+
+   # Download isochrone tables (~250 MB)
+   iso_path = fetch_isos(iso='MIST_1.2_vvcrit0.0')
+
+   # Download photometric offsets (recommended for fitting)
+   offset_path = fetch_offsets(grid='mist_v9')
+
+**With 3D dust maps** (for extinction priors):
 
 .. code-block:: python
 
-   from brutus import fetch_grids, fetch_isos, fetch_dustmaps
-   fetch_grids()
-   fetch_isos()
-   fetch_dustmaps()  # Optional - needed for dust map priors
+   from brutus.data import fetch_dustmaps
 
-Files are cached in your user data directory (``~/.brutus/`` or platform equivalent) and only downloaded once. Total disk space needed: **2-7 GB** depending on options.
+   # Download Bayestar dust maps (~2 GB)
+   dustmap_path = fetch_dustmaps(dustmap='bayestar19')
+
+Photometric Offsets
+^^^^^^^^^^^^^^^^^^^
+
+The photometric offsets correct for systematic differences between observed and
+model photometry. These are derived from well-characterized calibration stars
+and significantly improve fitting accuracy. While not strictly required, using
+offsets is strongly recommended for reliable results.
+
+Files are cached in your user data directory and only downloaded once.
+Total disk space needed: **~1 GB** minimum, **~3 GB** with dust maps.
 
 Testing the Installation
--------------------------
+------------------------
 
 To verify your installation works correctly:
 
@@ -123,6 +141,7 @@ To verify your installation works correctly:
    import brutus
    print(f"brutus version: {brutus.__version__}")
 
-   # Test core functionality
-   from brutus import Isochrone
+   # Test core imports
+   from brutus.core import Isochrone, StarGrid
+   from brutus.analysis import BruteForce
    print("Installation successful!")
