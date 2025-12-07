@@ -235,7 +235,7 @@ EEPTracks supports caching for faster repeated loads:
 Cluster Modeling
 ----------------
 
-For cluster fitting, see :doc:`cluster_modeling`. Key options:
+For cluster fitting, see :doc:`population_modeling`. Key options:
 
 .. code-block:: python
 

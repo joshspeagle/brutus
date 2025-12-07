@@ -33,7 +33,7 @@ For **individual field stars** with unknown evolutionary state:
    # Photometry generation (on-the-fly)
    star = StarEvolTrack(tracks=tracks, filters=['g', 'r', 'i', 'z'])
    sed, params1, params2 = star.get_seds(
-       mini=1.0, eep=400, feh=0.0, afe=0.0,
+       mini=1.0, eep=400, feh=0.0,
        av=0.1, dist=1000.0
    )
 
@@ -70,7 +70,7 @@ For **stellar clusters** with shared age and metallicity:
 
 - :doc:`/stellar_models` - Conceptual overview of MIST models, EEP, and isochrones
 - :doc:`/grid_generation` - Guide to creating and using pre-computed grids
-- :doc:`/cluster_modeling` - Using populations for cluster fitting
+- :doc:`/population_modeling` - Population-based cluster fitting
 
 .. currentmodule:: brutus.core
 

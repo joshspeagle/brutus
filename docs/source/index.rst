@@ -53,17 +53,17 @@ brutus
       Fit your first star with BruteForce.
 
    .. grid-item-card::
-      :link: tutorials
+      :link: glossary
       :link-type: doc
       :class-card: sd-shadow-sm
 
       :octicon:`book;3em;sd-text-primary`
 
-      **Tutorials**
-      ^^^^^^^^^^^^^
+      **Glossary**
+      ^^^^^^^^^^^^
 
-      Step-by-step examples for common tasks
-      with real astronomical data.
+      Key terms and concepts including
+      EEP, isochrones, and extinction.
 
 ----
 
@@ -109,7 +109,7 @@ Key Features
 
          *Fits shared age, metallicity, distance, and extinction for coeval populations.
          Handles cluster membership probabilities, binary stars, and outlier rejection.*
-         See :doc:`cluster_modeling`.
+         See :doc:`quickstart`.
 
    .. grid-item-card::
       :class-card: sd-border-0
@@ -198,6 +198,7 @@ Code Examples
          from brutus.data import load_models, load_offsets
          from brutus.core import StarGrid
          from brutus.analysis import BruteForce
+         from brutus.utils import inv_magnitude
 
          # Load model grid with specific filters
          filters = ['Gaia_G_MAW', 'Gaia_BP_MAWf', 'Gaia_RP_MAW',
@@ -211,16 +212,20 @@ Code Examples
          # Load photometric offsets
          offsets = load_offsets('offsets_mist_v9.h5', filters=filters)
 
-         # Fit photometry (flux densities, not magnitudes)
+         # Convert magnitudes to linear flux densities
+         flux, flux_err = inv_magnitude(mag, mag_err)
+
+         # Fit photometry
          fitter = BruteForce(grid)
          results = fitter.fit(
-             data=flux,              # (N, Nfilt) flux densities
+             data=flux,              # (N, Nfilt) linear flux densities
              data_err=flux_err,      # (N, Nfilt) flux errors
              data_mask=flux_mask,    # (N, Nfilt) boolean mask
              data_labels=obj_ids,    # (N,) object identifiers
              phot_offsets=offsets,   # Photometric calibration
              parallax=plx,           # (N,) parallax in mas
              parallax_err=plx_err,   # (N,) parallax error
+             data_coords=coords,     # (N, 2) Galactic (l, b) in degrees
              save_file='results.h5'
          )
 
@@ -240,7 +245,6 @@ Code Examples
          # Generate photometry for a 1 Gyr solar-metallicity population
          seds, params, params2 = pop.get_seds(
              feh=0.0,        # Solar metallicity
-             afe=0.0,        # Solar alpha abundance
              loga=9.0,       # log10(age/yr) = 1 Gyr
              av=0.5,         # V-band extinction
              rv=3.3,         # Extinction law R(V)
@@ -256,7 +260,6 @@ Code Examples
 
    installation
    quickstart
-   tutorials
    glossary
 
 .. toctree::
@@ -266,9 +269,9 @@ Code Examples
 
    scientific_background
    stellar_models
-   grid_generation
    priors
-   cluster_modeling
+   grid_generation
+   population_modeling
    photometric_offsets
 
 .. toctree::

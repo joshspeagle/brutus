@@ -108,7 +108,7 @@ For **stellar clusters** with MCMC:
 **See Also:**
 
 - :doc:`/grid_generation` - Understanding the brute-force fitting algorithm
-- :doc:`/cluster_modeling` - Detailed guide to cluster population fitting
+- :doc:`/population_modeling` - Cluster population fitting methodology
 - :doc:`/photometric_offsets` - Empirical calibration procedures
 - :doc:`/understanding_results` - Interpreting posterior distributions
 

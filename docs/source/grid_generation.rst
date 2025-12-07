@@ -10,7 +10,7 @@ Why evaluate on a grid rather than use MCMC sampling? The stellar parameter infe
 
 **Multi-modal posteriors**: A single set of photometric observations can be consistent with multiple stellar solutions (e.g., dwarf vs giant). MCMC samplers can get trapped in one mode, while grid evaluation naturally captures all solutions.
 
-**High-dimensional parameter space**: With ~7 parameters (mass, EEP, [Fe/H], [α/Fe], distance, A_V, R_V), MCMC convergence diagnostics are difficult. Grid evaluation guarantees complete coverage.
+**High-dimensional parameter space**: With ~6 parameters (mass, EEP, [Fe/H], distance, A_V, R_V), MCMC convergence diagnostics are difficult. Grid evaluation guarantees complete coverage.
 
 **Repeated structure**: The same stellar models apply to millions of stars. Pre-computing the grid once amortizes the cost across all targets.
 
@@ -37,7 +37,7 @@ A brutus **model grid** (``StarGrid``) maps stellar parameters to photometry:
 
 .. math::
 
-   (M_{\rm init}, {\rm EEP}, [{\rm Fe/H}], [\alpha/{\rm Fe}]) \rightarrow \{\mathbf{M}_{\rm ref}, \mathbf{R}, \mathbf{R}'\}
+   (M_{\rm init}, {\rm EEP}, [{\rm Fe/H}]) \rightarrow \{\mathbf{M}_{\rm ref}, \mathbf{R}, \mathbf{R}'\}
 
 where :math:`\mathbf{M}_{\rm ref}` are absolute magnitudes at a **reference distance of 1 kpc**, and :math:`\mathbf{R}`, :math:`\mathbf{R}'` are reddening coefficients.
 
@@ -52,10 +52,9 @@ This allows modeling arbitrary extinction without storing separate grids for eac
 Typical Grid Coverage
 ^^^^^^^^^^^^^^^^^^^^^
 
-- **Initial mass**: 0.08 to 150 :math:`M_\odot` (~200-500 points)
+- **Initial mass**: 0.08 to 150 M☉ (~200-500 points)
 - **EEP**: 202 to 808 (~100-300 points)
 - **Metallicity** [Fe/H]: -4.0 to +0.5 dex (~20-40 points)
-- **Alpha enhancement** [α/Fe]: -0.2 to +0.6 dex (~5-10 points)
 
 A comprehensive grid contains :math:`\sim 10^6` to :math:`10^7` models (several GB).
 
@@ -212,7 +211,7 @@ Next Steps
 ----------
 
 - Understand priors: :doc:`priors`
-- Cluster fitting: :doc:`cluster_modeling`
+- Cluster fitting: :doc:`population_modeling`
 - Configuration options: :doc:`choosing_options`
 - Interpret results: :doc:`understanding_results`
 

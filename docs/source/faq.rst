@@ -136,7 +136,7 @@ Which outlier model should I use?
 - **Chi-square** (default): More conservative, retains borderline members
 - **Uniform**: More aggressive at excluding outliers
 
-See :doc:`cluster_modeling` for details.
+See :doc:`quickstart` for details.
 
 Error Messages
 --------------
@@ -189,7 +189,7 @@ Also cite MIST: Choi et al. (2016), ApJ, 823, 102; Dotter (2016), ApJS, 222, 8.
 Getting Help
 ------------
 
-1. Read the documentation: :doc:`quickstart`, :doc:`tutorials`
+1. Read the documentation: :doc:`quickstart`
 2. Check the :doc:`glossary` for unfamiliar terms
 3. GitHub Issues: https://github.com/joshspeagle/brutus/issues
 4. Email: j.speagle@utoronto.ca

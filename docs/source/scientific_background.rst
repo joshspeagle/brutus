@@ -1,186 +1,176 @@
-Scientific Background
-=====================
+Bayesian Inference Framework
+============================
 
-This page provides an overview of the scientific foundations and statistical framework underlying **brutus**. For detailed mathematical derivations and methodological choices, see `Speagle et al. (2025) <https://arxiv.org/abs/2503.02227>`_.
+This page provides an overview of the statistical framework underlying ``brutus``. For detailed mathematical derivations, see `Speagle et al. (2025) <https://arxiv.org/abs/2503.02227>`_.
 
 .. tip::
-   For quick definitions of key terms (EEP, R_V, isochrone, etc.), see the :doc:`glossary`.
+   For quick definitions of key terms, see the :doc:`glossary`.
 
-What brutus Does
-----------------
+Overview
+--------
 
-**brutus** performs **Bayesian inference** to derive stellar properties, distances, and interstellar reddenings from photometric and astrometric observations. Given multi-band photometry and optionally parallax measurements for a star, brutus estimates:
+``brutus`` performs :term:`Bayesian inference <posterior>` to derive stellar properties from photometric and astrometric observations. Given multi-band photometry and (optionally) parallax measurements, ``brutus`` estimates:
 
-- **Distance** and **extinction** (reddening)
-- **Stellar parameters**: mass, age, metallicity, temperature, luminosity, radius, surface gravity
-- **Full posterior distributions** with properly propagated uncertainties
+- **Distance** and **extinction** (:math:`A_V`, :math:`R_V`)
+- **Stellar parameters**: mass, age, metallicity, temperature, luminosity, surface gravity
+- **Full posterior distributions** with properly quantified uncertainties
 
-The package is designed for three main use cases:
+The name "brutus" reflects the :term:`brute force` computational approach: rather than using MCMC sampling, ``brutus`` systematically evaluates the posterior over a pre-computed grid of stellar models, then marginalizes to obtain parameter estimates. This guarantees complete parameter space coverage and avoids convergence issues. See :doc:`grid_generation` for details on the computational approach.
 
-1. **Individual stars**: Fit single stellar sources with measured photometry and parallax
-2. **Stellar clusters**: Model coeval populations with shared age, metallicity, and distance
-3. **3-D dust mapping**: Map extinction along lines of sight using ensemble stellar data
+The Forward Model
+-----------------
 
-The Statistical Framework
---------------------------
+``brutus`` uses a forward modeling approach: predict what observations *should* look like given stellar parameters, then compare to actual data.
 
-brutus uses a forward modeling approach combined with Bayesian inference. The framework has three key components: a physical model connecting intrinsic stellar properties to observations, a statistical likelihood relating data to model predictions, and prior probability distributions encoding astrophysical knowledge.
+Stellar Parameters
+^^^^^^^^^^^^^^^^^^
 
-The Noiseless Model
-^^^^^^^^^^^^^^^^^^^
+The model separates **intrinsic parameters** (properties of the star itself) from **extrinsic parameters** (environmental effects):
 
-The fundamental relationship between observed magnitudes and underlying stellar properties is:
+**Intrinsic parameters** :math:`\theta`:
 
-.. math::
+- :math:`M_{\rm init}`: :term:`Initial mass <initial mass>` (solar masses)
+- :math:`{\rm EEP}`: :term:`Equivalent Evolutionary Point <EEP>` (evolutionary state)
+- :math:`[{\rm Fe/H}]`: :term:`Metallicity <metallicity>` (dex)
 
-   \mathbf{m}_{\theta,\phi} = \mathbf{M}_\theta + \mu + A_V \times (\mathbf{R}_\theta + R_V \times \mathbf{R}'_\theta)
+**Extrinsic parameters** :math:`\phi`:
 
-where:
-
-- :math:`\mathbf{m}_{\theta,\phi}` are the predicted observed magnitudes across multiple photometric bands
-- :math:`\mathbf{M}_\theta` are the intrinsic absolute magnitudes (derived from stellar evolution models)
-- :math:`\mu = 5 \log_{10}(d/10\,{\rm pc})` is the distance modulus
-- :math:`A_V` is the visual extinction (dust reddening)
-- :math:`\mathbf{R}_\theta` and :math:`\mathbf{R}'_\theta` are reddening vectors describing wavelength-dependent extinction
-- :math:`R_V \equiv A_V / E(B-V)` parameterizes variations in the dust extinction curve
-
-**Intrinsic parameters** :math:`\theta` describe the star itself:
-
-- :math:`M_{\rm init}`: Initial mass (solar masses)
-- :math:`[{\rm Fe/H}]_{\rm init}`: Initial metallicity (dex)
-- :math:`t_{\rm age}`: Current age (years)
-
-**Extrinsic parameters** :math:`\phi` describe environmental effects:
-
-- :math:`d`: Distance (pc)
-- :math:`A_V`: Visual extinction (magnitudes)
+- :math:`d`: Distance (parsecs)
+- :math:`A_V`: V-band :term:`extinction` (magnitudes)
 - :math:`R_V`: Extinction curve shape parameter
 
 .. note::
-   This model is a simplification that assumes single stars in isolation. Binary stars, stellar rotation, and detailed chemical abundance patterns are not explicitly modeled, though binary companions can be included with the secondary mass fraction (SMF) parameter.
+   ``brutus`` parameterizes stellar evolution using :term:`EEP` rather than age. EEP provides a mass-independent coordinate that increases monotonically along evolutionary tracks, avoiding degeneracies where multiple ages produce similar observables. Age is a *derived* quantity computed from (mass, EEP, metallicity). See :doc:`stellar_models` for details.
 
-The Noisy Data
-^^^^^^^^^^^^^^
+Predicted Magnitudes
+^^^^^^^^^^^^^^^^^^^^
 
-Real observations include measurement uncertainties. brutus models two types of data:
-
-**Photometry**: Flux densities are assumed normally distributed around their true values:
+The predicted apparent magnitude in each photometric band is:
 
 .. math::
 
-   \hat{\mathbf{F}} \sim \mathcal{N}[\mathbf{F}, \mathbf{C}_F]
-
-where :math:`\hat{\mathbf{F}}` are the observed flux densities, :math:`\mathbf{F}` are the true fluxes, and :math:`\mathbf{C}_F` is a diagonal covariance matrix of flux uncertainties.
-
-While the stellar models predict magnitudes, brutus converts to flux space for the likelihood calculation. This is because flux uncertainties are approximately Gaussian, while magnitude uncertainties are not. The conversion is:
-
-.. math::
-
-   F = 10^{-0.4 m}
-
-**Astrometry**: Parallax measurements are modeled as normally distributed:
-
-.. math::
-
-   \hat{\varpi} \sim \mathcal{N}[\varpi, \sigma_\varpi]
-
-where :math:`\hat{\varpi}` is the observed parallax (milliarcseconds), :math:`\varpi = 1000/d` is the true parallax, and :math:`\sigma_\varpi` is the parallax uncertainty.
-
-The parallax provides a direct constraint on distance that helps break degeneracies between distance and extinction.
-
-The Posterior Probability
-^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Bayes' theorem combines the data likelihood with prior information to yield the posterior probability distribution:
-
-.. math::
-
-   P(\theta, \phi \,|\, \hat{\mathbf{F}}, \hat{\varpi}) \propto \mathcal{L}_{\rm phot}(\theta, \phi) \times \mathcal{L}_{\rm astr}(\phi) \times \pi(\theta, \phi)
+   m_{\rm band} = M_{\rm band}(\theta) + \mu(d) + A_V \times \left[ R_{\rm band}(\theta) + R_V \times R'_{\rm band}(\theta) \right]
 
 where:
 
-- :math:`\mathcal{L}_{\rm phot}` is the photometric likelihood
-- :math:`\mathcal{L}_{\rm astr}` is the astrometric (parallax) likelihood
-- :math:`\pi(\theta, \phi)` encodes prior knowledge from Galactic models
+- :math:`M_{\rm band}(\theta)` is the absolute magnitude from stellar models
+- :math:`\mu(d) = 5 \log_{10}(d/10\,{\rm pc})` is the :term:`distance modulus`
+- :math:`R_{\rm band}` and :math:`R'_{\rm band}` are :term:`reddening vectors <reddening vector>` encoding wavelength-dependent extinction
 
-The posterior represents our updated knowledge about the stellar parameters and distance/extinction given the observed data and our astrophysical priors.
+The reddening vectors depend on both the dust extinction law and the stellar spectrum, allowing accurate extinction modeling across different stellar types.
 
-Prior Probability Distributions
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Model Assumptions
+^^^^^^^^^^^^^^^^^
 
-brutus uses informative priors based on Galactic structure and stellar population models. These priors factorize into independent components:
+The forward model assumes:
+
+- **Single stars**: No unresolved companions (binaries bias distances and masses)
+- **Non-rotating**: MIST models do not include rotational effects
+- **Solar-scaled abundances**: Except for α-enhancement, detailed abundance patterns are not modeled
+- **Standard extinction law**: Cardelli/Fitzpatrick-style parameterization with variable :math:`R_V`
+
+These assumptions are appropriate for most field stars but may break down for rapid rotators, chemically peculiar stars, or close binaries.
+
+Statistical Framework
+---------------------
+
+Observation Model
+^^^^^^^^^^^^^^^^^
+
+Real observations include measurement uncertainties. ``brutus`` models:
+
+**Photometry** as Gaussian in flux space:
 
 .. math::
 
-   \pi(\theta, \phi) \propto \pi(M_{\rm init}) \times \pi(d\,|\,\ell,b) \times \pi([{\rm Fe/H}]_{\rm init}\,|\,d,\ell,b) \times \pi(t_{\rm age}\,|\,d,\ell,b) \times \pi(A_V\,|\,d,\ell,b) \times \pi(R_V)
+   \hat{F}_{\rm band} \sim \mathcal{N}\left[ F_{\rm band}, \sigma_{F,{\rm band}}^2 \right]
 
-where :math:`\ell,b` are Galactic longitude and latitude. The priors include:
+where :math:`F = 10^{-0.4\,m}` converts magnitudes to linear :term:`flux density` (in "maggies", where 1 maggie = flux of a 0th magnitude source). Working in flux space ensures Gaussian errors—magnitude uncertainties are asymmetric and non-Gaussian.
 
-1. **Initial Mass Function (IMF)**: :math:`\pi(M_{\rm init})` describes the stellar mass distribution at formation (Kroupa IMF)
+**Parallax** as Gaussian:
 
-2. **3-D Stellar Number Density**: :math:`\pi(d\,|\,\ell,b)` models the spatial distribution of stars (thin disk, thick disk, halo components)
+.. math::
 
-3. **3-D Metallicity Distribution**: :math:`\pi([{\rm Fe/H}]_{\rm init}\,|\,d,\ell,b)` captures metallicity gradients in the Galaxy
+   \hat{\varpi} \sim \mathcal{N}\left[ 1000/d, \sigma_\varpi^2 \right]
 
-4. **3-D Age Distribution**: :math:`\pi(t_{\rm age}\,|\,d,\ell,b)` represents the age structure of different Galactic populations
+where :math:`\varpi` is in milliarcseconds and :math:`d` in parsecs. Parallax provides a direct distance constraint that helps break the distance-extinction degeneracy.
 
-5. **3-D Dust Extinction**: :math:`\pi(A_V\,|\,d,\ell,b)` uses 3-D dust maps (e.g., Bayestar) to constrain extinction along sight lines
+Posterior Distribution
+^^^^^^^^^^^^^^^^^^^^^^
 
-6. **Dust Curve Variation**: :math:`\pi(R_V)` models variations in extinction curve shape (mean :math:`R_V \approx 3.3`, scatter :math:`\sigma_{R_V} \approx 0.2`)
+Bayes' theorem combines the likelihood with prior information:
+
+.. math::
+
+   P(\theta, \phi \,|\, \hat{\mathbf{F}}, \hat{\varpi}) \propto \underbrace{\mathcal{L}_{\rm phot}(\theta, \phi)}_{\text{photometric likelihood}} \times \underbrace{\mathcal{L}_{\rm plx}(\phi)}_{\text{parallax likelihood}} \times \underbrace{\pi(\theta, \phi)}_{\text{prior}}
+
+The :term:`posterior` represents our knowledge of stellar parameters given the observed data and astrophysical priors.
+
+Prior Distributions
+^^^^^^^^^^^^^^^^^^^
+
+``brutus`` uses informative :term:`priors <prior>` based on Galactic structure:
+
+.. math::
+
+   \pi(\theta, \phi) = \pi(M_{\rm init}) \times \pi({\rm EEP}) \times \pi([{\rm Fe/H}], t_{\rm age} \,|\, d, \ell, b) \times \pi(A_V \,|\, d, \ell, b) \times \pi(R_V)
+
+The components are:
+
+1. **Initial Mass Function**: Kroupa :term:`IMF` favoring low-mass stars
+2. **EEP prior**: Uniform in EEP (accounts for varying evolutionary timescales)
+3. **Galactic structure**: 3-D density model (thin disk + thick disk + halo) with position-dependent age and metallicity distributions
+4. **3-D dust**: Extinction constraints from Bayestar dust maps
+5. **R_V variation**: Gaussian prior centered on :math:`R_V = 3.32` with :math:`\sigma = 0.18`
+
+These priors encode that: low-mass stars are more common than high-mass stars; nearby stars are likely disk members with near-solar metallicity; distant stars may be older halo members; and extinction increases with distance along dusty sightlines.
 
 .. seealso::
-   See :doc:`priors` for detailed descriptions of each prior component and guidance on customization.
+   See :doc:`priors` for detailed descriptions and customization options.
 
-Why Bayesian Inference?
-------------------------
+Outputs
+-------
 
-The Bayesian framework is well-suited for stellar parameter estimation because it: (1) **breaks degeneracies** between different stellar types by incorporating Galactic structure priors; (2) provides **full posterior distributions** for proper uncertainty quantification; (3) **combines diverse data** (photometry, parallax, dust maps) coherently; and (4) **handles missing data** by marginalization.
+For each fitted star, ``brutus`` produces:
 
-Common Use Cases
-----------------
+- **Posterior samples**: Draws from P(distance, :math:`A_V`, :math:`R_V` | data)
+- **Model indices**: Which grid models contribute to the posterior (for deriving mass, age, Teff, etc.)
+- **Diagnostics**: Minimum χ², log-evidence, number of bands used
 
-**Individual Field Stars**
-   For isolated stars with good photometry and parallax (e.g., from Gaia), brutus provides robust distance and extinction estimates even in moderately dusty regions. The Galactic priors help constrain the stellar population (thin disk vs thick disk vs halo) which informs the age and metallicity.
+See :doc:`understanding_results` for interpretation guidance.
 
-**Stellar Clusters**
-   Coeval populations offer powerful constraints because all stars share the same age, metallicity, and distance. brutus uses a mixture model to handle field contamination while fitting isochrones to cluster members. See :doc:`cluster_modeling` for details.
+Limitations
+-----------
 
-**3-D Dust Mapping**
-   By inverting the stellar parameter estimation problem, brutus can map the 3-D distribution of dust extinction using ensemble data from many stars along a sight line. This provides independent validation and refinement of existing dust maps.
+**Model Systematics**
 
-Limitations and Caveats
------------------------
+Stellar models have known systematic uncertainties:
 
-**Model Simplifications**
-   The stellar models assume non-rotating single stars with solar-scaled abundance patterns (except for α-enhancement). Real stars may have rotation, exotic abundances, or binary companions that violate these assumptions.
+- *Temperature scale*: MIST temperatures may be offset by 50–200 K depending on mass and evolutionary state
+- *Radius inflation*: Magnetic activity inflates radii of low-mass stars by 5–15%
+- *Bolometric corrections*: Missing opacities cause ~0.02–0.05 mag errors in some bands
 
-**Systematic Uncertainties**
-   While brutus provides full posterior distributions capturing statistical uncertainties, systematic errors can dominate for well-measured stars:
+See :doc:`photometric_offsets` for empirical calibration procedures.
 
-   - *Stellar evolution models* (~5-20%): MIST assumes non-rotating single stars. Magnetic activity causes 100-300 K temperature offsets and 5-20% radius inflation for low-mass stars.
-   - *Stellar atmospheres* (~2-5%): Missing molecular opacities and 1-D/LTE approximations cause 0.02-0.05 mag errors in bolometric corrections.
-   - *Dust extinction*: R_V varies from ~2 (dense clouds) to ~5 (diffuse ISM). 3-D dust maps have resolution limits.
-   - *Data calibration* (~2%): Photometric zero-points vary across surveys. Gaia parallaxes have ~20-30 μas systematic offsets.
+**Prior Sensitivity**
 
-   For well-measured stars, systematic uncertainties may dominate statistical errors. See :doc:`photometric_offsets` for empirical calibration procedures.
+For well-measured stars (bright, accurate parallax), priors have minimal impact. For poorly-measured stars (faint, no parallax), results can be prior-dominated. Always check prior sensitivity for your science case.
 
-**Prior Dependence**
-   Results can be sensitive to prior choices, especially for faint or poorly measured stars. It's important to check that priors are appropriate for your science case and consider how prior assumptions affect conclusions.
+**Binary Contamination**
+
+Unresolved binaries appear overluminous, biasing distances (too near) and masses (too high). Gaia RUWE > 1.4 often indicates binarity.
 
 **Computational Cost**
-   The brute-force grid approach is computationally intensive for large samples. Pre-computed model grids and parallel processing help, but fitting millions of stars requires substantial resources.
 
-Next Steps
-----------
-
-- Learn about the stellar evolution models: :doc:`stellar_models`
-- Understand the grid-based fitting approach: :doc:`grid_generation`
-- Explore the prior specifications: :doc:`priors`
-- See cluster modeling methodology: :doc:`cluster_modeling`
+Fitting scales with grid size and number of photometric bands. Typical performance: ~0.1–1 second per star with pre-computed grids. Large surveys benefit from parallelization.
 
 References
 ----------
 
-For full mathematical details and method validation, see:
+Speagle et al. (2025), "Deriving Stellar Properties, Distances, and Reddenings using Photometry and Astrometry with BRUTUS", `arXiv:2503.02227 <https://arxiv.org/abs/2503.02227>`_
 
-Speagle et al. (2025), "Deriving Stellar Properties, Distances, and Reddenings using Photometry and Astrometry with BRUTUS", arXiv:2503.02227
+Choi et al. (2016), "Mesa Isochrones and Stellar Tracks (MIST). I. Solar-scaled Models", `ApJ, 823, 102 <https://ui.adsabs.harvard.edu/abs/2016ApJ...823..102C>`_
+
+Dotter (2016), "MESA Isochrones and Stellar Tracks (MIST) 0: Methods for the Construction of Stellar Isochrones", `ApJS, 222, 8 <https://ui.adsabs.harvard.edu/abs/2016ApJS..222....8D>`_
+
+Green et al. (2019), "A 3D Dust Map Based on Gaia, Pan-STARRS 1, and 2MASS", `ApJ, 887, 93 <https://ui.adsabs.harvard.edu/abs/2019ApJ...887...93G>`_

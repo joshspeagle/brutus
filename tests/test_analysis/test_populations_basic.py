@@ -487,7 +487,14 @@ class TestMainInterface:
 
     def test_parameter_validation(self):
         """Test parameter validation for main function."""
-        theta = [0.0, 9.5, 0.1, 3.1, 1000.0]  # [feh, loga, av, rv, dist]
+        theta = [
+            0.0,
+            9.5,
+            0.1,
+            3.1,
+            1000.0,
+            0.05,
+        ]  # [feh, loga, av, rv, dist, field_frac]
         obs_phot = np.array([[1.0, 0.8, 0.6]])
         obs_err = np.array([[0.1, 0.08, 0.06]])
 
@@ -500,7 +507,14 @@ class TestMainInterface:
 
     def test_real_population_likelihood(self, real_stellarpop, mock_observations):
         """Test main function with real stellarpop and realistic parameters."""
-        theta = [0.0, 9.5, 0.1, 3.1, 1000.0]  # [feh, loga, av, rv, dist]
+        theta = [
+            0.0,
+            9.5,
+            0.1,
+            3.1,
+            1000.0,
+            0.05,
+        ]  # [feh, loga, av, rv, dist, field_frac]
         obs_phot = mock_observations["obs_flux"]
         obs_err = mock_observations["obs_err"]
 
@@ -530,7 +544,7 @@ class TestMainInterface:
         obs_phot = np.array([[1.0, 0.8]])
         obs_err = np.array([[0.1, 0.08]])
 
-        with pytest.raises(ValueError, match="Expected 5 population parameters"):
+        with pytest.raises(ValueError, match="Expected 6 population parameters"):
             isochrone_population_loglike(theta, None, obs_phot, obs_err)
 
     def test_photometry_shape_validation(self):
@@ -544,7 +558,14 @@ class TestMainInterface:
 
     def test_parallax_integration(self, real_stellarpop, mock_observations):
         """Test main function with parallax data."""
-        theta = [0.0, 9.5, 0.1, 3.1, 1000.0]  # [feh, loga, av, rv, dist]
+        theta = [
+            0.0,
+            9.5,
+            0.1,
+            3.1,
+            1000.0,
+            0.05,
+        ]  # [feh, loga, av, rv, dist, field_frac]
         obs_phot = mock_observations["obs_flux"][:2]  # Use 2 stars
         obs_err = mock_observations["obs_err"][:2]
         parallax = mock_observations["parallax"][:2]

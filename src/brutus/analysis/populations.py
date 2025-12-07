@@ -708,8 +708,9 @@ def isochrone_population_loglike(
 
     Parameters
     ----------
-    theta : array-like, shape (5,)
-        Population parameters: [feh, loga, av, rv, dist]
+    theta : array-like, shape (6,)
+        Population parameters: [feh, loga, av, rv, dist, field_frac]
+        where field_frac is the field contamination fraction (0 to 1).
     stellarpop : StellarPop object
         StellarPop model from core.populations module with get_seds method
     obs_phot : array-like, shape (N_objects, N_filters)
@@ -772,7 +773,7 @@ def isochrone_population_loglike(
         \\ln L(\\theta) = \\sum_i \\ln \\left[ \\int \\int \\left( w_c P_c(d_i|m, s, \\theta) + w_o P_o(d_i) \\right) dm \\, ds \\right]
 
     where:
-    - :math:`\\theta = [{\\rm Fe/H}, \\log {\\rm age}, A_V, R_V, d]` are population parameters
+    - :math:`\\theta = [{\\rm Fe/H}, \\log {\\rm age}, A_V, R_V, d, f_{\\rm field}]` are population parameters
     - :math:`m` is stellar mass
     - :math:`s` is secondary mass fraction (SMF)
     - :math:`w_c, w_o` are mixture weights
@@ -803,11 +804,10 @@ def isochrone_population_loglike(
     >>> print(f"Per-object likelihoods: {components['lnl_per_object']}")
     """
     theta = np.asarray(theta)
-    if len(theta) != 5:
-        raise ValueError(f"Expected 5 population parameters, got {len(theta)}")
+    if len(theta) != 6:
+        raise ValueError(f"Expected 6 population parameters, got {len(theta)}")
 
-    feh, loga, av, rv, dist = theta
-    field_fraction = 0.05  # Simple default - could be made a parameter
+    feh, loga, av, rv, dist, field_fraction = theta
 
     # Check inputs
     obs_phot = np.asarray(obs_phot)

@@ -128,7 +128,7 @@ Consider customizing priors for:
 - **Special regions**: Galactic bulge, Local Bubble, or spiral arms
 - **Known populations**: If you have independent age/metallicity constraints
 
-For cluster modeling with fixed age/metallicity/distance, see :doc:`cluster_modeling`.
+For cluster modeling with fixed age/metallicity/distance, see :doc:`population_modeling`.
 
 Testing Prior Sensitivity
 --------------------------
@@ -186,7 +186,7 @@ Next Steps
 
 - Configure fitting options: :doc:`choosing_options`
 - Understand results: :doc:`understanding_results`
-- Cluster modeling: :doc:`cluster_modeling`
+- Cluster modeling: :doc:`population_modeling`
 
 References
 ----------

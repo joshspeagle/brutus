@@ -346,7 +346,6 @@ Next Steps
 
 - Interpret fitting results: :doc:`understanding_results`
 - Choose configuration options: :doc:`choosing_options`
-- Review cluster modeling: :doc:`cluster_modeling`
 
 References
 ----------

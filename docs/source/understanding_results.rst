@@ -108,7 +108,7 @@ Different combinations of (M, age, [Fe/H]) produce similar effective temperature
 
 Unresolved companions add flux, making systems appear brighter and potentially bluer. This biases inferred distances (too close) and masses (too high). Approximately 50% of field stars have companions.
 
-**Indicators**: Gaia RUWE > 1.4 suggests astrometric excess noise from binarity. See :doc:`cluster_modeling` for binary fraction modeling.
+**Indicators**: Gaia RUWE > 1.4 suggests astrometric excess noise from binarity.
 
 Diagnostic Checks
 -----------------
