@@ -60,7 +60,6 @@ Advanced users can disable or customize priors:
 
 - :doc:`/priors` - Detailed conceptual guide to all prior distributions
 - :doc:`/scientific_background` - How priors fit into the Bayesian framework
-- :doc:`/choosing_options` - When and how to customize priors
 
 .. currentmodule:: brutus.priors
 

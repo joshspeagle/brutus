@@ -293,7 +293,6 @@ Code Examples
    :hidden:
 
    understanding_results
-   choosing_options
    faq
 
 .. toctree::

@@ -1,265 +1,170 @@
-Understanding and Interpreting Results
-========================================
+Understanding Results
+=====================
 
-This page explains how to interpret brutus output and assess reliability.
+This page explains how to work with brutus output files.
 
 Output Structure
 ----------------
 
-``BruteForce.fit()`` saves results to an **HDF5 file** and returns the file path:
+``BruteForce.fit()`` saves results to an HDF5 file:
 
 .. code-block:: python
 
    import h5py
    import numpy as np
 
-   output_file = fitter.fit(data, data_err, data_mask, labels, save_file='results.h5', ...)
-
-   with h5py.File(output_file, 'r') as f:
-       # Posterior draws (Nstars, Ndraws) - default Ndraws=250
+   with h5py.File('results.h5', 'r') as f:
+       # Posterior draws - shape (Nstars, Ndraws), default Ndraws=250
        distances = f['samps_dist'][:]    # Distance in kpc
        av_values = f['samps_red'][:]     # A_V extinction (mag)
        rv_values = f['samps_dred'][:]    # R_V values
-       log_weights = f['samps_logp'][:]  # Log-weights
+       log_posts = f['samps_logp'][:]    # Log-posterior probabilities
 
-       # Model information
-       model_idx = f['model_idx'][:]     # Grid model indices (Nstars, Ndraws)
-       ml_cov = f['ml_cov_sar'][:]       # Covariance matrices (Nstars, Ndraws, 3, 3)
+       # Model indices into the grid
+       model_idx = f['model_idx'][:]     # Shape (Nstars, Ndraws)
 
-       # Diagnostics
-       log_evidence = f['obj_log_evid'][:]  # Log-evidence (Nstars,)
-       chi2_min = f['obj_chi2min'][:]       # Minimum chi-squared (Nstars,)
-       n_bands = f['obj_Nbands'][:]         # Number of bands used (Nstars,)
+       # Per-object diagnostics
+       chi2_min = f['obj_chi2min'][:]    # Best-fit chi-squared (Nstars,)
+       n_bands = f['obj_Nbands'][:]      # Number of bands used (Nstars,)
 
-   # Compute summary statistics
-   dist_median = np.median(distances, axis=1)
-   dist_16, dist_84 = np.percentile(distances, [16, 84], axis=1)
-
-To access stellar parameters (mass, age, Teff), use ``model_idx`` to look up values in the model grid labels.
-
-Cluster Fitting Output
-^^^^^^^^^^^^^^^^^^^^^^
-
-Cluster fitting uses MCMC with ``isochrone_population_loglike()``. Results are in the sampler:
-
-.. code-block:: python
-
-   # theta = [feh, loga, av, rv, dist]
-   samples = sampler.get_chain(discard=1000, thin=10, flat=True)
-   feh_samples, loga_samples = samples[:, 0], samples[:, 1]
-
-Visualizing Posteriors
-----------------------
-
-.. code-block:: python
-
-   import corner
-   import h5py
-
-   with h5py.File('results.h5', 'r') as f:
-       dist = f['samps_dist'][0] * 1000  # pc
-       av = f['samps_red'][0]
-       rv = f['samps_dred'][0]
-
-   samples = np.column_stack([dist, av, rv])
-   fig = corner.corner(samples, labels=['Distance (pc)', r'$A_V$', r'$R_V$'],
-                       quantiles=[0.16, 0.5, 0.84], show_titles=True)
-
-Interpreting Posterior Shapes
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-- **Gaussian-like**: Well-constrained parameter
-- **Skewed**: Parameter near boundary (e.g., A_V near 0)
-- **Bimodal**: Degeneracy between solutions (e.g., dwarf vs giant)
-- **Flat**: Parameter unconstrained by data (expected for R_V when A_V~0)
-
-Common Degeneracies
--------------------
-
-Understanding degeneracies helps interpret results and identify when additional data would help.
-
-**Distance-Extinction Degeneracy**
-
-A distant star with low extinction can produce identical photometry to a nearby star with high extinction. Physically: increasing distance dims a star, while increasing extinction both dims and reddens it. In optical-only data, these effects partially cancel.
-
-.. code-block:: python
-
-   with h5py.File('results.h5', 'r') as f:
-       dist, av = f['samps_dist'][0], f['samps_red'][0]
-   corr = np.corrcoef(dist, av)[0, 1]
-   if abs(corr) > 0.7:
-       print("Strong distance-extinction degeneracy")
-
-**Breaking this degeneracy**: (1) Parallax provides direct distance constraint; (2) Near-IR photometry probes where extinction is weaker (A_K ~ 0.1 A_V); (3) 3-D dust maps constrain extinction along the line of sight.
-
-**Dwarf-Giant Degeneracy**
-
-A nearby M dwarf and a distant K giant can have identical colors despite vastly different luminosities (factor of ~1000). Without parallax, optical photometry alone cannot distinguish them.
-
-**Breaking this degeneracy**: (1) Parallax eliminates the distance ambiguity; (2) Galactic priors favor dwarfs at small distances and giants at large distances; (3) Look for bimodal posteriors indicating both solutions are viable.
-
-**Mass-Age-Metallicity Degeneracy**
-
-Different combinations of (M, age, [Fe/H]) produce similar effective temperatures and luminosities. Older metal-rich stars can mimic younger metal-poor stars.
-
-**Breaking this degeneracy**: (1) Galactic priors encode the age-metallicity relation (older populations are more metal-poor); (2) Spectroscopy provides independent metallicity; (3) Asteroseismology constrains mass and evolutionary state.
-
-**Binary Stars**
-
-Unresolved companions add flux, making systems appear brighter and potentially bluer. This biases inferred distances (too close) and masses (too high). Approximately 50% of field stars have companions.
-
-**Indicators**: Gaia RUWE > 1.4 suggests astrometric excess noise from binarity.
-
-Diagnostic Checks
------------------
-
-χ² Goodness-of-Fit
+Summary Statistics
 ^^^^^^^^^^^^^^^^^^
 
 .. code-block:: python
 
-   with h5py.File('results.h5', 'r') as f:
-       chi2_min = f['obj_chi2min'][0]
-       n_bands = f['obj_Nbands'][0]
+   # Posterior summaries for first star
+   dist = distances[0]  # kpc
+   print(f"Distance: {np.median(dist):.2f} kpc")
+   print(f"68% interval: [{np.percentile(dist, 16):.2f}, {np.percentile(dist, 84):.2f}] kpc")
 
-   chi2_reduced = chi2_min / (n_bands - 3)  # 3 free params: dist, A_V, R_V
+Stellar Parameters
+^^^^^^^^^^^^^^^^^^
 
-**Interpreting χ² values:**
-
-.. list-table::
-   :header-rows: 1
-   :widths: 15 25 60
-
-   * - χ² (reduced)
-     - Assessment
-     - Likely Cause / Action
-   * - < 0.5
-     - Errors overestimated
-     - Photometric uncertainties may be too large; consider recalibrating
-   * - 0.8 - 1.2
-     - **Good fit**
-     - Model matches data within uncertainties
-   * - 1.2 - 2.0
-     - Acceptable
-     - Minor tension; check individual band residuals
-   * - 2.0 - 3.0
-     - Marginal
-     - Investigate: possible binary, variability, or calibration issue
-   * - > 3.0
-     - Poor fit
-     - Check data quality, verify star is within model coverage, or consider unmodeled physics (binary, rotation)
-
-Parallax Consistency
-^^^^^^^^^^^^^^^^^^^^
-
-.. code-block:: python
-
-   parallax = 2.5  # mas
-   parallax_dist = 1000.0 / parallax  # pc
-
-   with h5py.File('results.h5', 'r') as f:
-       brutus_dist = np.median(f['samps_dist'][0]) * 1000  # pc
-
-   # Compare - should agree within uncertainties
-
-Prior Sensitivity
-^^^^^^^^^^^^^^^^^
-
-.. code-block:: python
-
-   # Fit with and without priors
-   fitter.fit(..., save_file='with.h5', data_coords=coords)
-   fitter.fit(..., save_file='without.h5', lngalprior=lambda *args: 0.0)
-
-   # >30% change indicates prior-dominated results
-
-Reliability Indicators
-----------------------
-
-✅ **High confidence**: χ²~1, unimodal posteriors, parallax agrees, residuals < 0.1 mag
-
-⚠ **Caution**: χ² > 2, asymmetric posteriors, some degeneracies
-
-❌ **Unreliable**: Bimodal posteriors, parallax disagrees >3σ, residuals > 0.3 mag
-
-Uncertainty Quantification
---------------------------
-
-brutus provides **Bayesian credible intervals**:
-
-.. code-block:: python
-
-   with h5py.File('results.h5', 'r') as f:
-       dist = f['samps_dist'][0] * 1000  # pc
-
-   dist_median = np.median(dist)
-   dist_16, dist_84 = np.percentile(dist, [16, 84])
-   print(f"Distance: {dist_median:.0f} (+{dist_84-dist_median:.0f} / -{dist_median-dist_16:.0f}) pc")
-
-**Note**: These uncertainties are statistical only. For well-measured stars, systematic uncertainties (stellar models, calibration) may be comparable or larger. See :doc:`scientific_background` for discussion.
-
-Derived Quantities
-------------------
-
-Stellar Parameters from Model Grid
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Stellar parameters are accessed via the model grid using ``model_idx``:
 
 .. code-block:: python
 
    from brutus.data import load_models
 
-   models, grid_labels, mask = load_models('grid_mist_v9.h5')
+   models, grid_labels, label_mask = load_models('grid_mist_v9.h5')
 
    with h5py.File('results.h5', 'r') as f:
-       model_idx = f['model_idx'][0]
+       idx = f['model_idx'][0]  # First star
 
-   masses = grid_labels['mini'][model_idx]
-   log_ages = grid_labels['loga'][model_idx]
-   log_teffs = grid_labels['logt'][model_idx]
+   # Available labels: mini, feh, eep, smf, loga, logl, logt, logg, Mr, agewt
+   masses = grid_labels['mini'][idx]      # Initial mass (Msun)
+   fehs = grid_labels['feh'][idx]         # [Fe/H]
+   log_ages = grid_labels['loga'][idx]    # log10(age/yr)
+   log_teffs = grid_labels['logt'][idx]   # log10(Teff/K)
+   log_Ls = grid_labels['logl'][idx]      # log10(L/Lsun)
 
    print(f"Mass: {np.median(masses):.2f} Msun")
-   print(f"Age: {10**np.median(log_ages)/1e9:.2f} Gyr")
    print(f"Teff: {10**np.median(log_teffs):.0f} K")
 
-Absolute Magnitude
-^^^^^^^^^^^^^^^^^^
+Cluster Fitting
+^^^^^^^^^^^^^^^
+
+Results from MCMC with ``isochrone_population_loglike()`` are stored in the sampler:
 
 .. code-block:: python
 
+   # theta = [feh, loga, av, rv, dist, field_frac]
+   samples = sampler.get_chain(discard=1000, thin=10, flat=True)
+
+Visualization
+-------------
+
+brutus provides plotting utilities in :mod:`brutus.plotting`:
+
+- :func:`~brutus.plotting.cornerplot` - Corner plots from fitting outputs
+- :func:`~brutus.plotting.dist_vs_red` - Distance vs extinction posterior
+- :func:`~brutus.plotting.posterior_predictive` - Model vs data SED comparison
+
+Example using the SED posterior predictive plot:
+
+.. code-block:: python
+
+   from brutus.plotting import posterior_predictive
+   from brutus.data import load_models
+
+   models, labels, label_mask = load_models('grid_mist_v9.h5')
+
    with h5py.File('results.h5', 'r') as f:
-       dist = f['samps_dist'][0]  # kpc
+       idxs = f['model_idx'][0]
+       reds = f['samps_red'][0]
+       dreds = f['samps_dred'][0]
+       dists = f['samps_dist'][0]
+
+   fig = posterior_predictive(
+       models, idxs, reds, dreds, dists,
+       data=observed_flux, data_err=flux_err, data_mask=mask
+   )
+
+For quick visualization with external libraries:
+
+.. code-block:: python
+
+   import corner
+
+   with h5py.File('results.h5', 'r') as f:
+       dist = f['samps_dist'][0]
        av = f['samps_red'][0]
 
-   app_mag = 16.5  # Observed magnitude
-   R_g = 3.518     # Extinction coefficient
-   dist_mod = 5.0 * np.log10(dist * 1000) - 5.0
-   abs_mag = app_mag - dist_mod - av * R_g
+   fig = corner.corner(
+       np.column_stack([dist, av]),
+       labels=['Distance (kpc)', r'$A_V$']
+   )
 
-Troubleshooting
----------------
+Diagnostics
+-----------
 
-**Large uncertainties**: Check S/N, verify star is within grid coverage, add parallax
+Chi-Squared
+^^^^^^^^^^^
 
-**Flat extinction posterior**: Normal for low-extinction stars; add near-IR bands if A_V needed
+Large ``obj_chi2min`` values (much greater than the number of bands) indicate the model fits poorly. Possible causes:
 
-**Distance at boundary**: Check parallax, consider exotic objects outside grid
+- Underestimated photometric errors
+- Bad photometry (outliers, saturation, blending)
+- Object outside model coverage (white dwarf, brown dwarf, unresolved binary)
 
-**χ² >> 1**: Bad photometry, underestimated errors, or object outside model coverage
+.. warning::
+   Chi-squared depends on your error estimates being accurate. It should not be used as the sole quality metric.
 
-Summary
--------
+Parallax Consistency
+^^^^^^^^^^^^^^^^^^^^
 
-Key diagnostics: χ² (should be ~1), posterior shapes (should be unimodal), parameter correlations (watch for degeneracies), prior sensitivity (<30% change), parallax consistency.
+If parallax was provided, check that the inferred distance is consistent:
 
-Next Steps
-----------
+.. code-block:: python
 
-- Configure options: :doc:`choosing_options`
-- Learn about priors: :doc:`priors`
-- See FAQ: :doc:`faq`
+   parallax_mas = 2.5
+   parallax_dist_kpc = 1.0 / parallax_mas
 
-References
-----------
+   with h5py.File('results.h5', 'r') as f:
+       phot_dist_kpc = np.median(f['samps_dist'][0])
 
-- Speagle et al. (2025), arXiv:2503.02227
-- Hogg & Foreman-Mackey (2018), ApJS, 236, 11 - MCMC methods
+   print(f"Parallax implies: {parallax_dist_kpc:.2f} kpc")
+   print(f"Photometry gives: {phot_dist_kpc:.2f} kpc")
+
+Significant disagreement may indicate binary contamination, parallax issues (check Gaia RUWE), or model mismatch.
+
+Prior Sensitivity
+^^^^^^^^^^^^^^^^^
+
+To check if results are prior-dominated, compare fits with and without priors:
+
+.. code-block:: python
+
+   # With Galactic prior
+   fitter.fit(..., save_file='with_prior.h5', data_coords=coords)
+
+   # Without Galactic prior
+   fitter.fit(..., save_file='no_prior.h5', lngalprior=lambda *args: 0.0)
+
+Large differences (>30%) indicate the prior strongly influences results, which is expected for faint stars with poor photometry.
+
+See Also
+--------
+
+- :mod:`brutus.plotting` - Visualization utilities
+- :doc:`faq` - Common questions
