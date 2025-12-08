@@ -8,50 +8,24 @@
 [![Coverage](https://codecov.io/gh/joshspeagle/brutus/branch/master/graph/badge.svg)](https://codecov.io/gh/joshspeagle/brutus)
 [![Documentation Status](https://readthedocs.org/projects/brutus/badge/?version=latest)](https://brutus.readthedocs.io/en/latest/?badge=latest)
 [![PyPI](https://img.shields.io/pypi/v/astro-brutus.svg)](https://pypi.org/project/astro-brutus/)
-[![Python](https://img.shields.io/pypi/pyversions/astro-brutus.svg)](https://pypi.org/project/astro-brutus/)
 [![arXiv](https://img.shields.io/badge/arXiv-2503.02227-b31b1b.svg)](https://arxiv.org/abs/2503.02227)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-`brutus` is a Pure Python package for **"brute force" Bayesian inference** to derive distances, reddenings, and stellar properties from photometry. The package is designed to be highly modular and user-friendly, with comprehensive support for modeling individual stars, star clusters, and 3-D dust mapping.
+`brutus` is a Python package for Bayesian inference of stellar properties, distances, and extinctions from photometry. It supports individual star fitting, cluster analysis, and 3D dust mapping.
 
-**Comprehensive documentation can be found at [brutus.readthedocs.io](https://brutus.readthedocs.io)**.
-
-Please contact Josh Speagle (<j.speagle@utoronto.ca>) with any questions.
+**Documentation**: [brutus.readthedocs.io](https://brutus.readthedocs.io)
 
 ## Installation
 
-The most recent **stable** release can be installed via `pip` by running
-
 ```bash
 pip install astro-brutus
 ```
 
-## Key Features
+Requires Python 3.8+ on Linux, macOS, or Windows with WSL.
 
-🌟 **Individual Star Modeling**: Fit distances, reddenings, and stellar properties for individual stars using Bayesian inference (with either pre-computed stellar grids or evolutionary mass tracks)
-
-🌟 **Cluster Analysis**: Model stellar clusters with consistent ages, metallicities, and distances (with isochrones)
-
-🌟 **3D Dust Mapping**: Integrate with 3D dust maps and model extinction along lines of sight
-
-## Detailed Installation
-
-### Requirements
-
-- **Python**: 3.8 or higher
-- **Operating System**: Linux, macOS, or Windows with WSL (see Windows note below)
-
-### Quick Install
-
-For most users, install the most recent stable release from PyPI:
-
-```bash
-pip install astro-brutus
-```
+**Windows users**: Due to the `healpy` dependency, brutus requires WSL (Windows Subsystem for Linux) on Windows.
 
 ### Development Install
-
-For development or to get the latest features:
 
 ```bash
 git clone https://github.com/joshspeagle/brutus.git
@@ -59,83 +33,33 @@ cd brutus
 pip install -e ".[dev]"
 ```
 
-### Windows Users - Important Note
+## Data Files
 
-⚠️ **Windows Compatibility**: Due to the `healpy` dependency (required for interacting with dust maps), brutus does not work reliably on native Windows. **Windows users should install and run brutus in WSL (Windows Subsystem for Linux)**.
-
-### Conda Installation
-
-If you use conda, you can install from conda-forge:
-
-```bash
-conda install -c conda-forge astro-brutus
-```
-
-### Dependencies
-
-Core dependencies that will be automatically installed:
-
-- `numpy` (≥1.19) - Numerical computing
-- `scipy` (≥1.6) - Scientific computing
-- `matplotlib` (≥3.3) - Plotting
-- `h5py` (≥3.0) - HDF5 file support
-- `healpy` (≥1.14) - HEALPix utilities for incorporating dust maps
-- `numba` (≥0.53) - Just-in-time compilation for performance
-- `pooch` (≥1.4) - Data downloading and management
-- `tqdm` (≥4.50) - Progress bars and live tracking
-
-## Data
-
-Brutus requires stellar evolution models and other data files to function. These can be downloaded automatically using built-in utilities:
+Download required stellar models and dust maps:
 
 ```python
 from brutus import fetch_grids, fetch_isos, fetch_dustmaps
 
-# Download MIST stellar evolution grids
-fetch_grids()
-
-# Download MIST isochrones
-fetch_isos()
-
-# Download 3D dust maps
-fetch_dustmaps()
+fetch_grids()      # MIST stellar grids
+fetch_isos()       # MIST isochrones
+fetch_dustmaps()   # 3D dust maps
 ```
 
-Alternately, you can download them manually from the [Harvard Dataverse](https://dataverse.harvard.edu/dataverse/astro-brutus).
+Data files are also available from the [Harvard Dataverse](https://dataverse.harvard.edu/dataverse/astro-brutus).
 
-## Contributing
+## Citation
 
-We welcome contributions! Please see the [contribution guide](https://brutus.readthedocs.io/en/latest/contributing.html) for guidelines.
-
-### Development Setup
-
-```bash
-git clone https://github.com/joshspeagle/brutus.git
-cd brutus
-pip install -e ".[dev]"
-```
-
-### Running Tests
-
-```bash
-# Basic tests
-pytest
-
-# With coverage
-pytest --cov=brutus
-```
+If you use `brutus`, please cite [Speagle et al. (2025)](https://arxiv.org/abs/2503.02227).
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License. See [LICENSE](LICENSE) for details.
 
 ## Contact
 
-- **Author**: Joshua S. Speagle
-- **Email**: <j.speagle@utoronto.ca>
-- **GitHub**: [https://github.com/joshspeagle/brutus](https://github.com/joshspeagle/brutus)
-- **Issues**: [https://github.com/joshspeagle/brutus/issues](https://github.com/joshspeagle/brutus/issues)
+- Author: Joshua S. Speagle (<j.speagle@utoronto.ca>)
+- Issues: [GitHub Issues](https://github.com/joshspeagle/brutus/issues)
 
 ## Acknowledgments
 
-`brutus` by default uses [MIST](http://waps.cfa.harvard.edu/MIST/) stellar evolution models and [Bayestar](https://argonaut.skymaps.info/) dust maps via the [https://dustmaps.readthedocs.io/en/latest/](`dustmaps` package). We thank the developers of these initiatives and codebases for making their data and/or code publicly available.
+`brutus` uses [MIST](http://waps.cfa.harvard.edu/MIST/) stellar evolution models and [Bayestar](https://argonaut.skymaps.info/) dust maps. We thank the developers for making their data publicly available.
