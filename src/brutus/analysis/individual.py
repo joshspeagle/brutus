@@ -726,12 +726,6 @@ class BruteForce:
         Mask indicating which labels are grid parameters (True)
         vs predictions (False).
 
-    nmodels : int
-        Number of models in the grid.
-
-    nfilters : int
-        Number of filters.
-
     See Also
     --------
     brutus.core.StarGrid : Stellar model grid infrastructure

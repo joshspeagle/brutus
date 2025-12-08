@@ -66,8 +66,8 @@ The forward model assumes:
 
 - **Single stars**: No unresolved companions (binaries bias distances and masses)
 - **Non-rotating**: MIST models do not include rotational effects
-- **Solar-scaled abundances**: Except for α-enhancement, detailed abundance patterns are not modeled
-- **Standard extinction law**: Cardelli/Fitzpatrick-style parameterization with variable :math:`R_V`
+- **Solar-scaled abundances**: Detailed abundance patterns beyond [Fe/H] are not modeled
+- **Fitzpatrick & Massa (2009) extinction law**: R_V-dependent parameterization
 
 These assumptions are appropriate for most field stars but may break down for rapid rotators, chemically peculiar stars, or close binaries.
 
@@ -174,3 +174,5 @@ Choi et al. (2016), "Mesa Isochrones and Stellar Tracks (MIST). I. Solar-scaled 
 Dotter (2016), "MESA Isochrones and Stellar Tracks (MIST) 0: Methods for the Construction of Stellar Isochrones", `ApJS, 222, 8 <https://ui.adsabs.harvard.edu/abs/2016ApJS..222....8D>`_
 
 Green et al. (2019), "A 3D Dust Map Based on Gaia, Pan-STARRS 1, and 2MASS", `ApJ, 887, 93 <https://ui.adsabs.harvard.edu/abs/2019ApJ...887...93G>`_
+
+Fitzpatrick & Massa (2009), "An Analysis of the Shapes of Interstellar Extinction Curves. VI. The Near-IR Extinction Law", `ApJ, 699, 1209 <https://ui.adsabs.harvard.edu/abs/2009ApJ...699.1209F>`_

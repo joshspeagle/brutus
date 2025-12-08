@@ -78,10 +78,20 @@ Astrometric Priors
 
 .. autofunction:: logp_parallax_scale
 
+.. autofunction:: convert_parallax_to_scale
+
 Galactic Structure Priors
 --------------------------
 
 .. autofunction:: logp_galactic_structure
+
+.. autofunction:: logn_disk
+
+.. autofunction:: logn_halo
+
+.. autofunction:: logp_feh
+
+.. autofunction:: logp_age_from_feh
 
 Extinction Priors
 -----------------

@@ -1,366 +1,257 @@
-Photometric Offsets and Empirical Calibration
-==============================================
+Empirical Calibrations
+======================
 
-This page explains the **empirical calibration** procedures used in brutus to correct systematic errors in theoretical stellar models. Understanding these corrections is important for achieving accurate stellar parameter estimates.
+This page explains the **empirical calibration** procedures used in ``brutus`` to correct systematic errors in theoretical stellar models. For full details, see Speagle et al. (2025) §5.
 
 Why Empirical Calibration?
----------------------------
+--------------------------
 
-Theoretical stellar evolution models like MIST are based on fundamental physics, but they are not perfect. Known issues include:
+Theoretical stellar models like MIST have known systematic errors:
 
-**Effective Temperature Systematics**
-   Models predict temperatures that are systematically offset from observations, particularly for M dwarfs. Interferometric measurements and empirical color-temperature relations show discrepancies of 100-300 K for cool stars.
+- **Temperature offsets**: Models predict temperatures that differ from observations, particularly for M dwarfs (100-300 K discrepancies)
+- **Radius discrepancies**: Theoretical radii disagree with interferometric measurements, especially for low-mass stars (up to 10-20% for M dwarfs)
+- **Photometric systematics**: Synthetic photometry has band-dependent offsets due to incomplete opacities, atmospheric modeling assumptions, and photometric system differences
 
-**Radius Discrepancies**
-   Theoretical radii disagree with interferometric measurements, especially for low-mass stars and evolved giants. Errors can reach 10-20% for M dwarfs.
+Without corrections, these propagate into biased distances, extinctions, and derived stellar parameters.
 
-**Photometric Systematics**
-   Even with correct temperatures and radii, synthetic photometry can have systematic offsets due to:
+``brutus`` implements two complementary corrections:
 
-   - Incomplete opacity tables (missing molecular lines)
-   - Simplified atmospheric modeling (1D, LTE assumptions)
-   - Uncertain bolometric corrections in certain wavelength regimes
-   - Differences between model and observed photometric systems
+1. **Isochrone corrections**: Adjust effective temperature and radius during model generation
+2. **Photometric offsets**: Multiplicative flux corrections derived from fitting results
 
-**Impact on Results**
-   Without corrections, these systematics propagate into:
+Isochrone Corrections
+---------------------
 
-   - Biased distance estimates (up to 10-20% errors)
-   - Incorrect extinction measurements
-   - Systematic errors in derived masses, ages, metallicities
+Isochrone corrections modify the predicted :math:`T_{\rm eff}` and radius as a function of stellar mass. These are applied during model generation via the ``corr_params`` parameter.
 
-Empirical calibration uses observations of well-characterized stars to **measure and correct** these systematic offsets.
+Mathematical Form
+^^^^^^^^^^^^^^^^^
 
-Two Types of Corrections
--------------------------
-
-brutus implements two complementary empirical corrections:
-
-1. Isochrone Corrections (Temperature and Radius)
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-**Purpose**: Fix systematic errors in fundamental stellar parameters (T_eff, radius)
-
-**Method**: Use open clusters with well-known properties to derive corrections
-
-**Application**: Modify the stellar models *before* computing photometry
-
-**When to use**: Always recommended for main-sequence stars with accurate cluster calibrations
-
-2. Photometric Offsets
-^^^^^^^^^^^^^^^^^^^^^^^
-
-**Purpose**: Fix systematic errors in synthetic photometry for specific filters
-
-**Method**: Compare observed and predicted photometry for nearby, low-reddening field stars
-
-**Application**: Add offsets to model magnitudes in specific photometric bands
-
-**When to use**: When fitting with specific survey data (e.g., Pan-STARRS, Gaia, SDSS)
-
-.. note::
-   These corrections are *complementary*. Isochrone corrections fix the stellar models, while photometric offsets fix the remaining systematic errors in converting models to observed magnitudes.
-
-Isochrone Corrections: Open Cluster Approach
----------------------------------------------
-
-Overview
-^^^^^^^^
-
-Open clusters provide ideal calibration targets because:
-
-- **Known distances**: Often from parallax, kinematics, or eclipsing binaries
-- **Known ages**: Isochrone fitting with multiple evolutionary phases
-- **Known metallicities**: Spectroscopic measurements for many members
-- **Low extinction**: Many nearby clusters have minimal reddening
-- **Rich sequences**: Wide mass range from turnoff to lower main sequence
-
-By comparing observed cluster sequences to theoretical isochrones, we can identify systematic offsets and derive empirical corrections.
-
-Correction Parameterization
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-brutus uses two linear correction parameters:
-
-**Temperature correction** (``dtdm``):
+The corrections are applied to :math:`\log T_{\rm eff}` and :math:`\log R`:
 
 .. math::
 
-   T_{\rm eff,corrected} = T_{\rm eff,model} + {\rm dtdm} \times (M - M_{\rm TO})
-
-where :math:`M` is stellar mass and :math:`M_{\rm TO}` is the turnoff mass for the isochrone. This corrects the temperature as a function of mass relative to the turnoff.
-
-**Radius correction** (``drdm``):
+   \Delta \log T_{\rm eff} = \log_{10}(1 + (M - 1) \times \texttt{dtdm}) \times f_{\rm EEP} \times f_{\rm [Fe/H]}
 
 .. math::
 
-   R_{\rm corrected} = R_{\rm model} + {\rm drdm} \times (M - M_{\rm TO})
+   \Delta \log R = \log_{10}(1 + (M - 1) \times \texttt{drdm}) \times f_{\rm EEP} \times f_{\rm [Fe/H]}
 
-These mass-dependent corrections allow different adjustments for different stellar masses while maintaining smooth continuity along the isochrone.
+where:
 
-**Additional parameters**:
+- :math:`M` is the initial mass in solar masses
+- :math:`f_{\rm EEP} = 1 - 1/(1 + \exp(-({\rm EEP} - 454)/\texttt{msto\_smooth}))` suppresses corrections after the main-sequence turnoff
+- :math:`f_{\rm [Fe/H]} = \exp(\texttt{feh\_scale} \times {\rm [Fe/H]})` scales corrections with metallicity
+- Corrections are zeroed for :math:`M \geq 1 M_\odot`
 
-- ``msto_smooth``: Smoothing scale near main sequence turnoff (avoids discontinuities)
-- ``feh_scale``: Metallicity-dependent scaling of corrections
+Default Parameters
+^^^^^^^^^^^^^^^^^^
 
-Typical Correction Values
-^^^^^^^^^^^^^^^^^^^^^^^^^^
+The default correction parameters (from cluster calibration):
 
-From cluster calibrations:
+.. list-table::
+   :widths: 20 20 60
+   :header-rows: 1
 
-- **dtdm**: ~100-300 K / solar mass for lower main sequence
-- **drdm**: ~0.05-0.15 R_sun / solar mass for lower main sequence
-- **Effect**: Primarily impacts M and K dwarfs; minimal effect on FGK giants
+   * - Parameter
+     - Default
+     - Description
+   * - ``dtdm``
+     - 0.09
+     - Temperature correction slope (dimensionless)
+   * - ``drdm``
+     - -0.09
+     - Radius correction slope (dimensionless)
+   * - ``msto_smooth``
+     - 30.0
+     - EEP smoothing scale for turnoff suppression
+   * - ``feh_scale``
+     - 0.5
+     - Metallicity scaling factor
 
-Applying Isochrone Corrections
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Usage
+^^^^^
 
-Corrections are applied during model generation:
+Corrections are applied automatically by default. To customize:
 
 .. code-block:: python
 
    from brutus.core import Isochrone, StellarPop
 
-   # Define correction parameters from cluster calibration
-   corr_params = [
-       100.0,   # dtdm: Temperature correction (K/Msun)
-       0.08,    # drdm: Radius correction (Rsun/Msun)
-       0.05,    # msto_smooth: Smoothing scale (Msun)
-       1.0      # feh_scale: Metallicity scaling
-   ]
-
-   # Initialize population model with corrections
+   # Initialize models
    iso = Isochrone()
-   pop = StellarPop(isochrone=iso)
+   filters = ['Gaia_G_MAW', 'Gaia_BP_MAWf', 'Gaia_RP_MAW',
+              '2MASS_J', '2MASS_H', '2MASS_Ks']
+   pop = StellarPop(iso, filters=filters)
 
-   # Generate photometry with corrections
-   seds, params1, params2 = pop.get_seds(
+   # Use default corrections (recommended)
+   seds, params, params2 = pop.get_seds(
        feh=0.0, loga=9.0, av=0.1, dist=1000.0,
-       corr_params=corr_params
+       apply_corr=True  # Default
    )
 
-For grid generation:
+   # Custom correction parameters
+   custom_corr = (0.10, -0.08, 25.0, 0.6)  # (dtdm, drdm, msto_smooth, feh_scale)
+   seds, params, params2 = pop.get_seds(
+       feh=0.0, loga=9.0, av=0.1, dist=1000.0,
+       corr_params=custom_corr
+   )
+
+   # Disable corrections entirely
+   seds_uncorr, _, _ = pop.get_seds(
+       feh=0.0, loga=9.0, av=0.1, dist=1000.0,
+       apply_corr=False
+   )
+
+For grid generation with :class:`~brutus.core.GridGenerator`:
 
 .. code-block:: python
 
    from brutus.core import GridGenerator, EEPTracks
 
    tracks = EEPTracks()
-   generator = GridGenerator(tracks, filters=['g', 'r', 'i'])
+   filters = ['Gaia_G_MAW', 'Gaia_BP_MAWf', 'Gaia_RP_MAW',
+              'PS_g', 'PS_r', 'PS_i', 'PS_z', 'PS_y']
+   generator = GridGenerator(tracks, filters=filters)
 
+   # Generate grid with default corrections
    generator.make_grid(
-       output_file='corrected_grid.h5',
-       corr_params=corr_params
+       output_file='my_grid.h5',
+       apply_corr=True  # Default
    )
 
-Photometric Offsets: Field Star Approach
------------------------------------------
+   # Or with custom parameters
+   generator.make_grid(
+       output_file='my_grid_custom.h5',
+       corr_params=(0.10, -0.08, 25.0, 0.6)
+   )
+
+Photometric Offsets
+-------------------
+
+Photometric offsets are **multiplicative flux corrections** that account for systematic differences between model predictions and observed photometry. These are computed from fitting results using bootstrap resampling.
 
 Overview
 ^^^^^^^^
 
-Even with isochrone corrections, residual photometric systematics remain. **Photometric offsets** measure the average difference between observed and model magnitudes for well-characterized field stars.
+The :func:`~brutus.analysis.photometric_offsets` function:
 
-Selection Criteria
-^^^^^^^^^^^^^^^^^^
+1. Takes posterior samples from :class:`~brutus.analysis.BruteForce` fitting
+2. Generates model SEDs for each sample
+3. Computes model/data flux ratios for each band
+4. Uses likelihood reweighting to avoid circularity (for bands used in fitting)
+5. Estimates median offsets and uncertainties via bootstrap
 
-Ideal calibration stars are:
+The key innovation is **likelihood reweighting**: when computing offsets for a band that was used in fitting, the function recomputes posteriors excluding that band to obtain unbiased estimates.
 
-- **Nearby**: d < 100 pc (parallax-based distances)
-- **Low extinction**: A_V < 0.1 mag (avoid reddening uncertainties)
-- **Well-measured**: High S/N photometry, accurate parallax
-- **Main sequence**: Avoid evolved stars with uncertain modeling
-- **Span color range**: Sample full range of stellar types
-
-Method
-^^^^^^
-
-1. Select calibration sample of nearby, low-reddening stars
-2. Fit each star with brutus using best available models (including isochrone corrections)
-3. Compute residuals: :math:`\Delta m_{\rm band} = m_{\rm obs} - m_{\rm model}`
-4. Bin residuals by color or stellar parameters
-5. Measure median offset in each bin
-6. Smooth and interpolate to get offset as function of stellar type
-
-Result: Offset function :math:`\Delta m_{\rm band}({\rm color})` or :math:`\Delta m_{\rm band}(T_{\rm eff}, \log g, [{\rm Fe/H}])`
-
-Applying Photometric Offsets
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Offsets are applied *after* model generation, as additive corrections:
+Basic Usage
+^^^^^^^^^^^
 
 .. code-block:: python
 
-   # Model magnitudes from brutus
-   model_mags = grid.get_photometry(stellar_params)
+   import numpy as np
+   from brutus.analysis.offsets import photometric_offsets, PhotometricOffsetsConfig
 
-   # Apply empirical offsets (band-dependent)
-   offset_g = 0.02   # mag (from field star calibration)
-   offset_r = -0.01  # mag
-   offset_i = 0.00   # mag
+   # After running BruteForce.fit() and extracting results...
+   # phot: observed fluxes, shape (n_objects, n_filters)
+   # err: flux errors, shape (n_objects, n_filters)
+   # mask: observation mask, shape (n_objects, n_filters)
+   # models: model grid coefficients
+   # idxs: fitted model indices, shape (n_objects, n_samples)
+   # reds: fitted A_V values, shape (n_objects, n_samples)
+   # dreds: fitted R_V values, shape (n_objects, n_samples)
+   # dists: fitted distances (kpc), shape (n_objects, n_samples)
 
-   corrected_mags = model_mags + np.array([offset_g, offset_r, offset_i])
+   # Compute offsets with default settings
+   offsets, errors, n_used = photometric_offsets(
+       phot, err, mask, models, idxs, reds, dreds, dists
+   )
 
-In practice, offsets are stored in lookup tables or polynomial fits and applied automatically during fitting.
+   # Apply corrections to observed photometry
+   phot_corrected = phot * offsets[None, :]
 
-Example: Pan-STARRS Offsets
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Configuration
+^^^^^^^^^^^^^
 
-Typical offsets for Pan-STARRS grizy:
-
-.. code-block:: python
-
-   # Example offsets (magnitudes)
-   offsets_ps1 = {
-       'g': +0.025,  # Models too bright
-       'r': -0.010,  # Models too faint
-       'i': +0.005,
-       'z': +0.015,
-       'y': +0.020
-   }
-
-These offsets vary with:
-
-- **Stellar type**: Different for dwarfs vs giants
-- **Metallicity**: Metal-poor stars may have different offsets
-- **Survey**: Each photometric system has unique systematics
-
-Color-Magnitude Dependent Offsets
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-More sophisticated calibrations use color-magnitude dependent offsets:
-
-.. math::
-
-   \Delta m_{\rm band}(g-i, M_i) = a_0 + a_1 (g-i) + a_2 M_i + a_3 (g-i)^2 + \ldots
-
-This captures systematic trends across the HR diagram. Implementation:
+Use :class:`~brutus.analysis.offsets.PhotometricOffsetsConfig` to customize behavior:
 
 .. code-block:: python
 
-   def photometric_offset_gband(color_gi, abs_mag_i):
-       """Empirical g-band offset as function of color and magnitude."""
-       a0, a1, a2, a3 = 0.01, 0.05, -0.002, 0.01
-       offset = a0 + a1*color_gi + a2*abs_mag_i + a3*color_gi**2
-       return offset
+   config = PhotometricOffsetsConfig(
+       min_bands_used=5,        # Minimum bands for reweighted objects
+       min_bands_unused=3,      # Minimum bands for non-reweighted objects
+       n_bootstrap=500,         # Bootstrap iterations
+       uncertainty_method='bootstrap_iqr',  # 'bootstrap_iqr' or 'bootstrap_std'
+       random_seed=42           # For reproducibility
+   )
 
-Estimating Offsets for Your Data
----------------------------------
+   offsets, errors, n_used = photometric_offsets(
+       phot, err, mask, models, idxs, reds, dreds, dists,
+       config=config
+   )
 
-If published offsets are unavailable for your photometric system, you can derive your own using this general procedure:
+Additional Parameters
+^^^^^^^^^^^^^^^^^^^^^
 
-1. **Select calibration sample**: Query nearby stars (d < 100 pc) with accurate Gaia parallaxes (σ_π/π < 10%), low extinction, and good photometry. Filter for RUWE < 1.4 to avoid binaries.
+.. code-block:: python
 
-2. **Cross-match**: Match your survey photometry to the Gaia calibration sample.
+   offsets, errors, n_used = photometric_offsets(
+       phot, err, mask, models, idxs, reds, dreds, dists,
+       sel=quality_mask,           # Boolean selection of objects to use
+       weights=sample_weights,     # Per-sample weights
+       mask_fit=fitting_mask,      # Which filters were used in fitting
+       old_offsets=previous_offs,  # Remove previous offsets before recomputing
+       dim_prior=True,             # Apply dimensionality prior in reweighting
+       prior_mean=prior_offs,      # Gaussian prior means
+       prior_std=prior_errs,       # Gaussian prior standard deviations
+       verbose=True
+   )
 
-3. **Fit with brutus**: Run ``BruteForce.fit()`` on each calibration star using the Gaia parallax as a constraint.
+Interpreting Results
+^^^^^^^^^^^^^^^^^^^^
 
-4. **Compute residuals**: For each star, calculate Δm = m_observed - m_model in each band.
+The function returns:
 
-5. **Analyze trends**: Bin residuals by color (e.g., BP-RP) and compute median offsets. Look for systematic trends with stellar type.
+- ``offsets``: Multiplicative flux corrections (model/data ratios). Apply as ``phot_corrected = phot * offsets``
+- ``errors``: Uncertainties from bootstrap distribution
+- ``n_used``: Number of objects used per filter (useful for quality assessment)
 
-6. **Parameterize**: Fit a polynomial (typically linear or quadratic in color) to the median offsets.
+Offsets near 1.0 indicate good agreement between models and data. Values significantly different from 1.0 suggest systematic calibration differences.
 
-.. tip::
-   See the ``tutorials/`` notebooks for worked examples of offset derivation with real data.
+Pre-Computed Offsets
+--------------------
 
-Validating Calibrations
-------------------------
+The default ``brutus`` grids include empirically calibrated offsets derived from:
 
-After deriving corrections, validate them using independent data:
+1. **Open cluster fitting**: Six benchmark clusters (including M67) used to derive isochrone corrections and initial photometric offsets
+2. **Field star validation**: ~23,000 nearby, low-reddening stars with precise Gaia parallaxes
 
-- **Open clusters**: Fit well-studied clusters with and without corrections. Compare derived distances and ages to literature values.
-- **Eclipsing binaries**: Compare brutus mass/radius estimates to model-independent EB measurements from radial velocities and eclipse modeling.
-- **Benchmark stars**: Use stars with interferometric radii or asteroseismic constraints.
+See Speagle et al. (2025) §5.2-5.3 for calibration details and Table 5 for the derived offset values.
 
-Good corrections should reduce scatter and systematic offsets relative to these independent constraints.
+When to Use Custom Calibrations
+-------------------------------
 
-When to Apply Corrections
---------------------------
+Use the default calibrations for most applications. Consider custom calibrations when:
 
-**Always Use**:
+- Working with photometric systems not in the default set
+- Analyzing populations very different from the calibration sample (e.g., very metal-poor)
+- Combining data from surveys with known cross-calibration issues
 
-✓ Isochrone corrections for main-sequence stars (well-calibrated from clusters)
-✓ Photometric offsets for surveys with known systematics
+Limitations
+-----------
 
-**Use with Caution**:
+- **Metallicity range**: Calibrations are optimized for near-solar metallicity. Metal-poor stars may have different systematics.
+- **Evolutionary phase**: Corrections are derived primarily from main-sequence stars. Giants and other phases may require different treatment.
+- **Survey-specific**: Each photometric system has unique calibration issues. Offsets don't transfer between surveys.
 
-⚠ Corrections derived for specific metallicity/age ranges applied to very different populations
-⚠ Extrapolating corrections beyond calibration sample (e.g., to brown dwarfs or very metal-poor stars)
-⚠ Combining corrections from different sources without validating consistency
+See Also
+--------
 
-**Don't Use**:
-
-✗ Corrections without understanding their origin or validation
-✗ Multiple conflicting corrections simultaneously
-✗ Corrections for photometric systems different from calibration
-
-Limitations and Uncertainties
-------------------------------
-
-**Residual Systematics**
-   Even with corrections, ~0.01-0.02 mag systematic errors remain in synthetic photometry.
-
-**Metallicity Dependence**
-   Most calibrations are for solar-metallicity stars. Metal-poor and metal-rich stars may have different systematics.
-
-**Evolutionary Phase Dependence**
-   Corrections derived for main-sequence stars may not apply to giants, white dwarfs, or pre-main-sequence stars.
-
-**Survey-Specific Systematics**
-   Each photometric survey has unique calibration issues. Offsets for one survey don't transfer to another.
-
-**Time Dependence**
-   Photometric systems drift over time. Calibrations should be updated for data release versions.
-
-Future Directions
------------------
-
-Ongoing work to improve empirical calibrations:
-
-- **Gaia DR4**: Improved parallaxes and photometry for calibration samples
-- **JWST**: Near/mid-IR calibrations for cool stars and dusty environments
-- **Spectrophotometry**: Direct comparison of model spectra to observed spectra
-- **Expanded cluster samples**: More clusters across age/metallicity space
-- **Physics-based corrections**: Understanding the physical origin of systematics to improve models
-
-Summary
--------
-
-brutus uses two types of empirical calibration:
-
-1. **Isochrone corrections**: Fix T_eff and radius systematics using open clusters
-   - Applied during model generation
-   - Parameterized by dtdm (temperature) and drdm (radius)
-   - Most important for main-sequence stars
-
-2. **Photometric offsets**: Fix synthetic photometry systematics using field stars
-   - Applied after model generation (additive to magnitudes)
-   - Can be constant, color-dependent, or position-dependent in HR diagram
-   - Survey-specific calibrations
-
-Both corrections improve accuracy of stellar parameter estimates and reduce systematic errors in distances and extinctions.
-
-Next Steps
-----------
-
-- Interpret fitting results: :doc:`understanding_results`
-- Choose configuration options: :doc:`choosing_options`
+- :doc:`grid_generation` - Grid-based fitting with ``BruteForce``
+- :doc:`stellar_models` - MIST models and :ref:`available filters <available-filters>`
+- :doc:`faq` - Troubleshooting and common questions
 
 References
 ----------
 
-Stellar Model Calibrations:
-
-- Torres et al. (2010), "Accurate Masses and Radii of Normal Stars from Detached Eclipsing Binaries", A&A Rev, 18, 67
-- Choi et al. (2018), "Empirical Isochrone Calibration Using Open Clusters", ApJ, 863, 65
-- Mann et al. (2015), "How to Constrain Your M Dwarf", ApJ, 804, 64
-
-Photometric Systems:
-
-- Scolnic et al. (2015), "Supercal: Cross-Calibration of Multiple Photometric Systems", ApJ, 815, 117
-- Magnier et al. (2020), "Pan-STARRS Photometric and Astrometric Calibration", ApJS, 251, 6
-
-brutus Implementation:
-
-- Speagle et al. (2025), arXiv:2503.02227
+Speagle et al. (2025), "Deriving Stellar Properties, Distances, and Reddenings using Photometry and Astrometry with BRUTUS", `arXiv:2503.02227 <https://arxiv.org/abs/2503.02227>`_ (see §5 for calibration details)

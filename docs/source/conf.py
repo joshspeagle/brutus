@@ -15,9 +15,20 @@ project = "brutus"
 copyright = "2025, Joshua S. Speagle"
 author = "Joshua S. Speagle"
 
-# The full version, including alpha/beta/rc tags
-release = "1.0.0"
-version = "1.0.0"
+# Auto-detect version from package metadata or pyproject.toml
+try:
+    from importlib.metadata import version as get_version
+
+    release = get_version("astro-brutus")
+except Exception:
+    # Fallback: parse pyproject.toml if package not installed
+    import tomllib
+
+    with open("../../pyproject.toml", "rb") as f:
+        pyproject = tomllib.load(f)
+    release = pyproject["project"]["version"]
+
+version = release
 
 # -- General configuration ---------------------------------------------------
 
@@ -35,6 +46,7 @@ extensions = [
     "numpydoc",
     "sphinx_design",
     "sphinx_copybutton",
+    "myst_parser",
 ]
 
 # Add any paths that contain templates here, relative to this directory.

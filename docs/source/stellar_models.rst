@@ -228,10 +228,12 @@ Interstellar dust modifies photometry through wavelength-dependent :term:`extinc
 
    m_{\rm band} = M_{\rm band} + \mu + A_V \times \left( R_{\rm band} + R_V \times R'_{\rm band} \right)
 
-where :math:`R_{\rm band}` and :math:`R'_{\rm band}` encode how extinction affects each filter for a given stellar spectrum. These are pre-computed for efficiency.
+where :math:`R_{\rm band}` and :math:`R'_{\rm band}` encode how extinction affects each filter for a given stellar spectrum.
+
+The reddening vectors are pre-computed using the Fitzpatrick & Massa (2009) extinction curve. This extinction law is parameterized by :term:`R_V` and is baked into the neural network predictions, allowing efficient evaluation of reddened magnitudes for any :math:`(A_V, R_V)` combination.
 
 .. seealso::
-   See :doc:`scientific_background` for the full extinction model.
+   See :doc:`priors` for the default R_V prior distribution, which is based on Schlafly et al. (2016).
 
 .. _available-filters:
 
@@ -333,6 +335,10 @@ References
 **MESA Stellar Evolution Code:**
 
 - Paxton et al. (2011, 2013, 2015, 2018, 2019), "Modules for Experiments in Stellar Astrophysics (MESA)", `ApJS series <https://ui.adsabs.harvard.edu/abs/2019ApJS..243...10P>`_
+
+**Extinction Law:**
+
+- Fitzpatrick & Massa (2009), "An Analysis of the Shapes of Interstellar Extinction Curves. VI. The Near-IR Extinction Law", `ApJ, 699, 1209 <https://ui.adsabs.harvard.edu/abs/2009ApJ...699.1209F>`_
 
 **brutus Implementation:**
 

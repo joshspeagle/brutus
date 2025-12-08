@@ -22,7 +22,7 @@ brutus
 
 ----
 
-.. grid:: 1 1 3 3
+.. grid:: 1 2 2 4
    :gutter: 4
    :class-container: sd-text-center
 
@@ -64,6 +64,19 @@ brutus
 
       Key terms and concepts including
       EEP, isochrones, and extinction.
+
+   .. grid-item-card::
+      :link: changelog
+      :link-type: doc
+      :class-card: sd-shadow-sm
+
+      :octicon:`megaphone;3em;sd-text-warning`
+
+      **What's New**
+      ^^^^^^^^^^^^^^
+
+      See the latest changes in v\ |version|.
+      Release notes and migration guides.
 
 ----
 

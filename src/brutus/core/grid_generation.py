@@ -66,7 +66,7 @@ measurements (1 mas = 1 kpc) and is documented in the grid attributes.
 where m_0 is the unreddened magnitude, and (a, b) are fitted coefficients.
 This allows fast computation of reddened photometry for arbitrary (A_V, R_V).
 
-**Grid Format**: HDF5 files contain three datasets:
+**Grid Format**: HDF5 files follow the format established in [1]_ and contain three datasets:
 - `mag_coeffs`: Structured array (Nmodel, Nfilter, 3) with coefficients
 - `labels`: Structured array (Nmodel,) with input parameters
 - `parameters`: Structured array (Nmodel,) with predicted stellar parameters
@@ -161,8 +161,8 @@ class GridGenerator:
 
     Generate grid for specific filters only:
 
-    >>> gen_gri = GridGenerator(tracks, filters=['g', 'r', 'i'])
-    >>> gen_gri.make_grid(output_file='grid_gri.h5')
+    >>> gen_gaia = GridGenerator(tracks, filters=['Gaia_G_MAW', 'Gaia_BP_MAWf', 'Gaia_RP_MAW'])
+    >>> gen_gaia.make_grid(output_file='grid_gaia.h5')
 
     Notes
     -----
@@ -266,7 +266,7 @@ class GridGenerator:
 
         rv_wt : numpy.ndarray, optional
             Weights for R_V grid points when fitting. If None, defaults to
-            exp(-|R_V - 3.3| / 0.5) favoring R_V=3.3.
+            exp(-abs(R_V - 3.3) / 0.5) favoring R_V=3.3.
 
         dist : float, optional
             Reference distance in parsecs. Default is 1000 (1 kpc).
