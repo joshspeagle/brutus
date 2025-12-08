@@ -549,7 +549,14 @@ class TestMainInterface:
 
     def test_photometry_shape_validation(self):
         """Test photometry shape validation."""
-        theta = [0.0, 9.5, 0.1, 3.1, 1000.0]
+        theta = [
+            0.0,
+            9.5,
+            0.1,
+            3.1,
+            1000.0,
+            0.05,
+        ]  # [feh, loga, av, rv, dist, field_frac]
         obs_phot = np.array([[1.0, 0.8]])
         obs_err = np.array([[0.1, 0.08, 0.06]])  # Wrong shape
 
