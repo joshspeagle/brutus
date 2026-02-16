@@ -6,6 +6,7 @@
 
 **Package name on PyPI**: `astro-brutus`
 **Version**: 1.0.0
+**Paper**: Speagle et al. (2025), [arXiv:2503.02227](https://arxiv.org/abs/2503.02227)
 
 ## Repository Structure
 
@@ -14,14 +15,16 @@ brutus/
 ├── src/brutus/           # Main package source
 │   ├── core/             # Stellar modeling (EEPTracks, StarGrid, Isochrone, StellarPop)
 │   ├── analysis/         # Fitting (BruteForce, population modeling, photometric offsets)
-│   ├── data/             # Data downloading/loading
+│   ├── data/             # Data downloading/loading (Pooch-based, Harvard Dataverse)
 │   ├── dust/             # 3D dust map utilities
 │   ├── priors/           # Bayesian priors (IMF, Galactic structure, extinction)
 │   ├── plotting/         # Visualization utilities
 │   └── utils/            # Math, photometry, sampling utilities
 ├── tests/                # Test suite (pytest)
+├── tutorials/            # 8 Jupyter tutorial notebooks
 ├── docs/source/          # Sphinx documentation
-└── pyproject.toml        # Package configuration
+├── pyproject.toml        # Package configuration
+└── CHANGELOG.md          # Version history
 ```
 
 ## Development Commands
@@ -33,8 +36,8 @@ pip install -e ".[dev]"
 # Run tests
 pytest
 
-# Run tests with coverage
-pytest --cov=brutus
+# Run tests with coverage (NUMBA_DISABLE_JIT=1 required for accurate numba coverage)
+NUMBA_DISABLE_JIT=1 pytest --cov=brutus
 
 # Build documentation
 cd docs && make html
@@ -57,12 +60,17 @@ pytest tests/test_analysis/test_individual.py -v
 ## Documentation
 
 Documentation lives in `docs/source/`:
+- **Getting Started**: `installation.rst`, `quickstart.rst`, `glossary.rst`
 - **Scientific Background**: `scientific_background.rst`, `stellar_models.rst`, `priors.rst`, `grid_generation.rst`, `population_modeling.rst`, `photometric_offsets.rst`
 - **User Guide**: `understanding_results.rst`, `faq.rst`
 - **API Reference**: `api/` directory with per-module documentation
-- **Getting Started**: `installation.rst`, `quickstart.rst`
+- **Development**: `changelog.rst`, `contributing.rst`
 
 Build with `cd docs && make html`. Output in `docs/build/html/`.
+
+## Tutorials
+
+8 Jupyter notebooks in `tutorials/` covering individual stars, populations, grids, priors, fitting, cluster analysis, dust mapping, and photometric calibration. These use real data files (FITS/HDF5) and require downloaded model data.
 
 ## Code Style
 
