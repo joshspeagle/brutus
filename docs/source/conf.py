@@ -5,9 +5,28 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html
 
 import os
+import shutil
 import sys
+from pathlib import Path
 
 sys.path.insert(0, os.path.abspath("../../src"))
+
+
+# -- Copy tutorial notebooks into docs at build time -------------------------
+
+
+def _copy_tutorials():
+    """Copy tutorial notebooks from tutorials/ into docs/source/tutorials/."""
+    source_dir = Path(__file__).resolve().parent.parent.parent / "tutorials"
+    dest_dir = Path(__file__).resolve().parent / "tutorials"
+    dest_dir.mkdir(exist_ok=True)
+
+    for nb in sorted(source_dir.glob("tutorial_*.ipynb")):
+        dest = dest_dir / nb.name
+        shutil.copy2(nb, dest)
+
+
+_copy_tutorials()
 
 # -- Project information -----------------------------------------------------
 
@@ -46,8 +65,13 @@ extensions = [
     "numpydoc",
     "sphinx_design",
     "sphinx_copybutton",
-    "myst_parser",
+    "myst_nb",
 ]
+
+# myst-nb configuration
+nb_execution_mode = "off"  # Use pre-rendered outputs, don't execute during build
+nb_custom_formats = {}
+suppress_warnings = ["mystnb.unknown_mime_type"]
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]

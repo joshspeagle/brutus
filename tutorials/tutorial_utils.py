@@ -4,10 +4,12 @@
 """
 Shared utilities for brutus tutorials.
 
-Provides consistent plotting styles, data loading helpers, and output
-management for all tutorial scripts and notebooks.
+Provides consistent plotting styles, data loading helpers, output
+management, assertion helpers, and standardized setup for all
+tutorial scripts and notebooks.
 """
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -128,8 +130,9 @@ def find_brutus_data_file(filename, search_paths=None):
     """
     Find a brutus data file, checking multiple possible locations.
 
-    This handles cross-platform paths and different mount points
-    (e.g., /mnt/c/ vs /mnt/d/ in WSL).
+    This handles cross-platform paths, different mount points
+    (e.g., /mnt/c/ vs /mnt/d/ in WSL), the Pooch cache directory,
+    and the ``BRUTUS_DATA_DIR`` environment variable.
 
     Parameters
     ----------
@@ -154,21 +157,40 @@ def find_brutus_data_file(filename, search_paths=None):
         search_paths = [
             tutorials_dir,  # tutorials directory itself
             tutorials_dir / "data",
-            tutorials_dir.parent / "data" / "DATAFILES",
-            tutorials_dir.parent / "data" / "benchmarks",
-            tutorials_dir.parent / "data" / "VICs",
-            Path("/mnt/d/Dropbox/GitHub/brutus/data/DATAFILES"),
-            Path("/mnt/d/Dropbox/GitHub/brutus/data/benchmarks"),
-            Path("/mnt/d/Dropbox/GitHub/brutus/data/VICs"),
-            Path("/mnt/d/Dropbox/GitHub/brutus/tutorials"),
-            Path("/mnt/c/Dropbox/GitHub/brutus/data/DATAFILES"),
-            Path("/mnt/c/Dropbox/GitHub/brutus/data/benchmarks"),
-            Path("/mnt/c/Dropbox/GitHub/brutus/data/VICs"),
-            Path("../data/DATAFILES"),
-            Path("../data/benchmarks"),
-            Path("../data/VICs"),
-            Path("./data"),
         ]
+
+        # Pooch cache directory (used by fetch_* functions and CI)
+        try:
+            import pooch
+
+            search_paths.append(Path(pooch.os_cache("astro-brutus")))
+        except ImportError:
+            pass
+
+        # BRUTUS_DATA_DIR environment variable
+        env_dir = os.environ.get("BRUTUS_DATA_DIR")
+        if env_dir:
+            search_paths.append(Path(env_dir))
+
+        # Standard project data directories
+        search_paths.extend(
+            [
+                tutorials_dir.parent / "data" / "DATAFILES",
+                tutorials_dir.parent / "data" / "benchmarks",
+                tutorials_dir.parent / "data" / "VICs",
+                Path("/mnt/d/Dropbox/GitHub/brutus/data/DATAFILES"),
+                Path("/mnt/d/Dropbox/GitHub/brutus/data/benchmarks"),
+                Path("/mnt/d/Dropbox/GitHub/brutus/data/VICs"),
+                Path("/mnt/d/Dropbox/GitHub/brutus/tutorials"),
+                Path("/mnt/c/Dropbox/GitHub/brutus/data/DATAFILES"),
+                Path("/mnt/c/Dropbox/GitHub/brutus/data/benchmarks"),
+                Path("/mnt/c/Dropbox/GitHub/brutus/data/VICs"),
+                Path("../data/DATAFILES"),
+                Path("../data/benchmarks"),
+                Path("../data/VICs"),
+                Path("./data"),
+            ]
+        )
 
     for base_path in search_paths:
         base_path = Path(base_path)
@@ -276,7 +298,7 @@ def check_data_requirements(tutorial_num, verbose=True):
     Parameters
     ----------
     tutorial_num : int
-        Tutorial number (0-8).
+        Tutorial number (0-11).
     verbose : bool, optional
         Whether to print detailed status. Default is True.
 
@@ -289,7 +311,7 @@ def check_data_requirements(tutorial_num, verbose=True):
     """
     # Define requirements per tutorial
     requirements = {
-        0: ["nn_c3k.h5", "MIST_1.2_EEPtrk.h5", "MIST_1.2_iso_vvcrit0.0.h5"],
+        0: [],
         1: ["nn_c3k.h5", "MIST_1.2_EEPtrk.h5"],
         2: ["nn_c3k.h5", "MIST_1.2_iso_vvcrit0.0.h5"],
         3: [
@@ -320,6 +342,9 @@ def check_data_requirements(tutorial_num, verbose=True):
             "offsets_mist_v9.txt",
             "offsets_bs_v5.txt",
         ],
+        9: [],
+        10: ["Orion_l204.7_b-19.2_mist.h5"],
+        11: ["Orion_l204.7_b-19.2_mist.h5"],
     }
 
     required_files = requirements.get(tutorial_num, [])
@@ -332,17 +357,17 @@ def check_data_requirements(tutorial_num, verbose=True):
         try:
             find_brutus_data_file(filename)  # Just check if file exists
             if verbose:
-                print(f"  ✓ Found: {filename}")
+                print(f"  Found: {filename}")
         except FileNotFoundError:
             missing.append(filename)
             if verbose:
-                print(f"  ✗ Missing: {filename}")
+                print(f"  Missing: {filename}")
 
     if verbose:
         if missing:
-            print(f"\n⚠ Missing {len(missing)} required file(s)")
+            print(f"\n  Missing {len(missing)} required file(s)")
         else:
-            print("\n✓ All required files available")
+            print("\n  All required files available")
 
     return len(missing) == 0, missing
 
@@ -378,3 +403,164 @@ def load_orion_data(**kwargs):
 def load_m67_data(**kwargs):
     """Load M67 cluster data. Convenience wrapper for load_tutorial_data."""
     return load_tutorial_data("m67", **kwargs)
+
+
+def setup_tutorial(tutorial_num, title=None):
+    """
+    Standardized bootstrap for every tutorial notebook.
+
+    Sets plot style, creates output directory, checks data availability,
+    and prints a status header.
+
+    Parameters
+    ----------
+    tutorial_num : int
+        Tutorial number (0-11).
+    title : str, optional
+        Tutorial title for the header. If None, uses a generic title.
+
+    Returns
+    -------
+    info : dict
+        Dictionary with keys:
+        - ``plot_dir``: Path to the plot output directory.
+        - ``data_available``: bool, whether all required data are available.
+        - ``missing_files``: list of missing data file names.
+    """
+    import matplotlib
+
+    # Set headless backend if not interactive
+    if "MPLBACKEND" in os.environ:
+        matplotlib.use(os.environ["MPLBACKEND"])
+
+    set_plot_style()
+
+    plot_dir = get_plot_dir(tutorial_num)
+
+    if title is None:
+        title = f"Tutorial {tutorial_num:02d}"
+    print_section(title)
+
+    data_ok, missing = check_data_requirements(tutorial_num, verbose=True)
+
+    return {
+        "plot_dir": plot_dir,
+        "data_available": data_ok,
+        "missing_files": missing,
+    }
+
+
+def load_example_results(filename="Orion_l204.7_b-19.2_mist.h5"):
+    """
+    Load pre-computed BruteForce results for plotting/results tutorials.
+
+    Parameters
+    ----------
+    filename : str, optional
+        Results filename to load.
+
+    Returns
+    -------
+    results : dict
+        Dictionary with result arrays loaded from the HDF5 file.
+    """
+    import h5py
+
+    filepath = find_brutus_data_file(filename)
+
+    results = {}
+    with h5py.File(filepath, "r") as f:
+        for key in f.keys():
+            if isinstance(f[key], h5py.Dataset):
+                results[key] = f[key][:]
+            elif isinstance(f[key], h5py.Group):
+                results[key] = {}
+                for subkey in f[key].keys():
+                    if isinstance(f[key][subkey], h5py.Dataset):
+                        results[key][subkey] = f[key][subkey][:]
+
+    results["filename"] = filepath
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Assertion helpers for programmatic output verification
+# ---------------------------------------------------------------------------
+
+
+def assert_figure_valid(fig, min_axes=1):
+    """
+    Assert that a matplotlib figure is valid and contains content.
+
+    Parameters
+    ----------
+    fig : matplotlib.figure.Figure
+        Figure to validate.
+    min_axes : int, optional
+        Minimum number of axes expected. Default is 1.
+
+    Raises
+    ------
+    AssertionError
+        If the figure is not valid.
+    """
+    import matplotlib.figure
+
+    assert isinstance(fig, matplotlib.figure.Figure), "Not a matplotlib Figure"
+    axes = fig.get_axes()
+    assert len(axes) >= min_axes, f"Expected at least {min_axes} axes, got {len(axes)}"
+
+
+def assert_array_properties(
+    arr, name="array", ndim=None, shape=None, min_val=None, max_val=None, finite=False
+):
+    """
+    Assert properties of a numpy array for output verification.
+
+    Parameters
+    ----------
+    arr : array_like
+        Array to check.
+    name : str, optional
+        Name for error messages.
+    ndim : int, optional
+        Expected number of dimensions.
+    shape : tuple, optional
+        Expected shape (use -1 for any size along a dimension).
+    min_val : float, optional
+        Minimum allowed value.
+    max_val : float, optional
+        Maximum allowed value.
+    finite : bool, optional
+        Whether all values must be finite.
+
+    Raises
+    ------
+    AssertionError
+        If any property check fails.
+    """
+    arr = np.asarray(arr)
+    if ndim is not None:
+        assert arr.ndim == ndim, f"{name}: expected {ndim}D, got {arr.ndim}D"
+    if shape is not None:
+        for i, (expected, actual) in enumerate(zip(shape, arr.shape)):
+            if expected != -1:
+                assert (
+                    expected == actual
+                ), f"{name}: dimension {i} expected {expected}, got {actual}"
+    if min_val is not None:
+        valid = arr[np.isfinite(arr)] if not finite else arr
+        if len(valid) > 0:
+            assert np.all(valid >= min_val), (
+                f"{name}: values below minimum {min_val} "
+                f"(min found: {np.nanmin(arr)})"
+            )
+    if max_val is not None:
+        valid = arr[np.isfinite(arr)] if not finite else arr
+        if len(valid) > 0:
+            assert np.all(valid <= max_val), (
+                f"{name}: values above maximum {max_val} "
+                f"(max found: {np.nanmax(arr)})"
+            )
+    if finite:
+        assert np.all(np.isfinite(arr)), f"{name}: contains non-finite values"
