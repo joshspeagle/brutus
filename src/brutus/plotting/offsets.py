@@ -211,7 +211,13 @@ def photometric_offsets(
         # Compute weights from ignoring current band.
         lnl = np.array(
             [
-                phot_loglike(mo, me, mt, mp, dim_prior=dim_prior)
+                phot_loglike(
+                    mo[None, :],
+                    me[None, :],
+                    mp[None, :, :],
+                    mask=mt[None, :],
+                    dim_prior=dim_prior,
+                ).squeeze(0)
                 for mo, me, mt, mp in zip(magobs[s], mageobs[s], mtemp[s], mpred[s])
             ]
         )
@@ -486,7 +492,13 @@ def photometric_offsets_2d(
             warnings.simplefilter("ignore")  # ignore bad values
             lnl = np.array(
                 [
-                    phot_loglike(mo, me, mt, mp, dim_prior=dim_prior)
+                    phot_loglike(
+                        mo[None, :],
+                        me[None, :],
+                        mp[None, :, :],
+                        mask=mt[None, :],
+                        dim_prior=dim_prior,
+                    ).squeeze(0)
                     for mo, me, mt, mp in zip(magobs, mageobs, mtemp, mpred)
                 ]
             )
