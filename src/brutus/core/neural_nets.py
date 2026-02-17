@@ -506,3 +506,81 @@ class FastNNPredictor(FastNN):
 
         # Return specified subset of filters
         return np.atleast_1d(m)[filt_idxs]
+
+    def sed_batch(
+        self,
+        logt,
+        logg,
+        feh_surf,
+        logl,
+        afe,
+        av,
+        rv,
+        dist,
+        filt_idxs=slice(None),
+    ):
+        """
+        Generate SED predictions for an array of stellar parameters.
+
+        Vectorized version of :meth:`sed` that evaluates the neural network
+        once for all stars, providing significant speedup over looping.
+
+        Parameters
+        ----------
+        logt : numpy.ndarray of shape (N,)
+            Base-10 logarithm of effective temperature for each star.
+        logg : numpy.ndarray of shape (N,)
+            Base-10 logarithm of surface gravity for each star.
+        feh_surf : numpy.ndarray of shape (N,)
+            Surface metallicity [Fe/H] for each star.
+        logl : numpy.ndarray of shape (N,)
+            Base-10 logarithm of luminosity for each star.
+        afe : numpy.ndarray of shape (N,)
+            Alpha element enhancement [alpha/Fe] for each star.
+        av : float
+            V-band extinction (same for all stars).
+        rv : float
+            Reddening parameter R(V) (same for all stars).
+        dist : float
+            Distance in parsecs (same for all stars).
+        filt_idxs : slice or array-like, optional
+            Filter subset to return. Default is all filters.
+
+        Returns
+        -------
+        seds : numpy.ndarray of shape (N, Nfilt_subset)
+            Predicted apparent magnitudes for each star and filter.
+            Stars with out-of-bounds parameters get NaN values.
+        """
+        logt = np.asarray(logt)
+        logg = np.asarray(logg)
+        feh_surf = np.asarray(feh_surf)
+        logl = np.asarray(logl)
+        afe = np.asarray(afe)
+        N = len(logt)
+
+        # Distance modulus (constant for all stars)
+        mu = 5.0 * np.log10(dist) - 5.0
+
+        # Build input array: shape (6, N)
+        x = np.array([10.0**logt, logg, feh_surf, afe, np.full(N, av), np.full(N, rv)])
+
+        # Determine which stars have valid (in-bounds, finite) parameters
+        valid = (
+            np.all(np.isfinite(x), axis=0)
+            & np.all(x >= self.xmin[:, None], axis=0)
+            & np.all(x <= self.xmax[:, None], axis=0)
+        )  # shape (N,)
+
+        # Initialize output with NaN
+        seds = np.full((N, self.NFILT), np.nan)
+
+        n_valid = np.sum(valid)
+        if n_valid > 0:
+            # Evaluate NN for all valid stars at once
+            BC = self.nneval(x[:, valid])  # shape (NFILT, n_valid)
+
+            # Convert to apparent magnitudes
+            seds[valid] = -2.5 * logl[valid, None] + 4.74 - BC.T + mu
+
+        return seds[:, filt_idxs]

@@ -357,6 +357,12 @@ def phot_loglike(flux, err, mfluxes, mask=None, dim_prior=False, dof_reduction=0
     if mask is None:
         mask = np.ones_like(flux)
 
+    # Sanitize NaN/invalid values in masked bands to prevent NaN propagation.
+    # In numpy, NaN * 0 = NaN, so masked bands with NaN flux or error would
+    # corrupt the entire computation. Replace with safe placeholders.
+    flux = np.where(mask > 0, flux, 0.0)
+    err = np.where(mask > 0, err, 1.0)
+
     # Apply mask to get effective dimensionality per object.
     Ndim = np.sum(mask, axis=1)
 

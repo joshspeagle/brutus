@@ -121,9 +121,9 @@ def generate_isochrone_population_grid(
     feh, loga, av, rv, dist : float
         Stellar population parameters (metallicity, log age, extinction, distance)
     smf_grid : array-like, optional
-        Secondary mass fraction grid. Default is adaptive grid from 0.0 to 1.0
+        Secondary mass fraction grid. Default is 21 uniform points from 0.0 to 1.0
     eep_grid : array-like, optional
-        EEP grid for isochrone evaluation. Default is 2000 points from 202 to 808
+        EEP grid for isochrone evaluation. Default is 1000 points from 202 to 808
     mini_bound : float, optional
         Minimum initial mass for evaluation. Default 0.08 solar masses
     eep_binary_max : float, optional
@@ -168,27 +168,9 @@ def generate_isochrone_population_grid(
     """
     # Set default grids
     if smf_grid is None:
-        smf_grid = np.array(
-            [
-                0.0,
-                0.2,
-                0.35,
-                0.45,
-                0.5,
-                0.55,
-                0.6,
-                0.65,
-                0.7,
-                0.75,
-                0.8,
-                0.85,
-                0.9,
-                0.95,
-                1.0,
-            ]
-        )
+        smf_grid = np.linspace(0.0, 1.0, 21)
     if eep_grid is None:
-        eep_grid = np.linspace(202.0, 808.0, 2000)
+        eep_grid = np.linspace(202.0, 808.0, 1000)
 
     smf_grid = np.asarray(smf_grid)
     eep_grid = np.asarray(eep_grid)
@@ -595,13 +577,15 @@ def apply_isochrone_mixture_model(
     ln_cluster_weight = np.log(cluster_prob * (1.0 - field_fraction))
     ln_outlier_weight = np.log(1.0 - cluster_prob * (1.0 - field_fraction))
 
-    # Apply mixture model using logsumexp for numerical stability
+    # Apply mixture model using numerically stable log-sum-exp
     cluster_term = lnl_cluster + ln_cluster_weight
     outlier_term = lnl_outlier + ln_outlier_weight
 
-    # Stack for logsumexp: shape (2, N_grid_points, N_objects)
-    terms = np.stack([cluster_term, outlier_term], axis=0)
-    lnl_mixture = logsumexp(terms, axis=0)
+    # For two terms, direct numpy is faster than scipy.special.logsumexp
+    max_term = np.maximum(cluster_term, outlier_term)
+    lnl_mixture = max_term + np.log(
+        np.exp(cluster_term - max_term) + np.exp(outlier_term - max_term)
+    )
 
     return lnl_mixture
 

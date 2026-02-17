@@ -125,7 +125,7 @@ Binary photometry is computed by adding the fluxes of both components:
 
    F_{\rm binary} = F_{\rm primary} + F_{\rm secondary}
 
-The default SMF grid has 15 values from 0.0 to 1.0, with finer sampling near equal-mass binaries where the photometric effect is largest.
+The default SMF grid uses 21 uniformly-spaced values from 0.0 to 1.0.
 
 .. note::
    Binary modeling is restricted to main-sequence stars (EEP < 480) to avoid unphysical configurations like two red giants in a close binary.
@@ -359,17 +359,144 @@ Use ``return_components=True`` to inspect intermediate results:
 Performance Considerations
 --------------------------
 
-**Grid Size**
+Timing Benchmarks
+^^^^^^^^^^^^^^^^^
 
-The default grid uses 2000 EEP points × 15 SMF values. After applying mass bounds and binary constraints (EEP < 480 for binaries), the effective grid size is typically 10,000-20,000 points per likelihood evaluation.
+The following benchmarks were measured on a typical workstation (2024) using 3 Gaia bands. All times are per evaluation of the full log-likelihood.
 
-Custom grids can be specified for faster iteration:
+**Pipeline stage breakdown** (100 stars, default grid):
+
+.. list-table::
+   :widths: 40 20 20
+   :header-rows: 1
+
+   * - Stage
+     - Time (ms)
+     - Fraction
+   * - Grid generation (fixed cost)
+     - 15
+     - 17%
+   * - Cluster loglike
+     - 50-90
+     - 54%
+   * - Mixture model
+     - 25
+     - 15%
+   * - Marginalization
+     - 23
+     - 14%
+   * - Outlier loglike
+     - <1
+     - <1%
+   * - **Total**
+     - **~120**
+     -
+
+**Scaling with number of stars:**
+
+.. list-table::
+   :widths: 30 30 30
+   :header-rows: 1
+
+   * - N_stars
+     - Time per eval (ms)
+     - Per-star cost (ms)
+   * - 10
+     - 40
+     - 4.0
+   * - 50
+     - 65
+     - 1.3
+   * - 100
+     - 120
+     - 1.2
+   * - 200
+     - 200
+     - 1.0
+   * - 500
+     - 600
+     - 1.2
+
+Grid generation is a fixed cost (~15 ms), so per-star cost decreases for larger samples. Adding more photometric bands increases cost modestly.
+
+Grid Resolution and Convergence
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The default grid uses 1000 EEP points :math:`\times` 21 SMF values. After applying mass bounds and binary constraints (EEP < 480 for binaries), the effective grid size is typically 7,000-10,000 points per evaluation.
+
+**EEP convergence** (measured as :math:`\Delta \ln \mathcal{L}` vs 5000-point reference, 100 stars):
+
+.. list-table::
+   :widths: 25 25 25 25
+   :header-rows: 1
+
+   * - N_EEP
+     - Grid size
+     - :math:`\Delta \ln \mathcal{L}`
+     - Time (ms)
+   * - 200
+     - 1,368
+     - -1.4
+     - 11
+   * - 500
+     - 3,451
+     - -0.4
+     - 26
+   * - **1000 (default)**
+     - **6,916**
+     - **-0.2**
+     - **75**
+   * - 2000
+     - 13,862
+     - -0.05
+     - 170
+   * - 5000 (reference)
+     - 34,581
+     - 0
+     - 529
+
+EEP convergence is fast: 500 points are within :math:`|\Delta \ln \mathcal{L}| < 0.5` of the reference, and 1000 points are essentially converged.
+
+**SMF convergence** (measured vs 31-point uniform reference, 100 stars):
+
+.. list-table::
+   :widths: 25 25 25 25
+   :header-rows: 1
+
+   * - SMF config
+     - Grid size
+     - :math:`\Delta \ln \mathcal{L}`
+     - Time (ms)
+   * - Singles only (N=1)
+     - 1,934
+     - +0.8
+     - 14
+   * - 7 uniform
+     - 7,046
+     - +12.6
+     - 67
+   * - 15 uniform
+     - 13,862
+     - +3.8
+     - 165
+   * - **21 uniform (default)**
+     - **18,974**
+     - **+1.7**
+     - **269**
+   * - 31 uniform (reference)
+     - 27,494
+     - 0
+     - 370
+
+SMF convergence is slower than EEP — at least 15-21 uniformly-spaced points are needed for :math:`|\Delta \ln \mathcal{L}| < 4` per 100 stars. Uniform spacing outperforms non-uniform grids at equal point counts.
+
+Custom grids can be specified for faster iteration during development:
 
 .. code-block:: python
 
-   # Coarser grid for development/testing
-   coarse_eep = np.linspace(202, 808, 500)
-   coarse_smf = np.array([0.0, 0.3, 0.5, 0.7, 1.0])
+   # Coarser grid for testing (~5x faster)
+   coarse_eep = np.linspace(202, 808, 200)
+   coarse_smf = np.linspace(0, 1, 7)
 
    lnl = isochrone_population_loglike(
        theta, pop, flux, flux_err,
