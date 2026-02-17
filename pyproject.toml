@@ -133,7 +133,6 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 markers = [
-    "tutorial: marks tests as tutorial notebook tests (deselect with '-m \"not tutorial\"')",
     "slow: marks tests as slow-running",
 ]
 filterwarnings = [

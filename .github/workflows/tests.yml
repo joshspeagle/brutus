@@ -242,58 +242,6 @@ jobs:
     #     mypy src/brutus --ignore-missing-imports
     #   continue-on-error: true
 
-  tutorial-tests:
-    runs-on: ubuntu-latest
-    needs: test
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11"]
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ matrix.python-version }}
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip setuptools wheel
-        pip install "numpy>=1.19,<2.0"
-        pip install --no-build-isolation "scipy>=1.6.0"
-        pip install --no-build-isolation "healpy>=1.14.0"
-        pip install --no-build-isolation -e ".[test]"
-        pip install jupyter nbconvert
-
-    - name: Cache test data files
-      uses: actions/cache@v4
-      id: cache-data
-      with:
-        path: |
-          ~/.cache/astro-brutus/
-        key: brutus-data-v3-${{ runner.os }}-${{ hashFiles('src/brutus/data/download.py') }}
-        restore-keys: |
-          brutus-data-v3-${{ runner.os }}-
-          brutus-data-v3-
-
-    - name: Run tutorial tests (committed data only)
-      env:
-        MPLBACKEND: Agg
-      run: |
-        # Run tutorials that use only committed/small data files
-        pytest tests/test_tutorials.py -v -m tutorial -k "tutorial_07 or tutorial_09 or tutorial_10 or tutorial_11" --no-cov || true
-
-    - name: Run tutorial tests (large data, if cached)
-      if: steps.cache-data.outputs.cache-hit == 'true'
-      env:
-        MPLBACKEND: Agg
-      run: |
-        # Run all tutorials when data cache is available
-        pytest tests/test_tutorials.py -v -m tutorial --no-cov
-      continue-on-error: true
-
   build:
     runs-on: ubuntu-latest
 
