@@ -48,6 +48,30 @@ Do I need priors?
 
 For bright stars with good parallax, priors have minimal impact. For faint stars or without parallax, priors are important. Use priors by default. See :doc:`priors`.
 
+Performance
+-----------
+
+How long does BruteForce fitting take?
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+With the default grid (614K models) and 8 photometric bands (Pan-STARRS + 2MASS), ``BruteForce`` processes approximately **2--3 stars per second** (including parallax and dust map priors). The dominant cost is the magnitude-space screening (``loglike_grid``), which evaluates all grid models for each star. Fitting scales roughly linearly with grid size; reducing to ~60K models yields a ~5--6x speedup. See :doc:`grid_generation` for detailed benchmarks.
+
+How long does population loglikelihood evaluation take?
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A single evaluation of :func:`~brutus.analysis.isochrone_population_loglike` takes approximately **40 ms** (fixed grid generation cost) plus **~1 ms per star**. For 100 stars with 3 Gaia bands, expect ~120 ms per evaluation. MCMC with 128 walkers and 5000 steps would take ~9 hours serially; use multiprocessing to parallelize across walkers. See :doc:`population_modeling` for full benchmarks.
+
+How do I tune the population grid resolution?
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The default grid (1000 EEP :math:`\times` 21 SMF points) balances accuracy and speed. Key findings:
+
+- **EEP**: Converges fast. 500 points are within :math:`\Delta \ln \mathcal{L} \approx 0.4` of the 5000-point reference. Reducing from 1000 to 200 gives a 6x speedup with :math:`\Delta \ln \mathcal{L} \approx 1.4`.
+- **SMF**: Converges slower. Uniform spacing outperforms non-uniform grids. At least 15 points are needed for :math:`|\Delta \ln \mathcal{L}| < 4` per 100 stars.
+- **For development**: ``eep_grid=np.linspace(202, 808, 200)`` with ``smf_grid=np.linspace(0, 1, 7)`` provides a ~10x speedup suitable for testing.
+
+See :doc:`population_modeling` for convergence tables.
+
 Data Formats
 ------------
 

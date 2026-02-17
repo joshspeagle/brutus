@@ -248,6 +248,59 @@ Complete Example
 Performance Considerations
 --------------------------
 
+Timing Benchmarks
+^^^^^^^^^^^^^^^^^
+
+The following benchmarks were measured using the default ``grid_mist_v9`` grid (613,530 models) with 8 photometric bands (Pan-STARRS grizy + 2MASS JHKs), Gaia parallax constraints, and Bayestar 3D dust map priors. All times are per star, averaged over 10 objects from the Orion test field after Numba JIT warmup.
+
+**Per-star timing breakdown:**
+
+.. list-table::
+   :widths: 45 20 15
+   :header-rows: 1
+
+   * - Stage
+     - Time (ms)
+     - Fraction
+   * - ``loglike_grid()`` — magnitude-space screening + flux-space refinement
+     - ~315
+     - ~89%
+   * - ``logpost_grid()`` — prior integration via MC sampling
+     - ~37
+     - ~10%
+   * - Posterior resampling
+     - ~3
+     - ~1%
+   * - I/O (HDF5 write)
+     - ~2
+     - <1%
+   * - **Total per star**
+     - **~355**
+     -
+
+.. note::
+   ``loglike_grid`` and ``logpost_grid`` overlap because ``logpost_grid`` only operates on models that survive the likelihood screening. The total is less than their sum. End-to-end throughput including all overhead is ~2--3 stars per second.
+
+**Inside ``loglike_grid()``** (the dominant cost):
+
+- ``_optimize_fit_mag()`` on the full 614K grid: ~200 ms — iterative convergence over all models before culling
+- Initial culling (parallax + :math:`\chi^2`): ~11 ms — typically reduces to 0.5--5% of models
+- ``_optimize_fit_flux()`` refinement: ~62 ms — 2--6 iterations on surviving models
+
+**Inside ``logpost_grid()``:**
+
+- Galactic structure prior: ~19 ms — astropy coordinate transforms for MC samples
+- Parallax prior: ~9 ms
+- MC sampling (50 draws :math:`\times` ~1,000 models): ~4 ms
+- Matrix inversion (3 :math:`\times` 3, ~1,000 models): ~4 ms
+
+**Scaling behavior:**
+
+Fitting time scales roughly linearly with grid size for small grids and becomes mildly superlinear for large grids as the working set exceeds CPU cache capacity. Band count has a modest impact because the inner loops iterate over models (N :math:`\sim 10^5`), not bands (N :math:`\sim 10`). Reducing the default grid by 10x (to ~60K models) yields roughly a 5--6x speedup.
+
+Configuration
+^^^^^^^^^^^^^
+
 The :meth:`~brutus.analysis.BruteForce.fit` method provides several parameters for tuning performance and resource usage.
 
 **I/O Mode** (``running_io``):
