@@ -1447,14 +1447,21 @@ class BruteForce:
             lnp_mc += lnp_gal_reshaped
 
         if dustfile is not None:
+            # Load dust map from file path if needed
+            if isinstance(dustfile, str):
+                from ..dust import Bayestar
+
+                dustfile = Bayestar(dustfile=dustfile)
+
             if lndustprior is None:
                 lndustprior = logp_extinction
 
             # Dust prior evaluation (VECTORIZED)
-            # The dust prior only depends on av values, not distance
-            # Flatten and evaluate all av values at once
+            # For 3D dust maps, pass distances so the prior can interpolate
+            # the extinction profile to each star's distance
             av_flat = a_mc.ravel()  # Shape: (Nmc * Nsel,)
-            lnp_dust_flat = lndustprior(av_flat, dustfile, coord)
+            dist_flat = dist_mc.ravel()  # Shape: (Nmc * Nsel,)
+            lnp_dust_flat = lndustprior(av_flat, dustfile, coord, distance=dist_flat)
             lnp_dust_reshaped = lnp_dust_flat.reshape(Nmc, Nsel)  # Shape: (Nmc, Nsel)
             lnp_mc += lnp_dust_reshaped
 
@@ -1589,11 +1596,14 @@ class BruteForce:
             default Galactic model from Green et al. (2014).
 
         lndustprior : callable, optional
-            Dust prior function. If not provided and dustfile is given,
-            uses the 3D dust map prior.
+            Dust prior function with signature
+            ``f(avs, dustmap, coord, distance=None)``. If not provided
+            and dustfile is given, uses ``logp_extinction``.
 
-        dustfile : str, optional
-            Path to the 3D dust map file.
+        dustfile : str or `~brutus.dust.Bayestar`, optional
+            3D dust map for extinction priors. Can be a file path (string)
+            to a Bayestar HDF5 file, which will be loaded automatically,
+            or a pre-loaded ``Bayestar`` object.
 
         apply_dlabels : bool, optional
             Whether to pass model labels to Galactic prior. Default is True.
@@ -1684,6 +1694,12 @@ class BruteForce:
         ...     data_coords=coords
         ... )
         """
+        # Load dust map from file path if needed (once for all objects)
+        if dustfile is not None and isinstance(dustfile, str):
+            from ..dust import Bayestar
+
+            dustfile = Bayestar(dustfile=dustfile)
+
         # Pre-process data and initialize priors
         setup_results = self._setup(
             data,

@@ -357,14 +357,16 @@ class TestGalacticPriors:
 class TestExtinctionPriors:
     """Test dust extinction priors."""
 
+    # --- Tests for simple 2-tuple dust maps ---
+
     def test_logp_extinction_valid_dustmap(self):
-        """Test extinction prior with valid dust map."""
+        """Test extinction prior with valid 2-tuple dust map."""
         avs = np.array([0.1, 0.2, 0.3])
         coord = SkyCoord(ra=180.0, dec=0.0, unit="deg")
 
-        # Mock dust map
+        # Mock dust map returning (mean, std) 2-tuple
         dustmap = Mock()
-        dustmap.query.return_value = (0.2, 0.05)  # mean, std
+        dustmap.query.return_value = (0.2, 0.05)
 
         logp = logp_extinction(avs, dustmap, coord)
 
@@ -409,11 +411,130 @@ class TestExtinctionPriors:
 
         # Mock dust map that raises exception
         dustmap = Mock()
-        dustmap.query.side_effect = ValueError("Query failed")
+        dustmap.query.side_effect = TypeError("Query failed")
 
         logp = logp_extinction(avs, dustmap, coord)
 
         # Should return uniform prior on error
+        assert np.allclose(logp, 0.0)
+
+    # --- Tests for 3D dust maps (Bayestar-like 3-tuple) ---
+
+    def test_logp_extinction_3d_dustmap_with_distance(self):
+        """Test extinction prior with 3D dust map and distance."""
+        avs = np.array([0.1, 0.3, 0.5])
+        coord = SkyCoord(l=90.0, b=0.0, unit="deg", frame="galactic")
+
+        # Mock 3D dust map returning (distances, av_profile, std_profile)
+        map_distances = np.array([0.1, 0.5, 1.0, 2.0, 5.0])
+        av_profile = np.array([0.05, 0.15, 0.3, 0.5, 0.8])
+        std_profile = np.array([0.02, 0.05, 0.1, 0.15, 0.2])
+
+        dustmap = Mock()
+        dustmap.query.return_value = (map_distances, av_profile, std_profile)
+
+        # Evaluate at d=1.0 kpc where map gives av_mean=0.3, av_std=0.1
+        logp = logp_extinction(avs, dustmap, coord, distance=1.0)
+
+        assert np.all(np.isfinite(logp))
+        # av=0.3 is closest to the map mean at d=1 kpc
+        assert logp[1] > logp[0]
+        assert logp[1] > logp[2]
+
+    def test_logp_extinction_3d_dustmap_no_distance(self):
+        """Test 3D dust map without distance returns uniform prior."""
+        avs = np.array([0.1, 0.5])
+        coord = SkyCoord(l=90.0, b=0.0, unit="deg", frame="galactic")
+
+        map_distances = np.array([0.1, 1.0, 5.0])
+        av_profile = np.array([0.05, 0.3, 0.8])
+        std_profile = np.array([0.02, 0.1, 0.2])
+
+        dustmap = Mock()
+        dustmap.query.return_value = (map_distances, av_profile, std_profile)
+
+        # No distance provided — should return uniform prior
+        logp = logp_extinction(avs, dustmap, coord)
+        assert np.allclose(logp, 0.0)
+
+    def test_logp_extinction_3d_dustmap_array_distances(self):
+        """Test 3D dust map with array of distances (BruteForce MC case)."""
+        # Simulate the BruteForce case: matching arrays of (av, distance)
+        # Use uniform sigma so normalization doesn't affect comparisons
+        # avs[0]=0.1 at d=0.5 (map gives 0.15, mismatch)
+        # avs[1]=0.3 at d=1.0 (map gives 0.3, exact match)
+        # avs[2]=1.5 at d=2.0 (map gives 0.5, large mismatch)
+        # avs[3]=0.8 at d=5.0 (map gives 0.8, exact match)
+        avs = np.array([0.1, 0.3, 1.5, 0.8])
+        distances = np.array([0.5, 1.0, 2.0, 5.0])
+        coord = SkyCoord(l=90.0, b=0.0, unit="deg", frame="galactic")
+
+        map_distances = np.array([0.1, 0.5, 1.0, 2.0, 5.0])
+        av_profile = np.array([0.05, 0.15, 0.3, 0.5, 0.8])
+        std_profile = np.array([0.1, 0.1, 0.1, 0.1, 0.1])  # uniform sigma
+
+        dustmap = Mock()
+        dustmap.query.return_value = (map_distances, av_profile, std_profile)
+
+        logp = logp_extinction(avs, dustmap, coord, distance=distances)
+
+        assert logp.shape == avs.shape
+        assert np.all(np.isfinite(logp))
+
+        # With uniform sigma, exact matches should have highest logp
+        assert logp[1] > logp[0]  # exact match vs small mismatch
+        assert logp[3] > logp[2]  # exact match vs large mismatch
+
+        # Verify against manual Gaussian computation
+        for i in range(len(avs)):
+            expected_mean = np.interp(distances[i], map_distances, av_profile)
+            sigma = 0.1
+            expected = -0.5 * (
+                (avs[i] - expected_mean) ** 2 / sigma**2 + np.log(2 * np.pi * sigma**2)
+            )
+            assert np.isclose(logp[i], expected, atol=1e-10)
+
+    def test_logp_extinction_3d_dustmap_nan_coverage(self):
+        """Test 3D dust map with NaN values (out of coverage)."""
+        avs = np.array([0.1, 0.5])
+        coord = SkyCoord(l=90.0, b=0.0, unit="deg", frame="galactic")
+
+        map_distances = np.array([0.1, 1.0, 5.0])
+        av_profile = np.array([np.nan, np.nan, np.nan])
+        std_profile = np.array([np.nan, np.nan, np.nan])
+
+        dustmap = Mock()
+        dustmap.query.return_value = (map_distances, av_profile, std_profile)
+
+        logp = logp_extinction(avs, dustmap, coord, distance=1.0)
+        assert np.allclose(logp, 0.0)
+
+    def test_logp_extinction_3d_components(self):
+        """Test 3D dust map with return_components."""
+        avs = np.array([0.3])
+        coord = SkyCoord(l=90.0, b=0.0, unit="deg", frame="galactic")
+
+        map_distances = np.array([0.1, 1.0, 5.0])
+        av_profile = np.array([0.05, 0.3, 0.8])
+        std_profile = np.array([0.02, 0.1, 0.2])
+
+        dustmap = Mock()
+        dustmap.query.return_value = (map_distances, av_profile, std_profile)
+
+        logp, (mean, err) = logp_extinction(
+            avs, dustmap, coord, distance=1.0, return_components=True
+        )
+
+        assert np.isclose(mean, 0.3)
+        assert np.isclose(err, 0.1)
+
+    def test_logp_extinction_string_dustfile(self):
+        """Test that passing a string (file path) returns uniform prior."""
+        avs = np.array([0.1, 0.5])
+        coord = SkyCoord(l=90.0, b=0.0, unit="deg", frame="galactic")
+
+        # String has no .query() method — should return uniform
+        logp = logp_extinction(avs, "bayestar2019_v1.h5", coord, distance=1.0)
         assert np.allclose(logp, 0.0)
 
 
