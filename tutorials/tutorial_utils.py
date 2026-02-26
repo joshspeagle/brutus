@@ -323,16 +323,14 @@ def check_data_requirements(tutorial_num, verbose=True):
         4: ["nn_c3k.h5", "MIST_1.2_iso_vvcrit0.0.h5", "bayestar2019_v1.h5"],
         5: [
             "grid_mist_v9.h5",
-            "grid_bayestar_v5.h5",
-            "offsets_mist_v8.txt",
-            "offsets_bs_v5.txt",
+            "offsets_mist_v9.txt",
             "bayestar2019_v1.h5",
             "Orion_l204.7_b-19.2.h5",
         ],
         6: [
             "nn_c3k.h5",
             "MIST_1.2_iso_vvcrit0.0.h5",
-            "offsets_mist_v8.txt",
+            "offsets_mist_v9.txt",
             "NGC_2682.fits",
         ],
         7: ["Orion_l204.7_b-19.2_mist.h5"],
