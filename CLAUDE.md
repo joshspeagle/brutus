@@ -70,13 +70,24 @@ Build with `cd docs && make html`. Output in `docs/build/html/`.
 
 ## Tutorials
 
-8 Jupyter notebooks in `tutorials/` covering individual stars, populations, grids, priors, fitting, cluster analysis, dust mapping, and photometric calibration. These use real data files (FITS/HDF5) and require downloaded model data.
+12 Jupyter notebooks in `tutorials/` covering individual stars, populations, grids, priors, fitting, cluster analysis, dust mapping, and photometric calibration. These use real data files (FITS/HDF5) and require downloaded model data.
 
 ## Code Style
 
 - `black` for formatting (line length 88)
 - `isort` for import sorting
 - NumPy-style docstrings
+
+## Unit Conventions and Normalization
+
+Understanding brutus's internal conventions is essential for correct usage:
+
+- **Flux**: "maggies" = `10^(-0.4 * m)` where `m` is the magnitude in native survey units. No absolute zeropoint offset — the conversion is purely relative.
+- **Model magnitudes**: Defined at a reference distance of **1 kpc**. Apparent magnitude at distance `d` (kpc) is `m_apparent = m_model + 5 * log10(d_kpc)`.
+- **Scale factor**: `scale = (d_ref / d)^2 = 1 / d_kpc^2`. Used internally to shift model flux to the observed distance.
+- **Parallax**: Expected in **milliarcseconds** (mas) throughout the fitting pipeline. Survey data in arcseconds must be multiplied by 1000.
+- **Extinction**: A(V) in magnitudes. The default R(V) prior is Gaussian with mean 3.32 and std 0.18.
+- **Reddening vectors**: In `_get_sed_mle`, `drvecs = (1/A_V) * ∂f/∂R_V` (the A(V) factor is divided out). The Fisher information computation multiplies by A(V) to recover the true derivative `∂f/∂R_V` for correct R(V) uncertainty estimation.
 
 ## Key APIs
 

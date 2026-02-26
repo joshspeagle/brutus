@@ -660,7 +660,10 @@ def _get_sed_mle(
             resid[i][j] = data[j] - models[i][j]
 
             # Derive scale cross-terms.
-            sr_mix[i] += models[i][j] * drvecs[i][j] * inv_tot_var[j]
+            # Note: drvecs = dR/dRv * fac * flux, so the true
+            # ∂f/∂Rv = Av * drvecs. We must include Av for correct
+            # Fisher information in R(V)-related terms.
+            sr_mix[i] += models[i][j] * drvecs[i][j] * av[i] * inv_tot_var[j]
             sa_mix[i] += models[i][j] * rvecs[i][j] * inv_tot_var[j]
 
             # Rescale reddening quantities.
@@ -669,9 +672,10 @@ def _get_sed_mle(
             reddening *= scale[i]
 
             # Derive reddening (cross-)terms
-            ar_mix[i] += drvecs[i][j] * reddening * inv_tot_var[j]
+            # ar_mix: use Av * drvecs for correct ∂f/∂Rv
+            ar_mix[i] += drvecs[i][j] * av[i] * reddening * inv_tot_var[j]
             a_den[i] += rvecs[i][j] * rvecs[i][j] * inv_tot_var[j]
-            r_den[i] += drvecs[i][j] * drvecs[i][j] * inv_tot_var[j]
+            r_den[i] += (drvecs[i][j] * av[i]) ** 2 * inv_tot_var[j]
 
         # Add in priors.
         a_den[i] += Av_varinv
@@ -1355,24 +1359,32 @@ class BruteForce:
         if lnprior is None:
             lnprior = np.zeros(Nmodels)
 
-        # Compute initial posterior
-        lnprob = lnlike + lnprior
+        # Compute initial posterior (without parallax — parallax is applied
+        # exactly on MC samples below, not via the approximate scale-based
+        # form which would double-count the constraint).
+        lnprob_base = lnlike + lnprior
 
-        # Add parallax prior if provided
+        # Add parallax prior for MODEL SELECTION only.
+        # logp_parallax_scale provides a Gaussian approximation on scale
+        # to help select relevant models. This is NOT propagated to MC
+        # sample weights where the exact logp_parallax is used instead.
+        lnprob_sel = lnprob_base.copy()
         if parallax is not None and parallax_err is not None:
             # Convert parallax to scale (VECTORIZED)
             scales_err = np.full(Nmodels, 1e10)  # Large error = uninformative
             valid_mask = icovs_sar[:, 0, 0] > 0
             scales_err[valid_mask] = 1.0 / np.sqrt(icovs_sar[valid_mask, 0, 0])
 
-            lnprob += logp_parallax_scale(scales, scales_err, parallax, parallax_err)
+            lnprob_sel += logp_parallax_scale(
+                scales, scales_err, parallax, parallax_err
+            )
 
-        # Select models above threshold
+        # Select models above threshold (using parallax-informed weights)
         if wt_thresh is not None:
-            sel = np.where(lnprob > np.max(lnprob) + np.log(wt_thresh))[0]
+            sel = np.where(lnprob_sel > np.max(lnprob_sel) + np.log(wt_thresh))[0]
         elif cdf_thresh is not None:
-            idx_sort = np.argsort(lnprob)[::-1]
-            cdf = np.cumsum(np.exp(lnprob[idx_sort] - np.max(lnprob)))
+            idx_sort = np.argsort(lnprob_sel)[::-1]
+            cdf = np.cumsum(np.exp(lnprob_sel[idx_sort] - np.max(lnprob_sel)))
             cdf /= cdf[-1]
             Nsel = np.searchsorted(cdf, 1.0 - cdf_thresh) + 1
             sel = idx_sort[:Nsel]
@@ -1410,8 +1422,9 @@ class BruteForce:
         a_mc = np.clip(a_mc, avlim[0], avlim[1])
         r_mc = np.clip(r_mc, rvlim[0], rvlim[1])
 
-        # Initialize log-posterior (VECTORIZED)
-        lnp_mc = np.tile(lnprob[sel], (Nmc, 1))  # Shape: (Nmc, Nsel)
+        # Initialize log-posterior from base (without parallax scale approx).
+        # The exact parallax likelihood is added below via logp_parallax.
+        lnp_mc = np.tile(lnprob_base[sel], (Nmc, 1))  # Shape: (Nmc, Nsel)
 
         # Prior evaluations - coordinate is fixed, so we can still optimize
         if coord is not None:

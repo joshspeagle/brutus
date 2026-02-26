@@ -300,21 +300,26 @@ def inverse3(A, regularize=False, min_eigenval_threshold=1e-12):
     else:
         A_inv = _batch_invert_3x3(A_work)
 
-    # Apply post-regularization to output if still needed
+    # Apply post-regularization to output if still needed.
+    # Use exact eigenvalue computation (np.linalg.eigvalsh) instead of
+    # Gershgorin circle approximation, which gives highly pessimistic
+    # bounds for matrices with large off-diagonal elements (common for
+    # correlated scale/AV/RV parameters) and causes massive
+    # over-regularization.
     if len(original_shape) == 2:
         matrix_sym = 0.5 * (A_inv + A_inv.T)
-        min_eigenval_approx = _min_eigenval_3x3_symmetric(matrix_sym)
-        if min_eigenval_approx < min_eigenval_threshold:
-            regularization = min_eigenval_threshold - min_eigenval_approx
+        min_eigenval = np.min(np.linalg.eigvalsh(matrix_sym))
+        if min_eigenval < min_eigenval_threshold:
+            regularization = min_eigenval_threshold - min_eigenval
             A_inv[0, 0] += regularization
             A_inv[1, 1] += regularization
             A_inv[2, 2] += regularization
     else:
         for i in range(original_shape[0]):
             matrix_sym = 0.5 * (A_inv[i] + A_inv[i].T)
-            min_eigenval_approx = _min_eigenval_3x3_symmetric(matrix_sym)
-            if min_eigenval_approx < min_eigenval_threshold:
-                regularization = min_eigenval_threshold - min_eigenval_approx
+            min_eigenval = np.min(np.linalg.eigvalsh(matrix_sym))
+            if min_eigenval < min_eigenval_threshold:
+                regularization = min_eigenval_threshold - min_eigenval
                 A_inv[i, 0, 0] += regularization
                 A_inv[i, 1, 1] += regularization
                 A_inv[i, 2, 2] += regularization
