@@ -10,7 +10,7 @@ The implementation uses multi-cloud extinction models with various smoothing
 kernels and is designed for use with nested sampling codes like dynesty.
 
 The core approach models cumulative extinction along a line-of-sight as a
-series of discrete "clouds" at different distances, each contributing
+series of discrete "clouds" at different distances, each contributing a mean
 extinction. This allows reconstruction of 3D dust maps from stellar photometry.
 
 Model Components
@@ -18,14 +18,15 @@ Model Components
 For n clouds, the model has 2n + 4 parameters per line-of-sight:
 
 - **Outlier fraction** (P_b): Fraction of stars that don't follow the model
-- **Foreground smoothing** (s_fore): Smoothing scale for nearest cloud
-- **Background smoothing** (s_back): Smoothing scale for distant clouds
+- **Foreground dispersion** (s_fore): Dispersion scale for the foreground layer
+- **Background dispersion** (s_back): Dispersion scale for background clouds
 - **Foreground extinction** (A_V,fore): Extinction before first cloud
 - **n cloud pairs**: (distance_i, extinction_i) for each cloud
 
 The cumulative extinction at distance d is computed by summing contributions
-from all clouds closer than d, smoothed by a kernel (Gaussian, Lorentzian,
-or top-hat).
+from all clouds closer than d. Each cloud layer has a mean extinction, and the
+kernel (Gaussian, Lorentzian, or top-hat) defines how individual stellar
+extinction samples scatter around that mean.
 
 Functions
 ---------
@@ -34,11 +35,11 @@ los_clouds_priortransform : Prior transformation
 los_clouds_loglike_samples : Likelihood function
     Compute log-likelihood given stellar distance/extinction samples
 kernel_tophat : Top-hat kernel
-    Sharp cloud edges
+    Uniform dispersion of extinction within a fixed range around the mean
 kernel_gauss : Gaussian kernel
-    Smooth cloud transitions
+    Gaussian dispersion of extinction around the cloud mean
 kernel_lorentz : Lorentzian kernel
-    Heavy-tailed cloud transitions
+    Heavy-tailed dispersion of extinction around the cloud mean
 
 See Also
 --------
@@ -51,7 +52,8 @@ Notes
 The likelihood computation accounts for:
 
 1. **Cloud contributions**: Each cloud adds extinction for stars behind it
-2. **Smoothing**: Kernel function smooths cloud boundaries
+2. **Dispersion**: Kernel function defines scatter of extinction values around
+   the cloud mean at each distance step
 3. **Outlier model**: Uniform distribution in (distance, extinction)
 4. **Foreground component**: Extinction before first cloud
 
@@ -470,6 +472,10 @@ def kernel_tophat(reds, kp):
     """
     Compute weighted log-probabilities using a Top-Hat kernel.
 
+    The kernel defines uniform dispersion of extinction values around the
+    cloud mean: samples within ``mean +/- half_bin_width`` are equally
+    likely, and samples outside are assigned zero probability.
+
     Parameters
     ----------
     reds : array_like, shape (Nsamps,)
@@ -519,6 +525,10 @@ def kernel_gauss(reds, kp):
     """
     Compute weighted log-probabilities using a Gaussian kernel.
 
+    The kernel defines Gaussian dispersion of extinction values around the
+    cloud mean: samples are weighted by a normal distribution centered on
+    the mean extinction with the given standard deviation.
+
     Parameters
     ----------
     reds : array_like, shape (Nsamps,)
@@ -563,6 +573,11 @@ def kernel_gauss(reds, kp):
 def kernel_lorentz(reds, kp):
     """
     Compute weighted log-probabilities using a Lorentzian kernel.
+
+    The kernel defines heavy-tailed dispersion of extinction values around
+    the cloud mean: samples are weighted by a Cauchy/Lorentzian distribution
+    centered on the mean extinction, allowing larger deviations from the
+    mean than a Gaussian kernel.
 
     Parameters
     ----------

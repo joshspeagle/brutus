@@ -95,3 +95,4 @@ virtualenv/
 # Linting/type checking cache
 .mypy_cache/
 .ruff_cache/
+tutorials/plots/diag_postpred/

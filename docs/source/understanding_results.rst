@@ -167,4 +167,3 @@ See Also
 --------
 
 - :mod:`brutus.plotting` - Visualization utilities
-- :doc:`faq` - Common questions

@@ -4,6 +4,7 @@ Quick coverage test for key refactored functionality.
 """
 
 import os
+import warnings
 
 import h5py
 import numpy as np
@@ -188,29 +189,43 @@ def test_bruteforce_core_functions():
             obs_mask = ~np.isnan(obs)
 
             # 1. Test loglike_grid with default parameters
-            lnl1, ndim1, chi2_1 = fitter.loglike_grid(
-                obs, obs_err, obs_mask, verbose=False
-            )
+            # (3 bands triggers a RuntimeWarning about minimum 4 bands)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                lnl1, ndim1, chi2_1 = fitter.loglike_grid(
+                    obs, obs_err, obs_mask, verbose=False
+                )
             assert lnl1 is not None
             assert len(lnl1) == fitter.nmodels
 
             # 2. Test with subset of indices
             indices = np.arange(5)
-            lnl2, ndim2, chi2_2 = fitter.loglike_grid(
-                obs, obs_err, obs_mask, indices=indices, verbose=False
-            )
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                lnl2, ndim2, chi2_2 = fitter.loglike_grid(
+                    obs, obs_err, obs_mask, indices=indices, verbose=False
+                )
             assert len(lnl2) == 5
 
             # 3. Test with different clipping threshold
-            lnl3, ndim3, chi2_3 = fitter.loglike_grid(
-                obs, obs_err, obs_mask, ltol=1e-1, verbose=False  # More aggressive
-            )
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                lnl3, ndim3, chi2_3 = fitter.loglike_grid(
+                    obs, obs_err, obs_mask, ltol=1e-1, verbose=False
+                )
             assert lnl3 is not None
 
             # 4. Test with return_vals=True
-            result = fitter.loglike_grid(
-                obs, obs_err, obs_mask, indices=indices, return_vals=True, verbose=False
-            )
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                result = fitter.loglike_grid(
+                    obs,
+                    obs_err,
+                    obs_mask,
+                    indices=indices,
+                    return_vals=True,
+                    verbose=False,
+                )
             assert isinstance(result, tuple)
             assert len(result) == 7  # lnl, ndim, chi2, scale, av, rv, icov_sar
 

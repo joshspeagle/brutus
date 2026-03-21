@@ -1162,6 +1162,14 @@ class BruteForce:
             data_mask[~clean] = False
         Ndim = sum(data_mask)
 
+        if Ndim < 4:
+            warnings.warn(
+                f"Only {Ndim} valid photometric bands. Minimum 4 recommended "
+                f"for reliable fits (3 free parameters: scale, Av, Rv).",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
         # Subselect only clean observations
         flux, fluxerr = data[data_mask], data_err[data_mask]
         mcoeffs = mag_coeffs[:, data_mask, :]
@@ -1180,6 +1188,9 @@ class BruteForce:
         if av_gauss is None:
             av_gauss = (0.0, 1e6)
         if rv_gauss is None:
+            # When the user explicitly passes None, it means "no R(V) prior
+            # in the likelihood computation; priors are applied separately
+            # in logpost_grid."  A huge sigma effectively removes the prior.
             rv_gauss = (3.32, 1e6)
 
         # Initialize values

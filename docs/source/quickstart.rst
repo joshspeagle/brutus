@@ -19,7 +19,8 @@ This guide walks you through the core brutus workflows.
    - **WISE**: ``WISE_W1``, ``WISE_W2``
 
    See :ref:`available-filters` for the complete list of supported filters
-   (SDSS, DECam, HST, Johnson-Cousins, etc.) and recommended combinations.
+   (SDSS, DECam, VISTA, UKIDSS, Tycho, Hipparcos, Kepler, TESS, Johnson-Cousins, etc.)
+   and recommended combinations.
 
 ----
 
@@ -149,11 +150,15 @@ extinction priors based on Galactic coordinates and distance:
    # Load the Bayestar 3D dust map from the downloaded file
    dustmap = Bayestar(dustfile=dustmap_path)
 
-   # Query extinction at a specific sightline
+   # Query extinction at a specific sightline using Galactic (l, b)
    l, b = 120.0, 30.0  # Galactic coordinates in degrees
-
-   # Returns A_V as a function of distance
    distances, av_mean, av_std = dustmap.query([l, b])
+
+   # Or equivalently, using an astropy SkyCoord
+   from astropy.coordinates import SkyCoord
+   import astropy.units as u
+   coord = SkyCoord(l=120.0*u.deg, b=30.0*u.deg, frame='galactic')
+   distances, av_mean, av_std = dustmap.query(coord)
 
    # distances: array of distance grid points in kpc
    # av_mean: cumulative A_V extinction at each distance (magnitudes)
@@ -161,6 +166,13 @@ extinction priors based on Galactic coordinates and distance:
 
    print(f"Distance grid: {distances.min():.2f} - {distances.max():.2f} kpc")
    print(f"A_V at 1 kpc: {av_mean[distances < 1][-1]:.2f} mag")
+
+.. note::
+
+   The Bayestar 3D dust map is based on Pan-STARRS 1 photometry and is only
+   available north of declination -30 degrees (the Pan-STARRS 1 footprint). For
+   sightlines south of this limit, the dust map prior will not be applied and
+   fitting will rely on the other priors instead.
 
 Running the Fitter
 ^^^^^^^^^^^^^^^^^^
@@ -179,6 +191,23 @@ uncertainties and a validity mask.
    - **Parallax**: Milliarcseconds (mas)
 
    - **Coordinates**: Galactic longitude and latitude in degrees
+
+.. note::
+
+   **Parallax is helpful but not required.** If parallax measurements are
+   available, they significantly improve distance and extinction estimates by
+   breaking the distance-extinction degeneracy. When parallax is not provided,
+   brutus relies on photometry and priors alone, which still yields useful
+   results but with broader posteriors.
+
+.. important::
+
+   **Minimum 4 photometric bands recommended.** The fitter has 3 free
+   parameters per star (scale/distance, A_V, R_V), so at least 4 bands are
+   needed for a constrained fit. The code will emit a ``RuntimeWarning`` if
+   fewer than 4 valid bands are provided but will not hard-fail. Optical +
+   near-IR coverage (e.g., Gaia + 2MASS) is recommended to break color-extinction
+   degeneracies.
 
 .. code-block:: python
 

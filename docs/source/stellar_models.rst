@@ -245,21 +245,24 @@ Available Photometric Filters
 **Space-Based**
 
 - **Gaia DR3**: ``Gaia_G_MAW``, ``Gaia_BP_MAWf``, ``Gaia_RP_MAW``
-- **HST ACS/WFC**: ``ACS_WFC_F475W``, ``ACS_WFC_F606W``, ``ACS_WFC_F814W``
-- **HST WFC3/UVIS**: ``WFC3_UVIS_F275W``, ``WFC3_UVIS_F336W``, ``WFC3_UVIS_F438W``
-- **HST WFC3/IR**: ``WFC3_IR_F110W``, ``WFC3_IR_F125W``, ``WFC3_IR_F160W``
 - **WISE**: ``WISE_W1``, ``WISE_W2``, ``WISE_W3``, ``WISE_W4``
+- **Hipparcos**: ``Hipparcos_Hp``
+- **Kepler**: ``Kepler_D51``, ``Kepler_Kp``
+- **TESS**: ``TESS``
 
 **Ground-Based Optical**
 
-- **Pan-STARRS**: ``PS_g``, ``PS_r``, ``PS_i``, ``PS_z``, ``PS_y``
+- **Pan-STARRS**: ``PS_g``, ``PS_r``, ``PS_i``, ``PS_z``, ``PS_y``, ``PS_w``, ``PS_open``
 - **SDSS**: ``SDSS_u``, ``SDSS_g``, ``SDSS_r``, ``SDSS_i``, ``SDSS_z``
-- **DECam**: ``DECam_g``, ``DECam_r``, ``DECam_i``, ``DECam_z``, ``DECam_Y``
-- **Johnson-Cousins**: ``Bessell_U``, ``Bessell_B``, ``Bessell_V``, ``Bessell_R``, ``Bessell_I``
+- **DECam**: ``DECam_u``, ``DECam_g``, ``DECam_r``, ``DECam_i``, ``DECam_z``, ``DECam_Y``
+- **Bessell (Johnson-Cousins)**: ``Bessell_U``, ``Bessell_B``, ``Bessell_V``, ``Bessell_R``, ``Bessell_I``
+- **Tycho**: ``Tycho_B``, ``Tycho_V``
 
 **Ground-Based Near-IR**
 
 - **2MASS**: ``2MASS_J``, ``2MASS_H``, ``2MASS_Ks``
+- **VISTA**: ``VISTA_Z``, ``VISTA_Y``, ``VISTA_J``, ``VISTA_H``, ``VISTA_Ks``
+- **UKIDSS**: ``UKIDSS_Z``, ``UKIDSS_Y``, ``UKIDSS_J``, ``UKIDSS_H``, ``UKIDSS_K``
 
 Pre-computed Grids vs On-the-Fly Models
 ---------------------------------------
@@ -317,7 +320,7 @@ Model Limitations
 MIST models have known limitations:
 
 - **Non-rotating**: Rotation affects stellar structure and lifetimes, especially for massive stars
-- **Single stars**: Binary evolution (mass transfer, mergers) not included
+- **Single stars**: Binary evolution (mass transfer, mergers) not included. However, unresolved binary companions can be partially modeled via the ``binary_fraction`` parameter in ``StellarPop.get_seds()``, which adds flux from a secondary star drawn from a mass ratio distribution.
 - **Solar-scaled abundances**: No alpha-enhancement or individual element variations
 - **M dwarf temperatures**: Models predict slightly incorrect temperatures for low-mass stars
 - **Radius inflation**: Magnetic activity inflates radii of active low-mass stars by 5–15%

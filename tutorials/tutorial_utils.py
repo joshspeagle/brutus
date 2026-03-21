@@ -231,11 +231,11 @@ def load_tutorial_data(dataset_name, **kwargs):
     if dataset_name.lower() == "orion":
         # Load Orion field data
         try:
-            filename = find_brutus_data_file("Orion_l204.7_b-19.2.h5")
+            filename = find_brutus_data_file("Orion_l209.1_b-19.9.h5")
         except FileNotFoundError:
             # Try tutorial directory
             filename = find_brutus_data_file(
-                "Orion_l204.7_b-19.2.h5", [Path(__file__).parent]
+                "Orion_l209.1_b-19.9.h5", [Path(__file__).parent]
             )
 
         with h5py.File(filename, "r") as f:
@@ -325,7 +325,7 @@ def check_data_requirements(tutorial_num, verbose=True):
             "grid_mist_v9.h5",
             "offsets_mist_v9.txt",
             "bayestar2019_v1.h5",
-            "Orion_l204.7_b-19.2.h5",
+            "Orion_l209.1_b-19.9.h5",
         ],
         6: [
             "nn_c3k.h5",
@@ -333,7 +333,7 @@ def check_data_requirements(tutorial_num, verbose=True):
             "offsets_mist_v9.txt",
             "NGC_2682.fits",
         ],
-        7: ["Orion_l204.7_b-19.2_mist.h5"],
+        7: ["Orion_l209.1_b-19.9_mist_nodust.h5"],
         8: [
             "grid_mist_v9.h5",
             "grid_bayestar_v5.h5",
@@ -341,8 +341,8 @@ def check_data_requirements(tutorial_num, verbose=True):
             "offsets_bs_v5.txt",
         ],
         9: [],
-        10: ["Orion_l204.7_b-19.2_mist.h5"],
-        11: ["Orion_l204.7_b-19.2_mist.h5"],
+        10: ["Orion_l209.1_b-19.9_mist.h5"],
+        11: ["Orion_l209.1_b-19.9_mist.h5"],
     }
 
     required_files = requirements.get(tutorial_num, [])
@@ -448,7 +448,7 @@ def setup_tutorial(tutorial_num, title=None):
     }
 
 
-def load_example_results(filename="Orion_l204.7_b-19.2_mist.h5"):
+def load_example_results(filename="Orion_l209.1_b-19.9_mist.h5"):
     """
     Load pre-computed BruteForce results for plotting/results tutorials.
 

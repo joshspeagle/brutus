@@ -191,9 +191,14 @@ class TestCoreIntegration:
         obs_mask = ~np.isnan(obs)
 
         # Warm up JIT/cache with first call
-        _ = fitter.loglike_grid(
-            obs, obs_err, obs_mask, indices=np.arange(10), ltol=5e-2, verbose=False
-        )
+        # (3 bands triggers a RuntimeWarning about minimum 4 bands)
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            _ = fitter.loglike_grid(
+                obs, obs_err, obs_mask, indices=np.arange(10), ltol=5e-2, verbose=False
+            )
 
         # Test different model counts
         model_counts = [10, 50, 100]
@@ -206,9 +211,11 @@ class TestCoreIntegration:
             indices = np.arange(n_models)
 
             start = time.time()
-            lnl, _, _ = fitter.loglike_grid(
-                obs, obs_err, obs_mask, indices=indices, ltol=5e-2, verbose=False
-            )
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                lnl, _, _ = fitter.loglike_grid(
+                    obs, obs_err, obs_mask, indices=indices, ltol=5e-2, verbose=False
+                )
             elapsed = time.time() - start
             times.append(elapsed)
 

@@ -318,14 +318,16 @@ class TestEdgeCasesAndErrorHandling:
         flux_err = np.array([1e-9, 1e-9, 1e-9, 1e-9, 1e-9])
         mask = np.array([True, False, False, False, False])  # Only first filter used
 
-        # Should handle gracefully or raise informative error
-        try:
-            results = fitter.loglike_grid(flux, flux_err, mask)
-            lnl, ndim, chi2 = results
-            assert len(lnl) > 0
-        except (ValueError, RuntimeError) as e:
-            # Acceptable to fail with informative error for single band
-            assert "insufficient" in str(e).lower() or "dimension" in str(e).lower()
+        # Should handle gracefully with a warning about too few bands
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            try:
+                results = fitter.loglike_grid(flux, flux_err, mask)
+                lnl, ndim, chi2 = results
+                assert len(lnl) > 0
+            except (ValueError, RuntimeError) as e:
+                # Acceptable to fail with informative error for single band
+                assert "insufficient" in str(e).lower() or "dimension" in str(e).lower()
 
     def test_extreme_noise_levels(self, mist_grid):
         """Test behavior with very high noise."""

@@ -5,7 +5,7 @@
 3D dust map implementations.
 
 This module provides classes for querying 3D dust maps, particularly the
-Bayestar maps from Green et al. (2015, 2018).
+Bayestar maps from Green et al. (2019).
 """
 
 import astropy.coordinates as coordinates
@@ -159,7 +159,7 @@ class DustMap:
 
 class Bayestar(DustMap):
     """
-    Query the Bayestar 3D dust maps from Green et al. (2015, 2018).
+    Query the Bayestar 3D dust maps from Green et al. (2019).
 
     The Bayestar maps cover the Pan-STARRS 1 footprint (dec > -30°) over
     approximately 3/4 of the sky, providing 3D extinction information.

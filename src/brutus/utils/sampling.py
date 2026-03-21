@@ -225,10 +225,11 @@ def draw_sar(
     sdraws, adraws, rdraws = np.zeros((3, nsamps, ndraws))
 
     for i, (s, a, r, c) in enumerate(zip(scales, avs, rvs, covs_sar)):
-        s_temp, a_temp, r_temp = [], [], []
+        s_chunks, a_chunks, r_chunks = [], [], []
+        n_collected = 0
 
         # Loop in case a significant chunk of draws are out-of-bounds.
-        while len(s_temp) < ndraws:
+        while n_collected < ndraws:
             # Draw samples.
             s_mc, a_mc, r_mc = rstate.multivariate_normal([s, a, r], c, size=ndraws).T
             # Flag draws that are out of bounds.
@@ -241,12 +242,16 @@ def draw_sar(
             )
             s_mc, a_mc, r_mc = s_mc[inbounds], a_mc[inbounds], r_mc[inbounds]
 
-            # Add to pre-existing samples.
-            s_temp = np.append(s_temp, s_mc)
-            a_temp = np.append(a_temp, a_mc)
-            r_temp = np.append(r_temp, r_mc)
+            # Accumulate in-bounds samples.
+            s_chunks.append(s_mc)
+            a_chunks.append(a_mc)
+            r_chunks.append(r_mc)
+            n_collected += len(s_mc)
 
-        # Cull any extra points.
+        # Concatenate and cull any extra points.
+        s_temp = np.concatenate(s_chunks)
+        a_temp = np.concatenate(a_chunks)
+        r_temp = np.concatenate(r_chunks)
         sdraws[i] = s_temp[:ndraws]
         adraws[i] = a_temp[:ndraws]
         rdraws[i] = r_temp[:ndraws]

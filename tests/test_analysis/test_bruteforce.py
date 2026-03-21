@@ -428,9 +428,10 @@ class TestBruteForceLikelihood:
         mask_partial = mask.copy()
         mask_partial[2:4] = False
 
-        lnl, ndim, chi2 = bruteforce_fitter.loglike_grid(
-            flux, flux_err, mask_partial, return_vals=False
-        )
+        with pytest.warns(RuntimeWarning, match="Only 3 valid photometric bands"):
+            lnl, ndim, chi2 = bruteforce_fitter.loglike_grid(
+                flux, flux_err, mask_partial, return_vals=False
+            )
 
         assert ndim == 3  # Only 3 bands observed
         assert np.all(np.isfinite(lnl))
@@ -442,9 +443,10 @@ class TestBruteForceLikelihood:
         flux_err = np.ones(5) * 0.01
         mask = np.ones(5, dtype=bool)
 
-        lnl, ndim, chi2 = bruteforce_fitter.loglike_grid(
-            flux, flux_err, mask, return_vals=False
-        )
+        with pytest.warns(RuntimeWarning, match="valid photometric bands"):
+            lnl, ndim, chi2 = bruteforce_fitter.loglike_grid(
+                flux, flux_err, mask, return_vals=False
+            )
 
         # Should handle bad values gracefully
         assert ndim < 5  # Bad values should be masked
@@ -818,15 +820,17 @@ class TestBruteForceRealGrid:
 
         # Test clipping behavior
         start = time.time()
-        lnl_default, _, _ = fitter.loglike_grid(
-            obs, obs_err, obs_mask, ltol=3e-2, return_vals=False
-        )
+        with pytest.warns(RuntimeWarning, match="valid photometric bands"):
+            lnl_default, _, _ = fitter.loglike_grid(
+                obs, obs_err, obs_mask, ltol=3e-2, return_vals=False
+            )
         time_default = time.time() - start
 
         start = time.time()
-        lnl_aggressive, _, _ = fitter.loglike_grid(
-            obs, obs_err, obs_mask, ltol=1e-1, return_vals=False
-        )
+        with pytest.warns(RuntimeWarning, match="valid photometric bands"):
+            lnl_aggressive, _, _ = fitter.loglike_grid(
+                obs, obs_err, obs_mask, ltol=1e-1, return_vals=False
+            )
         time_aggressive = time.time() - start
 
         # Should run reasonably fast
@@ -852,7 +856,10 @@ class TestBruteForceRealGrid:
         mask = np.ones(nfilters, dtype=bool)
 
         # Should handle gracefully
-        lnl, ndim, chi2 = fitter.loglike_grid(flux, flux_err, mask, return_vals=False)
+        with pytest.warns(RuntimeWarning, match="valid photometric bands"):
+            lnl, ndim, chi2 = fitter.loglike_grid(
+                flux, flux_err, mask, return_vals=False
+            )
         assert ndim < nfilters  # Some bad values should be masked
         assert np.any(np.isfinite(lnl))
 
@@ -862,9 +869,10 @@ class TestBruteForceRealGrid:
         flux_err_simple = np.full(nfilters, 0.01)
         mask_simple = np.ones(nfilters, dtype=bool)
 
-        lnl_simple, ndim_simple, _ = fitter.loglike_grid(
-            flux_simple, flux_err_simple, mask_simple, return_vals=False
-        )
+        with pytest.warns(RuntimeWarning, match="valid photometric bands"):
+            lnl_simple, ndim_simple, _ = fitter.loglike_grid(
+                flux_simple, flux_err_simple, mask_simple, return_vals=False
+            )
         assert ndim_simple == 1  # Only one valid band
         assert len(lnl_simple) == fitter.nmodels
 
@@ -1174,9 +1182,10 @@ class TestBruteForceMathematicalValidation:
         test_indices = [5]  # Middle of test range
 
         # Get analytical Hessian from our implementation
-        results = fitter.loglike_grid(
-            obs, obs_err, obs_mask, indices=test_indices, return_vals=True
-        )
+        with pytest.warns(RuntimeWarning, match="valid photometric bands"):
+            results = fitter.loglike_grid(
+                obs, obs_err, obs_mask, indices=test_indices, return_vals=True
+            )
 
         lnl, ndim, chi2, scale, av, rv, icov_sar = results
         analytical_icov = icov_sar[0]

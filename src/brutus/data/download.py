@@ -240,7 +240,7 @@ def fetch_dustmaps(target_dir=".", dustmap="bayestar19"):
     return _fetch(name, target_dir)
 
 
-def fetch_grids(target_dir=".", grid="mist_v9"):
+def fetch_grids(grid="mist_v9", target_dir="."):
     """
     Downloads pre-computed stellar model grids (used for fast stellar
     parameter inference and photometric fitting) to target directory.

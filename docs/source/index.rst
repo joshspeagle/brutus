@@ -300,7 +300,6 @@ Code Examples
    :hidden:
 
    understanding_results
-   faq
 
 .. toctree::
    :maxdepth: 2

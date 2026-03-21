@@ -249,7 +249,6 @@ See Also
 
 - :doc:`grid_generation` - Grid-based fitting with ``BruteForce``
 - :doc:`stellar_models` - MIST models and :ref:`available filters <available-filters>`
-- :doc:`faq` - Troubleshooting and common questions
 
 References
 ----------

@@ -17,6 +17,15 @@ Prior impact depends on data quality:
 
 Always check prior sensitivity for your science case (see `Testing Prior Sensitivity`_ below).
 
+.. note::
+
+   **Parallax is not required but helps significantly.** When parallax
+   measurements are available, they break the distance-extinction degeneracy that
+   is inherent in photometric fitting, leading to much tighter posteriors. Without
+   parallax, brutus relies on photometry and Galactic priors alone, which still
+   produces useful results but with broader uncertainties, especially for faint
+   stars.
+
 The Galactic Model
 ------------------
 
@@ -89,6 +98,12 @@ The combined prior weights each component by its stellar density at the 3-D posi
    \pi(A_V\,|\,d,\ell,b) \sim \mathcal{N}(\mu_{A_V}, \sigma_{A_V}^2)
 
 where the mean :math:`\mu_{A_V}` and uncertainty :math:`\sigma_{A_V}` come from the dust map at that sightline and distance.
+
+.. note::
+
+   The Bayestar 3D dust map is based on Pan-STARRS 1 photometry and is only
+   available north of declination -30 degrees (the Pan-STARRS 1 footprint). For
+   sightlines south of this limit, the dust map prior will not be applied.
 
 **Implementation**: Enabled via ``dustfile`` parameter in ``fit()``
 

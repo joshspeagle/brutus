@@ -542,7 +542,6 @@ See Also
 - :doc:`grid_generation` - Individual star fitting with ``BruteForce``
 - :doc:`stellar_models` - MIST models and :ref:`available filters <available-filters>`
 - :doc:`priors` - Prior probability distributions
-- :doc:`faq` - Troubleshooting and common questions
 
 References
 ----------

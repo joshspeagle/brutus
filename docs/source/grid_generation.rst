@@ -88,8 +88,6 @@ Download grids with :func:`~brutus.data.fetch_grids`:
      - Description
    * - ``mist_v9`` (default)
      - MIST v1.2 with empirical corrections. Recommended for most applications.
-   * - ``mist_v8``
-     - Earlier version of MIST v1.2 corrections.
    * - ``bayestar_v5``
      - Bayestar-compatible grid (Pan-STARRS + 2MASS filters only).
 
@@ -354,8 +352,6 @@ See Also
 - :doc:`stellar_models` - MIST models and :ref:`available filters <available-filters>`
 - :doc:`priors` - Prior probability distributions
 - :doc:`understanding_results` - Interpreting output files
-- :doc:`faq` - Troubleshooting and common questions
-
 References
 ----------
 

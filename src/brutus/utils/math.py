@@ -520,7 +520,7 @@ def truncnorm_logpdf(x, a, b, loc=0.0, scale=1.0):
 
     lnphi = -np.log(np.sqrt(2 * np.pi)) - 0.5 * np.square(xi)
     lndenom = np.log(scale / 2.0) + np.log(
-        erf(beta / np.sqrt(2)) - erf(alpha / np.sqrt(2))
+        np.maximum(erf(beta / np.sqrt(2)) - erf(alpha / np.sqrt(2)), 1e-300)
     )
 
     ans = np.subtract(lnphi, lndenom)
