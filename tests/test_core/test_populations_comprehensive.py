@@ -275,6 +275,10 @@ class TestStellarPopMethods:
                 [15.0, 14.5, 14.0, 13.8, 13.5]
             )  # Realistic magnitudes
             mock_predictor.NFILT = 5  # Number of filters
+            # sed_batch should return (N, Nfilt) array of magnitudes
+            mock_predictor.sed_batch.return_value = np.tile(
+                np.array([15.0, 14.5, 14.0, 13.8, 13.5]), (5, 1)
+            )
             mock_nn.return_value = mock_predictor
 
             pop = StellarPop(isochrone=iso, verbose=False)
@@ -367,6 +371,11 @@ class TestPopulationsIntegration:
             mock_predictor = MagicMock()
             mock_predictor.sed.return_value = np.array([15.0, 14.5, 14.0, 13.8, 13.5])
             mock_predictor.NFILT = 5
+            # sed_batch must return (N, Nfilt) for N input stars
+            mock_predictor.sed_batch.side_effect = lambda **kw: np.tile(
+                np.array([15.0, 14.5, 14.0, 13.8, 13.5]),
+                (len(kw["logt"]), 1),
+            )
             mock_nn.return_value = mock_predictor
 
             # Create integrated system
@@ -527,6 +536,10 @@ class TestPopulationsEdgeCases:
             mock_predictor = MagicMock()
             mock_predictor.sed.return_value = np.array([15.0, 14.5, 14.0, 13.8, 13.5])
             mock_predictor.NFILT = 5
+            mock_predictor.sed_batch.side_effect = lambda **kw: np.tile(
+                np.array([15.0, 14.5, 14.0, 13.8, 13.5]),
+                (len(kw["logt"]), 1),
+            )
             mock_nn.return_value = mock_predictor
 
             pop = StellarPop(isochrone=iso, verbose=False)
@@ -646,6 +659,10 @@ class TestPopulationsPerformance:
             mock_predictor = MagicMock()
             mock_predictor.sed.return_value = np.array([15.0, 14.5, 14.0, 13.8, 13.5])
             mock_predictor.NFILT = 5
+            mock_predictor.sed_batch.side_effect = lambda **kw: np.tile(
+                np.array([15.0, 14.5, 14.0, 13.8, 13.5]),
+                (len(kw["logt"]), 1),
+            )
             mock_nn.return_value = mock_predictor
 
             iso = Isochrone(verbose=False)

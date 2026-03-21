@@ -86,10 +86,10 @@ class TestPhotometricOffsets:
             np.random.uniform(0.05, 0.15, (nobj, nfilt)),
         )
 
-        # Mock phot_loglike to return proper shape for selected objects
-        def mock_phot_loglike_func(mo, me, mt, mp, dim_prior=True):
-            # Return loglike values for each sample (length nsamps)
-            return np.random.uniform(-10, -1, nsamps)
+        # Mock phot_loglike to return proper shape (Nobj=1, Nmod=nsamps)
+        def mock_phot_loglike_func(mo, me, mp, mask=None, dim_prior=True):
+            nmod = mp.shape[1]
+            return np.random.uniform(-10, -1, (1, nmod))
 
         # Mock logsumexp to return evidence for selected objects
         def mock_logsumexp_func(lnl, axis=1):
@@ -467,7 +467,7 @@ class TestPhotometricOffsets2D:
             np.random.uniform(15, 20, (nobj, nfilt)),
             np.random.uniform(0.05, 0.15, (nobj, nfilt)),
         )
-        mock_loglike = np.random.uniform(-8, -2, nsamps)
+        mock_loglike = np.random.uniform(-8, -2, (1, nsamps))
 
         with (
             patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
@@ -513,7 +513,7 @@ class TestPhotometricOffsets2D:
             np.random.uniform(15, 20, (nobj, nfilt)),
             np.random.uniform(0.05, 0.15, (nobj, nfilt)),
         )
-        mock_loglike = np.random.uniform(-8, -2, nsamps)
+        mock_loglike = np.random.uniform(-8, -2, (1, nsamps))
 
         with (
             patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
@@ -572,7 +572,7 @@ class TestPhotometricOffsets2D:
             np.random.uniform(15, 20, (nobj, nfilt)),
             np.random.uniform(0.05, 0.15, (nobj, nfilt)),
         )
-        mock_loglike = np.random.uniform(-8, -2, nsamps)
+        mock_loglike = np.random.uniform(-8, -2, (1, nsamps))
 
         with (
             patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
@@ -628,7 +628,7 @@ class TestPhotometricOffsets2D:
 
         nobj, nsamps, nfilt = idxs.shape[0], idxs.shape[1], phot.shape[1]
         mock_seds = np.random.uniform(15, 20, (nobj * nsamps, nfilt))
-        mock_loglike = np.random.uniform(-8, -2, nsamps)
+        mock_loglike = np.random.uniform(-8, -2, (1, nsamps))
 
         with (
             patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
@@ -675,7 +675,7 @@ class TestPhotometricOffsets2D:
             np.random.uniform(15, 20, (nobj, nfilt)),
             np.random.uniform(0.05, 0.15, (nobj, nfilt)),
         )
-        mock_loglike = np.random.uniform(-8, -2, nsamps)
+        mock_loglike = np.random.uniform(-8, -2, (1, nsamps))
 
         with (
             patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
@@ -743,8 +743,9 @@ class TestPhotometricOffsetsIntegration:
         mock_loglike = np.random.uniform(-15, -3, nsamps)
 
         # Mock functions with proper shapes
-        def mock_phot_loglike_func(mo, me, mt, mp, dim_prior=True):
-            return np.random.uniform(-15, -3, nsamps)
+        def mock_phot_loglike_func(mo, me, mp, mask=None, dim_prior=True):
+            nmod = mp.shape[1]
+            return np.random.uniform(-15, -3, (1, nmod))
 
         def mock_logsumexp_func(lnl, axis=1):
             return np.random.uniform(-8, 0, lnl.shape[0])
@@ -824,14 +825,20 @@ class TestPhotometricOffsetsIntegration:
             np.random.uniform(13, 17, (nobj, nfilt)),
             np.random.uniform(0.05, 0.15, (nobj, nfilt)),
         )
-        mock_loglike = np.random.uniform(-12, -2, nsamps)
+
+        def mock_phot_loglike_2d(mo, me, mp, mask=None, dim_prior=True):
+            nmod = mp.shape[1]
+            return np.random.uniform(-12, -2, (1, nmod))
 
         with (
             patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
             patch(
                 "brutus.plotting.offsets.magnitude", return_value=mock_magnitude_result
             ),
-            patch("brutus.plotting.offsets.phot_loglike", return_value=mock_loglike),
+            patch(
+                "brutus.plotting.offsets.phot_loglike",
+                side_effect=mock_phot_loglike_2d,
+            ),
             patch(
                 "brutus.plotting.offsets.logsumexp",
                 return_value=np.random.uniform(-6, 0, nobj),
