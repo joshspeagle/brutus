@@ -1177,10 +1177,6 @@ class TestPhotometricOffsetsCoverageGaps:
         assert axes is not None
         plt.close(fig)
 
-    @pytest.mark.xfail(
-        reason="Source bug: bounds is a tuple but code tries item assignment (line 524-526)",
-        strict=True,
-    )
     def test_2d_offsets_custom_span(self, base_data):
         """Test photometric_offsets_2d with custom xspan and yspan (line 505-548)."""
         d = base_data

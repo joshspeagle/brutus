@@ -476,7 +476,7 @@ def photometric_offsets_2d(
         n, xbins, ybins = np.histogram2d(x, y, bins=bins[i])
         xcent = 0.5 * (xbins[1:] + xbins[:-1])
         ycent = 0.5 * (ybins[1:] + ybins[:-1])
-        bounds = (xcent[0], xcent[-1], ycent[0], ycent[-1])  # default size
+        bounds = [xcent[0], xcent[-1], ycent[0], ycent[-1]]  # default size
         # Digitize values.
         xloc, yloc = np.digitize(x, xbins), np.digitize(y, ybins)
         # Compute selection ignoring current band.
