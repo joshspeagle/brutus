@@ -672,8 +672,10 @@ def _get_sed_mle(
             reddening *= scale[i]
 
             # Derive reddening (cross-)terms
-            # ar_mix: use Av * drvecs for correct ∂f/∂Rv
-            ar_mix[i] += drvecs[i][j] * av[i] * reddening * inv_tot_var[j]
+            # ar_mix: Gauss-Newton cross-term (∂f/∂Av)(∂f/∂Rv) / var
+            # where ∂f/∂Av = rvecs (already scaled) and
+            # ∂f/∂Rv = Av * drvecs (already scaled).
+            ar_mix[i] += rvecs[i][j] * drvecs[i][j] * av[i] * inv_tot_var[j]
             a_den[i] += rvecs[i][j] * rvecs[i][j] * inv_tot_var[j]
             r_den[i] += (drvecs[i][j] * av[i]) ** 2 * inv_tot_var[j]
 
@@ -1396,28 +1398,66 @@ class BruteForce:
         # Compute covariance from inverse covariance (VECTORIZED)
         icovs_selected = icovs_sar[sel]  # Shape: (Nsel, 3, 3)
 
-        # Batch inversion - now guaranteed to work due to eigenvalue-based regularization
+        # Batch inversion with diagonal preconditioning for stability.
+        # cov_sar is kept in (s, Av, Rv) space for backward compatibility.
         cov_sar = _inverse3(icovs_selected, regularize=True)
 
         # Monte Carlo integration over distance and extinction (VECTORIZED)
         Nmc = min(Nmc_prior, int(mem_lim * 1e6 / (8.0 * Nsel * 4)))
 
-        # Prepare means for batch sampling
-        means = np.column_stack([scales[sel], avs[sel], rvs[sel]])  # Shape: (Nsel, 3)
+        # Transform PRECISION matrix from (scale, Av, Rv) to (ln d, Av, Rv).
+        # This reparameterization avoids the Jacobian bias that arises when
+        # sampling in scale-space but evaluating priors in distance-space.
+        # The transformation uses eta = ln(d) = -0.5*ln(s), so
+        # d(eta)/d(s) = -1/(2s), i.e. J = diag(-1/(2s), 1, 1).
+        #
+        # The PRECISION matrix transforms as:
+        #   icov_lnd = J^{-T} * icov_sar * J^{-1}
+        # where J^{-1} = diag(-2s, 1, 1). This gives:
+        #   icov_lnd[0,0] = 4*s^2 * icov_sar[0,0]
+        #   icov_lnd[0,j] = -2*s * icov_sar[0,j]  for j=1,2
+        #   icov_lnd[j,0] = -2*s * icov_sar[j,0]  for j=1,2
+        #   icov_lnd[j,k] = icov_sar[j,k]          for j,k in {1,2}
+        #
+        # This is well-behaved: for small s (distant/unconstrained stars),
+        # 4*s^2 * icov_sar[0,0] gets SMALLER (less precision in ln d),
+        # which is physically correct. The old approach of transforming the
+        # covariance had cov_lnd[0,0] = cov_sar[0,0] / (4*s^2) which
+        # explodes for small s, causing MC samples to span many orders of
+        # magnitude in distance.
+        s_sel = scales[sel]  # Shape: (Nsel,)
+        s_sel = np.maximum(s_sel, 1e-20)  # Guard against zero/negative
+        two_s = 2.0 * s_sel
+        four_s2 = 4.0 * s_sel**2
 
-        # BATCH SAMPLING - Major performance improvement!
+        icov_lnd = icovs_selected.copy()
+        icov_lnd[:, 0, 0] = four_s2 * icovs_selected[:, 0, 0]
+        icov_lnd[:, 0, 1] = -two_s * icovs_selected[:, 0, 1]
+        icov_lnd[:, 1, 0] = -two_s * icovs_selected[:, 1, 0]
+        icov_lnd[:, 0, 2] = -two_s * icovs_selected[:, 0, 2]
+        icov_lnd[:, 2, 0] = -two_s * icovs_selected[:, 2, 0]
+        # (1,1), (1,2), (2,1), (2,2) are unchanged
+
+        # Invert the transformed precision to get covariance in (ln d, Av, Rv)
+        cov_lnd = _inverse3(icov_lnd, regularize=True)
+
+        # Prepare means in (ln d, Av, Rv) space
+        eta_sel = -0.5 * np.log(s_sel)  # ln(d) = -0.5*ln(s)
+        means = np.column_stack([eta_sel, avs[sel], rvs[sel]])  # Shape: (Nsel, 3)
+
+        # BATCH SAMPLING in (ln d, Av, Rv) space
         samples_all = sample_multivariate_normal(
-            means, cov_sar, size=Nmc, rstate=rstate
+            means, cov_lnd, size=Nmc, rstate=rstate
         )
         # samples_all shape: (3, Nmc, Nsel)
 
         # Extract and transform samples (VECTORIZED)
-        scale_samples = samples_all[0]  # Shape: (Nmc, Nsel)
+        eta_samples = samples_all[0]  # Shape: (Nmc, Nsel)
         a_mc = samples_all[1]  # Shape: (Nmc, Nsel)
         r_mc = samples_all[2]  # Shape: (Nmc, Nsel)
 
-        # Vectorized distance conversion and bounds application
-        dist_mc = 1.0 / np.sqrt(np.abs(scale_samples))
+        # Convert ln(d) to distance
+        dist_mc = np.exp(eta_samples)
         dist_mc = np.clip(dist_mc, 0.001, 1e6)
         a_mc = np.clip(a_mc, avlim[0], avlim[1])
         r_mc = np.clip(r_mc, rvlim[0], rvlim[1])
@@ -1425,6 +1465,13 @@ class BruteForce:
         # Initialize log-posterior from base (without parallax scale approx).
         # The exact parallax likelihood is added below via logp_parallax.
         lnp_mc = np.tile(lnprob_base[sel], (Nmc, 1))  # Shape: (Nmc, Nsel)
+
+        # Jacobian correction for ln(d) -> d transformation.
+        # The prior pi_d(d) is defined in distance-space. In ln(d)-space,
+        # the prior becomes pi_eta(eta) = pi_d(d) * |dd/d(eta)| = pi_d(d) * d.
+        # Since logp_galactic_structure already includes the d^2 volume element,
+        # the net Jacobian is just d (not d^3 as it would be in scale-space).
+        lnp_mc += np.log(dist_mc + 1e-300)
 
         # Prior evaluations - coordinate is fixed, so we can still optimize
         if coord is not None:
@@ -1492,7 +1539,25 @@ class BruteForce:
         if len(lnp_mask) > 0:
             lnp[lnp_mask] = LOG_ZERO
 
-        return sel, cov_sar, lnp, dist_mc.T, a_mc.T, r_mc.T, lnp_mc.T
+        # Compute effective sample size (ESS) for each selected model's
+        # MC samples. ESS = 1 / sum(w_i^2) where w_i are normalized weights.
+        # Low ESS indicates that the MC integration is dominated by a few
+        # samples, suggesting poor overlap between the proposal (Gaussian in
+        # ln d, Av, Rv) and the target (posterior with priors).
+        # lnp_mc shape is (Nmc, Nsel) at this point.
+        mc_ess = np.zeros(Nsel)
+        for j in range(Nsel):
+            lw = lnp_mc[:, j]
+            lw_max = np.max(lw)
+            w = np.exp(lw - lw_max)
+            w_sum = w.sum()
+            if w_sum > 0:
+                w_normed = w / w_sum
+                mc_ess[j] = 1.0 / np.sum(w_normed**2)
+            else:
+                mc_ess[j] = 0.0
+
+        return sel, cov_sar, lnp, dist_mc.T, a_mc.T, r_mc.T, lnp_mc.T, mc_ess
 
     def fit(
         self,
@@ -1680,6 +1745,11 @@ class BruteForce:
         - ``obj_log_evid``: Log-evidence per object (Ndata,)
         - ``obj_chi2min``: Minimum chi-squared per object (Ndata,)
         - ``obj_Nbands``: Number of bands used per object (Ndata,)
+        - ``mc_ess``: Monte Carlo effective sample size (Ndata, Ndraws).
+          For each posterior draw, the ESS of the MC integration over
+          (distance, Av, Rv) for that draw's source model. Low ESS
+          indicates poor overlap between the Gaussian proposal and the
+          target posterior.
 
         If save_dar_draws=True, also includes:
 
@@ -1784,6 +1854,9 @@ class BruteForce:
             out.create_dataset("obj_log_evid", data=np.zeros(Ndata, dtype="float32"))
             out.create_dataset("obj_chi2min", data=np.zeros(Ndata, dtype="float32"))
             out.create_dataset("obj_Nbands", data=np.zeros(Ndata, dtype="int16"))
+            out.create_dataset(
+                "mc_ess", data=np.zeros((Ndata, Ndraws), dtype="float32")
+            )
             if save_dar_draws:
                 out.create_dataset(
                     "samps_dist", data=np.ones((Ndata, Ndraws), dtype="float32")
@@ -1808,6 +1881,7 @@ class BruteForce:
             logevid_arr = np.zeros(Ndata, dtype="float32")
             chi2best_arr = np.zeros(Ndata, dtype="float32")
             nbands_arr = np.zeros(Ndata, dtype="int16")
+            mc_ess_arr = np.zeros((Ndata, Ndraws), dtype="float32")
             if save_dar_draws:
                 dist_arr = np.ones((Ndata, Ndraws), dtype="float32")
                 red_arr = np.ones((Ndata, Ndraws), dtype="float32")
@@ -1873,6 +1947,7 @@ class BruteForce:
                     reds,
                     dreds,
                     logwt,
+                    mc_ess_i,
                 ) = results
             else:
                 (
@@ -1885,6 +1960,7 @@ class BruteForce:
                     lpost,
                     levid,
                     chi2min,
+                    mc_ess_i,
                 ) = results
 
             # Print progress
@@ -1914,6 +1990,7 @@ class BruteForce:
                 out["obj_log_post"][i] = lpost
                 out["obj_log_evid"][i] = levid
                 out["obj_chi2min"][i] = chi2min
+                out["mc_ess"][i] = mc_ess_i
                 if save_dar_draws:
                     out["samps_dist"][i] = dists
                     out["samps_red"][i] = reds
@@ -1929,6 +2006,7 @@ class BruteForce:
                 logevid_arr[i] = levid
                 chi2best_arr[i] = chi2min
                 nbands_arr[i] = Ndim
+                mc_ess_arr[i] = mc_ess_i
                 if save_dar_draws:
                     dist_arr[i] = dists
                     red_arr[i] = reds
@@ -1960,6 +2038,7 @@ class BruteForce:
             out.create_dataset("obj_log_evid", data=logevid_arr)
             out.create_dataset("obj_chi2min", data=chi2best_arr)
             out.create_dataset("obj_Nbands", data=nbands_arr)
+            out.create_dataset("mc_ess", data=mc_ess_arr)
             if save_dar_draws:
                 out.create_dataset("samps_dist", data=dist_arr)
                 out.create_dataset("samps_red", data=red_arr)
@@ -2063,9 +2142,10 @@ class BruteForce:
         tuple
             If return_distreds=True:
                 (idxs, scales, avs, rvs, covs_sar, Ndim, lnprob, levid, chi2min,
-                 dists, reds, dreds, logwts)
+                 dists, reds, dreds, logwts, mc_ess)
             If return_distreds=False:
-                (idxs, scales, avs, rvs, covs_sar, Ndim, lnprob, levid, chi2min)
+                (idxs, scales, avs, rvs, covs_sar, Ndim, lnprob, levid, chi2min,
+                 mc_ess)
 
             Where:
             - idxs: Resampled model indices (Ndraws,)
@@ -2081,6 +2161,7 @@ class BruteForce:
             - reds: A(V) draws (Ndraws,)
             - dreds: R(V) draws (Ndraws,)
             - logwts: Log-weights for draws (Ndraws,)
+            - mc_ess: Effective sample size for each draw's source model (Ndraws,)
         """
         # Initialize random state
         if rstate is None:
@@ -2132,7 +2213,8 @@ class BruteForce:
         # Unpack posterior results
         # sel: selected model indices, cov_sar: covariances for selected models
         # lnp: log-posteriors, dist_mc/a_mc/r_mc: MC samples, lnp_mc: MC log-posteriors
-        sel, cov_sar_sel, lnp, dist_mc, a_mc, r_mc, lnp_mc = logpost_results
+        # mc_ess: effective sample size per selected model
+        sel, cov_sar_sel, lnp, dist_mc, a_mc, r_mc, lnp_mc, mc_ess_sel = logpost_results
         Nsel = len(sel)
 
         # Add parallax contribution to chi2 and Ndim if provided
@@ -2168,6 +2250,7 @@ class BruteForce:
         rvs = rvs_all[sidxs]
         covs_sar = cov_sar_sel[idxs_local]
         lnprob = lnp[idxs_local]
+        mc_ess = mc_ess_sel[idxs_local]
 
         if return_distreds:
             # Draw distance and reddening samples from MC integration
@@ -2212,9 +2295,21 @@ class BruteForce:
                 reds,
                 dreds,
                 logwts,
+                mc_ess,
             )
         else:
-            return (sidxs, scales, avs, rvs, covs_sar, Ndim_out, lnprob, levid, chi2min)
+            return (
+                sidxs,
+                scales,
+                avs,
+                rvs,
+                covs_sar,
+                Ndim_out,
+                lnprob,
+                levid,
+                chi2min,
+                mc_ess,
+            )
 
     def __repr__(self):
         """Return string representation of BruteForce object."""

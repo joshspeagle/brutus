@@ -243,8 +243,8 @@ def load_tutorial_data(dataset_name, **kwargs):
             mag, magerr = fpix["mag"][:], fpix["err"][:]
             mask = np.isfinite(magerr)
             phot, err = inv_magnitude(mag, magerr)
-            parallax = fpix["parallax"][:] * 1e3  # to mas
-            parallax_err = fpix["parallax_error"][:] * 1e3
+            parallax = fpix["parallax"][:]  # already in mas
+            parallax_err = fpix["parallax_error"][:]
 
             # Screen bad parallaxes
             psel = (

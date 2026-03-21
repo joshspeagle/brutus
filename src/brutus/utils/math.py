@@ -233,23 +233,104 @@ def _batch_invert_3x3(A_batch):
     return result
 
 
+def _invert_3x3_preconditioned(P, min_eigenval_threshold=1e-12):
+    """
+    Invert a single 3x3 symmetric positive-definite matrix using diagonal
+    preconditioning for numerical stability.
+
+    Normalizes the precision matrix to a correlation-like matrix (1s on
+    diagonal) before inversion, then transforms back. This reduces the
+    condition number from O(max_diag/min_diag) to O(1/(1-rho_max)),
+    which depends only on correlations, not parameter scales.
+
+    Parameters
+    ----------
+    P : ndarray of shape (3, 3)
+        Symmetric positive-definite precision matrix.
+    min_eigenval_threshold : float
+        Minimum eigenvalue threshold for the normalized covariance.
+
+    Returns
+    -------
+    C : ndarray of shape (3, 3)
+        The inverse (covariance) matrix.
+    """
+    # Step 1: Diagonal scaling factors
+    d0 = np.sqrt(max(P[0, 0], 1e-30))
+    d1 = np.sqrt(max(P[1, 1], 1e-30))
+    d2 = np.sqrt(max(P[2, 2], 1e-30))
+    d_inv = np.array([1.0 / d0, 1.0 / d1, 1.0 / d2])
+
+    # Step 2: Symmetrize and normalize to correlation-like matrix (1s on diagonal)
+    P_norm = np.empty((3, 3))
+    for i in range(3):
+        for j in range(3):
+            P_norm[i, j] = 0.5 * (P[i, j] + P[j, i]) * d_inv[i] * d_inv[j]
+
+    # Step 3: Pre-regularize if the normalized matrix is singular.
+    # In normalized space, a small additive shift is well-scaled since
+    # all diagonals are 1.0.
+    det_norm = _matrix_det_3x3(P_norm)
+    if abs(det_norm) < 1e-10:
+        P_norm[0, 0] += 1e-3
+        P_norm[1, 1] += 1e-3
+        P_norm[2, 2] += 1e-3
+
+    # Invert the normalized matrix analytically
+    C_norm = _invert_3x3_analytical(P_norm)
+
+    # Step 4: Handle inversion failure (inf/nan from truly degenerate input)
+    if not np.all(np.isfinite(C_norm)):
+        # Fallback: return diagonal covariance from precision diagonal
+        C = np.zeros((3, 3))
+        C[0, 0] = 1.0 / max(P[0, 0], 1e-30)
+        C[1, 1] = 1.0 / max(P[1, 1], 1e-30)
+        C[2, 2] = 1.0 / max(P[2, 2], 1e-30)
+        return C
+
+    # Step 5: Symmetrize and regularize in normalized space.
+    # Gershgorin bounds are tight here since diagonals are ~O(1)
+    # and off-diagonals are bounded correlations.
+    C_sym = 0.5 * (C_norm + C_norm.T)
+    min_eig = _min_eigenval_3x3_symmetric(C_sym)
+    if min_eig < min_eigenval_threshold:
+        shift = min_eigenval_threshold - min_eig
+        C_sym[0, 0] += shift
+        C_sym[1, 1] += shift
+        C_sym[2, 2] += shift
+        C_norm = C_sym
+
+    # Step 5: Transform back to original parameter space
+    # C_original = D^{-1} C_norm D^{-1}
+    C = np.empty((3, 3))
+    for i in range(3):
+        for j in range(3):
+            C[i, j] = C_norm[i, j] * d_inv[i] * d_inv[j]
+
+    return C
+
+
 def inverse3(A, regularize=False, min_eigenval_threshold=1e-12):
     """
-    Compute the inverse of a series of 3x3 matrices using adjoints.
+    Compute the inverse of a series of 3x3 matrices.
 
-    This method applies regularization to guarantee that the resulting
-    inverse matrices are mathematically valid for use in Cholesky
-    decompositions and multivariate normal sampling.
+    When ``regularize=True``, uses diagonal preconditioning: the precision
+    matrix is normalized to a correlation-like matrix (1s on diagonal)
+    before inversion, then transformed back. This reduces condition
+    numbers from O(max_diag/min_diag) to O(1/(1-rho_max)), making the
+    inversion numerically stable even when parameters have very different
+    scales (e.g. scale ~ 10^5 vs R(V) precision ~ 30).
 
     Parameters
     ----------
     A : `~numpy.ndarray` of shape `(..., 3, 3)`
         Array of 3x3 matrices.
     regularize : bool, optional
-        Whether to apply regularization to ensure positive semi-definiteness
-        of the OUTPUT matrices. Default: True.
+        Whether to apply diagonal preconditioning and regularization
+        to ensure positive semi-definiteness. Default: False.
     min_eigenval_threshold : float, optional
-        Minimum acceptable eigenvalue for OUTPUT matrices. Default: 1e-12.
+        Minimum acceptable eigenvalue for OUTPUT matrices in the
+        normalized space. Default: 1e-12.
 
     Returns
     -------
@@ -258,73 +339,19 @@ def inverse3(A, regularize=False, min_eigenval_threshold=1e-12):
         regularize=True.
     """
     if not regularize:
-        # Use analytical 3x3 inversion (numba-compatible)
         if len(A.shape) == 2:
             return _invert_3x3_analytical(A)
         else:
-            # Batch case - use numba-compiled batch function
             return _batch_invert_3x3(A)
 
-    # With regularization: pre-condition the input matrices
-    A_work = A.copy()
-    original_shape = A_work.shape
-
-    # Pre-regularize input matrices that are too singular
-    if len(original_shape) == 2:
-        # Single 3x3 matrix
-        # For singular matrices, ensure symmetric regularization
-        det = _matrix_det_3x3(A_work)  # Use numba-compatible determinant
-        if abs(det) < 1e-12:  # Matrix is singular or nearly singular
-            # First make symmetric if needed, then add diagonal regularization
-            A_work = 0.5 * (A_work + A_work.T)
-            regularization = 1e-3  # Strong regularization for numerical stability
-            A_work[0, 0] += regularization
-            A_work[1, 1] += regularization
-            A_work[2, 2] += regularization
+    if len(A.shape) == 2:
+        return _invert_3x3_preconditioned(A, min_eigenval_threshold)
     else:
-        # Array of matrices
-        for i in range(original_shape[0]):
-            # For singular matrices, ensure symmetric regularization
-            det = _matrix_det_3x3(A_work[i])  # Use numba-compatible determinant
-            if abs(det) < 1e-12:  # Matrix is singular or nearly singular
-                # First make symmetric if needed, then add diagonal regularization
-                A_work[i] = 0.5 * (A_work[i] + A_work[i].T)
-                regularization = 1e-3  # Strong regularization for numerical stability
-                A_work[i, 0, 0] += regularization
-                A_work[i, 1, 1] += regularization
-                A_work[i, 2, 2] += regularization
-
-    # Compute inverse of pre-conditioned matrices using analytical method
-    if len(original_shape) == 2:
-        A_inv = _invert_3x3_analytical(A_work)
-    else:
-        A_inv = _batch_invert_3x3(A_work)
-
-    # Apply post-regularization to output if still needed.
-    # Use exact eigenvalue computation (np.linalg.eigvalsh) instead of
-    # Gershgorin circle approximation, which gives highly pessimistic
-    # bounds for matrices with large off-diagonal elements (common for
-    # correlated scale/AV/RV parameters) and causes massive
-    # over-regularization.
-    if len(original_shape) == 2:
-        matrix_sym = 0.5 * (A_inv + A_inv.T)
-        min_eigenval = np.min(np.linalg.eigvalsh(matrix_sym))
-        if min_eigenval < min_eigenval_threshold:
-            regularization = min_eigenval_threshold - min_eigenval
-            A_inv[0, 0] += regularization
-            A_inv[1, 1] += regularization
-            A_inv[2, 2] += regularization
-    else:
-        for i in range(original_shape[0]):
-            matrix_sym = 0.5 * (A_inv[i] + A_inv[i].T)
-            min_eigenval = np.min(np.linalg.eigvalsh(matrix_sym))
-            if min_eigenval < min_eigenval_threshold:
-                regularization = min_eigenval_threshold - min_eigenval
-                A_inv[i, 0, 0] += regularization
-                A_inv[i, 1, 1] += regularization
-                A_inv[i, 2, 2] += regularization
-
-    return A_inv
+        N = A.shape[0]
+        result = np.empty_like(A)
+        for i in range(N):
+            result[i] = _invert_3x3_preconditioned(A[i], min_eigenval_threshold)
+        return result
 
 
 def isPSD(A):

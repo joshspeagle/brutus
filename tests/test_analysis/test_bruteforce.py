@@ -470,12 +470,14 @@ class TestBruteForcePosterior:
             like_results, Nmc_prior=10, wt_thresh=0.01  # Small for testing
         )
 
-        sel, cov, lnp, dist_mc, av_mc, rv_mc, lnp_mc = results
+        sel, cov, lnp, dist_mc, av_mc, rv_mc, lnp_mc, mc_ess = results
 
         assert len(sel) > 0  # Some models selected
         assert cov.shape == (len(sel), 3, 3)
         assert len(lnp) == len(sel)
         assert dist_mc.shape == (len(sel), 10)
+        assert mc_ess.shape == (len(sel),)
+        assert np.all(mc_ess >= 0)
 
     def test_logpost_model_selection(self, bruteforce_fitter, synthetic_observation):
         """Test different model selection methods."""
@@ -515,7 +517,7 @@ class TestBruteForcePosterior:
             wt_thresh=0.01,
         )
 
-        sel, cov, lnp, dist_mc, av_mc, rv_mc, lnp_mc = results
+        sel, cov, lnp, dist_mc, av_mc, rv_mc, lnp_mc, mc_ess = results
 
         # Check distance samples are positive
         assert np.all(dist_mc > 0)
@@ -527,6 +529,10 @@ class TestBruteForcePosterior:
         # Check Rv is bounded
         assert np.all(rv_mc >= 1)
         assert np.all(rv_mc <= 8)  # Default rvlim
+
+        # Check ESS is reasonable (between 0 and Nmc)
+        assert np.all(mc_ess >= 0)
+        assert np.all(mc_ess <= 100)
 
 
 class TestBruteForceInternal:
@@ -571,7 +577,7 @@ class TestBruteForceInternal:
             wt_thresh=0.01,
         )
 
-        # _fit returns 13 values with return_distreds=True (default)
+        # _fit returns 14 values with return_distreds=True (default)
         (
             idxs,
             scales,
@@ -586,6 +592,7 @@ class TestBruteForceInternal:
             reds,
             dreds,
             logwts,
+            mc_ess,
         ) = results
 
         # Check basic outputs
@@ -732,7 +739,7 @@ class TestBruteForceRealGrid:
         )
 
         # Verify basic posterior computation works
-        sel, cov_sar, lnp, dist_mc, av_mc, rv_mc, lnp_mc = results_basic
+        sel, cov_sar, lnp, dist_mc, av_mc, rv_mc, lnp_mc, mc_ess = results_basic
 
         # Basic validation - ensure we get reasonable outputs
         assert len(sel) > 0, "No models selected by posterior"
@@ -764,7 +771,7 @@ class TestBruteForceRealGrid:
         )
 
         # Verify galactic prior integration works
-        sel_gal, _, lnp_gal, _, _, _, _ = results_galactic
+        sel_gal, _, lnp_gal, _, _, _, _, _ = results_galactic
         assert len(sel_gal) > 0, "Galactic prior eliminated all models"
 
         print(f"✓ With galactic prior: {len(sel_gal)} models selected")
@@ -779,7 +786,7 @@ class TestBruteForceRealGrid:
             coord=coord_galactic,
         )
 
-        sel_cdf, _, _, _, _, _, _ = results_cdf
+        sel_cdf, _, _, _, _, _, _, _ = results_cdf
         assert len(sel_cdf) > 0, "CDF threshold eliminated all models"
 
         print(f"✓ CDF selection: {len(sel_cdf)} models selected")
@@ -1060,7 +1067,7 @@ class TestBruteForceCoverageCompletion:
             tuple(like_results), Nmc_prior=5, wt_thresh=0.1
         )
 
-        sel, cov, lnp, dist_mc, av_mc, rv_mc, lnp_mc = results
+        sel, cov, lnp, dist_mc, av_mc, rv_mc, lnp_mc, mc_ess = results
         assert len(sel) > 0
 
 
@@ -1486,8 +1493,8 @@ class TestBruteForceFitMethod:
             return_distreds=True,
         )
 
-        # Should return 13-element tuple
-        assert len(results) == 13
+        # Should return 14-element tuple (13 + mc_ess)
+        assert len(results) == 14
         (
             idxs,
             scales,
@@ -1502,6 +1509,7 @@ class TestBruteForceFitMethod:
             reds,
             dreds,
             logwts,
+            mc_ess,
         ) = results
 
         # Verify shapes
@@ -1545,9 +1553,9 @@ class TestBruteForceFitMethod:
             return_distreds=False,
         )
 
-        # Should return 9-element tuple
-        assert len(results) == 9
-        idxs, scales, avs, rvs, covs_sar, Ndim, lnprob, levid, chi2min = results
+        # Should return 10-element tuple (9 + mc_ess)
+        assert len(results) == 10
+        idxs, scales, avs, rvs, covs_sar, Ndim, lnprob, levid, chi2min, mc_ess = results
 
         # Verify shapes
         assert idxs.shape == (10,)
