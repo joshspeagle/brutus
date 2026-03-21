@@ -159,7 +159,7 @@ class TestStarGridBruteForceIntegration:
         # Fit through BruteForce
         results = fitter._fit(flux, flux_err, mask, Nmc_prior=20, wt_thresh=0.05)
 
-        # _fit returns 13 values with return_distreds=True (default)
+        # _fit returns 14 values with return_distreds=True (default)
         (
             idxs,
             scales,
@@ -174,6 +174,7 @@ class TestStarGridBruteForceIntegration:
             reds,
             dreds,
             logwts,
+            mc_ess,
         ) = results
 
         # Check results are reasonable
@@ -267,10 +268,10 @@ class TestStarGridBruteForceIntegration:
         assert len(results) == len(multi_star_observations)
 
         # Different stars should prefer different models
-        # _fit returns 13 values: (idxs, scales, avs, rvs, covs_sar, Ndim, lnprob, levid, chi2min, dists, reds, dreds, logwts)
+        # _fit returns 14 values: (idxs, scales, avs, rvs, covs_sar, Ndim, lnprob, levid, chi2min, dists, reds, dreds, logwts, mc_ess)
         best_models = [
             idxs[np.argmax(lnprob)]
-            for idxs, _, _, _, _, _, lnprob, _, _, _, _, _, _ in results
+            for idxs, _, _, _, _, _, lnprob, _, _, _, _, _, _, _ in results
         ]
         assert len(set(best_models)) > 1  # Not all the same
 
@@ -467,7 +468,7 @@ class TestRealWorldScenarios:
             wt_thresh=0.01,
         )
 
-        # _fit returns 13 values with return_distreds=True (default)
+        # _fit returns 14 values with return_distreds=True (default)
         (
             idxs,
             scales,
@@ -482,6 +483,7 @@ class TestRealWorldScenarios:
             reds,
             dreds,
             logwts,
+            mc_ess,
         ) = results
 
         # Should get reasonable posterior samples
@@ -518,7 +520,7 @@ class TestRealWorldScenarios:
             wt_thresh=0.02,
         )
 
-        # _fit returns 13 values with return_distreds=True (default)
+        # _fit returns 14 values with return_distreds=True (default)
         (
             idxs,
             scales,
@@ -533,6 +535,7 @@ class TestRealWorldScenarios:
             reds,
             dreds,
             logwts,
+            mc_ess,
         ) = results
 
         # Should recover reasonable extinction (allowing some tolerance for fitting)
