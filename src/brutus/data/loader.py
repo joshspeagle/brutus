@@ -235,7 +235,7 @@ def load_models(
 
     if not include_binaries and "smf" in labels2:
         try:
-            sel *= combined_labels["smf"] == 0.0
+            sel &= combined_labels["smf"] == 0.0
             labels2 = [x for x in labels2 if x != "smf"]
         except KeyError:
             pass

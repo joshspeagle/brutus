@@ -775,7 +775,7 @@ class StellarPop(object):
         params2 = dict(zip(self.isochrone.predictions, params_arr2.T))
 
         # Handle binary stars
-        if 0.0 < binary_fraction <= 1.0:
+        if 0.0 < binary_fraction < 1.0:
             self._add_binary_components(
                 seds,
                 params,
@@ -795,8 +795,8 @@ class StellarPop(object):
                 corr_params,
             )
         elif binary_fraction == 1.0:
-            # Equal mass binaries
-            seds[self.isochrone.eep_u <= eep_binary_max] -= 2.5 * np.log10(2.0)
+            # Equal-mass binary: flux doubles -> magnitude decreases by 2.5*log10(2)
+            seds[~np.isnan(seds[:, 0])] -= 2.5 * np.log10(2.0)
             params2 = deepcopy(params)
             params_arr2 = deepcopy(params_arr.T)
 

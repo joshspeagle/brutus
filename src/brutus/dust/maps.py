@@ -282,7 +282,8 @@ class Bayestar(DustMap):
 
                 # Check for exact matches
                 idx = np.where(in_bounds, idx, -1)
-                match_idx = in_bounds & (self._hp_idx_sorted[k][idx] == ipix)
+                safe_idx = np.clip(idx, 0, None)
+                match_idx = in_bounds & (self._hp_idx_sorted[k][safe_idx] == ipix)
 
                 if np.any(match_idx):
                     valid_idx = idx[match_idx]
@@ -348,8 +349,9 @@ class Bayestar(DustMap):
 
         # Extract extinction data
         in_bounds = pix_idx != -1
-        av_mean = self._av_mean[pix_idx].copy()
-        av_std = self._av_std[pix_idx].copy()
+        safe_idx = np.clip(pix_idx, 0, None)
+        av_mean = self._av_mean[safe_idx].copy()
+        av_std = self._av_std[safe_idx].copy()
 
         # Set out-of-bounds values to NaN
         av_mean[~in_bounds] = np.nan
