@@ -407,25 +407,10 @@ class TestInternalFunctions:
         """Test internal helper functions to improve coverage."""
         import numpy as np
 
-        from brutus.utils.math import (
-            _invert_3x3_analytical,
-            _matrix_det_3x3,
-            _min_eigenval_3x3_symmetric,
-        )
-
-        # Test _min_eigenval_3x3_symmetric
-        A = np.array(
-            [[2, 1, 0], [1, 3, 1], [0, 1, 2]], dtype=float
-        )  # Known symmetric positive definite matrix
-        min_eig = _min_eigenval_3x3_symmetric(A)
-        assert min_eig > 0, "Minimum eigenvalue should be positive for PSD matrix"
-
-        # Test with near-singular matrix
-        B = np.array([[1, 1, 1], [1, 1.001, 1], [1, 1, 1.001]], dtype=float)
-        min_eig_B = _min_eigenval_3x3_symmetric(B)
-        assert min_eig_B < 0.1, "Should detect small eigenvalue"
+        from brutus.utils.math import _invert_3x3_analytical, _matrix_det_3x3
 
         # Test _matrix_det_3x3
+        A = np.array([[2, 1, 0], [1, 3, 1], [0, 1, 2]], dtype=float)
         det_A = _matrix_det_3x3(A)
         expected_det = np.linalg.det(A)
         np.testing.assert_almost_equal(det_A, expected_det, decimal=10)

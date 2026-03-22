@@ -120,7 +120,7 @@ class TestScalarFallbackSEDGeneration:
         # Make sed_batch raise an exception to trigger fallback
         pop.predictor.sed_batch.side_effect = RuntimeError("batch failed")
 
-        with pytest.warns(RuntimeWarning, match="Batch SED generation failed"):
+        with pytest.warns(RuntimeWarning, match="Batch primary SED generation failed"):
             seds, params, params2 = pop.get_seds(feh=0.0, loga=9.0)
 
         # Should still produce valid output via scalar loop

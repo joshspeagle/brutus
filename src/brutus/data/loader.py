@@ -9,7 +9,9 @@ photometric offsets, and other data files into memory for use in
 stellar fitting and analysis.
 """
 
+import os
 import sys
+from pathlib import Path
 
 import h5py
 import numpy as np
@@ -17,7 +19,56 @@ import numpy as np
 # Import filter definitions
 from .filters import FILTERS
 
-__all__ = ["load_models", "load_offsets"]
+__all__ = ["find_nn_file", "load_models", "load_offsets"]
+
+
+def find_nn_file(possible_names=("nn_c3k.h5", "nnMIST_BC.h5")):
+    """
+    Find the neural network model file in standard locations.
+
+    Searches for the neural network HDF5 file used for bolometric correction
+    predictions, checking the local ``data/DATAFILES`` directory first, then
+    the pooch cache directory.
+
+    Parameters
+    ----------
+    possible_names : tuple of str, optional
+        Filenames to search for, tried in order. Default is
+        ``("nn_c3k.h5", "nnMIST_BC.h5")``. The first file found is returned.
+
+    Returns
+    -------
+    path : pathlib.Path
+        Absolute path to the neural network file.
+
+    Raises
+    ------
+    FileNotFoundError
+        If none of the candidate files can be found in any searched location.
+    """
+    # Package root: src/brutus/data/loader.py -> four levels up to repo root
+    package_root = Path(__file__).parent.parent.parent.parent
+
+    for nn_name in possible_names:
+        # Check local data directory first
+        local_path = package_root / "data" / "DATAFILES" / nn_name
+        if os.path.exists(str(local_path)):
+            return local_path
+
+        # If not found locally, try pooch cache directory
+        import pooch
+
+        cache_dir = Path(pooch.os_cache("astro-brutus"))
+        cache_path = cache_dir / nn_name
+        if os.path.exists(str(cache_path)):
+            return cache_path
+
+    raise FileNotFoundError(
+        f"Could not find neural network file. "
+        f"Searched for {possible_names} in "
+        f"{package_root / 'data' / 'DATAFILES'} and pooch cache. "
+        f"Run brutus.data.fetch_nns() to download the file."
+    )
 
 
 def load_models(

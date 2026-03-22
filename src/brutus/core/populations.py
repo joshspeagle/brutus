@@ -161,7 +161,6 @@ class Isochrone:
     def __init__(self, mistfile=None, predictions=None, verbose=True):
 
         # Set default file path
-        # TODO: Extract shared file discovery logic to a utility function
         if mistfile is None:
             package_root = Path(__file__).parent.parent.parent.parent
             mistfile = package_root / "data" / "DATAFILES" / "MIST_1.2_iso_vvcrit0.0.h5"
@@ -550,30 +549,10 @@ class StellarPop:
         self.filters = filters
 
         # Set default neural network file
-        # TODO: Extract shared file discovery logic to a utility function
         if nnfile is None:
-            import os
+            from ..data.loader import find_nn_file
 
-            package_root = Path(__file__).parent.parent.parent.parent
-
-            # Try multiple possible names (nn_c3k.h5 is downloaded by pooch,
-            # nnMIST_BC.h5 is legacy name - they are the same file)
-            possible_names = ["nn_c3k.h5", "nnMIST_BC.h5"]
-
-            for nn_name in possible_names:
-                # Check local data directory first
-                nnfile = package_root / "data" / "DATAFILES" / nn_name
-                if os.path.exists(str(nnfile)):
-                    break
-
-                # If not found locally, try pooch cache directory
-                import pooch
-
-                cache_dir = Path(pooch.os_cache("astro-brutus"))
-                cache_path = cache_dir / nn_name
-                if os.path.exists(str(cache_path)):
-                    nnfile = cache_path
-                    break
+            nnfile = find_nn_file()
 
         # Initialize neural network predictor
         try:
@@ -586,6 +565,91 @@ class StellarPop:
                     f"Warning: Neural network initialization failed: {e}\n"
                 )
             self.predictor = None
+
+    def _evaluate_seds(self, params, valid_mask, av, rv, dist, label=""):
+        """
+        Evaluate SEDs using batch method with scalar fallback.
+
+        Attempts vectorized evaluation via ``sed_batch`` first. If that fails
+        (or is unavailable), falls back to a per-star ``sed()`` loop.
+
+        Parameters
+        ----------
+        params : dict
+            Dictionary of stellar parameter arrays, keyed by parameter name.
+            Must contain ``"logt"``, ``"logg"``, ``"feh_surf"``, ``"logl"``,
+            ``"afe_surf"``, and ``"mini"``.
+
+        valid_mask : numpy.ndarray of bool
+            Boolean mask indicating which stars should have SEDs evaluated.
+
+        av : float
+            V-band extinction A(V) in magnitudes.
+
+        rv : float
+            Extinction law parameter R(V).
+
+        dist : float
+            Distance in parsecs.
+
+        label : str, optional
+            Descriptive label used in warning messages (e.g., ``"primary"``
+            or ``"secondary"``). Default is ``""``.
+
+        Returns
+        -------
+        seds : numpy.ndarray of shape (N, Nfilt)
+            SED array with predictions for valid stars and NaN elsewhere.
+        """
+        N = len(params["mini"])
+        seds = np.full((N, self.predictor.NFILT), np.nan)
+        n_valid = np.sum(valid_mask)
+
+        if n_valid > 0 and hasattr(self.predictor, "sed_batch"):
+            try:
+                seds[valid_mask] = self.predictor.sed_batch(
+                    logt=params["logt"][valid_mask],
+                    logg=params["logg"][valid_mask],
+                    feh_surf=params["feh_surf"][valid_mask],
+                    logl=params["logl"][valid_mask],
+                    afe=params["afe_surf"][valid_mask],
+                    av=av,
+                    rv=rv,
+                    dist=dist,
+                )
+            except Exception as e:
+                warnings.warn(
+                    f"Batch {label}SED generation failed, falling back to "
+                    f"loop: {e}",
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
+                # Fall through to scalar loop below
+                n_valid = 0
+
+        if n_valid == 0 or not hasattr(self.predictor, "sed_batch"):
+            for i in range(N):
+                if valid_mask[i]:
+                    try:
+                        seds[i] = self.predictor.sed(
+                            logl=params["logl"][i],
+                            logt=params["logt"][i],
+                            logg=params["logg"][i],
+                            feh_surf=params["feh_surf"][i],
+                            afe=params["afe_surf"][i],
+                            av=av,
+                            rv=rv,
+                            dist=dist,
+                        )
+                    except Exception as e:
+                        warnings.warn(
+                            f"{label.capitalize()}SED generation failed for "
+                            f"index {i} (mini={params['mini'][i]:.3f}): {e}",
+                            RuntimeWarning,
+                            stacklevel=3,
+                        )
+
+        return seds
 
     def get_seds(
         self,
@@ -716,59 +780,10 @@ class StellarPop:
 
         # Convert to dictionary format
         params = dict(zip(self.isochrone.predictions, params_arr.T))
-        Neep = len(params_arr)
-
-        # Initialize SED array
-        seds = np.full((Neep, self.predictor.NFILT), np.nan)
 
         # Generate primary component SEDs using vectorized evaluation
         mass_valid = params["mini"] >= mini_bound
-        n_valid = np.sum(mass_valid)
-
-        if n_valid > 0 and hasattr(self.predictor, "sed_batch"):
-            # Vectorized path: evaluate all valid stars at once
-            try:
-                seds[mass_valid] = self.predictor.sed_batch(
-                    logt=params["logt"][mass_valid],
-                    logg=params["logg"][mass_valid],
-                    feh_surf=params["feh_surf"][mass_valid],
-                    logl=params["logl"][mass_valid],
-                    afe=params["afe_surf"][mass_valid],
-                    av=av,
-                    rv=rv,
-                    dist=dist,
-                )
-            except Exception as e:
-                warnings.warn(
-                    f"Batch SED generation failed, falling back to loop: {e}",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-                # Fall through to scalar loop below
-                n_valid = 0
-
-        if n_valid == 0 or not hasattr(self.predictor, "sed_batch"):
-            # Scalar fallback: loop over individual stars
-            for i in range(Neep):
-                if params["mini"][i] >= mini_bound:
-                    try:
-                        seds[i] = self.predictor.sed(
-                            logl=params["logl"][i],
-                            logt=params["logt"][i],
-                            logg=params["logg"][i],
-                            feh_surf=params["feh_surf"][i],
-                            afe=params["afe_surf"][i],
-                            av=av,
-                            rv=rv,
-                            dist=dist,
-                        )
-                    except Exception as e:
-                        warnings.warn(
-                            f"Primary SED generation failed for EEP index {i} "
-                            f"(mini={params['mini'][i]:.3f}): {e}",
-                            RuntimeWarning,
-                            stacklevel=2,
-                        )
+        seds = self._evaluate_seds(params, mass_valid, av, rv, dist, label="primary ")
 
         # Initialize secondary parameters
         params_arr2 = np.full_like(params_arr, np.nan)
@@ -875,51 +890,10 @@ class StellarPop:
             )
 
         # Generate secondary SEDs using vectorized evaluation
-        seds2 = np.full_like(seds, np.nan)
         sec_valid = (params2["mini"] >= mini_bound) & np.isfinite(params2["mini"])
-        n_sec_valid = np.sum(sec_valid)
-
-        if n_sec_valid > 0 and hasattr(self.predictor, "sed_batch"):
-            try:
-                seds2[sec_valid] = self.predictor.sed_batch(
-                    logt=params2["logt"][sec_valid],
-                    logg=params2["logg"][sec_valid],
-                    feh_surf=params2["feh_surf"][sec_valid],
-                    logl=params2["logl"][sec_valid],
-                    afe=params2["afe_surf"][sec_valid],
-                    av=av,
-                    rv=rv,
-                    dist=dist,
-                )
-            except Exception as e:
-                warnings.warn(
-                    f"Batch secondary SED generation failed, falling back: {e}",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-                n_sec_valid = 0
-
-        if n_sec_valid == 0 or not hasattr(self.predictor, "sed_batch"):
-            for i in range(len(seds)):
-                if params2["mini"][i] >= mini_bound and np.isfinite(params2["mini"][i]):
-                    try:
-                        seds2[i] = self.predictor.sed(
-                            logl=params2["logl"][i],
-                            logt=params2["logt"][i],
-                            logg=params2["logg"][i],
-                            feh_surf=params2["feh_surf"][i],
-                            afe=params2["afe_surf"][i],
-                            av=av,
-                            rv=rv,
-                            dist=dist,
-                        )
-                    except Exception as e:
-                        warnings.warn(
-                            f"Secondary SED generation failed for EEP index {i} "
-                            f"(mini2={params2['mini'][i]:.3f}): {e}",
-                            RuntimeWarning,
-                            stacklevel=2,
-                        )
+        seds2 = self._evaluate_seds(
+            params2, sec_valid, av, rv, dist, label="secondary "
+        )
 
         # Combine primary and secondary SEDs
         seds[:] = add_mag(seds, seds2)

@@ -219,7 +219,6 @@ class EEPTracks:
         self.logg_idx = np.where(np.array(self.predictions) == "logg")[0][0]
 
         # Set default file path
-        # TODO: Extract shared file discovery logic to a utility function
         if mistfile is None:
             package_root = Path(__file__).parent.parent.parent.parent
             mistfile = package_root / "data" / "DATAFILES" / "MIST_1.2_EEPtrk.h5"
@@ -847,26 +846,9 @@ class StarEvolTrack:
 
         # Set default neural network file
         if nnfile is None:
-            package_root = Path(__file__).parent.parent.parent.parent
+            from ..data.loader import find_nn_file
 
-            # Try multiple possible names (nn_c3k.h5 is downloaded by pooch,
-            # nnMIST_BC.h5 is legacy name - they are the same file)
-            possible_names = ["nn_c3k.h5", "nnMIST_BC.h5"]
-
-            for nn_name in possible_names:
-                # Check local data directory first
-                nnfile = package_root / "data" / "DATAFILES" / nn_name
-                if os.path.exists(str(nnfile)):
-                    break
-
-                # If not found locally, try pooch cache directory
-                import pooch
-
-                cache_dir = Path(pooch.os_cache("astro-brutus"))
-                cache_path = cache_dir / nn_name
-                if os.path.exists(str(cache_path)):
-                    nnfile = cache_path
-                    break
+            nnfile = find_nn_file()
 
         # Initialize neural network predictor
         try:

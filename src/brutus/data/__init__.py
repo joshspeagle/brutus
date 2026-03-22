@@ -19,7 +19,7 @@ from .download import (
 )
 
 # Import data loading functions
-from .loader import load_models, load_offsets
+from .loader import find_nn_file, load_models, load_offsets
 
 __all__ = [
     # Data downloading
@@ -30,6 +30,7 @@ __all__ = [
     "fetch_offsets",
     "fetch_nns",
     # Data loading
+    "find_nn_file",
     "load_models",
     "load_offsets",
 ]

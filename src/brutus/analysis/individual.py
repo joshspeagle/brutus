@@ -104,9 +104,6 @@ LOG_ZERO = -1e300
 # Minimum allowed scale factor to prevent division by zero or log(0).
 MIN_SCALE = 1e-20
 
-# Small epsilon for numerical stability in matrix operations and comparisons.
-EPS_NUMERIC = 1e-10
-
 
 # ============================================================================
 # Grid-based optimization functions
@@ -1470,7 +1467,7 @@ class BruteForce:
         # explodes for small s, causing MC samples to span many orders of
         # magnitude in distance.
         s_sel = scales[sel]  # Shape: (Nsel,)
-        s_sel = np.maximum(s_sel, 1e-20)  # Guard against zero/negative
+        s_sel = np.maximum(s_sel, MIN_SCALE)  # Guard against zero/negative
         two_s = 2.0 * s_sel
         four_s2 = 4.0 * s_sel**2
 
@@ -2337,26 +2334,20 @@ class BruteForce:
             dreds = np.zeros(Ndraws, dtype="float32")
             logwts = np.zeros(Ndraws, dtype="float32")
 
-            for i, idx_local in enumerate(idxs_local):
-                # Get MC samples for this model
-                mc_logwts = lnp_mc[idx_local]  # Shape: (Nmc,)
-                mc_logwts_max = np.max(mc_logwts)
-
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    mc_wt = np.exp(mc_logwts - mc_logwts_max)
-                    mc_wt_sum = mc_wt.sum()
-                    if mc_wt_sum > 0:
-                        mc_wt /= mc_wt_sum
-                    else:
-                        mc_wt = np.ones(len(mc_logwts)) / len(mc_logwts)
-
-                # Draw one MC sample
-                imc = rstate.choice(len(mc_logwts), p=mc_wt)
-                dists[i] = dist_mc[idx_local, imc]
-                reds[i] = a_mc[idx_local, imc]
-                dreds[i] = r_mc[idx_local, imc]
-                logwts[i] = mc_logwts[imc]
+            # Vectorized MC sample drawing using Gumbel-max trick.
+            # For each posterior draw, select one MC sample proportional
+            # to its weight — equivalent to rstate.choice(p=weights)
+            # but fully vectorized across all Ndraws at once.
+            all_mc_logwts = lnp_mc[idxs_local]  # (Ndraws, Nmc)
+            Nmc_actual = all_mc_logwts.shape[1]
+            gumbel_noise = -np.log(
+                -np.log(rstate.uniform(size=(Ndraws, Nmc_actual)) + 1e-300) + 1e-300
+            )
+            imc_all = np.argmax(all_mc_logwts + gumbel_noise, axis=1)
+            dists = dist_mc[idxs_local, imc_all].astype("float32")
+            reds = a_mc[idxs_local, imc_all].astype("float32")
+            dreds = r_mc[idxs_local, imc_all].astype("float32")
+            logwts = all_mc_logwts[np.arange(Ndraws), imc_all].astype("float32")
 
             return (
                 sidxs,

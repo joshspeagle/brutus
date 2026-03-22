@@ -113,48 +113,6 @@ class _function_wrapper:
 
 
 @jit(nopython=True, cache=True)
-def _min_eigenval_3x3_symmetric(A):
-    """
-    Fast approximation of minimum eigenvalue for 3x3 symmetric matrix.
-
-    Uses Gershgorin circle theorem for a quick lower bound estimate.
-    This is much faster than full eigenvalue computation and sufficient
-    for regularization purposes.
-    """
-    # Gershgorin circles give bounds on eigenvalues
-    # For each diagonal element, the eigenvalue is within radius = sum of off-diagonals
-
-    # Circle 1: center = A[0,0], radius = |A[0,1]| + |A[0,2]|
-    center1 = A[0, 0]
-    a01 = A[0, 1] if A[0, 1] >= 0 else -A[0, 1]  # numba-compatible abs
-    a02 = A[0, 2] if A[0, 2] >= 0 else -A[0, 2]
-    radius1 = a01 + a02
-    min1 = center1 - radius1
-
-    # Circle 2: center = A[1,1], radius = |A[1,0]| + |A[1,2]|
-    center2 = A[1, 1]
-    a10 = A[1, 0] if A[1, 0] >= 0 else -A[1, 0]
-    a12 = A[1, 2] if A[1, 2] >= 0 else -A[1, 2]
-    radius2 = a10 + a12
-    min2 = center2 - radius2
-
-    # Circle 3: center = A[2,2], radius = |A[2,0]| + |A[2,1]|
-    center3 = A[2, 2]
-    a20 = A[2, 0] if A[2, 0] >= 0 else -A[2, 0]
-    a21 = A[2, 1] if A[2, 1] >= 0 else -A[2, 1]
-    radius3 = a20 + a21
-    min3 = center3 - radius3
-
-    # Minimum eigenvalue is at least the smallest lower bound
-    result = min1
-    if min2 < result:
-        result = min2
-    if min3 < result:
-        result = min3
-    return result
-
-
-@jit(nopython=True, cache=True)
 def _matrix_det_3x3(A):
     """Compute 3x3 matrix determinant - numba compatible."""
     return (

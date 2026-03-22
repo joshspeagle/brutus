@@ -46,13 +46,13 @@ and are automatically downloaded when needed.
 """
 
 import sys
-from pathlib import Path
 
 import h5py
 import numpy as np
 
 # Import filter definitions from parent module
 from ..data.filters import FILTERS
+from ..data.loader import find_nn_file
 
 __all__ = ["FastNN", "FastNNPredictor"]
 
@@ -118,32 +118,8 @@ class FastNN:
         # Initialize values.
         if filters is None:
             filters = np.array(FILTERS)
-        # TODO: Extract shared file discovery logic to a utility function
         if nnfile is None:
-            import os
-
-            package_root = Path(
-                __file__
-            ).parent.parent.parent.parent  # Get the package root directory
-
-            # Try multiple possible names (nn_c3k.h5 is downloaded by pooch,
-            # nnMIST_BC.h5 is legacy name - they are the same file)
-            possible_names = ["nn_c3k.h5", "nnMIST_BC.h5"]
-
-            for nn_name in possible_names:
-                # Check local data directory first
-                nnfile = package_root / "data" / "DATAFILES" / nn_name
-                if os.path.exists(str(nnfile)):
-                    break
-
-                # If not found locally, try pooch cache directory
-                import pooch
-
-                cache_dir = Path(pooch.os_cache("astro-brutus"))
-                cache_path = cache_dir / nn_name
-                if os.path.exists(str(cache_path)):
-                    nnfile = cache_path
-                    break
+            nnfile = find_nn_file()
 
         # Read in NN data.
         if verbose:
