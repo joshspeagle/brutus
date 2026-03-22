@@ -289,10 +289,12 @@ def _invert_3x3_preconditioned(P, min_eigenval_threshold=1e-12):
         return C
 
     # Step 5: Symmetrize and regularize in normalized space.
-    # Gershgorin bounds are tight here since diagonals are ~O(1)
-    # and off-diagonals are bounded correlations.
+    # Use exact eigenvalues (not Gershgorin) because highly correlated
+    # parameters (ρ > 0.9, common for distance-extinction degeneracy)
+    # cause Gershgorin to give wildly pessimistic bounds that trigger
+    # massive false regularization.
     C_sym = 0.5 * (C_norm + C_norm.T)
-    min_eig = _min_eigenval_3x3_symmetric(C_sym)
+    min_eig = np.min(np.linalg.eigvalsh(C_sym))
     if min_eig < min_eigenval_threshold:
         shift = min_eigenval_threshold - min_eig
         C_sym[0, 0] += shift
