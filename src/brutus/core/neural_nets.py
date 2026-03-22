@@ -356,35 +356,8 @@ class FastNNPredictor(FastNN):
         self.filters = filters
         self.NFILT = len(filters)
 
-        # Set default neural network file
-        # TODO: Extract shared file discovery logic to a utility function
-        if nnfile is None:
-            import os
-
-            package_root = Path(
-                __file__
-            ).parent.parent.parent.parent  # Get the package root directory
-
-            # Try multiple possible names (nn_c3k.h5 is downloaded by pooch,
-            # nnMIST_BC.h5 is legacy name - they are the same file)
-            possible_names = ["nn_c3k.h5", "nnMIST_BC.h5"]
-
-            for nn_name in possible_names:
-                # Check local data directory first
-                nnfile = package_root / "data" / "DATAFILES" / nn_name
-                if os.path.exists(str(nnfile)):
-                    break
-
-                # If not found locally, try pooch cache directory
-                import pooch
-
-                cache_dir = Path(pooch.os_cache("astro-brutus"))
-                cache_path = cache_dir / nn_name
-                if os.path.exists(str(cache_path)):
-                    nnfile = cache_path
-                    break
-
         # Initialize parent class with neural network
+        # (file discovery is handled by FastNN.__init__)
         super().__init__(filters=filters, nnfile=nnfile, verbose=verbose)
 
     def sed(

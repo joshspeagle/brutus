@@ -75,6 +75,7 @@ Combined Galactic structure prior:
 ... )
 """
 
+import warnings
 from math import erf, exp, log, pi, sqrt
 
 import numpy as np
@@ -89,10 +90,8 @@ _SQRT2 = sqrt(2.0)
 
 
 def _logsumexp3(a, b, c):
-    """Fast logsumexp of 3 arrays. Avoids scipy overhead for this common case."""
-    mx = np.maximum(np.maximum(a, b), c)
-    result = mx + np.log(np.exp(a - mx) + np.exp(b - mx) + np.exp(c - mx))
-    return np.where(np.isfinite(mx), result, mx)
+    """Fast logsumexp of 3 arrays using numpy's logaddexp ufunc."""
+    return np.logaddexp(np.logaddexp(a, b), c)
 
 
 @jit(nopython=True, parallel=True, cache=True)
@@ -798,8 +797,6 @@ def logp_galactic_structure(
                 min_sigma,
             )
         except Exception as e:
-            import warnings
-
             warnings.warn(
                 f"Numba fused galactic prior failed, falling back to numpy: {e}",
                 RuntimeWarning,
@@ -892,8 +889,12 @@ def logp_galactic_structure(
                 feh_lnp = _logsumexp3(feh_lnp_thin, feh_lnp_thick, feh_lnp_halo)
                 logp += feh_lnp
                 components["feh"] = [feh_lnp_thin, feh_lnp_thick, feh_lnp_halo]
-            except (KeyError, IndexError, ValueError):
-                pass
+            except (KeyError, IndexError, ValueError) as e:
+                warnings.warn(
+                    f"Metallicity prior computation failed: {e}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
 
         # Age prior — fused computation
         if "loga" in labels.dtype.names:
@@ -932,8 +933,12 @@ def logp_galactic_structure(
                 age_lnp = _logsumexp3(age_lnp_thin, age_lnp_thick, age_lnp_halo)
                 logp += age_lnp
                 components["age"] = [age_lnp_thin, age_lnp_thick, age_lnp_halo]
-            except (KeyError, IndexError, ValueError):
-                pass
+            except (KeyError, IndexError, ValueError) as e:
+                warnings.warn(
+                    f"Age prior computation failed: {e}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
 
     if return_components:
         return logp, components

@@ -267,7 +267,8 @@ def cornerplot(
     parallax_kwargs["alpha"] = parallax_kwargs.get("alpha", 0.3)
 
     # Ignore age weights.
-    labels = [x for x in params.dtype.names if x != "agewt"]
+    if labels is None:
+        labels = [x for x in params.dtype.names if x != "agewt"]
 
     # Deal with 1D results.
     with warnings.catch_warnings():
@@ -353,9 +354,7 @@ def cornerplot(
             q = [0.5 - 0.5 * span[i], 0.5 + 0.5 * span[i]]
             span[i] = quantile(samples[i], q, weights=weights)
 
-    # Set labels
-    if labels is None:
-        labels = list(params.dtype.names)
+    # Append additional labels for extra dimensions
     labels.append("Av")
     labels.append("Rv")
     labels.append("Parallax")

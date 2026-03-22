@@ -153,85 +153,83 @@ def load_models(
         f = h5py.File(filepath, "r", libver="latest", swmr=True)
     except (OSError, ValueError):
         f = h5py.File(filepath, "r")
-    mag_coeffs_dataset = f["mag_coeffs"]
+    with f:
+        mag_coeffs_dataset = f["mag_coeffs"]
 
-    # Find which requested filters actually exist in the file
-    available_filters = list(mag_coeffs_dataset.dtype.names)
-    valid_filters = [filt for filt in filters if filt in available_filters]
+        # Find which requested filters actually exist in the file
+        available_filters = list(mag_coeffs_dataset.dtype.names)
+        valid_filters = [filt for filt in filters if filt in available_filters]
 
-    if verbose:
-        sys.stderr.write(
-            f"Reading entire dataset ({len(available_filters)} filters) once...\n"
+        if verbose:
+            sys.stderr.write(
+                f"Reading entire dataset ({len(available_filters)} filters) once...\n"
+            )
+
+        # Read the ENTIRE dataset once into memory (this is the key optimization!)
+        mag_coeffs = mag_coeffs_dataset[:]
+
+        if verbose:
+            sys.stderr.write(
+                f"Extracting {len(valid_filters)} requested filters from memory...\n"
+            )
+
+        # Pre-allocate array for only the valid filters
+        models = np.zeros((len(mag_coeffs), len(valid_filters), 3), dtype="float32")
+
+        # Extract each valid filter from the in-memory data (no more H5 I/O!)
+        for i, filt in enumerate(valid_filters):
+            try:
+                models[:, i] = mag_coeffs[filt]  # Extract from memory, not H5!
+            except KeyError:
+                pass
+
+        # Update filters list to only include the ones we actually loaded
+        filters = valid_filters
+
+        # Read in labels.
+        combined_labels = np.full(
+            len(models), np.nan, dtype=np.dtype([(n, np.float64) for n in labels])
         )
-
-    # Read the ENTIRE dataset once into memory (this is the key optimization!)
-    mag_coeffs = mag_coeffs_dataset[:]
-
-    if verbose:
-        sys.stderr.write(
-            f"Extracting {len(valid_filters)} requested filters from memory...\n"
-        )
-
-    # Pre-allocate array for only the valid filters
-    models = np.zeros((len(mag_coeffs), len(valid_filters), 3), dtype="float32")
-
-    # Extract each valid filter from the in-memory data (no more H5 I/O!)
-    for i, filt in enumerate(valid_filters):
+        label_mask = np.zeros(1, dtype=np.dtype([(n, np.bool_) for n in labels]))
         try:
-            models[:, i] = mag_coeffs[filt]  # Extract from memory, not H5!
+            # Grab "labels" (inputs).
+            flabels = f["labels"][:]
+            for n in flabels.dtype.names:
+                if n in labels:
+                    combined_labels[n] = flabels[n]
+                    label_mask[n] = True
         except KeyError:
             pass
-
-    # Update filters list to only include the ones we actually loaded
-    filters = valid_filters
-
-    # Read in labels.
-    combined_labels = np.full(
-        len(models), np.nan, dtype=np.dtype([(n, np.float64) for n in labels])
-    )
-    label_mask = np.zeros(1, dtype=np.dtype([(n, np.bool_) for n in labels]))
-    try:
-        # Grab "labels" (inputs).
-        flabels = f["labels"][:]
-        for n in flabels.dtype.names:
-            if n in labels:
-                combined_labels[n] = flabels[n]
-                label_mask[n] = True
-    except KeyError:
-        pass
-    try:
-        # Grab "parameters" (predictions from labels).
-        fparams = f["parameters"][:]
-        for n in fparams.dtype.names:
-            if n in labels:
-                combined_labels[n] = fparams[n]
-    except KeyError:
-        pass
+        try:
+            # Grab "parameters" (predictions from labels).
+            fparams = f["parameters"][:]
+            for n in fparams.dtype.names:
+                if n in labels:
+                    combined_labels[n] = fparams[n]
+        except KeyError:
+            pass
 
     # Remove extraneous/undefined labels.
     labels2 = [l for i, l in zip(combined_labels[0], labels) if ~np.isnan(i)]
 
     # Apply cuts.
     sel = np.ones(len(combined_labels), dtype="bool")
-    if include_ms and include_postms:
-        sel = np.ones(len(combined_labels), dtype="bool")
-    elif not include_ms and not include_postms:
+    if not include_ms and not include_postms:
         raise ValueError(
             "If you don't include the Main Sequence and "
             "Post-Main Sequence models you have nothing left!"
         )
-    elif include_postms:
+    elif include_postms and not include_ms:
         try:
             sel = combined_labels["eep"] > 454.0
         except KeyError:
             pass
-    elif include_ms:
+    elif include_ms and not include_postms:
         try:
             sel = combined_labels["eep"] <= 454.0
         except KeyError:
             pass
-    else:
-        raise RuntimeError("Something has gone horribly wrong!")
+    # else: include_ms and include_postms — sel stays all-True
 
     if not include_binaries and "smf" in labels2:
         try:
@@ -243,9 +241,6 @@ def load_models(
     # Compile results.
     combined_labels = combined_labels[labels2]
     label_mask = label_mask[labels2]
-
-    # Close file
-    f.close()
 
     return models[sel], combined_labels[sel], label_mask
 

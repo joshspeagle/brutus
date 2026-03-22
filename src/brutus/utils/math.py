@@ -431,8 +431,8 @@ def isPSD(A):
     if not np.allclose(A, A.T, rtol=1e-10, atol=1e-10):
         return False
 
-    # Check eigenvalues are non-negative
-    eigenvals = np.linalg.eigvals(A)
+    # Check eigenvalues are non-negative (eigvalsh is faster for symmetric matrices)
+    eigenvals = np.linalg.eigvalsh(A)
     return np.all(eigenvals >= -1e-10)  # Allow small numerical errors
 
 

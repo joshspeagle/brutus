@@ -1488,12 +1488,8 @@ class BruteForce:
         # inversion error at high condition numbers. Default: no shrinkage
         # (alpha=0), relying on the exact eigvalsh regularization in _inverse3.
         if precision_shrinkage > 0:
-            diag_P = np.zeros_like(icov_lnd)
-            for i in range(3):
-                diag_P[:, i, i] = icov_lnd[:, i, i]
-            icov_lnd = (
-                1.0 - precision_shrinkage
-            ) * icov_lnd + precision_shrinkage * diag_P
+            off_diag_mask = ~np.eye(3, dtype=bool)
+            icov_lnd[:, off_diag_mask] *= 1.0 - precision_shrinkage
 
         # Invert precision to get covariance in (ln d, Av, Rv)
         cov_lnd = _inverse3(icov_lnd, regularize=True)
@@ -1897,6 +1893,8 @@ class BruteForce:
         out = h5py.File(save_file, "w")
         out.create_dataset("labels", data=data_labels)
 
+        # TODO: Consolidate HDF5 dataset creation for streaming and batch modes
+        # into a shared specification dict to reduce duplication.
         if running_io:
             # Streaming mode: create datasets upfront, write as we go
             out.create_dataset(
