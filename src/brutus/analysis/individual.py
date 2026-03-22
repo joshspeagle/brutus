@@ -1505,10 +1505,11 @@ class BruteForce:
                 # Extract labels for selected models: shape (Nsel,)
                 labels_selected = dlabels[sel]
 
-                # Use np.repeat to repeat each label Nmc times: shape (Nmc * Nsel,)
-                # This creates: [label0, label0, ..., label0, label1, label1, ..., label1, ...]
-                #               |---- Nmc times ----|  |---- Nmc times ----|
-                labels_flat = np.repeat(labels_selected, Nmc)
+                # Use np.tile to repeat the label array Nmc times: shape (Nmc * Nsel,)
+                # This creates: [label0, label1, ..., labelN, label0, label1, ..., labelN, ...]
+                #               |---- MC sample 0 ----|  |---- MC sample 1 ----|
+                # which matches dist_mc.ravel() layout (Nmc, Nsel) in row-major order.
+                labels_flat = np.tile(labels_selected, Nmc)
 
                 # Evaluate prior for all distance-label pairs at once
                 lnp_gal_flat = lngalprior(dist_flat, coord, labels=labels_flat)
