@@ -103,12 +103,8 @@ Setting up nested sampling for 2-cloud model:
 import warnings
 
 import numpy as np
+from scipy.special import logsumexp
 from scipy.stats import truncnorm
-
-try:
-    from scipy.special import logsumexp
-except ImportError:
-    from scipy.misc import logsumexp
 
 __all__ = [
     "los_clouds_priortransform",

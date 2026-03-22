@@ -38,4 +38,19 @@ FILTERS = (
     + tess
 )
 
-__all__ = []
+__all__ = [
+    "FILTERS",
+    "gaia",
+    "sdss",
+    "ps",
+    "decam",
+    "tycho",
+    "bessell",
+    "tmass",
+    "ukidss",
+    "vista",
+    "wise",
+    "hipp",
+    "kepler",
+    "tess",
+]

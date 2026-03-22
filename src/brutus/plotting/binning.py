@@ -15,15 +15,11 @@ from functools import partial
 
 import numpy as np
 from scipy.ndimage import gaussian_filter as norm_kde
+from scipy.special import logsumexp
 
 from ..priors import logp_galactic_structure as gal_lnprior
 from ..priors import logp_parallax
 from ..utils.sampling import draw_sar
-
-try:
-    from scipy.special import logsumexp
-except ImportError:
-    from scipy.misc import logsumexp
 
 __all__ = ["bin_pdfs_distred"]
 
@@ -135,12 +131,7 @@ def bin_pdfs_distred(
     # Initialize values.
     nobjs, nsamps = data[0].shape
     if rstate is None:
-        try:
-            # Attempt to use intel-specific version.
-            rstate = np.random_intel
-        except AttributeError:
-            # Fall back to default if not present.
-            rstate = np.random
+        rstate = np.random
     if lndistprior is None:
         lndistprior = partial(gal_lnprior, R_solar=R_solar, Z_solar=Z_solar)
     if parallaxes is None:

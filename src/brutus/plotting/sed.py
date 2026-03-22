@@ -148,7 +148,7 @@ def posterior_predictive(
 
     # Generate figure.
     if fig is None:
-        fig, ax = fig, axes = plt.subplots(1, 1, figsize=(nfilt * 1.5, 10))
+        fig, ax = plt.subplots(1, 1, figsize=(nfilt * 1.5, 10))
     else:
         fig, ax = fig
 

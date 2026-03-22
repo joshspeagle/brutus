@@ -16,16 +16,12 @@ import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib.ticker import MaxNLocator, NullLocator, ScalarFormatter
 from scipy.ndimage import gaussian_filter as norm_kde
+from scipy.special import logsumexp
 
 from ..priors import logp_galactic_structure as gal_lnprior
 from ..priors import logp_parallax
 from ..utils.sampling import draw_sar, quantile
 from .utils import hist2d
-
-try:
-    from scipy.special import logsumexp
-except ImportError:
-    from scipy.misc import logsumexp
 
 str_type = str
 float_type = float
@@ -180,7 +176,7 @@ def cornerplot(
         This will show the median (0.5 quantile) along with the upper/lower
         bounds associated with the 0.025 and 0.975 (95%/2-sigma credible
         interval) quantiles.
-        Default is `True`.
+        Default is `False`.
 
     title_fmt : str, optional
         The format string for the quantiles provided in the title. Default is

@@ -55,14 +55,13 @@ Examples
 >>> icov = inverse3(cov, reg_val=1e-10)
 """
 
-from math import gamma, log
+from math import lgamma, log
 
 import numpy as np
 from numba import jit
 from scipy.special import erf
 
 __all__ = [
-    "_function_wrapper",
     "galactic_to_galactocentric_cyl",
     "inverse3",
     "isPSD",
@@ -455,7 +454,9 @@ def chisquare_logpdf(x, df, loc=0, scale=1):
         Input values.
 
     df : float
-        Degrees of freedom.
+        Degrees of freedom. Uses ``math.lgamma`` internally, so there is no
+        overflow risk for large ``df`` (unlike ``math.gamma`` which overflows
+        for ``df`` > ~340).
 
     loc : float, optional
         Offset of distribution. Default is 0.
@@ -482,7 +483,7 @@ def chisquare_logpdf(x, df, loc=0, scale=1):
         y = np.where(keys, 0.1, y)  # temporary value, will be set to -inf below
 
     # Compute log-pdf
-    ans = -log(2 ** (df / 2.0) * gamma(df / 2.0))
+    ans = -(df / 2.0) * log(2) - lgamma(df / 2.0)
     ans = ans + (df / 2.0 - 1.0) * np.log(y) - y / 2.0 - log(scale)
 
     if not is_scalar:
@@ -524,12 +525,10 @@ def truncnorm_pdf(x, a, b, loc=0.0, scale=1.0):
     _a = scale * a + loc
     _b = scale * b + loc
     xi = (x - loc) / scale
-    alpha = (_a - loc) / scale
-    beta = (_b - loc) / scale
 
     phix = np.exp(-0.5 * xi**2) / np.sqrt(2.0 * np.pi)
-    Phia = 0.5 * (1 + erf(alpha / np.sqrt(2)))
-    Phib = 0.5 * (1 + erf(beta / np.sqrt(2)))
+    Phia = 0.5 * (1 + erf(a / np.sqrt(2)))
+    Phib = 0.5 * (1 + erf(b / np.sqrt(2)))
 
     ans = phix / (scale * (Phib - Phia))
 
@@ -577,12 +576,10 @@ def truncnorm_logpdf(x, a, b, loc=0.0, scale=1.0):
     _b = scale * b + loc
 
     xi = (x - loc) / scale
-    alpha = (_a - loc) / scale
-    beta = (_b - loc) / scale
 
     lnphi = -np.log(np.sqrt(2 * np.pi)) - 0.5 * np.square(xi)
     lndenom = np.log(scale / 2.0) + np.log(
-        np.maximum(erf(beta / np.sqrt(2)) - erf(alpha / np.sqrt(2)), 1e-300)
+        np.maximum(erf(b / np.sqrt(2)) - erf(a / np.sqrt(2)), 1e-300)
     )
 
     ans = np.subtract(lnphi, lndenom)

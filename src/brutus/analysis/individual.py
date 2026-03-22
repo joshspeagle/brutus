@@ -73,11 +73,7 @@ from math import log
 import h5py
 import numpy as np
 from numba import jit
-
-try:
-    from scipy.special import logsumexp
-except ImportError:
-    from scipy.misc import logsumexp
+from scipy.special import logsumexp
 
 # Import StarGrid and SED utilities
 from ..core import StarGrid
@@ -1189,7 +1185,11 @@ class BruteForce:
             mags[~mclean], mags_var[~mclean] = 0.0, 1e50
 
         # Set default Gaussian priors if not provided
-        # These defaults are essentially flat over the allowed range
+        # These defaults are essentially flat over the allowed range.
+        # Default flow: fit(av_gauss=None) -> _fit(av_gauss=(0.0, 1e6))
+        # -> loglike_grid(av_gauss=(0.0, 1e6)) -> _get_sed_mle internal
+        # default (0.0, 1e6). The large std (1e6) makes the prior
+        # effectively flat over the allowed A(V) range.
         if av_gauss is None:
             av_gauss = (0.0, 1e6)
         if rv_gauss is None:

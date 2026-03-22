@@ -213,12 +213,7 @@ def draw_sar(
     (2, 100)
     """
     if rstate is None:
-        try:
-            # Attempt to use intel-specific version.
-            rstate = np.random_intel
-        except AttributeError:
-            # Fall back to default if not present.
-            rstate = np.random
+        rstate = np.random
 
     # Generate realizations for each (scale, av, rv, cov_sar) set.
     nsamps = len(scales)

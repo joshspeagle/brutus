@@ -12,15 +12,11 @@ import warnings
 
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.special import logsumexp
 
 from ..core.sed_utils import get_seds
 from ..utils.photometry import magnitude, phot_loglike
 from ..utils.sampling import quantile
-
-try:
-    from scipy.special import logsumexp
-except ImportError:
-    from scipy.misc import logsumexp
 
 
 def photometric_offsets(
@@ -191,9 +187,7 @@ def photometric_offsets(
     if fig is None:
         ncols = 5
         nrows = (nfilt - 1) // ncols + 1
-        fig, axes = fig, axes = plt.subplots(
-            nrows, ncols, figsize=(ncols * 6, nrows * 5)
-        )
+        fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 6, nrows * 5))
     else:
         fig, axes = fig
         nrows, ncols = axes.shape
@@ -336,8 +330,7 @@ def photometric_offsets_2d(
         the default behavior is to plot as a function of observed magnitude.
 
     y : `~numpy.ndarray` with shape `(Nobj)` or `(Nobj, Nsamps)`
-        Corresponding values to be plotted on the `x` axis. In not provided,
-        the default behavior is to plot as a function of observed magnitude.
+        Corresponding values to be plotted on the `y` axis.
 
     flux : bool, optional
         Whether the photometry provided is in fluxes (instead of magnitudes).
@@ -462,9 +455,7 @@ def photometric_offsets_2d(
     if fig is None:
         ncols = 5
         nrows = (nfilt - 1) // ncols + 1
-        fig, axes = fig, axes = plt.subplots(
-            nrows, ncols, figsize=(ncols * 15, nrows * 12)
-        )
+        fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 15, nrows * 12))
     else:
         fig, axes = fig
         nrows, ncols = axes.shape

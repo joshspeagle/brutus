@@ -10,7 +10,6 @@ throughout the codebase, now organized by functionality.
 
 # Mathematical functions
 from .math import (
-    _function_wrapper,
     chisquare_logpdf,
     galactic_to_galactocentric_cyl,
     inverse3,
@@ -42,7 +41,6 @@ __all__ = [
     "add_mag",
     "phot_loglike",
     # Mathematical functions
-    "_function_wrapper",
     "galactic_to_galactocentric_cyl",
     "inverse3",
     "isPSD",
