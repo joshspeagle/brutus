@@ -296,9 +296,10 @@ def hist2d(
         )
 
     # Plot the density map. This can't be plotted at the same time as the
-    # contour fills.
+    # contour fills. Use sqrt scaling to make low-density bins more visible.
     elif plot_density:
-        ax.pcolor(X, Y, H.max() - H.T, cmap=density_cmap)
+        H_scaled = np.sqrt(np.maximum(H, 0))
+        ax.pcolor(X, Y, H_scaled.max() - H_scaled.T, cmap=density_cmap)
 
     # Plot the contour edge colors.
     if plot_contours and not degenerate_data:

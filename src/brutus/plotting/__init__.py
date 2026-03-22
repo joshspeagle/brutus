@@ -14,6 +14,7 @@ from .corner import cornerplot
 from .distance import dist_vs_red
 from .offsets import photometric_offsets, photometric_offsets_2d
 from .sed import posterior_predictive
+from .summary import summary_plot
 from .utils import hist2d
 
 __all__ = [
@@ -25,6 +26,7 @@ __all__ = [
     "dist_vs_red",
     "cornerplot",
     "posterior_predictive",
+    "summary_plot",
     "photometric_offsets",
     "photometric_offsets_2d",
 ]
