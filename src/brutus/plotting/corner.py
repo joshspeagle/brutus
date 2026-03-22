@@ -10,6 +10,7 @@ posterior distributions.
 
 import copy
 import warnings
+from functools import partial
 
 import numpy as np
 from matplotlib import pyplot as plt
@@ -69,6 +70,8 @@ def cornerplot(
     verbose=False,
     fig=None,
     rstate=None,
+    R_solar=8.2,
+    Z_solar=0.025,
 ):
     """
     Generate a corner plot of the 1-D and 2-D marginalized posteriors.
@@ -261,7 +264,7 @@ def cornerplot(
     if parallax_kwargs is None:
         parallax_kwargs = dict()
     if lndistprior is None:
-        lndistprior = gal_lnprior
+        lndistprior = partial(gal_lnprior, R_solar=R_solar, Z_solar=Z_solar)
 
     # Set defaults.
     hist_kwargs["alpha"] = hist_kwargs.get("alpha", 0.6)
@@ -297,7 +300,10 @@ def cornerplot(
         # Regenerate distance and reddening samples from inputs.
         scales, avs, rvs, covs_sar = copy.deepcopy(data)
 
-        if lndistprior == gal_lnprior and coord is None:
+        _is_default_prior = lndistprior is gal_lnprior or (
+            hasattr(lndistprior, "func") and lndistprior.func is gal_lnprior
+        )
+        if _is_default_prior and coord is None:
             raise ValueError(
                 "`coord` must be passed if the default distance " "prior was used."
             )

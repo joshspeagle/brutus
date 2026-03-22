@@ -76,12 +76,10 @@ Combined Galactic structure prior:
 """
 
 import numpy as np
-from astropy import units
-from astropy.coordinates import CylindricalRepresentation as CylRep
-from astropy.coordinates import SkyCoord
 
-# Import utility function from brutus.utils
+# Import utility functions from brutus.utils
 from brutus.utils import truncnorm_logpdf
+from brutus.utils.math import galactic_to_galactocentric_cyl
 
 # Import scipy for logsumexp
 try:
@@ -539,14 +537,10 @@ def logp_galactic_structure(
         # coord is a tuple of (l, b) in degrees
         ell, b = coord[0], coord[1]
 
-    # Create coordinate arrays
-    ell = np.full_like(dists, ell)
-    b = np.full_like(dists, b)
-    coords = SkyCoord(
-        l=ell * units.deg, b=b * units.deg, distance=dists * units.kpc, frame="galactic"
+    # Convert to Galactocentric cylindrical coordinates using fast NumPy math
+    R, Z = galactic_to_galactocentric_cyl(
+        dists, ell, b, R_solar=R_solar, Z_solar=Z_solar
     )
-    coords_cyl = coords.galactocentric.cartesian.represent_as(CylRep)
-    R, Z = coords_cyl.rho.value, coords_cyl.z.value
 
     # Thin disk component
     logp_thin = logn_disk(

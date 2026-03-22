@@ -150,17 +150,20 @@ class TestDustMapBase:
         assert result == "test_result"
         dust_map.query.assert_called_once()
 
-        # Check that a SkyCoord was created
+        # Check that (l, b) array was passed directly (optimized path)
         coords_arg = dust_map.query.call_args[0][0]
-        assert hasattr(coords_arg, "l")
-        assert hasattr(coords_arg, "b")
+        assert isinstance(coords_arg, np.ndarray)
+        np.testing.assert_allclose(coords_arg[0, 0], 45.0)
+        np.testing.assert_allclose(coords_arg[0, 1], 30.0)
 
-        # Test with distance
+        # Test with distance (d is accepted but not used for HEALPix queries)
         dust_map.query.reset_mock()
         result = dust_map.query_gal(ell=45.0, b=30.0, d=1.5)
         assert result == "test_result"
         coords_arg = dust_map.query.call_args[0][0]
-        assert hasattr(coords_arg, "distance")
+        assert isinstance(coords_arg, np.ndarray)
+        np.testing.assert_allclose(coords_arg[0, 0], 45.0)
+        np.testing.assert_allclose(coords_arg[0, 1], 30.0)
 
     def test_dustmap_query_equ(self):
         """Test Equatorial coordinate query interface."""

@@ -67,6 +67,7 @@ Basic usage with grid-based fitting:
 import sys
 import time
 import warnings
+from functools import partial
 from math import log
 
 import h5py
@@ -952,6 +953,8 @@ class BruteForce:
         mag_max=50.0,
         merr_max=0.25,
         rstate=None,
+        R_solar=8.2,
+        Z_solar=0.025,
     ):
         """
         Pre-process data and initialize priors for fitting.
@@ -1041,7 +1044,9 @@ class BruteForce:
                 "default Galactic model prior."
             )
         if lngalprior is None:
-            lngalprior = logp_galactic_structure
+            lngalprior = partial(
+                logp_galactic_structure, R_solar=R_solar, Z_solar=Z_solar
+            )
 
         # Initialize dust prior
         if lndustprior is None and dustfile is not None:
@@ -1337,6 +1342,8 @@ class BruteForce:
         mem_lim=8000.0,
         rstate=None,
         apply_av_prior=True,
+        R_solar=8.2,
+        Z_solar=0.025,
         **kwargs,
     ):
         """
@@ -1487,7 +1494,9 @@ class BruteForce:
         # Prior evaluations - coordinate is fixed, so we can still optimize
         if coord is not None:
             if lngalprior is None:
-                lngalprior = logp_galactic_structure
+                lngalprior = partial(
+                    logp_galactic_structure, R_solar=R_solar, Z_solar=Z_solar
+                )
 
             # Galactic prior evaluation (FULLY VECTORIZED)
             # We have dist_mc shape (Nmc, Nsel) and need to evaluate for each model's labels
@@ -1608,6 +1617,8 @@ class BruteForce:
         running_io=True,
         mem_lim=8000.0,
         verbose=True,
+        R_solar=8.2,
+        Z_solar=0.025,
     ):
         """
         Fit all input models to the input data to compute log-posteriors.
@@ -1819,6 +1830,8 @@ class BruteForce:
             mag_max=mag_max,
             merr_max=merr_max,
             rstate=rstate,
+            R_solar=R_solar,
+            Z_solar=Z_solar,
         )
 
         (
@@ -1941,6 +1954,8 @@ class BruteForce:
                 mem_lim=mem_lim,
                 rstate=rstate,
                 return_distreds=save_dar_draws,
+                R_solar=R_solar,
+                Z_solar=Z_solar,
             )
 
             # Unpack results
@@ -2090,6 +2105,8 @@ class BruteForce:
         mem_lim=8000.0,
         rstate=None,
         return_distreds=True,
+        R_solar=8.2,
+        Z_solar=0.025,
     ):
         """
         Perform internal fitting for a single object.
@@ -2220,6 +2237,8 @@ class BruteForce:
             rvlim=rvlim,
             mem_lim=mem_lim,
             rstate=rstate,
+            R_solar=R_solar,
+            Z_solar=Z_solar,
         )
 
         # Unpack posterior results

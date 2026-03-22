@@ -63,6 +63,7 @@ from scipy.special import erf
 
 __all__ = [
     "_function_wrapper",
+    "galactic_to_galactocentric_cyl",
     "inverse3",
     "isPSD",
     "chisquare_logpdf",
@@ -535,3 +536,81 @@ def truncnorm_logpdf(x, a, b, loc=0.0, scale=1.0):
             ans = -np.inf
 
     return ans
+
+
+def galactic_to_galactocentric_cyl(dists, ell, b, R_solar=8.2, Z_solar=0.025):
+    """
+    Convert Galactic coordinates to Galactocentric cylindrical coordinates.
+
+    Converts heliocentric Galactic coordinates (l, b, distance) to
+    Galactocentric cylindrical coordinates (R, Z) using a simple rotation
+    and translation. This is a fast NumPy-based replacement for
+    astropy SkyCoord coordinate transformations.
+
+    Parameters
+    ----------
+    dists : array_like
+        Heliocentric distances in kpc.
+    ell : float or array_like
+        Galactic longitude in degrees.
+    b : float or array_like
+        Galactic latitude in degrees.
+    R_solar : float, optional
+        Solar Galactocentric radius in kpc. Default is 8.2.
+    Z_solar : float, optional
+        Solar height above the Galactic midplane in kpc. Default is 0.025.
+
+    Returns
+    -------
+    R : ndarray
+        Galactocentric cylindrical radius in kpc.
+    Z : ndarray
+        Height above/below the Galactic midplane in kpc.
+
+    Notes
+    -----
+    The conversion assumes:
+
+    - The Sun is located at ``(x, y, z) = (R_solar, 0, Z_solar)`` in
+      Galactocentric Cartesian coordinates.
+    - Galactic longitude ``l=0`` points toward the Galactic center.
+    - The Galactic midplane is at ``Z=0``.
+
+    The Cartesian positions relative to the Sun are:
+
+    .. math::
+
+        x = d \\cos(b) \\cos(l)
+
+        y = d \\cos(b) \\sin(l)
+
+    And the Galactocentric cylindrical coordinates are:
+
+    .. math::
+
+        R = \\sqrt{(x - R_\\odot)^2 + y^2}
+
+        Z = d \\sin(b) + Z_\\odot
+
+    See Also
+    --------
+    brutus.priors.galactic.logp_galactic_structure : Uses this for coordinate
+        conversion instead of astropy SkyCoord.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from brutus.utils.math import galactic_to_galactocentric_cyl
+    >>> R, Z = galactic_to_galactocentric_cyl(
+    ...     dists=np.array([1.0, 5.0]), ell=90.0, b=0.0
+    ... )
+    """
+    ell_rad = np.deg2rad(ell)
+    b_rad = np.deg2rad(b)
+    cos_b = np.cos(b_rad)
+    x = dists * cos_b * np.cos(ell_rad)
+    y = dists * cos_b * np.sin(ell_rad)
+    R = np.sqrt((x - R_solar) ** 2 + y**2)
+    Z = dists * np.sin(b_rad) + Z_solar
+
+    return R, Z

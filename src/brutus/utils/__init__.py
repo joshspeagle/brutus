@@ -12,6 +12,7 @@ throughout the codebase, now organized by functionality.
 from .math import (
     _function_wrapper,
     chisquare_logpdf,
+    galactic_to_galactocentric_cyl,
     inverse3,
     isPSD,
     truncnorm_logpdf,
@@ -42,6 +43,7 @@ __all__ = [
     "phot_loglike",
     # Mathematical functions
     "_function_wrapper",
+    "galactic_to_galactocentric_cyl",
     "inverse3",
     "isPSD",
     "chisquare_logpdf",

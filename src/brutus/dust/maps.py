@@ -82,7 +82,8 @@ class DustMap:
         b : float or astropy.units.Quantity
             Galactic latitude in degrees.
         d : float or astropy.units.Quantity, optional
-            Distance from the Solar System in kpc.
+            Distance from the Solar System in kpc. Not used by HEALPix-based
+            maps but accepted for API compatibility.
         **kwargs
             Additional keyword arguments passed to query.
 
@@ -90,19 +91,16 @@ class DustMap:
         -------
         Query results as implemented by subclasses.
         """
-        # Handle units
-        if not isinstance(ell, units.Quantity):
-            ell = ell * units.deg
-        if not isinstance(b, units.Quantity):
-            b = b * units.deg
+        # Extract numeric values from astropy Quantities if needed
+        if isinstance(ell, units.Quantity):
+            ell = ell.to(units.deg).value
+        if isinstance(b, units.Quantity):
+            b = b.to(units.deg).value
 
-        # Create coordinate object
-        if d is None:
-            coords = coordinates.SkyCoord(ell, b, frame="galactic")
-        else:
-            if not isinstance(d, units.Quantity):
-                d = d * units.kpc
-            coords = coordinates.SkyCoord(ell, b, distance=d, frame="galactic")
+        # Pass (l, b) arrays directly to query, avoiding SkyCoord overhead
+        ell = np.atleast_1d(np.asarray(ell, dtype=float))
+        b = np.atleast_1d(np.asarray(b, dtype=float))
+        coords = np.column_stack([ell, b])
 
         return self.query(coords, **kwargs)
 
