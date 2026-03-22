@@ -347,6 +347,57 @@ class TestBayestarMapReal:
         # (Note: this tests real Bayestar coverage behavior)
 
 
+class TestBayestarFindDataIdxOutOfCoverage:
+    """Test that _find_data_idx returns NaN (via -1 index) for out-of-coverage coords."""
+
+    def test_out_of_coverage_returns_negative_idx(self, bayestar_map):
+        """
+        Query coordinates well outside the Bayestar map coverage and
+        verify _find_data_idx returns -1 (not data from the last pixel).
+
+        Bayestar covers declination > -30 deg approximately.
+        Coordinates at very negative declinations (in Galactic coords,
+        near the south celestial pole) should not be found.
+        """
+        # Use coordinates likely outside Bayestar coverage.
+        # The south celestial pole in Galactic coords is roughly l~303, b~-27.
+        # Pick coordinates at extreme southern galactic latitudes that are
+        # less likely to be covered.
+        # Also try coordinates that correspond to dec << -30.
+        # l=0, b=-89 is near the south galactic pole (dec ~ -27 deg, might
+        # still be covered). Use equatorial coords to be sure:
+        # dec = -80 => convert to galactic and query.
+        south_eq = coord.SkyCoord(ra=0.0 * u.deg, dec=-80.0 * u.deg, frame="icrs")
+        gal = south_eq.galactic
+        l_arr = np.array([gal.l.deg])
+        b_arr = np.array([gal.b.deg])
+
+        pix_idx = bayestar_map._find_data_idx(l_arr, b_arr)
+
+        # This coordinate should NOT be in the map (dec = -80),
+        # so pix_idx should be -1.
+        assert pix_idx[0] == -1, (
+            f"Coordinate at dec=-80 (l={l_arr[0]:.1f}, b={b_arr[0]:.1f}) "
+            f"should return pix_idx=-1 (not found), got {pix_idx[0]}"
+        )
+
+    def test_out_of_coverage_query_returns_nan(self, bayestar_map):
+        """
+        Full query for coordinates outside coverage should return NaN
+        extinction values, not data from arbitrary pixels.
+        """
+        # dec = -80 is far outside Bayestar coverage
+        coords_south = coord.SkyCoord(ra=0.0 * u.deg, dec=-80.0 * u.deg, frame="icrs")
+
+        distances, av_mean, av_std = bayestar_map.query(coords_south)
+
+        # The returned extinction should be all NaN for an uncovered pixel
+        assert np.all(np.isnan(av_mean)), (
+            "Out-of-coverage query should return NaN extinction values, "
+            f"got non-NaN values: {av_mean[~np.isnan(av_mean)]}"
+        )
+
+
 class TestDustModuleIntegration:
     """Integration tests for the dust module."""
 

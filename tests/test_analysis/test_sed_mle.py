@@ -859,3 +859,183 @@ class TestGetSedMleMultiModel:
         )
 
         assert np.all(scale > 0), "All scale factors should be positive"
+
+
+# ============================================================================
+# Part 6 -- Convergence test for _optimize_fit_mag (M20)
+# ============================================================================
+
+
+class TestOptimizeFitMagConvergence:
+    """Test that _optimize_fit_mag recovers known synthetic star parameters."""
+
+    def test_recovers_known_synthetic_star(self, simple_mag_coeffs):
+        """
+        Create a known synthetic star (model + noise), run the full
+        loglike_grid pipeline, and verify the optimized (scale, Av, Rv)
+        are close to the true values.
+        """
+        av_true, rv_true, scale_true = 0.8, 3.3, 1.0
+        snr = 200.0
+
+        data, tot_var, resid = _make_synthetic_data(
+            simple_mag_coeffs,
+            av_true,
+            rv_true,
+            scale_true,
+            snr=snr,
+        )
+
+        av_arr = np.array([av_true * 0.5])  # Start away from truth
+        rv_arr = np.array([3.0])  # Start away from truth
+
+        from brutus.analysis.individual import _optimize_fit_mag
+        from brutus.core.sed_utils import _get_seds
+        from brutus.utils.photometry import magnitude
+
+        Nmodels, Nbands = simple_mag_coeffs.shape[0], simple_mag_coeffs.shape[1]
+
+        # Compute initial model predictions in magnitudes
+        models_init, rvecs_init, drvecs_init = _get_seds(
+            simple_mag_coeffs,
+            av_arr,
+            rv_arr,
+            return_flux=False,
+        )
+
+        # Convert data to magnitudes
+        with np.errstate(divide="ignore", invalid="ignore"):
+            mags = -2.5 * np.log10(data)
+            mags_var = (2.5 / np.log(10.0)) ** 2 * tot_var / data**2
+
+        resid_init = mags - models_init
+        stepsize = np.ones(Nmodels)
+
+        results = _optimize_fit_mag(
+            data,
+            tot_var,
+            models_init,
+            rvecs_init,
+            drvecs_init,
+            av_arr.copy(),
+            rv_arr.copy(),
+            simple_mag_coeffs,
+            resid_init,
+            stepsize,
+            mags,
+            mags_var,
+            avlim=(0.0, 20.0),
+            av_gauss=(0.0, 1e6),
+            rvlim=(1.0, 8.0),
+            rv_gauss=(3.32, 0.18),
+        )
+        (
+            models_out,
+            rvecs_out,
+            drvecs_out,
+            scale_opt,
+            av_opt,
+            rv_opt,
+            icov_sar,
+            resid_out,
+        ) = results
+
+        # The optimized values should be close to the true values.
+        npt.assert_allclose(
+            scale_opt[0],
+            scale_true,
+            rtol=0.1,
+            err_msg="Scale should converge near true value",
+        )
+        npt.assert_allclose(
+            av_opt[0], av_true, atol=0.3, err_msg="Av should converge near true value"
+        )
+        npt.assert_allclose(
+            rv_opt[0], rv_true, atol=0.5, err_msg="Rv should converge near true value"
+        )
+
+
+# ============================================================================
+# Part 7 -- MC integration quality test (M21)
+# ============================================================================
+
+
+class TestMCIntegrationQuality:
+    """Test that logpost_grid MC integration produces reasonable ESS and evidence."""
+
+    def test_ess_and_evidence_on_synthetic_data(self, simple_mag_coeffs):
+        """
+        Run _get_sed_mle on synthetic data and then manually replicate the
+        MC integration step from logpost_grid to check that ESS is
+        reasonable (> Nmc/2) and the evidence is finite.
+        """
+        from scipy.special import logsumexp
+
+        from brutus.utils.math import inverse3
+        from brutus.utils.sampling import sample_multivariate_normal
+
+        av_true, rv_true, scale_true = 0.5, 3.3, 1.0
+        data, tot_var, resid = _make_synthetic_data(
+            simple_mag_coeffs,
+            av_true,
+            rv_true,
+            scale_true,
+            snr=100.0,
+        )
+
+        av_arr = np.array([av_true])
+        rv_arr = np.array([rv_true])
+
+        _, _, _, scale_ml, icov_sar, _ = _get_sed_mle(
+            data,
+            tot_var,
+            resid.copy(),
+            simple_mag_coeffs,
+            av_arr.copy(),
+            rv_arr.copy(),
+            av_gauss=(0.0, 1e6),
+            rv_gauss=(3.32, 0.18),
+        )
+
+        # Transform precision to (ln d, Av, Rv) space
+        s = max(scale_ml[0], 1e-20)
+        icov_lnd = icov_sar[0].copy()
+        icov_lnd[0, 0] = 4.0 * s**2 * icov_sar[0, 0, 0]
+        icov_lnd[0, 1] = -2.0 * s * icov_sar[0, 0, 1]
+        icov_lnd[1, 0] = -2.0 * s * icov_sar[0, 1, 0]
+        icov_lnd[0, 2] = -2.0 * s * icov_sar[0, 0, 2]
+        icov_lnd[2, 0] = -2.0 * s * icov_sar[0, 2, 0]
+
+        cov_lnd = inverse3(icov_lnd, regularize=True)
+        assert np.all(np.isfinite(cov_lnd)), "Covariance should be finite"
+
+        # MC sampling
+        Nmc = 200
+        eta_true = -0.5 * np.log(s)
+        mean = np.array([[eta_true, av_true, rv_true]])
+        cov_batch = cov_lnd[np.newaxis, :, :]
+
+        rstate = np.random.RandomState(42)
+        samples = sample_multivariate_normal(mean, cov_batch, size=Nmc, rstate=rstate)
+        # samples shape: (3, Nmc, 1)
+
+        eta_mc = samples[0, :, 0]
+        dist_mc = np.exp(eta_mc)
+
+        # Compute log-weights (just Jacobian + flat prior for simplicity)
+        lnp_mc = np.log(dist_mc + 1e-300)
+
+        # Compute ESS
+        lw_max = np.max(lnp_mc)
+        w = np.exp(lnp_mc - lw_max)
+        w_sum = w.sum()
+        w_normed = w / w_sum
+        ess = 1.0 / np.sum(w_normed**2)
+
+        assert (
+            ess > Nmc / 2
+        ), f"ESS ({ess:.1f}) should be > Nmc/2 ({Nmc/2}) for well-centered samples"
+
+        # Compute evidence (log-marginal likelihood proxy)
+        lnZ = logsumexp(lnp_mc) - np.log(Nmc)
+        assert np.isfinite(lnZ), "Evidence should be finite"

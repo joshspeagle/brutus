@@ -302,7 +302,7 @@ def _invert_3x3_preconditioned(P, min_eigenval_threshold=1e-12):
         C_sym[2, 2] += shift
         C_norm = C_sym
 
-    # Step 5: Transform back to original parameter space
+    # Step 6: Transform back to original parameter space
     # C_original = D^{-1} C_norm D^{-1}
     C = np.empty((3, 3))
     for i in range(3):
@@ -362,7 +362,7 @@ def _batch_invert_3x3_preconditioned(P_batch, min_eigenval_threshold=1e-12):
     # Use np.linalg.eigvalsh on the entire batch at once
     eigvals = np.linalg.eigvalsh(C_sym)  # (N, 3), sorted ascending
     min_eigs = eigvals[:, 0]  # (N,)
-    needs_reg = min_eigs < min_eigenval_threshold
+    needs_reg = (min_eigs < min_eigenval_threshold) & (~bad)
     if np.any(needs_reg):
         shifts = min_eigenval_threshold - min_eigs[needs_reg]
         C_sym[needs_reg, 0, 0] += shifts
@@ -506,10 +506,12 @@ def truncnorm_pdf(x, a, b, loc=0.0, scale=1.0):
         Input values.
 
     a : float
-        Lower cutoff of normal distribution.
+        Lower bound in standardized units. The actual lower cutoff
+        in data space is ``scale * a + loc``.
 
     b : float
-        Upper cutoff of normal distribution.
+        Upper bound in standardized units. The actual upper cutoff
+        in data space is ``scale * b + loc``.
 
     loc : float, optional
         Mean of normal distribution. Default is 0.0.
@@ -556,10 +558,12 @@ def truncnorm_logpdf(x, a, b, loc=0.0, scale=1.0):
         Input values.
 
     a : float
-        Lower cutoff of normal distribution.
+        Lower bound in standardized units. The actual lower cutoff
+        in data space is ``scale * a + loc``.
 
     b : float
-        Upper cutoff of normal distribution.
+        Upper bound in standardized units. The actual upper cutoff
+        in data space is ``scale * b + loc``.
 
     loc : float, optional
         Mean of normal distribution. Default is 0.0.

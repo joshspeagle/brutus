@@ -91,7 +91,8 @@ _SQRT2 = sqrt(2.0)
 def _logsumexp3(a, b, c):
     """Fast logsumexp of 3 arrays. Avoids scipy overhead for this common case."""
     mx = np.maximum(np.maximum(a, b), c)
-    return mx + np.log(np.exp(a - mx) + np.exp(b - mx) + np.exp(c - mx))
+    result = mx + np.log(np.exp(a - mx) + np.exp(b - mx) + np.exp(c - mx))
+    return np.where(np.isfinite(mx), result, mx)
 
 
 @jit(nopython=True, parallel=True, cache=True)
@@ -234,6 +235,8 @@ def _galactic_prior_fused(
         # Age prior
         if has_loga:
             age_val = 10.0 ** loga_arr[i] / 1e9  # Gyr
+            if not has_feh:
+                feh_lnp = 0.0
             ln_w_thin = lnp_thin - (logp_total - feh_lnp if has_feh else logp_total)
             ln_w_thick = lnp_thick - (logp_total - feh_lnp if has_feh else logp_total)
             ln_w_halo = lnp_halo - (logp_total - feh_lnp if has_feh else logp_total)
@@ -794,8 +797,14 @@ def logp_galactic_structure(
                 max_sigma,
                 min_sigma,
             )
-        except Exception:
-            pass  # Fall through to numpy path on any numba error
+        except Exception as e:
+            import warnings
+
+            warnings.warn(
+                f"Numba fused galactic prior failed, falling back to numpy: {e}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
     # Thin disk component
     logp_thin = logn_disk(

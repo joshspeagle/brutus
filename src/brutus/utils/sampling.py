@@ -219,12 +219,16 @@ def draw_sar(
     nsamps = len(scales)
     sdraws, adraws, rdraws = np.zeros((3, nsamps, ndraws))
 
+    max_attempts = 10000
+
     for i, (s, a, r, c) in enumerate(zip(scales, avs, rvs, covs_sar)):
         s_chunks, a_chunks, r_chunks = [], [], []
         n_collected = 0
+        n_attempts = 0
 
         # Loop in case a significant chunk of draws are out-of-bounds.
         while n_collected < ndraws:
+            n_attempts += 1
             # Draw samples.
             s_mc, a_mc, r_mc = rstate.multivariate_normal([s, a, r], c, size=ndraws).T
             # Flag draws that are out of bounds.
@@ -243,13 +247,41 @@ def draw_sar(
             r_chunks.append(r_mc)
             n_collected += len(s_mc)
 
-        # Concatenate and cull any extra points.
-        s_temp = np.concatenate(s_chunks)
-        a_temp = np.concatenate(a_chunks)
-        r_temp = np.concatenate(r_chunks)
-        sdraws[i] = s_temp[:ndraws]
-        adraws[i] = a_temp[:ndraws]
-        rdraws[i] = r_temp[:ndraws]
+            if n_attempts >= max_attempts:
+                import warnings
+
+                warnings.warn(
+                    f"draw_sar: only collected {n_collected}/{ndraws} "
+                    f"in-bounds samples after {max_attempts} attempts for "
+                    f"sample {i}. Padding with mean values.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                break
+
+        # Concatenate collected samples.
+        if n_collected > 0:
+            s_temp = np.concatenate(s_chunks)
+            a_temp = np.concatenate(a_chunks)
+            r_temp = np.concatenate(r_chunks)
+        else:
+            s_temp = np.array([])
+            a_temp = np.array([])
+            r_temp = np.array([])
+
+        # If we have enough, cull extras; otherwise pad with mean values.
+        if n_collected >= ndraws:
+            sdraws[i] = s_temp[:ndraws]
+            adraws[i] = a_temp[:ndraws]
+            rdraws[i] = r_temp[:ndraws]
+        else:
+            sdraws[i, :n_collected] = s_temp[:n_collected]
+            adraws[i, :n_collected] = a_temp[:n_collected]
+            rdraws[i, :n_collected] = r_temp[:n_collected]
+            # Pad remaining slots with the mean values.
+            sdraws[i, n_collected:] = s
+            adraws[i, n_collected:] = a
+            rdraws[i, n_collected:] = r
 
     return sdraws, adraws, rdraws
 

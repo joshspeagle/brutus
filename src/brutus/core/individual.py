@@ -216,6 +216,7 @@ class EEPTracks(object):
         self.logg_idx = np.where(np.array(self.predictions) == "logg")[0][0]
 
         # Set default file path
+        # TODO: Extract shared file discovery logic to a utility function
         if mistfile is None:
             package_root = Path(__file__).parent.parent.parent.parent
             mistfile = package_root / "data" / "DATAFILES" / "MIST_1.2_EEPtrk.h5"

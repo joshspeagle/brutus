@@ -486,6 +486,53 @@ class TestPosteriorPredictive:
         plt.close(fig)
 
 
+class TestSummaryPlot:
+    """Basic smoke test for summary_plot."""
+
+    def test_summary_plot_returns_fig_axes_ax_sed(self):
+        """Test that summary_plot returns (fig, axes, ax_sed) without error."""
+        from unittest.mock import patch
+
+        from brutus.plotting.summary import summary_plot
+
+        np.random.seed(42)
+        nmodels, nfilt, ncoeff = 20, 5, 3
+        n_samples = 25
+
+        models = np.random.uniform(10, 20, (nmodels, nfilt, ncoeff))
+        idxs = np.random.choice(nmodels, n_samples, replace=True)
+        reds = np.random.exponential(0.3, n_samples)
+        dreds = np.random.normal(3.3, 0.2, n_samples)
+        dists = np.random.lognormal(np.log(1.5), 0.4, n_samples)
+
+        # Create structured params array (corner plot needs named fields)
+        dtype = np.dtype(
+            [("mass", "f4"), ("age", "f4"), ("feh", "f4"), ("agewt", "f4")]
+        )
+        params = np.empty(nmodels, dtype=dtype)
+        params["mass"] = np.random.uniform(0.5, 2.0, nmodels)
+        params["age"] = np.random.uniform(0.1, 10.0, nmodels)
+        params["feh"] = np.random.uniform(-2.0, 0.5, nmodels)
+        params["agewt"] = np.ones(nmodels)
+
+        mock_seds = np.random.uniform(14, 18, (n_samples, nfilt))
+
+        with patch("brutus.plotting.sed.get_seds", return_value=mock_seds):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                fig, axes, ax_sed = summary_plot(
+                    models, idxs, reds, dreds, dists, params
+                )
+
+        assert fig is not None
+        assert axes is not None
+        assert ax_sed is not None
+        assert hasattr(fig, "subplots_adjust")  # Figure-like object
+        assert hasattr(ax_sed, "plot")  # Axes-like object
+
+        plt.close(fig)
+
+
 class TestPosteriorPredictiveIntegration:
     """Integration tests for posterior_predictive with realistic scenarios."""
 

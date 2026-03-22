@@ -203,6 +203,7 @@ def photometric_offsets(
             & (np.all(np.isfinite(magobs), axis=1))
         )
         # Compute weights from ignoring current band.
+        # TODO: vectorize this loop over objects for performance
         lnl = np.array(
             [
                 phot_loglike(
@@ -469,7 +470,7 @@ def photometric_offsets_2d(
         ycent = 0.5 * (ybins[1:] + ybins[:-1])
         bounds = [xcent[0], xcent[-1], ycent[0], ycent[-1]]  # default size
         # Digitize values.
-        xloc, yloc = np.digitize(x, xbins), np.digitize(y, ybins)
+        xloc, yloc = np.digitize(x, xbins) - 1, np.digitize(y, ybins) - 1
         # Compute selection ignoring current band.
         mtemp = np.array(mask)
         mtemp[:, i] = False
@@ -479,6 +480,7 @@ def photometric_offsets_2d(
             & (np.all(np.isfinite(magobs), axis=1))
         )
         # Compute weights from ignoring current band.
+        # TODO: vectorize this loop over objects for performance
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")  # ignore bad values
             lnl = np.array(

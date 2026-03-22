@@ -135,8 +135,7 @@ def _optimize_fit_mag(
     init_thresh=5e-3,
 ):
     """
-    Optimize the distance and reddening between the models and the data using.
-
+    Optimize the distance and reddening between the models and the data using
     the gradient in **magnitudes**. This executes multiple `(Av, Rv)` updates.
 
     Parameters
@@ -560,10 +559,15 @@ def _get_sed_mle(
     data, tot_var, resid, mag_coeffs, av, rv, av_gauss=(0.0, 1e6), rv_gauss=(3.32, 0.18)
 ):
     """
-    Optimize the distance and reddening between the models and the data using.
+    Recompute model SEDs, derive the MLE scale factor, compute residuals,
+    and build the Fisher information (precision) matrix.
 
-    the gradient in **flux densities**. This executes **only one**
-    `(Av, Rv)` update.
+    Given current `(Av, Rv)` values for each model, this function
+    regenerates the reddened SEDs from the magnitude polynomial
+    coefficients, computes the maximum-likelihood scale factor
+    (equivalently distance) for each model, forms the residuals
+    between the scaled model and data, and assembles the 3x3 Fisher
+    information (precision) matrix in `(scale, Av, Rv)` space.
 
     Parameters
     ----------
@@ -1244,7 +1248,7 @@ class BruteForce:
                 if np.isfinite(parallax) and np.isfinite(parallax_err):
                     with warnings.catch_warnings():
                         warnings.simplefilter("ignore")
-                        par = np.sqrt(scale)
+                        par = np.sqrt(scale)  # sqrt(scale) = 1/d_kpc = parallax_mas
                         chi2_p = (par - parallax) ** 2 / parallax_err**2
                         lnl_p = lnl - 0.5 * chi2_p
 
@@ -2297,7 +2301,9 @@ class BruteForce:
             if np.isfinite(parallax) and np.isfinite(parallax_err):
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    par_pred = np.sqrt(scales_all)
+                    par_pred = np.sqrt(
+                        scales_all
+                    )  # sqrt(scale) = 1/d_kpc = parallax_mas
                     chi2_with_par += (par_pred - parallax) ** 2 / parallax_err**2
                     Ndim_out += 1
 

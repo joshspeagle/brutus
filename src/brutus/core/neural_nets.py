@@ -118,6 +118,7 @@ class FastNN(object):
         # Initialize values.
         if filters is None:
             filters = np.array(FILTERS)
+        # TODO: Extract shared file discovery logic to a utility function
         if nnfile is None:
             import os
 
@@ -356,6 +357,7 @@ class FastNNPredictor(FastNN):
         self.NFILT = len(filters)
 
         # Set default neural network file
+        # TODO: Extract shared file discovery logic to a utility function
         if nnfile is None:
             import os
 

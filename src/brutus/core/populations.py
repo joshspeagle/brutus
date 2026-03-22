@@ -161,6 +161,7 @@ class Isochrone(object):
     def __init__(self, mistfile=None, predictions=None, verbose=True):
 
         # Set default file path
+        # TODO: Extract shared file discovery logic to a utility function
         if mistfile is None:
             package_root = Path(__file__).parent.parent.parent.parent
             mistfile = package_root / "data" / "DATAFILES" / "MIST_1.2_iso_vvcrit0.0.h5"
@@ -549,6 +550,7 @@ class StellarPop(object):
         self.filters = filters
 
         # Set default neural network file
+        # TODO: Extract shared file discovery logic to a utility function
         if nnfile is None:
             import os
 
@@ -834,8 +836,15 @@ class StellarPop(object):
         mini_mask = np.where(np.isfinite(mini))[0]
         if len(mini_mask) > 0:
             try:
+                mini_valid = mini[mini_mask]
+                eep_valid = eep[mini_mask]
+                sort_idx = np.argsort(mini_valid)
                 eep2 = np.interp(
-                    mini2, mini[mini_mask], eep[mini_mask], left=np.nan, right=np.nan
+                    mini2,
+                    mini_valid[sort_idx],
+                    eep_valid[sort_idx],
+                    left=np.nan,
+                    right=np.nan,
                 )
             except Exception:
                 eep2 = np.full_like(eep, np.nan)

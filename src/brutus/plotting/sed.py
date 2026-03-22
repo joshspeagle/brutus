@@ -69,7 +69,7 @@ def posterior_predictive(
 
     data_err : `~numpy.ndarray` of shape `(Nfilt)`
         Associated 1-sigma errors on the data values. If provided,
-        these will be overplotted as **3-sigma** error bars.
+        these will be overplotted as `psig`-sigma error bars (default: 2-sigma).
 
     data_mask : `~numpy.ndarray` of shape `(Nfilt)`
         Binary mask (0/1) indicating whether the data value was observed.
@@ -91,13 +91,6 @@ def posterior_predictive(
     labels : iterable with shape `(ndim,)`, optional
         A list of names corresponding to each filter. If not provided,
         an ascending set of integers `(0, 1, 2, ...)` will be used.
-
-    max_n_ticks : int, optional
-        Maximum number of ticks allowed. Default is `5`.
-
-    top_ticks : bool, optional
-        Whether to label the top (rather than bottom) ticks. Default is
-        `False`.
 
     rstate : `~numpy.random.RandomState`, optional
         `~numpy.random.RandomState` instance.
@@ -158,7 +151,7 @@ def posterior_predictive(
         idxs = rstate.choice(nsamps, p=weights / weights.sum(), size=nsamps * 10)
     else:
         idxs = np.arange(nsamps)
-    parts = ax.violinplot(seds, positions=np.arange(nfilt), showextrema=False)
+    parts = ax.violinplot(seds[idxs], positions=np.arange(nfilt), showextrema=False)
     for pc in parts["bodies"]:
         pc.set_facecolor(vcolor)
         pc.set_edgecolor("none")
