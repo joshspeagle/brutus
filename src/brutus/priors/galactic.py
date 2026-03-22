@@ -75,17 +75,222 @@ Combined Galactic structure prior:
 ... )
 """
 
+from math import erf, exp, log, pi, sqrt
+
 import numpy as np
+from numba import jit, prange
 
 # Import utility functions from brutus.utils
 from brutus.utils import truncnorm_logpdf
 from brutus.utils.math import galactic_to_galactocentric_cyl
+
+_LOG_2PI = log(2.0 * pi)
+_SQRT2 = sqrt(2.0)
 
 
 def _logsumexp3(a, b, c):
     """Fast logsumexp of 3 arrays. Avoids scipy overhead for this common case."""
     mx = np.maximum(np.maximum(a, b), c)
     return mx + np.log(np.exp(a - mx) + np.exp(b - mx) + np.exp(c - mx))
+
+
+@jit(nopython=True, parallel=True, cache=True)
+def _galactic_prior_fused(
+    dists,
+    R_arr,
+    Z_arr,
+    feh_arr,
+    loga_arr,
+    has_feh,
+    has_loga,
+    R_solar,
+    Z_solar,
+    # Thin disk
+    R_thin,
+    Z_thin,
+    Rs_thin,
+    f_thin,
+    # Thick disk
+    R_thick,
+    Z_thick,
+    Rs_thick,
+    f_thick,
+    # Halo
+    Rs_halo,
+    eta_halo,
+    q_halo_ctr,
+    q_halo_inf,
+    r_q_halo,
+    f_halo,
+    # Metallicity
+    feh_thin_mean,
+    feh_thin_sigma,
+    feh_thick_mean,
+    feh_thick_sigma,
+    feh_halo_mean,
+    feh_halo_sigma,
+    # Age
+    max_age,
+    min_age,
+    feh_age_ctr,
+    feh_age_scale,
+    nsigma_from_max_age,
+    max_sigma_age,
+    min_sigma_age,
+):
+    """Fused galactic prior: computes density + vol + met + age in one pass."""
+    N = len(dists)
+    logp_out = np.empty(N)
+
+    # Solar halo normalization (scalar, computed once)
+    r_solar = sqrt(R_solar**2 + Z_solar**2)
+    r_prime_solar = sqrt(r_solar**2 + r_q_halo**2)
+    q_solar = q_halo_inf - (q_halo_inf - q_halo_ctr) * exp(
+        1.0 - r_prime_solar / r_q_halo
+    )
+    R_eff_solar_halo = sqrt(R_solar**2 + (Z_solar / q_solar) ** 2 + Rs_halo**2)
+
+    for i in prange(N):
+        d = dists[i]
+        R = R_arr[i]
+        Z = Z_arr[i]
+
+        # Volume factor
+        vol = 2.0 * log(d + 1e-300)
+
+        # Thin disk
+        R_eff_thin = sqrt(R**2 + Rs_thin**2)
+        lnp_thin = (
+            -(R_eff_thin - R_solar) / R_thin - (abs(Z) - abs(Z_solar)) / Z_thin + vol
+        )
+
+        # Thick disk
+        R_eff_thick = sqrt(R**2 + Rs_thick**2)
+        lnp_thick = (
+            -(R_eff_thick - R_solar) / R_thick
+            - (abs(Z) - abs(Z_solar)) / Z_thick
+            + vol
+            + log(f_thick)
+        )
+
+        # Halo
+        r = sqrt(R**2 + Z**2)
+        r_prime = sqrt(r**2 + r_q_halo**2)
+        q = q_halo_inf - (q_halo_inf - q_halo_ctr) * exp(1.0 - r_prime / r_q_halo)
+        R_eff_halo = sqrt(R**2 + (Z / q) ** 2 + Rs_halo**2)
+        lnp_halo = -eta_halo * log(R_eff_halo / R_eff_solar_halo) + vol + log(f_halo)
+
+        # logsumexp3
+        mx = max(lnp_thin, max(lnp_thick, lnp_halo))
+        logp_total = mx + log(
+            exp(lnp_thin - mx) + exp(lnp_thick - mx) + exp(lnp_halo - mx)
+        )
+
+        # Metallicity prior
+        if has_feh:
+            feh_val = feh_arr[i]
+            # Component membership
+            ln_w_thin = lnp_thin - logp_total
+            ln_w_thick = lnp_thick - logp_total
+            ln_w_halo = lnp_halo - logp_total
+
+            # Gaussian logpdf for each component
+            feh_lnp_thin = (
+                -0.5
+                * (
+                    (feh_val - feh_thin_mean) ** 2 / feh_thin_sigma**2
+                    + _LOG_2PI
+                    + 2 * log(feh_thin_sigma)
+                )
+                + ln_w_thin
+            )
+            feh_lnp_thick = (
+                -0.5
+                * (
+                    (feh_val - feh_thick_mean) ** 2 / feh_thick_sigma**2
+                    + _LOG_2PI
+                    + 2 * log(feh_thick_sigma)
+                )
+                + ln_w_thick
+            )
+            feh_lnp_halo = (
+                -0.5
+                * (
+                    (feh_val - feh_halo_mean) ** 2 / feh_halo_sigma**2
+                    + _LOG_2PI
+                    + 2 * log(feh_halo_sigma)
+                )
+                + ln_w_halo
+            )
+
+            mx2 = max(feh_lnp_thin, max(feh_lnp_thick, feh_lnp_halo))
+            feh_lnp = mx2 + log(
+                exp(feh_lnp_thin - mx2)
+                + exp(feh_lnp_thick - mx2)
+                + exp(feh_lnp_halo - mx2)
+            )
+            logp_total += feh_lnp
+
+        # Age prior
+        if has_loga:
+            age_val = 10.0 ** loga_arr[i] / 1e9  # Gyr
+            ln_w_thin = lnp_thin - (logp_total - feh_lnp if has_feh else logp_total)
+            ln_w_thick = lnp_thick - (logp_total - feh_lnp if has_feh else logp_total)
+            ln_w_halo = lnp_halo - (logp_total - feh_lnp if has_feh else logp_total)
+
+            # Compute truncated normal for each component
+            age_lnp_total = -1e300
+            for comp_idx in range(3):
+                if comp_idx == 0:
+                    fm = feh_thin_mean
+                    ln_w = ln_w_thin
+                elif comp_idx == 1:
+                    fm = feh_thick_mean
+                    ln_w = ln_w_thick
+                else:
+                    fm = feh_halo_mean
+                    ln_w = ln_w_halo
+
+                age_mean = (max_age - min_age) / (
+                    1.0 + exp((fm - feh_age_ctr) / feh_age_scale)
+                ) + min_age
+                age_sigma = (max_age - age_mean) / nsigma_from_max_age
+                if age_sigma < min_sigma_age:
+                    age_sigma = min_sigma_age
+                if age_sigma > max_sigma_age:
+                    age_sigma = max_sigma_age
+
+                xi = (age_val - age_mean) / age_sigma
+                alpha = (min_age - age_mean) / age_sigma
+                beta = (max_age - age_mean) / age_sigma
+                lnphi = -0.5 * (_LOG_2PI + xi * xi)
+                denom = max(erf(beta / _SQRT2) - erf(alpha / _SQRT2), 1e-300)
+                lndenom = log(age_sigma / 2.0) + log(denom)
+                age_comp = lnphi - lndenom + ln_w
+
+                # Bounds check
+                if age_val < min_age or age_val > max_age:
+                    age_comp = -1e300
+
+                # Accumulate logsumexp
+                if age_comp > age_lnp_total:
+                    age_lnp_total = (
+                        age_comp + log(1.0 + exp(age_lnp_total - age_comp))
+                        if age_lnp_total > -1e200
+                        else age_comp
+                    )
+                else:
+                    age_lnp_total = (
+                        age_lnp_total + log(1.0 + exp(age_comp - age_lnp_total))
+                        if age_comp > -1e200
+                        else age_lnp_total
+                    )
+
+            logp_total += age_lnp_total
+
+        logp_out[i] = logp_total
+
+    return logp_out
 
 
 __all__ = [
@@ -543,6 +748,55 @@ def logp_galactic_structure(
         dists, ell, b, R_solar=R_solar, Z_solar=Z_solar
     )
 
+    # Fast path: use fused numba kernel when labels are provided and
+    # return_components is not needed. Eliminates ~15 temporary arrays.
+    if labels is not None and not return_components and len(dists) > 1000:
+        has_feh = "feh" in labels.dtype.names
+        has_loga = "loga" in labels.dtype.names
+        feh_arr = labels["feh"] if has_feh else np.empty(0)
+        loga_arr = labels["loga"] if has_loga else np.empty(0)
+        try:
+            return _galactic_prior_fused(
+                dists,
+                R,
+                Z,
+                feh_arr,
+                loga_arr,
+                has_feh,
+                has_loga,
+                R_solar,
+                Z_solar,
+                R_thin,
+                Z_thin,
+                Rs_thin,
+                1.0,
+                R_thick,
+                Z_thick,
+                Rs_thick,
+                f_thick,
+                Rs_halo,
+                eta_halo,
+                q_halo_ctr,
+                q_halo_inf,
+                r_q_halo,
+                f_halo,
+                feh_thin,
+                feh_thin_sigma,
+                feh_thick,
+                feh_thick_sigma,
+                feh_halo,
+                feh_halo_sigma,
+                max_age,
+                min_age,
+                feh_age_ctr,
+                feh_age_scale,
+                nsigma_from_max_age,
+                max_sigma,
+                min_sigma,
+            )
+        except Exception:
+            pass  # Fall through to numpy path on any numba error
+
     # Thin disk component
     logp_thin = logn_disk(
         R,
@@ -589,89 +843,83 @@ def logp_galactic_structure(
 
     # Apply metallicity and age priors if labels provided
     if labels is not None:
-        # Component membership probabilities
+        # Component membership probabilities (reuse logp_thin/thick/halo)
         lnprior_thin = logp_thin - logp
         lnprior_thick = logp_thick - logp
         lnprior_halo = logp_halo - logp
 
-        # Metallicity prior
+        # Metallicity prior — fused computation to minimize temporaries
         if "feh" in labels.dtype.names:
             try:
                 feh = labels["feh"]
 
-                # Component-specific metallicity priors
+                # Inline Gaussian logpdf for all 3 components at once
+                # logp_feh(feh, mu, sigma) = -0.5*((feh-mu)^2/sigma^2 + log(2*pi*sigma^2))
                 feh_lnp_thin = (
-                    logp_feh(feh, feh_mean=feh_thin, feh_sigma=feh_thin_sigma)
+                    -0.5
+                    * (
+                        (feh - feh_thin) ** 2 / feh_thin_sigma**2
+                        + np.log(2.0 * np.pi * feh_thin_sigma**2)
+                    )
                     + lnprior_thin
                 )
                 feh_lnp_thick = (
-                    logp_feh(feh, feh_mean=feh_thick, feh_sigma=feh_thick_sigma)
+                    -0.5
+                    * (
+                        (feh - feh_thick) ** 2 / feh_thick_sigma**2
+                        + np.log(2.0 * np.pi * feh_thick_sigma**2)
+                    )
                     + lnprior_thick
                 )
                 feh_lnp_halo = (
-                    logp_feh(feh, feh_mean=feh_halo, feh_sigma=feh_halo_sigma)
+                    -0.5
+                    * (
+                        (feh - feh_halo) ** 2 / feh_halo_sigma**2
+                        + np.log(2.0 * np.pi * feh_halo_sigma**2)
+                    )
                     + lnprior_halo
                 )
 
-                # Combined metallicity prior
                 feh_lnp = _logsumexp3(feh_lnp_thin, feh_lnp_thick, feh_lnp_halo)
                 logp += feh_lnp
                 components["feh"] = [feh_lnp_thin, feh_lnp_thick, feh_lnp_halo]
             except (KeyError, IndexError, ValueError):
                 pass
 
-        # Age prior
+        # Age prior — fused computation
         if "loga" in labels.dtype.names:
             try:
-                age = 10 ** labels["loga"] / 1e9  # Convert log(age) to Gyr
+                age = 10.0 ** labels["loga"] / 1e9  # Convert log(age) to Gyr
 
-                # Component-specific age priors
-                age_lnp_thin = (
-                    logp_age_from_feh(
-                        age,
-                        feh_mean=feh_thin,
-                        max_age=max_age,
-                        min_age=min_age,
-                        feh_age_ctr=feh_age_ctr,
-                        feh_age_scale=feh_age_scale,
-                        nsigma_from_max_age=nsigma_from_max_age,
-                        max_sigma=max_sigma,
-                        min_sigma=min_sigma,
+                # Compute age priors for all 3 components with shared parameters.
+                # logp_age_from_feh computes a truncated normal; inline the core
+                # computation to avoid 3 separate function calls + temporaries.
+                age_params = []
+                for fm, lnp_comp in [
+                    (feh_thin, lnprior_thin),
+                    (feh_thick, lnprior_thick),
+                    (feh_halo, lnprior_halo),
+                ]:
+                    age_mean = (max_age - min_age) / (
+                        1.0 + np.exp((fm - feh_age_ctr) / feh_age_scale)
+                    ) + min_age
+                    age_sigma = np.clip(
+                        (max_age - age_mean) / nsigma_from_max_age,
+                        min_sigma,
+                        max_sigma,
                     )
-                    + lnprior_thin
-                )
-
-                age_lnp_thick = (
-                    logp_age_from_feh(
-                        age,
-                        feh_mean=feh_thick,
-                        max_age=max_age,
-                        min_age=min_age,
-                        feh_age_ctr=feh_age_ctr,
-                        feh_age_scale=feh_age_scale,
-                        nsigma_from_max_age=nsigma_from_max_age,
-                        max_sigma=max_sigma,
-                        min_sigma=min_sigma,
+                    age_params.append(
+                        truncnorm_logpdf(
+                            age,
+                            (min_age - age_mean) / age_sigma,
+                            (max_age - age_mean) / age_sigma,
+                            loc=age_mean,
+                            scale=age_sigma,
+                        )
+                        + lnp_comp
                     )
-                    + lnprior_thick
-                )
 
-                age_lnp_halo = (
-                    logp_age_from_feh(
-                        age,
-                        feh_mean=feh_halo,
-                        max_age=max_age,
-                        min_age=min_age,
-                        feh_age_ctr=feh_age_ctr,
-                        feh_age_scale=feh_age_scale,
-                        nsigma_from_max_age=nsigma_from_max_age,
-                        max_sigma=max_sigma,
-                        min_sigma=min_sigma,
-                    )
-                    + lnprior_halo
-                )
-
-                # Combined age prior
+                age_lnp_thin, age_lnp_thick, age_lnp_halo = age_params
                 age_lnp = _logsumexp3(age_lnp_thin, age_lnp_thick, age_lnp_halo)
                 logp += age_lnp
                 components["age"] = [age_lnp_thin, age_lnp_thick, age_lnp_halo]

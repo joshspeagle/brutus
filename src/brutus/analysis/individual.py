@@ -1333,6 +1333,9 @@ class BruteForce:
         lnprior=None,
         wt_thresh=1e-3,
         cdf_thresh=2e-3,
+        max_models=50000,
+        precision_shrinkage=0.0,
+        subsample_mode="representative",
         lngalprior=None,
         lndustprior=None,
         dustfile=None,
@@ -1413,6 +1416,29 @@ class BruteForce:
 
         Nsel = len(sel)
 
+        # Subsample if Nsel exceeds max_models
+        if max_models is not None and Nsel > max_models:
+            if subsample_mode == "representative":
+                # Gumbel-max trick: add Gumbel noise to log-weights,
+                # take top-k. This gives exact weighted sampling without
+                # replacement in O(N) via argpartition.
+                gumbel_noise = -np.log(
+                    -np.log(rstate.uniform(size=Nsel) + 1e-300) + 1e-300
+                )
+                perturbed = lnprob_sel[sel] + gumbel_noise
+                top_k = np.argpartition(perturbed, -max_models)[-max_models:]
+                sel = sel[top_k]
+            elif subsample_mode == "topk":
+                # Deterministic: keep highest-weight models
+                top_k = np.argpartition(lnprob_sel[sel], -max_models)[-max_models:]
+                sel = sel[top_k]
+            else:
+                raise ValueError(
+                    f"Unknown subsample_mode '{subsample_mode}'. "
+                    f"Must be 'representative' or 'topk'."
+                )
+            Nsel = len(sel)
+
         # Select precision matrices for the chosen models.
         icovs_selected = icovs_sar[sel]  # Shape: (Nsel, 3, 3)
 
@@ -1452,35 +1478,23 @@ class BruteForce:
         icov_lnd[:, 2, 0] = -two_s * icovs_selected[:, 2, 0]
         # (1,1), (1,2), (2,1), (2,2) are unchanged
 
-        # Apply Ledoit-Wolf-style shrinkage to the precision matrix.
-        # The Gauss-Newton approximation error is concentrated in the
-        # off-diagonal terms (cross-derivatives), so we shrink toward
-        # the diagonal proportionally to the off-diagonal energy.
-        # VECTORIZED: operates on all Nsel matrices simultaneously.
-        diag_vals = np.sqrt(
-            np.maximum(np.diagonal(icov_lnd, axis1=1, axis2=2), 1e-30)
-        )  # (Nsel, 3)
-        d_inv = 1.0 / diag_vals  # (Nsel, 3)
-        P_norm = icov_lnd * d_inv[:, :, None] * d_inv[:, None, :]  # (Nsel, 3, 3)
-        total_sq = np.sum(P_norm**2, axis=(1, 2))  # (Nsel,)
-        diag_sq = np.sum(np.diagonal(P_norm, axis1=1, axis2=2) ** 2, axis=1)  # (Nsel,)
-        off_diag_sq = total_sq - diag_sq  # (Nsel,)
-        alpha = np.minimum(off_diag_sq / total_sq / (1.0 - 1.0 / 3.0), 0.9)  # (Nsel,)
-        # Shrink: P_shrunk = (1-α)P + α*diag(P)
-        # = P - α*(P - diag(P)) = P - α*off_diag(P)
-        diag_P = np.zeros_like(icov_lnd)
-        for i in range(3):
-            diag_P[:, i, i] = icov_lnd[:, i, i]
-        icov_lnd = (1.0 - alpha[:, None, None]) * icov_lnd + alpha[
-            :, None, None
-        ] * diag_P
+        # Optional: apply fixed diagonal shrinkage to the precision matrix
+        # before inversion for numerical stability. Small alpha (e.g., 0.05)
+        # regularizes the off-diagonal cross-terms which carry the most
+        # inversion error at high condition numbers. Default: no shrinkage
+        # (alpha=0), relying on the exact eigvalsh regularization in _inverse3.
+        if precision_shrinkage > 0:
+            diag_P = np.zeros_like(icov_lnd)
+            for i in range(3):
+                diag_P[:, i, i] = icov_lnd[:, i, i]
+            icov_lnd = (
+                1.0 - precision_shrinkage
+            ) * icov_lnd + precision_shrinkage * diag_P
 
-        # Invert the shrunk precision to get covariance in (ln d, Av, Rv)
+        # Invert precision to get covariance in (ln d, Av, Rv)
         cov_lnd = _inverse3(icov_lnd, regularize=True)
 
         # Also compute cov_sar for backward-compatible output.
-        # This is deferred here (after sampling) to avoid a redundant
-        # inversion. We invert the ORIGINAL (unshrunk) precision.
         cov_sar = _inverse3(icovs_selected, regularize=True)
 
         # Prepare means in (ln d, Av, Rv) space
@@ -1632,6 +1646,9 @@ class BruteForce:
         save_dar_draws=True,
         running_io=True,
         mem_lim=8000.0,
+        max_models=50000,
+        precision_shrinkage=0.0,
+        subsample_mode="representative",
         verbose=True,
         R_solar=8.2,
         Z_solar=0.025,
@@ -1968,6 +1985,9 @@ class BruteForce:
                 ltol_subthresh=ltol_subthresh,
                 logl_initthresh=logl_initthresh,
                 mem_lim=mem_lim,
+                precision_shrinkage=precision_shrinkage,
+                max_models=max_models,
+                subsample_mode=subsample_mode,
                 rstate=rstate,
                 return_distreds=save_dar_draws,
                 R_solar=R_solar,
@@ -2119,6 +2139,9 @@ class BruteForce:
         ltol_subthresh=1e-2,
         logl_initthresh=5e-3,
         mem_lim=8000.0,
+        max_models=50000,
+        precision_shrinkage=0.0,
+        subsample_mode="representative",
         rstate=None,
         return_distreds=True,
         R_solar=8.2,
@@ -2252,6 +2275,9 @@ class BruteForce:
             avlim=avlim,
             rvlim=rvlim,
             mem_lim=mem_lim,
+            precision_shrinkage=precision_shrinkage,
+            max_models=max_models,
+            subsample_mode=subsample_mode,
             rstate=rstate,
             R_solar=R_solar,
             Z_solar=Z_solar,
