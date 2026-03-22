@@ -99,7 +99,7 @@ from .neural_nets import FastNNPredictor
 __all__ = ["Isochrone", "StellarPop"]
 
 
-class Isochrone(object):
+class Isochrone:
     """
     Stellar parameter predictions for isochrones using MIST evolutionary models.
 
@@ -456,7 +456,7 @@ class Isochrone(object):
         return np.c_[dlogt, dlogr]
 
 
-class StellarPop(object):
+class StellarPop:
     """
     Synthetic photometry generation for stellar populations.
 

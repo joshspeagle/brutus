@@ -188,13 +188,15 @@ def summary_plot(
 
     # Save the corner plot's subplot params before calling posterior_predictive,
     # which calls plt.tight_layout() and would destroy the spacing.
-    saved_params = fig.subplotpars
-    saved_left = saved_params.left
-    saved_right = saved_params.right
-    saved_top = saved_params.top
-    saved_bottom = saved_params.bottom
-    saved_wspace = saved_params.wspace
-    saved_hspace = saved_params.hspace
+    sp = fig.subplotpars
+    saved = dict(
+        left=sp.left,
+        right=sp.right,
+        top=sp.top,
+        bottom=sp.bottom,
+        wspace=sp.wspace,
+        hspace=sp.hspace,
+    )
 
     # Generate the posterior predictive SED on the inset axes
     posterior_predictive(
@@ -217,14 +219,7 @@ def summary_plot(
     ax_sed.set_title("Posterior Predictive SED", fontsize=9)
 
     # Restore the corner plot's subplot params (undoes plt.tight_layout())
-    fig.subplots_adjust(
-        left=saved_left,
-        right=saved_right,
-        top=saved_top,
-        bottom=saved_bottom,
-        wspace=saved_wspace,
-        hspace=saved_hspace,
-    )
+    fig.subplots_adjust(**saved)
 
     # Re-set the SED axes position (it was computed before tight_layout)
     ax_sed.set_position([left, bottom, width, height])

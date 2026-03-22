@@ -91,6 +91,9 @@ from scipy.optimize import minimize
 # Import filter definitions
 from ..data.filters import FILTERS
 
+# Import utilities
+from ..utils.photometry import add_mag
+
 # Import neural network predictor
 from .neural_nets import FastNNPredictor
 
@@ -114,7 +117,7 @@ rename = {
 }
 
 
-class EEPTracks(object):
+class EEPTracks:
     """
     Stellar parameter predictions for individual stars using evolutionary tracks.
 
@@ -764,7 +767,7 @@ class EEPTracks(object):
         return corrs
 
 
-class StarEvolTrack(object):
+class StarEvolTrack:
     """
     Synthetic photometry generation for individual stars.
 
@@ -1078,8 +1081,6 @@ class StarEvolTrack(object):
                     )
 
                     # Combine SEDs (magnitude addition)
-                    from ..utils.photometry import add_mag
-
                     sed = add_mag(sed, sed2)
 
                 except Exception as e:
@@ -1189,7 +1190,7 @@ class StarEvolTrack(object):
         return eep2
 
 
-class StarGrid(object):
+class StarGrid:
     """
     Grid-based stellar modeling and synthetic photometry generation.
 

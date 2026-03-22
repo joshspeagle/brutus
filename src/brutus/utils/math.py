@@ -71,7 +71,7 @@ __all__ = [
 ]
 
 
-class _function_wrapper(object):
+class _function_wrapper:
     """
     A hack to make functions pickleable when `args` or `kwargs` are.
 
@@ -103,7 +103,7 @@ class _function_wrapper(object):
         except Exception:
             import traceback
 
-            print("Exception while calling {0} function:".format(self.name))
+            print(f"Exception while calling {self.name} function:")
             print("  params:", x)
             print("  args:", self.args)
             print("  kwargs:", self.kwargs)
@@ -155,6 +155,16 @@ def _min_eigenval_3x3_symmetric(A):
 
 
 @jit(nopython=True, cache=True)
+def _matrix_det_3x3(A):
+    """Compute 3x3 matrix determinant - numba compatible."""
+    return (
+        A[0, 0] * (A[1, 1] * A[2, 2] - A[1, 2] * A[2, 1])
+        - A[0, 1] * (A[1, 0] * A[2, 2] - A[1, 2] * A[2, 0])
+        + A[0, 2] * (A[1, 0] * A[2, 1] - A[1, 1] * A[2, 0])
+    )
+
+
+@jit(nopython=True, cache=True)
 def _invert_3x3_analytical(A):
     """
     Invert a 3x3 matrix using analytical formulas.
@@ -168,11 +178,7 @@ def _invert_3x3_analytical(A):
     a31, a32, a33 = A[2, 0], A[2, 1], A[2, 2]
 
     # Calculate determinant
-    det = (
-        a11 * (a22 * a33 - a23 * a32)
-        - a12 * (a21 * a33 - a23 * a31)
-        + a13 * (a21 * a32 - a22 * a31)
-    )
+    det = _matrix_det_3x3(A)
 
     # Check for singular matrix
     if abs(det) < 1e-15:  # Essentially zero determinant
@@ -197,16 +203,6 @@ def _invert_3x3_analytical(A):
     inv[2, 2] = (a11 * a22 - a12 * a21) / det
 
     return inv
-
-
-@jit(nopython=True, cache=True)
-def _matrix_det_3x3(A):
-    """Compute 3x3 matrix determinant - numba compatible."""
-    return (
-        A[0, 0] * (A[1, 1] * A[2, 2] - A[1, 2] * A[2, 1])
-        - A[0, 1] * (A[1, 0] * A[2, 2] - A[1, 2] * A[2, 0])
-        + A[0, 2] * (A[1, 0] * A[2, 1] - A[1, 1] * A[2, 0])
-    )
 
 
 @jit(nopython=True, cache=True)

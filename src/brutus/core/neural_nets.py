@@ -57,7 +57,7 @@ from ..data.filters import FILTERS
 __all__ = ["FastNN", "FastNNPredictor"]
 
 
-class FastNN(object):
+class FastNN:
     """
     Object that wraps the underlying neural networks used to interpolate.
 
@@ -385,9 +385,7 @@ class FastNNPredictor(FastNN):
                     break
 
         # Initialize parent class with neural network
-        super(FastNNPredictor, self).__init__(
-            filters=filters, nnfile=nnfile, verbose=verbose
-        )
+        super().__init__(filters=filters, nnfile=nnfile, verbose=verbose)
 
     def sed(
         self,

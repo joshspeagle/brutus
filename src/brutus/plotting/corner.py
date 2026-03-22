@@ -23,10 +23,6 @@ from ..priors import logp_parallax
 from ..utils.sampling import draw_sar, quantile
 from .utils import hist2d
 
-str_type = str
-float_type = float
-int_type = int
-
 __all__ = ["cornerplot"]
 
 
@@ -366,7 +362,7 @@ def cornerplot(
     labels.append("Distance")
 
     # Setting up smoothing.
-    if isinstance(smooth, int_type) or isinstance(smooth, float_type):
+    if isinstance(smooth, int) or isinstance(smooth, float):
         smooth = [smooth for i in range(ndim)]
 
     # Setup axis layout (from `corner.py`).
@@ -417,16 +413,18 @@ def cornerplot(
         if i < ndim - 1:
             if top_ticks:
                 ax.xaxis.set_ticks_position("top")
-                [tick.set_rotation(45) for tick in ax.get_xticklabels()]
+                for tick in ax.get_xticklabels():
+                    tick.set_rotation(45)
             else:
                 ax.set_xticklabels([])
         else:
-            [tick.set_rotation(45) for tick in ax.get_xticklabels()]
+            for tick in ax.get_xticklabels():
+                tick.set_rotation(45)
             ax.set_xlabel(labels[i], **label_kwargs)
             ax.xaxis.set_label_coords(0.5, -0.3)
         # Generate distribution.
         sx = smooth[i]
-        if isinstance(sx, int_type):
+        if isinstance(sx, int):
             # If `sx` is an integer, plot a weighted histogram with
             # `sx` bins within the provided bounds.
             n, b, _ = ax.hist(
@@ -465,7 +463,8 @@ def cornerplot(
         # Add truth value(s).
         if truths is not None and truths[i] is not None:
             try:
-                [ax.axvline(t, color=truth_color, **truth_kwargs) for t in truths[i]]
+                for t in truths[i]:
+                    ax.axvline(t, color=truth_color, **truth_kwargs)
             except TypeError:
                 ax.axvline(truths[i], color=truth_color, **truth_kwargs)
         # Set titles.
@@ -474,10 +473,9 @@ def cornerplot(
             if title_fmt is not None:
                 ql, qm, qh = quantile(x, title_quantiles, weights=weights)
                 q_minus, q_plus = qm - ql, qh - qm
-                fmt = "{{0:{0}}}".format(title_fmt).format
-                title = r"${{{0}}}_{{-{1}}}^{{+{2}}}$"
-                title = title.format(fmt(qm), fmt(q_minus), fmt(q_plus))
-                title = "{0} = {1}".format(labels[i], title)
+                fmt = f"{{0:{title_fmt}}}".format
+                title = rf"${{{fmt(qm)}}}_{{-{fmt(q_minus)}}}^{{+{fmt(q_plus)}}}$"
+                title = f"{labels[i]} = {title}"
                 ax.set_title(title, **title_kwargs)
         # Add parallax prior.
         if i == ndim - 2 and parallax is not None and parallax_err is not None:
@@ -516,19 +514,21 @@ def cornerplot(
             if i < ndim - 1:
                 ax.set_xticklabels([])
             else:
-                [tick.set_rotation(45) for tick in ax.get_xticklabels()]
+                for tick in ax.get_xticklabels():
+                    tick.set_rotation(45)
                 ax.set_xlabel(labels[j], **label_kwargs)
                 ax.xaxis.set_label_coords(0.5, -0.3)
             if j > 0:
                 ax.set_yticklabels([])
             else:
-                [tick.set_rotation(45) for tick in ax.get_yticklabels()]
+                for tick in ax.get_yticklabels():
+                    tick.set_rotation(45)
                 ax.set_ylabel(labels[i], **label_kwargs)
                 ax.yaxis.set_label_coords(-0.3, 0.5)
             # Generate distribution.
             sy = smooth[j]
-            check_ix = isinstance(sx, int_type)
-            check_iy = isinstance(sy, int_type)
+            check_ix = isinstance(sx, int)
+            check_iy = isinstance(sy, int)
             if check_ix and check_iy:
                 fill_contours = False
                 plot_contours = False
@@ -556,18 +556,14 @@ def cornerplot(
             if truths is not None:
                 if truths[j] is not None:
                     try:
-                        [
+                        for t in truths[j]:
                             ax.axvline(t, color=truth_color, **truth_kwargs)
-                            for t in truths[j]
-                        ]
                     except TypeError:
                         ax.axvline(truths[j], color=truth_color, **truth_kwargs)
                 if truths[i] is not None:
                     try:
-                        [
+                        for t in truths[i]:
                             ax.axhline(t, color=truth_color, **truth_kwargs)
-                            for t in truths[i]
-                        ]
                     except TypeError:
                         ax.axhline(truths[i], color=truth_color, **truth_kwargs)
 

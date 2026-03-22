@@ -17,10 +17,6 @@ from scipy.ndimage import gaussian_filter as norm_kde
 
 from ..utils.sampling import quantile
 
-str_type = str
-float_type = float
-int_type = int
-
 __all__ = ["hist2d"]
 
 
@@ -149,12 +145,12 @@ def hist2d(
         contour_cmap[i][-1] *= float(i) / (len(levels) + 1)
 
     # Initialize smoothing.
-    if isinstance(smooth, int_type) or isinstance(smooth, float_type):
+    if isinstance(smooth, int) or isinstance(smooth, float):
         smooth = [smooth, smooth]
     bins = []
     svalues = []
     for s in smooth:
-        if isinstance(s, int_type):
+        if isinstance(s, int):
             # If `s` is an integer, the weighted histogram has
             # `s` bins within the provided bounds.
             bins.append(s)

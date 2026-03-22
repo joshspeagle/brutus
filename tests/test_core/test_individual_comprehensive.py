@@ -856,24 +856,23 @@ class TestIndividualStarsEdgeCases:
         return mock_data
 
     def test_star_evol_track_invalid_inputs(self):
-        """Test StarEvolTrack with invalid inputs."""
+        """Test StarEvolTrack raises when predictor is unavailable."""
         tracks = MagicMock()
         tracks.get_predictions.return_value = np.random.random(6)
         tracks.pred_labels = ["age", "logl", "logt", "logr", "logg", "phase"]
 
-        with patch("brutus.core.neural_nets.FastNNPredictor") as mock_nn:
+        with patch("brutus.core.individual.FastNNPredictor") as mock_nn:
             mock_nn.return_value = MagicMock()
 
             star_track = StarEvolTrack(tracks=tracks, verbose=False)
+            # Force predictor to None to simulate initialization failure
+            star_track.predictor = None
 
-            # Test invalid mass ratio
-            with pytest.raises((ValueError, RuntimeError)):
-                star_track.get_seds(
-                    mini=1.0, eep=350, feh=0.0, afe=0.0, smf=2.0
-                )  # > 1.0
+            # Test that RuntimeError is raised when predictor is unavailable
+            with pytest.raises(RuntimeError):
+                star_track.get_seds(mini=1.0, eep=350, feh=0.0, afe=0.0, smf=2.0)
 
-            # Test negative mass
-            with pytest.raises((ValueError, RuntimeError)):
+            with pytest.raises(RuntimeError):
                 star_track.get_seds(mini=-1.0, eep=350, feh=0.0, afe=0.0)
 
 

@@ -14,6 +14,8 @@ import numpy as np
 from ..core.sed_utils import get_seds
 from ..utils.photometry import magnitude
 
+__all__ = ["posterior_predictive"]
+
 
 def posterior_predictive(
     models,
@@ -188,6 +190,3 @@ def posterior_predictive(
     plt.tight_layout()
 
     return fig, ax, parts
-
-
-__all__ = ["posterior_predictive"]

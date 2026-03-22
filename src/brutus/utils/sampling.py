@@ -59,6 +59,8 @@ Drawing from posterior:
 >>> # samples = draw_sar(scales, avs, rvs, covs_sar, ndraws=1000)
 """
 
+import warnings
+
 import numpy as np
 from numba import jit
 
@@ -118,8 +120,7 @@ def quantile(x, q, weights=None):
 
     if weights is None:
         # If no weights provided, this simply calls `np.percentile`.
-        result = np.percentile(x, list(100.0 * q))
-        return np.array(result)
+        return np.percentile(x, list(100.0 * q))
     else:
         # If weights are provided, compute the weighted quantiles.
         weights = np.atleast_1d(weights)
@@ -129,11 +130,7 @@ def quantile(x, q, weights=None):
         sw = weights[idx]  # sort weights
         # Compute CDF at sample midpoints for proper quantile calculation
         cdf = (np.cumsum(sw, dtype=float) - 0.5 * sw) / np.sum(sw)
-        quantiles = np.interp(q, cdf, x[idx])
-        if quantiles.size == 1:
-            return np.array([quantiles[0]])
-        else:
-            return np.array(quantiles)
+        return np.interp(q, cdf, x[idx])
 
 
 def draw_sar(
@@ -248,8 +245,6 @@ def draw_sar(
             n_collected += len(s_mc)
 
             if n_attempts >= max_attempts:
-                import warnings
-
                 warnings.warn(
                     f"draw_sar: only collected {n_collected}/{ndraws} "
                     f"in-bounds samples after {max_attempts} attempts for "
@@ -352,22 +347,15 @@ def _sample_multivariate_normal_jit(mean, cov, size, eps, random_samples):
     for n in range(N):
         L[n] = _cholesky_3x3(K[n])
 
-    # Transform samples: ans = mean + L @ z
-    ans = np.empty((N, d, size))
-    for n in range(N):
-        for s in range(size):
-            # ans[n, :, s] = mean[n] + L[n] @ random_samples[n, :, s]
-            for i in range(d):
-                ans[n, i, s] = mean[n, i]
-                for j in range(d):
-                    ans[n, i, s] += L[n, i, j] * random_samples[n, j, s]
-
-    # Reshape to match expected output format: (dim, size, Ndist)
+    # Transform samples and write directly to output layout: (dim, size, Ndist)
     result = np.empty((d, size, N))
     for n in range(N):
         for s in range(size):
             for i in range(d):
-                result[i, s, n] = ans[n, i, s]
+                val = mean[n, i]
+                for j in range(d):
+                    val += L[n, i, j] * random_samples[n, j, s]
+                result[i, s, n] = val
 
     return result
 

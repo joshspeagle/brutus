@@ -151,10 +151,7 @@ def bin_pdfs_distred(
         xbin, ybin = bins
     except (TypeError, ValueError):
         xbin = ybin = bins
-    if ebv:
-        ylims = avlims  # default Rv goes from [1., 8.] -> min(Rv) = 1.
-    else:
-        ylims = avlims
+    ylims = avlims
     if dist_type == "scale":
         xlims = (1.0 / dlims[::-1]) ** 2
     elif dist_type == "parallax":
@@ -215,7 +212,7 @@ def bin_pdfs_distred(
         for i, (xs, ys) in enumerate(zip(xdraws, ydraws)):
             # Print progress.
             if verbose:
-                sys.stderr.write("\rBinning object {0}/{1}".format(i + 1, nobjs))
+                sys.stderr.write(f"\rBinning object {i + 1}/{nobjs}")
             H, xedges, yedges = np.histogram2d(xs, ys, bins=(xbins, ybins))
             binned_vals[i] = H / nsamps
     except (AttributeError, KeyError):
@@ -246,7 +243,7 @@ def bin_pdfs_distred(
 
             # Print progress.
             if verbose:
-                sys.stderr.write("\rBinning object {0}/{1}".format(i + 1, nobjs))
+                sys.stderr.write(f"\rBinning object {i + 1}/{nobjs}")
 
             # Draw random samples.
             sdraws, adraws, rdraws = draw_sar(
