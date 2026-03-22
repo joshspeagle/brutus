@@ -81,11 +81,12 @@ import numpy as np
 from brutus.utils import truncnorm_logpdf
 from brutus.utils.math import galactic_to_galactocentric_cyl
 
-# Import scipy for logsumexp
-try:
-    from scipy.special import logsumexp
-except ImportError:
-    from scipy.misc import logsumexp
+
+def _logsumexp3(a, b, c):
+    """Fast logsumexp of 3 arrays. Avoids scipy overhead for this common case."""
+    mx = np.maximum(np.maximum(a, b), c)
+    return mx + np.log(np.exp(a - mx) + np.exp(b - mx) + np.exp(c - mx))
+
 
 __all__ = [
     "logn_disk",
@@ -581,7 +582,7 @@ def logp_galactic_structure(
     logp_halo += vol_factor + np.log(f_halo)
 
     # Combined number density prior
-    logp = logsumexp([logp_thin, logp_thick, logp_halo], axis=0)
+    logp = _logsumexp3(logp_thin, logp_thick, logp_halo)
 
     # Component tracking
     components = {"number_density": [logp_thin, logp_thick, logp_halo]}
@@ -613,7 +614,7 @@ def logp_galactic_structure(
                 )
 
                 # Combined metallicity prior
-                feh_lnp = logsumexp([feh_lnp_thin, feh_lnp_thick, feh_lnp_halo], axis=0)
+                feh_lnp = _logsumexp3(feh_lnp_thin, feh_lnp_thick, feh_lnp_halo)
                 logp += feh_lnp
                 components["feh"] = [feh_lnp_thin, feh_lnp_thick, feh_lnp_halo]
             except (KeyError, IndexError, ValueError):
@@ -671,7 +672,7 @@ def logp_galactic_structure(
                 )
 
                 # Combined age prior
-                age_lnp = logsumexp([age_lnp_thin, age_lnp_thick, age_lnp_halo], axis=0)
+                age_lnp = _logsumexp3(age_lnp_thin, age_lnp_thick, age_lnp_halo)
                 logp += age_lnp
                 components["age"] = [age_lnp_thin, age_lnp_thick, age_lnp_halo]
             except (KeyError, IndexError, ValueError):

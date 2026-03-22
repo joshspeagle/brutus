@@ -313,6 +313,69 @@ def _invert_3x3_preconditioned(P, min_eigenval_threshold=1e-12):
     return C
 
 
+def _batch_invert_3x3_preconditioned(P_batch, min_eigenval_threshold=1e-12):
+    """
+    Batch-invert N 3x3 matrices with diagonal preconditioning.
+
+    Fully vectorized: operates on the entire (N, 3, 3) array at once
+    using numpy broadcasting. Avoids Python loops over N matrices.
+    """
+
+    # Step 1: Diagonal scaling (vectorized)
+    diag = np.sqrt(np.maximum(np.diagonal(P_batch, axis1=1, axis2=2), 1e-30))  # (N, 3)
+    d_inv = 1.0 / diag  # (N, 3)
+
+    # Step 2: Normalize to correlation form (vectorized)
+    P_sym = 0.5 * (P_batch + np.swapaxes(P_batch, 1, 2))  # symmetrize
+    P_norm = P_sym * d_inv[:, :, None] * d_inv[:, None, :]  # (N, 3, 3)
+
+    # Step 3: Pre-regularize singular matrices
+    dets = (
+        P_norm[:, 0, 0]
+        * (P_norm[:, 1, 1] * P_norm[:, 2, 2] - P_norm[:, 1, 2] * P_norm[:, 2, 1])
+        - P_norm[:, 0, 1]
+        * (P_norm[:, 1, 0] * P_norm[:, 2, 2] - P_norm[:, 1, 2] * P_norm[:, 2, 0])
+        + P_norm[:, 0, 2]
+        * (P_norm[:, 1, 0] * P_norm[:, 2, 1] - P_norm[:, 1, 1] * P_norm[:, 2, 0])
+    )  # (N,)
+    singular = np.abs(dets) < 1e-10
+    if np.any(singular):
+        P_norm[singular, 0, 0] += 1e-3
+        P_norm[singular, 1, 1] += 1e-3
+        P_norm[singular, 2, 2] += 1e-3
+
+    # Step 4: Batch analytical inversion
+    C_norm = _batch_invert_3x3(P_norm)
+
+    # Step 5: Handle inversion failures
+    bad = ~np.all(np.isfinite(C_norm), axis=(1, 2))
+    if np.any(bad):
+        C_norm[bad] = 0.0
+        for i in range(3):
+            C_norm[bad, i, i] = 1.0 / np.maximum(P_batch[bad, i, i], 1e-30)
+        # For bad matrices, d_inv should be identity-like
+        d_inv[bad] = 1.0
+
+    # Step 6: Symmetrize
+    C_sym = 0.5 * (C_norm + np.swapaxes(C_norm, 1, 2))
+
+    # Step 7: Batch eigenvalue check and regularization
+    # Use np.linalg.eigvalsh on the entire batch at once
+    eigvals = np.linalg.eigvalsh(C_sym)  # (N, 3), sorted ascending
+    min_eigs = eigvals[:, 0]  # (N,)
+    needs_reg = min_eigs < min_eigenval_threshold
+    if np.any(needs_reg):
+        shifts = min_eigenval_threshold - min_eigs[needs_reg]
+        C_sym[needs_reg, 0, 0] += shifts
+        C_sym[needs_reg, 1, 1] += shifts
+        C_sym[needs_reg, 2, 2] += shifts
+
+    # Step 8: Transform back to original parameter space
+    C = C_sym * d_inv[:, :, None] * d_inv[:, None, :]  # (N, 3, 3)
+
+    return C
+
+
 def inverse3(A, regularize=False, min_eigenval_threshold=1e-12):
     """
     Compute the inverse of a series of 3x3 matrices.
@@ -350,11 +413,7 @@ def inverse3(A, regularize=False, min_eigenval_threshold=1e-12):
     if len(A.shape) == 2:
         return _invert_3x3_preconditioned(A, min_eigenval_threshold)
     else:
-        N = A.shape[0]
-        result = np.empty_like(A)
-        for i in range(N):
-            result[i] = _invert_3x3_preconditioned(A[i], min_eigenval_threshold)
-        return result
+        return _batch_invert_3x3_preconditioned(A, min_eigenval_threshold)
 
 
 def isPSD(A):

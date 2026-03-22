@@ -1413,12 +1413,8 @@ class BruteForce:
 
         Nsel = len(sel)
 
-        # Compute covariance from inverse covariance (VECTORIZED)
+        # Select precision matrices for the chosen models.
         icovs_selected = icovs_sar[sel]  # Shape: (Nsel, 3, 3)
-
-        # Batch inversion with diagonal preconditioning for stability.
-        # cov_sar is kept in (s, Av, Rv) space for backward compatibility.
-        cov_sar = _inverse3(icovs_selected, regularize=True)
 
         # Monte Carlo integration over distance and extinction (VECTORIZED)
         Nmc = min(Nmc_prior, int(mem_lim * 1e6 / (8.0 * Nsel * 4)))
@@ -1460,21 +1456,32 @@ class BruteForce:
         # The Gauss-Newton approximation error is concentrated in the
         # off-diagonal terms (cross-derivatives), so we shrink toward
         # the diagonal proportionally to the off-diagonal energy.
-        for k in range(Nsel):
-            P = icov_lnd[k]
-            # Normalize to correlation form
-            diag_vals = np.sqrt(np.maximum(np.diag(P), 1e-30))
-            d_inv = 1.0 / diag_vals
-            P_norm = P * np.outer(d_inv, d_inv)
-            # Off-diagonal energy fraction
-            off_diag_sq = np.sum(P_norm**2) - np.sum(np.diag(P_norm) ** 2)
-            total_sq = np.sum(P_norm**2)
-            alpha = min(off_diag_sq / total_sq / (1.0 - 1.0 / 3.0), 0.9)
-            # Shrink precision toward diagonal
-            icov_lnd[k] = (1.0 - alpha) * P + alpha * np.diag(np.diag(P))
+        # VECTORIZED: operates on all Nsel matrices simultaneously.
+        diag_vals = np.sqrt(
+            np.maximum(np.diagonal(icov_lnd, axis1=1, axis2=2), 1e-30)
+        )  # (Nsel, 3)
+        d_inv = 1.0 / diag_vals  # (Nsel, 3)
+        P_norm = icov_lnd * d_inv[:, :, None] * d_inv[:, None, :]  # (Nsel, 3, 3)
+        total_sq = np.sum(P_norm**2, axis=(1, 2))  # (Nsel,)
+        diag_sq = np.sum(np.diagonal(P_norm, axis1=1, axis2=2) ** 2, axis=1)  # (Nsel,)
+        off_diag_sq = total_sq - diag_sq  # (Nsel,)
+        alpha = np.minimum(off_diag_sq / total_sq / (1.0 - 1.0 / 3.0), 0.9)  # (Nsel,)
+        # Shrink: P_shrunk = (1-α)P + α*diag(P)
+        # = P - α*(P - diag(P)) = P - α*off_diag(P)
+        diag_P = np.zeros_like(icov_lnd)
+        for i in range(3):
+            diag_P[:, i, i] = icov_lnd[:, i, i]
+        icov_lnd = (1.0 - alpha[:, None, None]) * icov_lnd + alpha[
+            :, None, None
+        ] * diag_P
 
         # Invert the shrunk precision to get covariance in (ln d, Av, Rv)
         cov_lnd = _inverse3(icov_lnd, regularize=True)
+
+        # Also compute cov_sar for backward-compatible output.
+        # This is deferred here (after sampling) to avoid a redundant
+        # inversion. We invert the ORIGINAL (unshrunk) precision.
+        cov_sar = _inverse3(icovs_selected, regularize=True)
 
         # Prepare means in (ln d, Av, Rv) space
         eta_sel = -0.5 * np.log(s_sel)  # ln(d) = -0.5*ln(s)
@@ -1579,21 +1586,13 @@ class BruteForce:
 
         # Compute effective sample size (ESS) for each selected model's
         # MC samples. ESS = 1 / sum(w_i^2) where w_i are normalized weights.
-        # Low ESS indicates that the MC integration is dominated by a few
-        # samples, suggesting poor overlap between the proposal (Gaussian in
-        # ln d, Av, Rv) and the target (posterior with priors).
-        # lnp_mc shape is (Nmc, Nsel) at this point.
-        mc_ess = np.zeros(Nsel)
-        for j in range(Nsel):
-            lw = lnp_mc[:, j]
-            lw_max = np.max(lw)
-            w = np.exp(lw - lw_max)
-            w_sum = w.sum()
-            if w_sum > 0:
-                w_normed = w / w_sum
-                mc_ess[j] = 1.0 / np.sum(w_normed**2)
-            else:
-                mc_ess[j] = 0.0
+        # VECTORIZED across all Nsel models.
+        lw_max = np.max(lnp_mc, axis=0, keepdims=True)  # (1, Nsel)
+        w = np.exp(lnp_mc - lw_max)  # (Nmc, Nsel)
+        w_sum = w.sum(axis=0, keepdims=True)  # (1, Nsel)
+        w_normed = w / np.maximum(w_sum, 1e-300)  # (Nmc, Nsel)
+        mc_ess = 1.0 / np.sum(w_normed**2, axis=0)  # (Nsel,)
+        mc_ess = np.where(w_sum.ravel() > 0, mc_ess, 0.0)
 
         return sel, cov_sar, lnp, dist_mc.T, a_mc.T, r_mc.T, lnp_mc.T, mc_ess
 
