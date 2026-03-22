@@ -1456,7 +1456,24 @@ class BruteForce:
         icov_lnd[:, 2, 0] = -two_s * icovs_selected[:, 2, 0]
         # (1,1), (1,2), (2,1), (2,2) are unchanged
 
-        # Invert the transformed precision to get covariance in (ln d, Av, Rv)
+        # Apply Ledoit-Wolf-style shrinkage to the precision matrix.
+        # The Gauss-Newton approximation error is concentrated in the
+        # off-diagonal terms (cross-derivatives), so we shrink toward
+        # the diagonal proportionally to the off-diagonal energy.
+        for k in range(Nsel):
+            P = icov_lnd[k]
+            # Normalize to correlation form
+            diag_vals = np.sqrt(np.maximum(np.diag(P), 1e-30))
+            d_inv = 1.0 / diag_vals
+            P_norm = P * np.outer(d_inv, d_inv)
+            # Off-diagonal energy fraction
+            off_diag_sq = np.sum(P_norm**2) - np.sum(np.diag(P_norm) ** 2)
+            total_sq = np.sum(P_norm**2)
+            alpha = min(off_diag_sq / total_sq / (1.0 - 1.0 / 3.0), 0.9)
+            # Shrink precision toward diagonal
+            icov_lnd[k] = (1.0 - alpha) * P + alpha * np.diag(np.diag(P))
+
+        # Invert the shrunk precision to get covariance in (ln d, Av, Rv)
         cov_lnd = _inverse3(icov_lnd, regularize=True)
 
         # Prepare means in (ln d, Av, Rv) space
