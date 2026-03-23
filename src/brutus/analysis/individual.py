@@ -2302,8 +2302,8 @@ class BruteForce:
                     chi2_with_par += (par_pred - parallax) ** 2 / parallax_err**2
                     Ndim_out += 1
 
-        # Compute goodness-of-fit metrics
-        chi2min = np.min(chi2_with_par[sel])
+        # Compute goodness-of-fit metrics (over ALL models, not just posterior-selected)
+        chi2min = np.min(chi2_with_par)
         levid = logsumexp(lnp)
 
         # Resample from posterior

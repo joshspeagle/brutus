@@ -21,7 +21,7 @@ brutus/
 │   ├── plotting/         # Visualization utilities
 │   └── utils/            # Math, photometry, sampling utilities
 ├── tests/                # Test suite (pytest)
-├── tutorials/            # 8 Jupyter tutorial notebooks
+├── tutorials/            # 12 Jupyter tutorial notebooks (00-11)
 ├── docs/source/          # Sphinx documentation
 ├── pyproject.toml        # Package configuration
 └── CHANGELOG.md          # Version history
@@ -36,12 +36,15 @@ pip install -e ".[dev]"
 # Run tests
 pytest
 
-# Run tests with coverage (NUMBA_DISABLE_JIT=1 required for accurate numba coverage)
+# Run tests with coverage
+# NUMBA_DISABLE_JIT=1 is REQUIRED: @jit functions show 0% coverage otherwise
 NUMBA_DISABLE_JIT=1 pytest --cov=brutus
 
 # Build documentation
 cd docs && make html
 ```
+
+Pre-commit hooks run `black`, `isort`, and `flake8`. If a commit fails on formatting, re-stage the auto-formatted files and commit again.
 
 ## Testing
 
@@ -88,6 +91,49 @@ Understanding brutus's internal conventions is essential for correct usage:
 - **Parallax**: Expected in **milliarcseconds** (mas) throughout the fitting pipeline. Survey data in arcseconds must be multiplied by 1000.
 - **Extinction**: A(V) in magnitudes. The default R(V) prior is Gaussian with mean 3.32 and std 0.18.
 - **Reddening vectors**: In `_get_sed_mle`, `drvecs = (1/A_V) * ∂f/∂R_V` (the A(V) factor is divided out). The Fisher information computation multiplies by A(V) to recover the true derivative `∂f/∂R_V` for correct R(V) uncertainty estimation.
+- **Photometric offsets**: Multiplicative flux corrections loaded via `load_offsets()`. Applied as `flux *= offset, err *= offset` in `_setup()`. The offset uncertainties (~0.02 mag optical, ~0.03 mag NIR per Speagle et al. 2025 Table 5) are NOT automatically added to measurement errors. Users should add systematic errors in quadrature before fitting:
+  ```python
+  sys_err_mag = np.array([0.02, 0.02, ...])  # per filter
+  sys_err_flux = flux * sys_err_mag * np.log(10) / 2.5
+  err = np.sqrt(err**2 + sys_err_flux**2)
+  ```
+
+## Architecture: Grid-Based Bayesian Inference
+
+brutus uses **systematic grid evaluation** rather than MCMC:
+- Evaluates likelihood at every grid point — no convergence diagnostics needed
+- For each grid point, optimizes (scale, A_V, R_V) via Gauss-Newton and computes a 3x3 Fisher information matrix
+- MC samples from the Fisher-based Gaussian approximate the local posterior
+- Galactic structure priors, parallax constraints, and IMF are applied as weights
+- Final posterior is a weighted mixture over all grid points
+
+The 3x3 Fisher matrix is in (scale, A_V, R_V) space. Internally, `logpost_grid` transforms to **log-distance space** (eta = ln(d)) for MC sampling, applying a Jacobian correction exp(eta) to weights. This prevents the 1/d^3 bias that occurs when sampling in scale space.
+
+## Internal Constants
+
+- **`MIN_SCALE`** = `1e-20`: Floor for scale factor to prevent log-underflow. Defined in `analysis/individual.py`.
+- **`LOG_ZERO`** = `-1e300`: Pseudo-negative-infinity for log-probabilities. Avoids true `-np.inf` arithmetic issues.
+
+## Numba JIT
+
+Performance-critical functions use `@jit(nopython=True, cache=True)`:
+- `_optimize_fit_mag/flux`, `_get_sed_mle` in `analysis/individual.py`
+- `_galactic_prior_fused` in `priors/galactic.py`
+- Matrix operations in `utils/math.py`
+
+`NUMBA_DISABLE_JIT=1` forces pure-Python fallback for coverage and debugging.
+
+## Plotting Module
+
+- **`corner.py`**: `cornerplot()` — parameter posterior triangle plot
+- **`sed.py`**: `posterior_predictive()` — SED residual violin plots
+- **`summary.py`**: `summary_plot()` — corner plot + SED inset in one figure
+- **`distance.py`**: `dist_vs_red()` — distance vs. reddening 2D posterior
+- **`binning.py`**: `bin_pdfs_distred()` — bin PDFs for dust mapping
+- **`offsets.py`**: `photometric_offsets()` — offset diagnostic plots
+- **`utils.py`**: `hist2d()` — 2D histogram/contour utility
+
+All importable from `brutus.plotting` directly.
 
 ## Key APIs
 
@@ -119,7 +165,13 @@ fitter.fit(
     data=flux, data_err=flux_err, data_mask=mask,
     data_labels=obj_ids, save_file='results.h5',
     parallax=parallax, parallax_err=parallax_err,
-    data_coords=coords
+    data_coords=coords,
+    # Performance/accuracy tuning (all optional with sensible defaults):
+    max_models=50000,          # Subsample models when Nsel exceeds this
+    precision_shrinkage=0.0,   # Shrink off-diagonal precision (try 0.03)
+    R_solar=8.2, Z_solar=0.025,  # Solar position for galactic priors
+    Ndraws=250,                # Posterior samples per object
+    Nmc_prior=50,              # MC samples for prior integration
 )
 ```
 
@@ -132,3 +184,31 @@ iso = Isochrone()
 pop = StellarPop(iso, filters=filters)
 seds, params, params2 = pop.get_seds(feh=0.0, loga=9.0, av=0.1, dist=1000.0)
 ```
+
+## Fit Quality Metrics
+
+**Do NOT use chi2/Nbands as a quality metric.** It is not variance-stabilizing across different numbers of bands and conflates DOF with band count.
+
+Instead, use **p-values** from the chi-squared distribution with proper degrees of freedom:
+```python
+from scipy import stats
+dof = nbands - 3  # 3 free parameters: scale, A_V, R_V
+pvalue = 1.0 - stats.chi2.cdf(chi2min, max(dof, 1))
+```
+
+Thresholds:
+- `p > 0.001`: Good fit
+- `1e-6 < p <= 0.001`: Marginal
+- `p <= 1e-6`: Poor fit (model inadequacy, YSOs, binaries, etc.)
+
+The `obj_chi2min` field in HDF5 output includes the parallax contribution (if parallax was provided), and `obj_Nbands` counts parallax as an extra band. So DOF = `obj_Nbands - 3` when parallax is used, `obj_Nbands - 3` otherwise (parallax adds 1 band and 0 free parameters).
+
+For posterior predictive validation, compare the **posterior predictive width** (std of predicted flux across draws) to the **measurement error** per band. The ratio should be ~1; ratios >> 1 indicate poorly constrained parameters.
+
+## Common Pitfalls
+
+- **`np.tile` vs `np.repeat` for label alignment**: When broadcasting labels across MC samples, use `np.tile(labels, Nmc)` (repeats entire array), NOT `np.repeat(labels, Nmc)` (repeats each element). Wrong order silently scrambles label-to-sample mapping.
+- **ar_mix cross-term**: The A_V-R_V Fisher cross-term must include the `av[i]` factor to un-normalize `drvecs`. Missing this makes the precision matrix singular.
+- **Scale factor guard**: Always clamp scale to `MIN_SCALE` before taking `log(scale)`. Without this, NaN propagates through distance priors.
+- **Minimum 4 bands**: Fitting requires at least 4 valid photometric bands (3 free parameters + 1 DOF). Fewer bands produce degenerate Fisher matrices.
+- **Diagonal preconditioning**: The 3x3 precision matrix inversion uses diagonal preconditioning (normalize to correlation matrix, invert, un-normalize). This reduces condition numbers from ~30,000 to ~14.
