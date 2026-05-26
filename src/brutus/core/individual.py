@@ -880,6 +880,7 @@ class StarEvolTrack:
         corr_params=None,
         return_eep2=False,
         return_dict=True,
+        combine_seds=True,
         tol=1e-6,
         **kwargs,
     ):
@@ -936,12 +937,17 @@ class StarEvolTrack:
         return_dict : bool, optional
             Return parameters as dictionary. Default is True.
 
+        combine_seds : bool, optional
+            If True and binary star requested, combine primary and secondary SEDs by adding
+            their magnitudes. If False, separate SEDs for primary and secondary will be returned.
+            Default is True.
+
         tol : float, optional
             Tolerance for binary EEP calculation. Default is 1e-6.
 
         Returns
         -------
-        sed : numpy.ndarray of shape (Nfilters,)
+        sed : numpy.ndarray of shape (Nfilters,) or tuple
             Synthetic SED in magnitudes.
 
         params : dict or numpy.ndarray
@@ -1005,6 +1011,7 @@ class StarEvolTrack:
         # Convert to dictionary format
         params = dict(zip(self.tracks.predictions, params_arr))
         sed = np.full(self.predictor.NFILT, np.nan)
+        sed2 = np.full(self.predictor.NFILT, np.nan)
 
         # Initialize secondary parameters
         params_arr2 = np.full_like(params_arr, np.nan)
@@ -1061,9 +1068,9 @@ class StarEvolTrack:
                         rv=rv,
                         dist=dist,
                     )
-
-                    # Combine SEDs (magnitude addition)
-                    sed = add_mag(sed, sed2)
+                    if combine_seds:
+                        # Combine SEDs (magnitude addition)
+                        sed = add_mag(sed, sed2)
 
                 except Exception as e:
                     warnings.warn(
@@ -1077,7 +1084,9 @@ class StarEvolTrack:
         if not return_dict:
             params = params_arr
             params2 = params_arr2
-
+        if not combine_seds and smf > 0.0:
+            # Return separate SEDs for primary and secondary as a list
+            sed = [sed, sed2]
         if return_eep2:
             return sed, params, params2, eep2
         else:
