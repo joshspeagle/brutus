@@ -21,7 +21,7 @@
 pip install astro-brutus
 ```
 
-Requires Python 3.8+ on Linux, macOS, or Windows with WSL.
+Requires Python 3.9+ on Linux, macOS, or Windows with WSL.
 
 **Windows users**: Due to the `healpy` dependency, brutus requires WSL (Windows Subsystem for Linux) on Windows.
 

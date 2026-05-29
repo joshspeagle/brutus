@@ -177,8 +177,10 @@ def hist2d(
             "have no dynamic range."
         )
 
-    # Smooth the results.
-    if not np.all(svalues == 0.0):
+    # Smooth the results. (svalues is a Python list, so guard on an array to
+    # make the comparison element-wise rather than a scalar list-vs-float that
+    # always evaluated truthy.)
+    if not np.all(np.asarray(svalues) == 0.0):
         H = norm_kde(H, svalues)
 
     # Compute the density levels.

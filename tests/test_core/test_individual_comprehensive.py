@@ -550,6 +550,72 @@ class TestStarEvolTrackMethods:
         # params2 should have secondary star information
         assert len(params2) > 0
 
+    def test_get_seds_binary_primary_survives_failed_companion(self):
+        """A valid primary SED must survive a non-converging companion.
+
+        Regression: ``_get_eep_for_secondary`` used an unrealistically tight
+        tolerance, so a companion whose age could not be matched returned NaN.
+        That NaN propagated through ``add_mag`` and turned the ENTIRE combined
+        SED into NaN, silently discarding the otherwise-valid primary during
+        grid generation. The fix returns a primary-only SED in that case.
+
+        Uses faithful mocks: ``get_predictions`` returns NaN for non-finite
+        labels (and an unmatchable constant companion age), and the predictor
+        returns a NaN SED for NaN stellar parameters -- unlike the shared
+        fixture whose fixed return value masks the bug.
+        """
+        import warnings
+
+        preds = ["loga", "logl", "logt", "logr", "logg", "feh_surf", "afe_surf"]
+
+        def get_predictions(labels, **kwargs):
+            labels = np.asarray(labels, dtype=float)
+            if not np.all(np.isfinite(labels)):
+                return np.full(7, np.nan)
+            mini_l, feh_l, afe_l = labels[0], labels[2], labels[3]
+            # Primary (mini~1.0) has age 9.0 dex; the companion's age is a
+            # constant 9.05 dex regardless of EEP, so it can never be matched
+            # -> eep2 = NaN. The primary itself is a perfectly valid track point.
+            loga = 9.0 if np.isclose(mini_l, 1.0) else 9.05
+            return np.array([loga, 0.0, 3.7, 0.0, 4.5, feh_l, afe_l])
+
+        def sed(logl, logt, logg, feh_surf, afe, av, rv, dist):
+            # Faithful NN: NaN stellar params -> NaN SED.
+            if not np.all(np.isfinite([logl, logt, logg, feh_surf, afe])):
+                return np.full(5, np.nan)
+            return np.array([15.0, 14.5, 14.0, 13.8, 13.5])
+
+        tracks = MagicMock()
+        tracks.get_predictions.side_effect = get_predictions
+        tracks.predictions = preds
+        tracks.labels = ["mini", "eep", "feh", "afe"]
+        tracks.mini_bound = 0.08
+
+        with patch("brutus.core.neural_nets.FastNNPredictor"):
+            predictor = MagicMock()
+            predictor.sed.side_effect = sed
+            predictor.NFILT = 5
+            st = StarEvolTrack(tracks=tracks, verbose=False)
+            st.filters = ["u", "g", "r", "i", "z"]
+            st.predictor = predictor
+
+        # combine_seds=True: the combined SED must NOT be all-NaN (the bug).
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            sed_c, _, _ = st.get_seds(
+                mini=1.0, eep=350, feh=0.0, afe=0.0, smf=0.7, combine_seds=True
+            )
+        sed_c = np.asarray(sed_c)
+        assert np.all(np.isfinite(sed_c)), "valid primary destroyed by failed companion"
+
+        # combine_seds=False: returns [primary, secondary]; primary stays finite.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            sed_s, _, _ = st.get_seds(
+                mini=1.0, eep=350, feh=0.0, afe=0.0, smf=0.7, combine_seds=False
+            )
+        assert np.all(np.isfinite(np.asarray(sed_s[0])))
+
     def test_get_seds_multiple_stars(self, mock_star_evol_track):
         """Test get_seds with different stellar parameters."""
         # Test with single star but different parameters to exercise more code paths

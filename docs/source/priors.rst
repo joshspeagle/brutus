@@ -139,7 +139,7 @@ For diagnostic purposes, priors can be disabled or made uninformative:
    # Fit without Galactic structure prior
    fitter.fit(
        data, data_err, data_mask, labels, save_file='results.h5',
-       lngalprior=lambda *args: 0.0,  # Uniform prior
+       lngalprior=lambda *args, **kwargs: 0.0,  # Uniform prior
    )
 
 **Extinction priors:**
@@ -167,12 +167,16 @@ Pass custom Galactic structure prior functions via ``lngalprior``:
 
    from brutus.priors import logp_galactic_structure
 
-   def custom_galactic_prior(dist, gal_l, gal_b, dlabels=None):
-       """Custom prior: uniform within 100 pc, default otherwise."""
+   def custom_galactic_prior(dist, coord, labels=None):
+       """Custom prior: uniform within 100 pc, default otherwise.
+
+       ``dist`` is in kpc and ``coord`` is a single ``(l, b)`` tuple in
+       degrees, matching how ``fit()`` calls ``lngalprior``.
+       """
        if dist < 0.1:  # kpc
            # Return value at boundary to ensure continuity
-           return logp_galactic_structure(0.1, gal_l, gal_b, dlabels)
-       return logp_galactic_structure(dist, gal_l, gal_b, dlabels)
+           return logp_galactic_structure(0.1, coord, labels=labels)
+       return logp_galactic_structure(dist, coord, labels=labels)
 
    fitter.fit(
        data, data_err, data_mask, labels, save_file='results.h5',
@@ -205,7 +209,7 @@ Compare results with and without priors to assess prior influence:
    fitter.fit(data, data_err, data_mask, labels, save_file='with.h5',
               data_coords=coords)
    fitter.fit(data, data_err, data_mask, labels, save_file='without.h5',
-              lngalprior=lambda *args: 0.0)
+              lngalprior=lambda *args, **kwargs: 0.0)
 
    # Compare
    with h5py.File('with.h5', 'r') as f:

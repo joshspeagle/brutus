@@ -1164,6 +1164,17 @@ class BruteForce:
             data_mask[~clean] = False
         Ndim = sum(data_mask)
 
+        if Ndim == 0:
+            # Fail fast with a clear message. With zero valid bands the
+            # optimizer operates on empty arrays and divides by zero (an opaque
+            # ZeroDivisionError under numba), so this would otherwise abort a
+            # whole batch with an unhelpful error.
+            raise ValueError(
+                "No valid photometric bands for this object (all bands are "
+                "masked or non-finite). Fitting requires at least 4 valid bands "
+                "(3 free parameters scale/A(V)/R(V) plus >=1 DOF); filter such "
+                "objects out of the input before fitting."
+            )
         if Ndim < 4:
             warnings.warn(
                 f"Only {Ndim} valid photometric bands. Minimum 4 recommended "
@@ -1316,7 +1327,10 @@ class BruteForce:
         icov_sar[init_sel] = icov_sar_new
 
         # Apply dimensional prior
-        if dim_prior:
+        if dim_prior and Ndim > 0:
+            # Guard against Ndim == 0 (fully-masked object): np.log(0) = -inf
+            # would inject +inf into every model's log-likelihood. For Ndim >= 1
+            # this is identical to the previous behaviour.
             lnl -= 0.5 * (3.0 - Ndim) * np.log(Ndim)
 
         if return_vals:
@@ -1443,8 +1457,11 @@ class BruteForce:
         # Select precision matrices for the chosen models.
         icovs_selected = icovs_sar[sel]  # Shape: (Nsel, 3, 3)
 
-        # Monte Carlo integration over distance and extinction (VECTORIZED)
-        Nmc = min(Nmc_prior, int(mem_lim * 1e6 / (8.0 * Nsel * 4)))
+        # Monte Carlo integration over distance and extinction (VECTORIZED).
+        # Floor at 1: a very small mem_lim relative to Nsel can drive the
+        # memory-derived cap to 0, which would otherwise yield empty MC draws,
+        # log(Nmc) = -inf, and a crash in the downstream reduction.
+        Nmc = max(1, min(Nmc_prior, int(mem_lim * 1e6 / (8.0 * Nsel * 4))))
 
         # Transform PRECISION matrix from (scale, Av, Rv) to (ln d, Av, Rv).
         # This reparameterization avoids the Jacobian bias that arises when
@@ -1778,6 +1795,31 @@ class BruteForce:
 
         verbose : bool, optional
             Whether to print progress to stderr. Default is True.
+
+        max_models : int, optional
+            When the number of models selected for an object exceeds this, the
+            models are subsampled (see ``subsample_mode``) to bound memory and
+            runtime. Default is 50000.
+
+        precision_shrinkage : float, optional
+            Fractional shrinkage applied to the off-diagonal terms of the 3x3
+            (scale, A(V), R(V)) precision matrix before Monte Carlo sampling,
+            which stabilizes strongly-correlated fits. 0 disables it; ~0.03 is a
+            reasonable nonzero value. Default is 0.0.
+
+        subsample_mode : str, optional
+            Strategy used to thin models when the selection exceeds
+            ``max_models``: ``'representative'`` (Gumbel-max sampling weighted by
+            likelihood) or ``'topk'`` (the highest-likelihood models). Default
+            is ``'representative'``.
+
+        R_solar : float, optional
+            Solar galactocentric radius in kpc, used by the Galactic structure
+            prior. Default is 8.2.
+
+        Z_solar : float, optional
+            Solar height above the Galactic midplane in kpc, used by the
+            Galactic structure prior. Default is 0.025.
 
         Returns
         -------

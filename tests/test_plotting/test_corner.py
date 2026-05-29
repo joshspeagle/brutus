@@ -92,6 +92,40 @@ class TestCornerplot:
 
         plt.close(fig)
 
+    def test_cornerplot_does_not_mutate_labels(
+        self, sample_indices, basic_params, direct_data
+    ):
+        """A caller-supplied labels list must not be mutated, and reusing it
+        must not accumulate Av/Rv/Parallax/Distance entries.
+
+        Regression: cornerplot appended those names onto the caller's list in
+        place, so a second call with the same list raised ValueError (no field
+        of name 'Av') or produced mislabeled axes.
+        """
+        labels = ["mass", "feh"]
+        fig1, _ = cornerplot(
+            sample_indices,
+            direct_data,
+            basic_params,
+            labels=labels,
+            applied_parallax=False,
+            span=[0.9 for _ in range(6)],
+        )
+        plt.close(fig1)
+        assert labels == ["mass", "feh"]  # not mutated in place
+
+        # Reuse the same list object: must not raise or mislabel.
+        fig2, _ = cornerplot(
+            sample_indices,
+            direct_data,
+            basic_params,
+            labels=labels,
+            applied_parallax=False,
+            span=[0.9 for _ in range(6)],
+        )
+        plt.close(fig2)
+        assert labels == ["mass", "feh"]
+
     def test_cornerplot_with_parallax(self, sample_indices, basic_params, direct_data):
         """Test cornerplot with parallax information."""
         fig, axes = cornerplot(

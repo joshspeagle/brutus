@@ -204,14 +204,21 @@ class FastNN:
         The scaling is applied as: x_scaled = (x - xmin) / (xmax - xmin)
         where xmin and xmax are the bounds from the training data.
         """
-        try:
-            # Handle 1D input case
-            xp = (np.atleast_2d(x) - self.xmin[None, :]) / self.xspan[None, :]
-            return xp.T
-        except (ValueError, IndexError):
-            # Handle 2D input case (multiple evaluations)
-            xp = (np.atleast_2d(x) - self.xmin[:, None]) / self.xspan[:, None]
-            return xp
+        # Dispatch on input dimensionality explicitly. The previous
+        # implementation tried the 1D normalization and fell back to the 2D
+        # form only when broadcasting raised a ValueError; that dispatch is
+        # unsound because a (6, 6) batch -- exactly 6 samples for 6 parameters
+        # -- broadcasts against xmin[None, :] (shape (1, 6)) WITHOUT error and
+        # silently normalized along the wrong axis, producing corrupted
+        # photometry for the N == 6 case only.
+        x = np.asarray(x)
+        if x.ndim == 1:
+            # 1D input of shape (Ninput,) -> (Ninput, 1)
+            xp = (x - self.xmin) / self.xspan
+            return xp[:, None]
+        # 2D input of shape (Ninput, Nsamples) -> (Ninput, Nsamples)
+        xp = (x - self.xmin[:, None]) / self.xspan[:, None]
+        return xp
 
     def sigmoid(self, a):
         """

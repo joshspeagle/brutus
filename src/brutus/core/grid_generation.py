@@ -66,7 +66,8 @@ measurements (1 mas = 1 kpc) and is documented in the grid attributes.
 where m_0 is the unreddened magnitude, and (a, b) are fitted coefficients.
 This allows fast computation of reddened photometry for arbitrary (A_V, R_V).
 
-**Grid Format**: HDF5 files follow the format established in [1]_ and contain three datasets:
+**Grid Format**: HDF5 files follow the format established in Speagle et al. (2025)
+and contain three datasets:
 - `mag_coeffs`: Structured array (Nmodel, Nfilter, 3) with coefficients
 - `labels`: Structured array (Nmodel,) with input parameters
 - `parameters`: Structured array (Nmodel,) with predicted stellar parameters
@@ -78,8 +79,8 @@ covering a limited parameter space.
 
 References
 ----------
-.. [1] Grid format follows the structure established in Speagle et al.
-       (in prep), optimized for StarGrid interpolation performance.
+- Grid format follows the structure established in Speagle et al. (2025),
+  optimized for StarGrid interpolation performance.
 """
 
 import sys
@@ -90,11 +91,6 @@ from pathlib import Path
 
 import h5py
 import numpy as np
-
-try:
-    from scipy import polyfit as scipy_polyfit
-except ImportError:
-    from numpy import polyfit as scipy_polyfit
 
 # Import brutus components
 from ..data.filters import FILTERS
@@ -572,12 +568,12 @@ class GridGenerator:
         # Fit A_V dependence at each R_V
         # For each (rv, filter): fit m vs A_V
         sfits = np.array(
-            [scipy_polyfit(av_grid, s, 1, w=av_wt).T for s in seds]
+            [np.polyfit(av_grid, s, 1, w=av_wt).T for s in seds]
         )  # Shape: (Nrv, Nfilt, 2) where [..., 0] = slope, [..., 1] = intercept
 
         # Fit R_V dependence of the A_V slope
         # For each filter: fit A_V_slope vs R_V
-        sedr, seda = scipy_polyfit(
+        sedr, seda = np.polyfit(
             rv_grid, sfits[:, :, 0], 1, w=rv_wt
         )  # sedr: Rv dependence, seda: Av vector at Rv=3.3
 

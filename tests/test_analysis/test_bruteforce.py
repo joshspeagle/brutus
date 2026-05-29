@@ -481,6 +481,47 @@ class TestBruteForcePosterior:
         assert mc_ess.shape == (len(sel),)
         assert np.all(mc_ess >= 0)
 
+    def test_logpost_grid_tiny_mem_lim(self, bruteforce_fitter, synthetic_observation):
+        """A tiny mem_lim must not crash; Nmc is floored to >= 1.
+
+        Regression: ``Nmc = min(Nmc_prior, int(mem_lim*1e6/(32*Nsel)))`` could
+        be 0 for a small mem_lim, yielding empty MC draws, ``log(0)``, and a
+        crash in the downstream reduction.
+        """
+        import warnings
+
+        flux, flux_err, mask, _ = synthetic_observation
+        like_results = bruteforce_fitter.loglike_grid(
+            flux, flux_err, mask, return_vals=True
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            results = bruteforce_fitter.logpost_grid(
+                like_results, Nmc_prior=10, wt_thresh=0.01, mem_lim=1e-4
+            )
+        sel, _, lnp, dist_mc = results[0], results[1], results[2], results[3]
+        assert len(sel) > 0
+        assert dist_mc.shape[1] >= 1  # Nmc floored to >= 1
+        assert not np.any(np.isnan(lnp))
+
+    def test_loglike_grid_all_masked_raises(
+        self, bruteforce_fitter, synthetic_observation
+    ):
+        """A fully-masked object must fail fast with a clear error.
+
+        Regression: with zero valid bands the optimizer divided by zero (an
+        opaque ZeroDivisionError under numba) and the dim_prior term hit
+        log(0). loglike_grid now raises an actionable ValueError instead.
+        """
+        import warnings
+
+        flux, flux_err, mask, _ = synthetic_observation
+        zero_mask = np.zeros_like(mask, dtype=bool)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match="valid photometric band"):
+                bruteforce_fitter.loglike_grid(flux, flux_err, zero_mask)
+
     def test_logpost_model_selection(self, bruteforce_fitter, synthetic_observation):
         """Test different model selection methods."""
         flux, flux_err, mask, true_idx = synthetic_observation

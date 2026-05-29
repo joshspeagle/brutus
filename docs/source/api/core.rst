@@ -31,7 +31,7 @@ For **individual field stars** with unknown evolutionary state:
    tracks = EEPTracks()
 
    # Photometry generation (on-the-fly)
-   star = StarEvolTrack(tracks=tracks, filters=['g', 'r', 'i', 'z'])
+   star = StarEvolTrack(tracks=tracks, filters=['PS_g', 'PS_r', 'PS_i', 'PS_z'])
    sed, params1, params2 = star.get_seds(
        mini=1.0, eep=400, feh=0.0,
        av=0.1, dist=1000.0
@@ -45,8 +45,8 @@ For **large samples** requiring speed:
    from brutus.data import load_models
 
    # Load pre-computed grid
-   models, labels, label_mask = load_models('grid_file.h5')
-   grid = StarGrid(models, labels, label_mask)
+   models, labels, label_mask = load_models('grid_mist_v9.h5')
+   grid = StarGrid(models, labels)
 
    # Fast photometry lookup (no re-computation)
    # Use with BruteForce fitter for thousands to millions of stars

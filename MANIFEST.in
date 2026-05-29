@@ -6,7 +6,7 @@ include CHANGELOG.md
 include pyproject.toml
 
 # Include data files
-include src/brutus/PSMrLF_lnprior.dat
+include src/brutus/priors/PSMrLF_lnprior.dat
 
 # Include package data recursively
 recursive-include src/brutus *.dat *.txt *.h5

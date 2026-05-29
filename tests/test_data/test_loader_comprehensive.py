@@ -46,3 +46,24 @@ class TestPlaceholder:
         # This minimal test ensures the file doesn't break pytest discovery
         # while we rely on the superior real data tests in test_data_comprehensive.py
         pass
+
+
+class TestLoadOffsetsSingleRow:
+    """Regression: a single-filter offsets file must not crash."""
+
+    def test_single_row_file(self, tmp_path):
+        # np.loadtxt collapses a one-row file to shape (2,); the old arr.T
+        # unpack then yielded 0-d scalars and a "nonzero on 0d arrays"
+        # ValueError downstream.
+        p = tmp_path / "offsets_single.txt"
+        p.write_text("PS_g 1.02\n")
+        out = load_offsets(str(p), filters=["PS_g"], verbose=False)
+        assert out.shape == (1,)
+        assert np.isclose(out[0], 1.02)
+
+    def test_single_row_missing_filter(self, tmp_path):
+        p = tmp_path / "offsets_single.txt"
+        p.write_text("PS_g 1.02\n")
+        out = load_offsets(str(p), filters=["PS_g", "PS_r"], verbose=False)
+        assert np.isclose(out[0], 1.02)
+        assert out[1] == 1.0  # not in file -> no-offset default

@@ -493,16 +493,15 @@ def kernel_tophat(reds, kp):
     >>> logw = kernel_tophat(reds, kp)
     >>> # Samples within [0.3, 0.7] should have higher weights
     """
-    # Extract kernel parameters
+    # Extract kernel parameters. The mean may be a full per-object/per-sample
+    # array (e.g. when a reddening template makes the cloud mean differ between
+    # objects); keep it broadcastable instead of collapsing it to a scalar.
+    # Collapsing the mean (the previous behaviour) applied object 0's mean to
+    # every object, silently corrupting the likelihood for template fits.
     kmean, kwidth = kp[0], kp[1]
+    kwidth = np.asarray(kwidth)
 
-    # Handle array inputs by taking first element if needed
-    if hasattr(kmean, "__len__"):
-        kmean = kmean.flat[0] if hasattr(kmean, "flat") else kmean[0]
-    if hasattr(kwidth, "__len__"):
-        kwidth = kwidth.flat[0] if hasattr(kwidth, "flat") else kwidth[0]
-
-    if kwidth <= 0:
+    if np.any(kwidth <= 0):
         raise ValueError(f"Kernel width must be positive, got {kwidth}")
 
     klow, khigh = kmean - kwidth, kmean + kwidth  # tophat low/high edges
@@ -546,16 +545,13 @@ def kernel_gauss(reds, kp):
     >>> logw = kernel_gauss(reds, kp)
     >>> # Sample at 0.5 should have highest weight
     """
-    # Extract kernel parameters
+    # Extract kernel parameters. Keep the mean broadcastable (it may differ
+    # per object/sample when a reddening template is applied); collapsing it to
+    # a scalar would apply object 0's mean to every object.
     kmean, kstd = kp[0], kp[1]
+    kstd = np.asarray(kstd)
 
-    # Handle array inputs by taking first element if needed
-    if hasattr(kmean, "__len__"):
-        kmean = kmean.flat[0] if hasattr(kmean, "flat") else kmean[0]
-    if hasattr(kstd, "__len__"):
-        kstd = kstd.flat[0] if hasattr(kstd, "flat") else kstd[0]
-
-    if kstd <= 0:
+    if np.any(kstd <= 0):
         raise ValueError(f"Kernel standard deviation must be positive, got {kstd}")
 
     norm = np.sqrt(2 * np.pi) * kstd
@@ -597,16 +593,13 @@ def kernel_lorentz(reds, kp):
     >>> logw = kernel_lorentz(reds, kp)
     >>> # Sample at 0.5 should have highest weight, with heavy tails
     """
-    # Extract kernel parameters
+    # Extract kernel parameters. Keep the mean broadcastable (it may differ
+    # per object/sample when a reddening template is applied); collapsing it to
+    # a scalar would apply object 0's mean to every object.
     kmean, khwhm = kp[0], kp[1]
+    khwhm = np.asarray(khwhm)
 
-    # Handle array inputs by taking first element if needed
-    if hasattr(kmean, "__len__"):
-        kmean = kmean.flat[0] if hasattr(kmean, "flat") else kmean[0]
-    if hasattr(khwhm, "__len__"):
-        khwhm = khwhm.flat[0] if hasattr(khwhm, "flat") else khwhm[0]
-
-    if khwhm <= 0:
+    if np.any(khwhm <= 0):
         raise ValueError(f"Kernel HWHM must be positive, got {khwhm}")
 
     norm = np.pi * khwhm

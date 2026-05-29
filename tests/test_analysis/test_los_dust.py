@@ -158,6 +158,30 @@ class TestKernelFunctions:
         with pytest.raises(ValueError, match="Kernel HWHM must be positive"):
             kernel_lorentz(reds, (1.5, -0.1))
 
+    def test_kernel_per_object_mean(self):
+        """Per-object cloud means must not collapse to object 0's mean.
+
+        Regression: the kernels previously did ``kmean = kmean.flat[0]``, so a
+        per-object mean array (as produced by a reddening template) wrongly
+        applied object 0's mean to every object -- giving wrong (often -inf
+        for the tophat) weights for objects 1..N-1.
+        """
+        nobj, nsamps = 3, 4
+        kmean = np.array([[0.5] * nsamps, [1.5] * nsamps, [2.5] * nsamps])
+        reds = kmean.copy()  # each object sits exactly on its own mean
+        kstd = np.full((nobj, nsamps), 0.1)
+
+        lg = kernel_gauss(reds, (kmean, kstd))
+        assert np.all(np.isfinite(lg))
+        # Every object is at its own peak -> all rows identical.
+        assert np.allclose(lg[0], lg[1]) and np.allclose(lg[0], lg[2])
+
+        lt = kernel_tophat(reds, (kmean, np.full((nobj, nsamps), 0.2)))
+        assert np.all(np.isfinite(lt))  # rows 1, 2 were -inf before the fix
+
+        ll = kernel_lorentz(reds, (kmean, kstd))
+        assert np.allclose(ll[0], ll[1]) and np.allclose(ll[0], ll[2])
+
 
 class TestPriorTransform:
     """Test the prior transform function for nested sampling."""
@@ -350,6 +374,46 @@ class TestLogLikelihood:
         )
 
         assert np.isfinite(loglike)
+
+    def test_loglike_template_reds_per_object_means(self):
+        """With per-object template reddenings, the joint log-likelihood must
+        equal the sum of the per-object log-likelihoods.
+
+        Regression for the kernel mean-collapse: every object except object 0
+        was previously evaluated against object 0's cloud mean, so the joint
+        likelihood did not decompose object-by-object.
+        """
+        nobj, nsamps = 3, 100
+        dsamps = np.full((nobj, nsamps), 12.0)
+        template_reds = np.array([0.5, 1.5, 2.5])
+        red_fg, red_bg = 0.05, 1.0
+        rsamps = np.empty((nobj, nsamps))
+        for i in range(nobj):
+            rsamps[i] = red_bg * template_reds[i]  # each obj at its own bg mean
+        theta = [0.0, 0.05, 0.05, red_fg, 8.0, red_bg]
+
+        full = los_clouds_loglike_samples(
+            theta,
+            dsamps,
+            rsamps,
+            kernel="gauss",
+            template_reds=template_reds,
+            Ndraws=nsamps,
+            monotonic=False,
+        )
+        per_obj = sum(
+            los_clouds_loglike_samples(
+                theta,
+                dsamps[i : i + 1],
+                rsamps[i : i + 1],
+                kernel="gauss",
+                template_reds=template_reds[i : i + 1],
+                Ndraws=nsamps,
+                monotonic=False,
+            )
+            for i in range(nobj)
+        )
+        assert np.isclose(full, per_obj, atol=1e-6)
 
     def test_loglike_additive_foreground(self):
         """Test log-likelihood with additive foreground."""

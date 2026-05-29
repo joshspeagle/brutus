@@ -51,7 +51,7 @@ Stellar parameters are accessed via the model grid using ``model_idx``:
    with h5py.File('results.h5', 'r') as f:
        idx = f['model_idx'][0]  # First star
 
-   # Available labels: mini, feh, eep, smf, loga, logl, logt, logg, Mr, agewt
+   # Available labels: mini, feh, eep, loga, logl, logt, logg, agewt
    masses = grid_labels['mini'][idx]      # Initial mass (Msun)
    fehs = grid_labels['feh'][idx]         # [Fe/H]
    log_ages = grid_labels['loga'][idx]    # log10(age/yr)
@@ -118,17 +118,50 @@ For quick visualization with external libraries:
 Diagnostics
 -----------
 
-Chi-Squared
-^^^^^^^^^^^
+Goodness of Fit
+^^^^^^^^^^^^^^^
 
-Large ``obj_chi2min`` values (much greater than the number of bands) indicate the model fits poorly. Possible causes:
+Use a **p-value** to assess fit quality, not ``chi2/Nbands``. The raw ratio is not
+variance-stabilizing across different numbers of bands and conflates the degrees of
+freedom with the band count. Instead, compare ``obj_chi2min`` to the chi-squared
+distribution with the proper degrees of freedom.
+
+The fit has 3 free parameters (scale, A_V, R_V), so the degrees of freedom are
+``dof = obj_Nbands - 3``. When a parallax is provided, ``obj_chi2min`` includes the
+parallax contribution and ``obj_Nbands`` counts the parallax as an extra band (it adds
+1 band and 0 free parameters), so ``dof = obj_Nbands - 3`` in both cases.
+
+.. code-block:: python
+
+   from scipy import stats
+
+   with h5py.File('results.h5', 'r') as f:
+       chi2min = f['obj_chi2min'][:]    # (Nstars,)
+       n_bands = f['obj_Nbands'][:]     # (Nstars,)
+
+   dof = np.maximum(n_bands - 3, 1)
+   pvalue = 1.0 - stats.chi2.cdf(chi2min, dof)
+
+   # Classify fits
+   good = pvalue > 0.001
+   marginal = (pvalue > 1e-6) & (pvalue <= 0.001)
+   poor = pvalue <= 1e-6
+
+Thresholds:
+
+- ``p > 0.001``: Good fit
+- ``1e-6 < p <= 0.001``: Marginal
+- ``p <= 1e-6``: Poor fit (model inadequacy)
+
+Poor fits typically arise from:
 
 - Underestimated photometric errors
 - Bad photometry (outliers, saturation, blending)
-- Object outside model coverage (white dwarf, brown dwarf, unresolved binary)
+- Object outside model coverage (white dwarf, brown dwarf, unresolved binary, YSO)
 
 .. warning::
-   Chi-squared depends on your error estimates being accurate. It should not be used as the sole quality metric.
+   The p-value depends on your error estimates being accurate. Underestimated errors
+   inflate ``obj_chi2min`` and drive the p-value toward zero even for a correct model.
 
 Parallax Consistency
 ^^^^^^^^^^^^^^^^^^^^
@@ -159,7 +192,7 @@ To check if results are prior-dominated, compare fits with and without priors:
    fitter.fit(..., save_file='with_prior.h5', data_coords=coords)
 
    # Without Galactic prior
-   fitter.fit(..., save_file='no_prior.h5', lngalprior=lambda *args: 0.0)
+   fitter.fit(..., save_file='no_prior.h5', lngalprior=lambda *args, **kwargs: 0.0)
 
 Large differences (>30%) indicate the prior strongly influences results, which is expected for faint stars with poor photometry.
 

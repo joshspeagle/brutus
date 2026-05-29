@@ -108,7 +108,7 @@ def quantile(x, q, weights=None):
 
     >>> weights = np.array([1, 1, 1, 1, 10])  # Last sample heavily weighted
     >>> quantile(x, q, weights=weights)
-    array([5., 5., 5.])
+    array([4.        , 4.63636364, 5.        ])
     """
     # Initial check.
     x = np.atleast_1d(x)
@@ -144,8 +144,7 @@ def draw_sar(
     rstate=None,
 ):
     """
-    Generate random draws from the joint scale-A_V-R_V posterior for a.
-
+    Generate random draws from the joint scale-A_V-R_V posterior for a
     given object.
 
     This function generates Monte Carlo samples from the joint posterior

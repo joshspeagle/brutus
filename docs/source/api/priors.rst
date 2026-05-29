@@ -35,26 +35,38 @@ Priors are automatically applied by the ``BruteForce`` fitter, but can also be e
    log_prior_imf = logp_imf(masses)
 
    # Evaluate Galactic structure prior
-   distances = np.array([100, 500, 1000, 5000])  # pc
+   distances = np.array([0.1, 0.5, 1.0, 5.0])  # kpc
    gal_l, gal_b = 45.0, 10.0  # Galactic coordinates (deg)
-   log_prior_gal = logp_galactic_structure(distances, gal_l, gal_b)
+   log_prior_gal = logp_galactic_structure(distances, (gal_l, gal_b))
 
    # Evaluate extinction prior from 3-D dust map
+   from brutus.dust import Bayestar
+   dustmap = Bayestar()  # load a 3-D dust map object
    av_values = np.array([0.1, 0.5, 1.0, 2.0])  # mag
-   log_prior_dust = logp_extinction(av_values, distances[0], gal_l, gal_b)
+   log_prior_dust = logp_extinction(av_values, dustmap, (gal_l, gal_b),
+                                    distance=distances[0])
 
 **Customization:**
 
-Advanced users can disable or customize priors:
+Advanced users can customize or disable priors by passing callables to ``fit()``.
+The Galactic structure prior is supplied via ``lngalprior``, which is called as
+``lngalprior(dist, coord, labels=...)`` where ``coord`` is a single ``(l, b)`` tuple:
 
 .. code-block:: python
 
    from brutus.analysis import BruteForce
 
-   # Disable specific priors
-   fitter = BruteForce(grid, use_galactic_prior=False)
+   fitter = BruteForce(grid)
 
-   # Or provide custom prior functions (requires modifying internals)
+   # Disable the Galactic structure prior with a flat (zero) prior
+   fitter.fit(
+       data=flux, data_err=flux_err, data_mask=mask,
+       data_labels=obj_ids, save_file='results.h5',
+       data_coords=coords,
+       lngalprior=lambda dist, coord, labels=None: np.zeros(len(np.atleast_1d(dist))),
+   )
+
+   # Or provide a custom Galactic prior function with the same signature
 
 **See Also:**
 

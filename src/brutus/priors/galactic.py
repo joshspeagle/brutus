@@ -62,17 +62,14 @@ Evaluate disk number density:
 
 Combined Galactic structure prior:
 
->>> from astropy.coordinates import SkyCoord
 >>> from brutus.priors.galactic import logp_galactic_structure
 >>>
->>> # Sky position
->>> coords = SkyCoord(ra=180, dec=30, unit='deg', frame='icrs')
->>> distances = np.array([1.0, 2.0, 5.0])  # kpc
+>>> # Galactic coordinates (l, b) in degrees and distances in kpc
+>>> coord = (90.0, 30.0)
+>>> distances = np.array([1.0, 2.0, 5.0])
 >>>
->>> # Evaluate prior
->>> log_prior = logp_galactic_structure(
-...     coords, distances, feh=0.0, disk_frac=0.9
-... )
+>>> # Evaluate the combined thin disk + thick disk + halo prior
+>>> log_prior = logp_galactic_structure(distances, coord)
 """
 
 import warnings

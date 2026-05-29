@@ -102,7 +102,8 @@ This allows prediction of stellar parameters for any combination of mass, evolut
    tracks = EEPTracks()
 
    # Get predictions for a 1.0 solar mass star at TAMS with solar metallicity
-   params = tracks.get_predictions([1.0, 454, 0.0])
+   # Labels are [mini, eep, feh, afe]
+   params = tracks.get_predictions([1.0, 454, 0.0, 0.0])
    # Returns: [log_age, log_L, log_Teff, log_g, ...]
 
    print(f"Age: {10**params[0] / 1e9:.2f} Gyr")
@@ -159,9 +160,9 @@ Use tracks when modeling individual stars with unknown masses:
    )
 
    seds, params1, params2 = result
-   # seds: flux densities in each filter
-   # params1: input parameters (mini, eep, feh)
-   # params2: derived parameters (Teff, logg, age, etc.)
+   # seds: magnitudes in each filter
+   # params1: primary component stellar parameters (Teff, logg, age, etc.)
+   # params2: secondary component parameters (for binaries)
 
 Isochrones (``Isochrone``, ``StellarPop``)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -184,9 +185,9 @@ Use :term:`isochrones <isochrone>` when modeling coeval populations (clusters):
    )
 
    seds, params1, params2 = result
-   # seds: (N_stars, N_filters) array of flux densities along the isochrone
-   # params1: stellar parameters for each point
-   # params2: derived quantities
+   # seds: (N_stars, N_filters) array of magnitudes along the isochrone
+   # params1: primary component stellar parameters for each point
+   # params2: secondary component parameters (for binaries)
 
 From Parameters to Photometry
 -----------------------------
@@ -300,7 +301,7 @@ Pre-computed Grids vs On-the-Fly Models
    from brutus.data import load_models
 
    models, labels, label_mask = load_models('grid_mist_v9.h5', filters=filters)
-   grid = StarGrid(models, labels, label_mask)
+   grid = StarGrid(models, labels)
 
 **On-the-fly models** (for flexibility):
 

@@ -353,9 +353,12 @@ def load_offsets(filepath, filters=None, verbose=True):
     if isinstance(_tmp, tuple):
         filts, vals = _tmp
     else:
-        arr = np.asarray(_tmp)
-        # Expecting shape (Nrows, 2) -> transpose to get two columns
-        filts, vals = arr.T
+        # np.loadtxt collapses a single data row to shape (2,); atleast_2d
+        # promotes it back to (Nrows, 2) so a single-filter offsets file does
+        # not crash (the old arr.T unpack yielded 0-d scalars and a later
+        # "nonzero on 0d arrays" ValueError).
+        arr = np.atleast_2d(np.asarray(_tmp))
+        filts, vals = arr[:, 0], arr[:, 1]
     vals = vals.astype(float)
 
     # Fill in offsets where appropriate.

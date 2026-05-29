@@ -97,3 +97,7 @@ virtualenv/
 .ruff_cache/
 tutorials/plots/diag_postpred/
 tutorials/plots/diagnostics/
+
+# Tutorial notebooks copied into the docs tree at build time by conf.py
+# (_copy_tutorials); the source of truth is tutorials/*.ipynb.
+docs/source/tutorials/tutorial_*.ipynb

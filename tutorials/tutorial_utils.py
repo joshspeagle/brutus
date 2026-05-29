@@ -167,24 +167,20 @@ def find_brutus_data_file(filename, search_paths=None):
         except ImportError:
             pass
 
-        # BRUTUS_DATA_DIR environment variable
-        env_dir = os.environ.get("BRUTUS_DATA_DIR")
-        if env_dir:
-            search_paths.append(Path(env_dir))
+        # Data-directory environment variables. BRUTUS_DATA_DIR is the tutorial
+        # convention; ASTRO_BRUTUS_DATA_DIR is what Pooch itself honors, so we
+        # check both to stay consistent with the download cache override.
+        for _env_name in ("BRUTUS_DATA_DIR", "ASTRO_BRUTUS_DATA_DIR"):
+            env_dir = os.environ.get(_env_name)
+            if env_dir:
+                search_paths.append(Path(env_dir))
 
-        # Standard project data directories
+        # Standard project data directories (relative to the repo layout).
         search_paths.extend(
             [
                 tutorials_dir.parent / "data" / "DATAFILES",
                 tutorials_dir.parent / "data" / "benchmarks",
                 tutorials_dir.parent / "data" / "VICs",
-                Path("/mnt/d/Dropbox/GitHub/brutus/data/DATAFILES"),
-                Path("/mnt/d/Dropbox/GitHub/brutus/data/benchmarks"),
-                Path("/mnt/d/Dropbox/GitHub/brutus/data/VICs"),
-                Path("/mnt/d/Dropbox/GitHub/brutus/tutorials"),
-                Path("/mnt/c/Dropbox/GitHub/brutus/data/DATAFILES"),
-                Path("/mnt/c/Dropbox/GitHub/brutus/data/benchmarks"),
-                Path("/mnt/c/Dropbox/GitHub/brutus/data/VICs"),
                 Path("../data/DATAFILES"),
                 Path("../data/benchmarks"),
                 Path("../data/VICs"),
