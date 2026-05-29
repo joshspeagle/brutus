@@ -39,7 +39,7 @@ For data management::
 from __future__ import division, print_function
 
 # Version management
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 # Core functionality imports
 try:
