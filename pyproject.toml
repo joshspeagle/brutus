@@ -120,11 +120,14 @@ ensure_newline_before_comments = true
 
 [tool.pytest.ini_options]
 minversion = "6.0"
+# Coverage flags are intentionally NOT enabled by default. Writing the HTML
+# coverage report fails on some filesystems (notably WSL/DrvFs, with
+# "OSError: [Errno 22] Invalid argument" on htmlcov/*), which aborts every
+# pytest invocation including --collect-only. Default runs therefore omit
+# coverage; CI measures it explicitly (see .github/workflows/tests.yml):
+#   NUMBA_DISABLE_JIT=1 pytest tests/ --cov=brutus --cov-report=xml
+# For a local coverage report, run that command yourself.
 addopts = [
-    "--cov=brutus",
-    "--cov-report=term-missing",
-    "--cov-report=xml",
-    "--cov-report=html",
     "--strict-markers",
     "--strict-config",
 ]
