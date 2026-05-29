@@ -67,6 +67,20 @@ import numpy as np
 __all__ = ["logp_imf", "logp_ps1_luminosity_function"]
 
 
+def _powerlaw_mass_integral(m_lo, m_hi, alpha):
+    """Integral of ``M**(-alpha) dM`` from ``m_lo`` to ``m_hi``.
+
+    Uses the logarithmic form ``ln(m_hi / m_lo)`` when ``alpha`` is (near) 1,
+    where the usual ``(m**(1 - alpha)) / (1 - alpha)`` expression is singular
+    (0/0). This keeps the IMF normalization finite and correct for the
+    physically meaningful flat-in-log slope ``alpha == 1`` (and tames the
+    catastrophic cancellation that occurs for slopes very close to 1).
+    """
+    if np.isclose(alpha, 1.0):
+        return np.log(m_hi / m_lo)
+    return (m_hi ** (1.0 - alpha) - m_lo ** (1.0 - alpha)) / (1.0 - alpha)
+
+
 def logp_imf(
     mgrid,
     alpha_low=1.3,
@@ -154,23 +168,17 @@ def logp_imf(
     # Low-mass regime: mass_min to min(mass_break, mass_max)
     if mass_max >= mass_break:
         # Both regimes present
-        norm_low = (mass_break ** (1.0 - alpha_low) - mass_min ** (1.0 - alpha_low)) / (
-            1.0 - alpha_low
-        )
+        norm_low = _powerlaw_mass_integral(mass_min, mass_break, alpha_low)
         # High-mass regime: mass_break to mass_max
         # The high-mass PDF includes continuity factor: mass_break^(alpha_high - alpha_low)
         continuity_factor = mass_break ** (alpha_high - alpha_low)
-        norm_high = (
-            continuity_factor
-            * (mass_max ** (1.0 - alpha_high) - mass_break ** (1.0 - alpha_high))
-            / (1.0 - alpha_high)
+        norm_high = continuity_factor * _powerlaw_mass_integral(
+            mass_break, mass_max, alpha_high
         )
         norm = norm_low + norm_high
     else:
         # Only low-mass regime present
-        norm = (mass_max ** (1.0 - alpha_low) - mass_min ** (1.0 - alpha_low)) / (
-            1.0 - alpha_low
-        )
+        norm = _powerlaw_mass_integral(mass_min, mass_max, alpha_low)
 
     # Handle binary component if provided
     if mgrid2 is not None:

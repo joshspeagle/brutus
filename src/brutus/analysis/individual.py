@@ -1316,7 +1316,10 @@ class BruteForce:
         icov_sar[init_sel] = icov_sar_new
 
         # Apply dimensional prior
-        if dim_prior:
+        if dim_prior and Ndim > 0:
+            # Guard against Ndim == 0 (fully-masked object): np.log(0) = -inf
+            # would inject +inf into every model's log-likelihood. For Ndim >= 1
+            # this is identical to the previous behaviour.
             lnl -= 0.5 * (3.0 - Ndim) * np.log(Ndim)
 
         if return_vals:
@@ -1443,8 +1446,11 @@ class BruteForce:
         # Select precision matrices for the chosen models.
         icovs_selected = icovs_sar[sel]  # Shape: (Nsel, 3, 3)
 
-        # Monte Carlo integration over distance and extinction (VECTORIZED)
-        Nmc = min(Nmc_prior, int(mem_lim * 1e6 / (8.0 * Nsel * 4)))
+        # Monte Carlo integration over distance and extinction (VECTORIZED).
+        # Floor at 1: a very small mem_lim relative to Nsel can drive the
+        # memory-derived cap to 0, which would otherwise yield empty MC draws,
+        # log(Nmc) = -inf, and a crash in the downstream reduction.
+        Nmc = max(1, min(Nmc_prior, int(mem_lim * 1e6 / (8.0 * Nsel * 4))))
 
         # Transform PRECISION matrix from (scale, Av, Rv) to (ln d, Av, Rv).
         # This reparameterization avoids the Jacobian bias that arises when

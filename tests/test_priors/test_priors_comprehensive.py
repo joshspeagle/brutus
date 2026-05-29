@@ -88,6 +88,24 @@ class TestStellarPriors:
         # Should produce different results
         assert not np.allclose(logp_custom, logp_default)
 
+    def test_logp_imf_alpha_unity_no_crash(self):
+        """A power-law slope of exactly 1.0 must not raise.
+
+        Regression: the IMF normalization used ``(m**(1-alpha))/(1-alpha)``,
+        which is 0/0 for ``alpha == 1`` and raised ZeroDivisionError. The
+        ``alpha == 1`` (flat-in-log) slope is physically meaningful.
+        """
+        masses = np.array([0.3, 1.0, 5.0])
+        for kwargs in (
+            {"alpha_low": 1.0},
+            {"alpha_high": 1.0},
+            {"alpha_low": 1.0, "alpha_high": 1.0},
+        ):
+            logp = logp_imf(masses, **kwargs)
+            finite = logp[np.isfinite(logp)]
+            assert finite.size >= 1
+            assert np.all(np.isfinite(finite))
+
     def test_logp_imf_normalization(self):
         """Test that IMF is properly normalized."""
         # Create fine mass grid

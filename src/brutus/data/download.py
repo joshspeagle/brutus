@@ -85,6 +85,7 @@ def _fetch(name, symlink_dir):
         Path to the symlinked file in the target directory.
     """
     import os
+    import shutil
 
     # In CI, try to use cached file directly if it exists to avoid re-downloads
     if os.environ.get("CI") == "true":
@@ -108,8 +109,18 @@ def _fetch(name, symlink_dir):
 
     target_path = pathlib.Path(symlink_dir).resolve() / name
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    if not target_path.exists():
-        target_path.symlink_to(fpath)
+    # Remove a stale/broken symlink first: Path.exists() follows links and
+    # reports False for a dangling link, so a leftover broken link would make
+    # symlink_to() raise FileExistsError.
+    if target_path.is_symlink() and not target_path.exists():
+        target_path.unlink()
+    if not target_path.exists() and not target_path.is_symlink():
+        try:
+            target_path.symlink_to(fpath)
+        except OSError:
+            # Filesystems without symlink support (some Windows/network/
+            # container mounts) or insufficient privilege: fall back to a copy.
+            shutil.copy2(fpath, target_path)
 
     return target_path
 

@@ -269,6 +269,11 @@ def cornerplot(
     # Ignore age weights.
     if labels is None:
         labels = [x for x in params.dtype.names if x != "agewt"]
+    else:
+        # Copy any caller-supplied labels: the Av/Rv/Parallax/Distance appends
+        # below mutate this list in place, which would otherwise corrupt the
+        # caller's list and break reuse across repeated calls.
+        labels = list(labels)
 
     # Deal with 1D results.
     with warnings.catch_warnings():
