@@ -29,6 +29,53 @@ _nn_file = _find_nn_file()
 _has_nn_data = _nn_file is not None
 
 
+class TestFastNNEncode:
+    """Regression tests for ``FastNN.encode`` input-dimensionality dispatch.
+
+    These do not require the neural-network data file -- they exercise the
+    pure rescaling logic on a bare ``FastNN`` instance with synthetic bounds.
+    """
+
+    @staticmethod
+    def _make_nn():
+        from brutus.core.neural_nets import FastNN
+
+        nn = FastNN.__new__(FastNN)
+        # Six parameters with distinct, asymmetric bounds so that a
+        # wrong-axis normalization yields a clearly different result.
+        nn.xmin = np.array([3.0, 0.1, -2.0, -0.2, 0.0, 2.0])
+        nn.xmax = np.array([4.0, 5.0, 0.5, 0.4, 6.0, 8.0])
+        nn.xspan = nn.xmax - nn.xmin
+        return nn
+
+    def test_encode_1d_contract(self):
+        """A 1D input of shape (Ninput,) returns (Ninput, 1)."""
+        nn = self._make_nn()
+        x = nn.xmin + 0.5 * nn.xspan
+        out = nn.encode(x)
+        assert out.shape == (6, 1)
+        npt.assert_allclose(out[:, 0], (x - nn.xmin) / nn.xspan)
+
+    @pytest.mark.parametrize("nsamp", [5, 6, 7])
+    def test_encode_2d_per_parameter_normalization(self, nsamp):
+        """2D batches normalize per parameter (row) for every batch size.
+
+        Regression for the silent N == 6 bug: a (6, 6) batch used to
+        broadcast against ``xmin[None, :]`` without raising, so the wrong
+        (sample-axis) normalization was applied only when exactly 6 samples
+        were supplied.
+        """
+        nn = self._make_nn()
+        x = np.stack(
+            [nn.xmin + ((j + 1) / (nsamp + 2)) * nn.xspan for j in range(nsamp)],
+            axis=1,
+        )  # shape (6, nsamp)
+        out = nn.encode(x)
+        expected = (x - nn.xmin[:, None]) / nn.xspan[:, None]
+        assert out.shape == (6, nsamp)
+        npt.assert_allclose(out, expected)
+
+
 @pytest.mark.skipif(not _has_nn_data, reason="Neural network data file not available")
 class TestFastNNPredictorDefaultFilters:
     """Test FastNNPredictor initialization with filters=None (line 354)."""
