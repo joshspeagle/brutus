@@ -62,7 +62,6 @@ extensions = [
     "sphinx.ext.viewcode",
     "sphinx.ext.mathjax",
     "sphinx.ext.githubpages",
-    "numpydoc",
     "sphinx_design",
     "sphinx_copybutton",
     "myst_nb",
@@ -119,9 +118,6 @@ napoleon_use_rtype = True
 napoleon_preprocess_types = False
 napoleon_type_aliases = None
 napoleon_attr_annotations = True
-
-# numpydoc settings
-numpydoc_show_class_members = False
 
 # autosummary settings
 autosummary_generate = True

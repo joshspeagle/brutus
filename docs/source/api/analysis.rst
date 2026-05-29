@@ -29,19 +29,23 @@ For **individual field stars** with photometry and parallax:
    from brutus.analysis import BruteForce
    from brutus.core import StarGrid
    from brutus.data import load_models
+   from brutus.utils import inv_magnitude
    import numpy as np
    import h5py
 
    # Load pre-computed grid
-   models, labels, label_mask = load_models('grid_file.h5')
-   grid = StarGrid(models, labels, label_mask)
+   models, labels, label_mask = load_models('grid_mist_v9.h5')
+   grid = StarGrid(models, labels)
 
    # Initialize fitter
    fitter = BruteForce(grid)
 
    # Observed data (Nstars=1 in this example)
-   flux = np.array([[16.5, 15.2, 14.8, 13.5, 13.1]])  # shape (1, 5)
-   flux_err = np.array([[0.01, 0.01, 0.02, 0.03, 0.03]])
+   # BruteForce.fit expects linear flux densities ("maggies"), NOT magnitudes.
+   # Convert observed magnitudes + errors to maggies via inv_magnitude.
+   mag = np.array([[16.5, 15.2, 14.8, 13.5, 13.1]])  # shape (1, 5)
+   mag_err = np.array([[0.01, 0.01, 0.02, 0.03, 0.03]])
+   flux, flux_err = inv_magnitude(mag, mag_err)  # maggies = 10**(-0.4*mag)
    mask = np.array([[True, True, True, True, True]])
    obj_ids = np.array([[1]])
    parallax = np.array([2.5])  # mas

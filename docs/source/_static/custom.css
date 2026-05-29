@@ -51,7 +51,7 @@ a.reference.internal.image-reference {
 .version-badge {
     display: inline-block;
     padding: 0.25rem 0.75rem;
-    background: var(--color-brand-primary);
+    background: var(--pst-color-primary, #6c9bd1);
     color: white;
     border-radius: 1rem;
     font-size: 0.875rem;

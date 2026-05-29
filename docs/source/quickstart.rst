@@ -51,7 +51,7 @@ stars at specific points along their evolutionary tracks.
    star = StarEvolTrack(tracks=tracks, filters=filters)
 
    # Generate SED for a star with specific parameters
-   result = star.get_seds(
+   sed, params, params2 = star.get_seds(
        mini=1.0,       # Initial mass in solar masses
        eep=350,        # Equivalent evolutionary point (main sequence ~300-450)
        feh=0.0,        # Metallicity [Fe/H]
@@ -60,10 +60,10 @@ stars at specific points along their evolutionary tracks.
        dist=1000.0     # Distance in parsecs
    )
 
-   # result is a dictionary containing:
-   # - 'seds': flux densities in each filter
-   # - 'params': input stellar parameters
-   # - 'derived': derived quantities (Teff, logg, luminosity, etc.)
+   # get_seds returns a 3-tuple:
+   # - sed:     synthetic SED in magnitudes (one value per filter)
+   # - params:  primary component stellar parameters (dict by default)
+   # - params2: secondary component parameters (for binaries; dict by default)
 
 **What is EEP?** The Equivalent Evolutionary Point is an index along a stellar
 evolution track. Key values: ~200 (pre-main sequence), ~300-450 (main sequence),
@@ -85,7 +85,7 @@ stellar population at a fixed age and metallicity.
    pop = StellarPop(isochrone=iso, filters=filters)
 
    # Generate photometry for a 1 Gyr, solar-metallicity population
-   result = pop.get_seds(
+   seds, params, params2 = pop.get_seds(
        feh=0.0,        # Metallicity [Fe/H]
        loga=9.0,       # log10(age/yr) = 9.0 corresponds to 1 Gyr
        av=0.5,         # V-band extinction in magnitudes
@@ -93,12 +93,12 @@ stellar population at a fixed age and metallicity.
        dist=2000.0     # Distance in parsecs
    )
 
-   # result is a dictionary containing:
-   # - 'seds': (N_stars, N_filters) array of flux densities
-   # - 'params': (N_stars,) structured array with mini, eep, feh, etc.
-   # - 'derived': (N_stars,) structured array with Teff, logg, mass, etc.
+   # get_seds returns a 3-tuple:
+   # - seds:    (N_stars, N_filters) array of SEDs in magnitudes
+   # - params:  (N_stars,) stellar parameters (mini, eep, feh, etc.)
+   # - params2: (N_stars,) secondary-component parameters (for binaries)
 
-   print(f"Generated {len(result['seds'])} stars along the isochrone")
+   print(f"Generated {len(seds)} stars along the isochrone")
 
 ----
 
@@ -123,11 +123,13 @@ Loading Models and Preparing Data
               '2MASS_J', '2MASS_H', '2MASS_Ks']
 
    # Load pre-computed model grid
+   # The third return value is a mask of available ancillary labels;
+   # it is not a StarGrid argument.
    models, labels, label_mask = load_models(
        'grid_mist_v9.h5',
        filters=filters
    )
-   grid = StarGrid(models, labels, label_mask)
+   grid = StarGrid(models, labels)
 
    # Load photometric calibration offsets (recommended)
    offsets = load_offsets('offsets_mist_v9.h5', filters=filters)
@@ -281,7 +283,7 @@ Use ``model_idx`` to look up stellar parameters from the model grid:
    models, labels, label_mask = load_models('grid_mist_v9.h5', filters=filters)
 
    # Extract stellar parameters for each posterior draw
-   # labels contains: mini, feh, eep, loga, logl, logt, logg, Mr, agewt
+   # labels contains: mini, feh, eep, loga, logl, logt, logg, agewt
    star_idx = 0  # First star
 
    # Get initial mass and surface gravity for all draws

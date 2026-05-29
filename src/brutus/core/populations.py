@@ -68,14 +68,15 @@ The StellarPop class uses dependency injection, accepting an
 Isochrone instance rather than inheriting from it. This makes the code
 more modular and allows for different isochrone implementations.
 
-This implementation is based on the MIST stellar evolution framework [1]_ [2]_.
+This implementation is based on the MIST stellar evolution framework
+(Choi et al. 2016; Dotter 2016).
 
 References
 ----------
-.. [1] Choi et al. 2016, "MESA Isochrones and Stellar Tracks (MIST) 0. Methods
-       for the Construction of Stellar Isochrones", ApJ, 823, 102
-.. [2] Dotter 2016, "MESA Isochrones and Stellar Tracks (MIST) I. Solar-scaled
-       Models", ApJS, 222, 8
+- Choi et al. 2016, "MESA Isochrones and Stellar Tracks (MIST) 0. Methods
+  for the Construction of Stellar Isochrones", ApJ, 823, 102
+- Dotter 2016, "MESA Isochrones and Stellar Tracks (MIST) I. Solar-scaled
+  Models", ApJS, 222, 8
 """
 
 import sys

@@ -15,7 +15,7 @@ brutus requires several types of external data:
 
 **Automatic Data Management:**
 
-Data files are automatically downloaded on first use and cached locally. The default cache location is ``~/.brutus/data/`` but can be configured via environment variables.
+Data files are automatically downloaded on first use and cached locally. The default cache location is ``~/.cache/astro-brutus/`` (via ``pooch.os_cache('astro-brutus')``) but can be overridden with the ``ASTRO_BRUTUS_DATA_DIR`` environment variable.
 
 **Typical Usage:**
 
@@ -41,9 +41,9 @@ Data files are automatically downloaded on first use and cached locally. The def
    from brutus.data import load_models
    from brutus.core import StarGrid
 
-   # Load pre-computed grid
-   models, labels, params = load_models('grid_gaiadr3_2mass_wise.h5')
-   grid = StarGrid(models, labels, params)
+   # Load pre-computed grid (third return is the ancillary-label mask)
+   models, labels, label_mask = load_models('grid_mist_v9.h5')
+   grid = StarGrid(models, labels)
 
    # Grid is now ready for use with BruteForce fitter
 
@@ -52,7 +52,7 @@ Data files are automatically downloaded on first use and cached locally. The def
 .. code-block:: python
 
    # Load grid from custom path
-   models, labels, params = load_models('/path/to/my_custom_grid.h5')
+   models, labels, label_mask = load_models('/path/to/my_custom_grid.h5')
 
 **Data File Formats:**
 
@@ -95,6 +95,8 @@ Data Loading
 .. autofunction:: load_models
 
 .. autofunction:: load_offsets
+
+.. autofunction:: find_nn_file
 
 Submodules
 ----------

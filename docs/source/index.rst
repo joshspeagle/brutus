@@ -220,10 +220,10 @@ Code Examples
          models, labels, label_mask = load_models(
              'grid_mist_v9.h5', filters=filters
          )
-         grid = StarGrid(models, labels, label_mask)
+         grid = StarGrid(models, labels)
 
          # Load photometric offsets
-         offsets = load_offsets('offsets_mist_v9.h5', filters=filters)
+         offsets = load_offsets('offsets_mist_v9.txt', filters=filters)
 
          # Convert magnitudes to linear flux densities
          flux, flux_err = inv_magnitude(mag, mag_err)

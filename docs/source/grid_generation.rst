@@ -106,7 +106,7 @@ All grids include photometry for the full set of :ref:`available-filters`. When 
               'PS_g', 'PS_r', 'PS_i', 'PS_z', 'PS_y',
               '2MASS_J', '2MASS_H', '2MASS_Ks']
    models, labels, label_mask = load_models('grid_mist_v9.h5', filters=filters)
-   grid = StarGrid(models, labels, label_mask)
+   grid = StarGrid(models, labels)
 
 Creating Custom Grids
 ---------------------
@@ -183,7 +183,7 @@ This step dominates the computation time.
 Use bootstrap resampling from the importance-weighted samples to produce Monte Carlo draws of stellar parameters (mass, EEP, metallicity) and extrinsic parameters (distance, :math:`A_V`, :math:`R_V`).
 
 .. note::
-   The screening stages (1-2) can occasionally clip rare but valid solutions. If you suspect this is happening (e.g., for unusual stars), try relaxing the ``chi2_threshold`` parameter.
+   The screening stages (1-2) can occasionally clip rare but valid solutions. If you suspect this is happening (e.g., for unusual stars), try relaxing the model-selection controls in :meth:`~brutus.analysis.BruteForce.fit`. Lowering ``wt_thresh`` (default ``1e-3``), which keeps models whose weight exceeds ``wt_thresh * max(weight)``, retains more candidates; if ``wt_thresh`` is set to ``None``, the CDF-based cut ``cdf_thresh`` (default ``2e-3``) is used instead. You can also loosen the iterative likelihood-optimization tolerance ``ltol`` (default ``3e-2``).
 
 Complete Example
 ----------------
@@ -201,7 +201,7 @@ Complete Example
    filters = ['Gaia_G_MAW', 'Gaia_BP_MAWf', 'Gaia_RP_MAW',
               '2MASS_J', '2MASS_H', '2MASS_Ks']
    models, labels, label_mask = load_models('grid_mist_v9.h5', filters=filters)
-   grid = StarGrid(models, labels, label_mask)
+   grid = StarGrid(models, labels)
 
    # Initialize fitter
    fitter = BruteForce(grid)
@@ -233,9 +233,9 @@ Complete Example
 
    # Read results
    with h5py.File(output_file, 'r') as f:
-       distances = f['samps_dist'][:]  # (Nstars, Ndraws) in kpc
-       av_values = f['samps_red'][:]   # A_V samples
-       rv_values = f['samps_rv'][:]    # R_V samples
+       distances = f['samps_dist'][:]   # (Nstars, Ndraws) in kpc
+       av_values = f['samps_red'][:]    # A_V samples
+       rv_values = f['samps_dred'][:]   # R_V samples
 
    # Summarize
    dist_pc = np.median(distances[0]) * 1000
@@ -352,6 +352,7 @@ See Also
 - :doc:`stellar_models` - MIST models and :ref:`available filters <available-filters>`
 - :doc:`priors` - Prior probability distributions
 - :doc:`understanding_results` - Interpreting output files
+
 References
 ----------
 

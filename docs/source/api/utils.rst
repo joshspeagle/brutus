@@ -24,9 +24,10 @@ Most users won't call these utilities directly (they're used internally by ``Bru
    from brutus.utils.photometry import magnitude, add_mag, phot_loglike
    import numpy as np
 
-   # Convert flux to magnitude
-   flux = np.array([1e-10, 5e-11, 2e-11])  # erg/s/cm^2/AA
-   mags = magnitude(flux)
+   # Convert flux to magnitude (returns (mag, mag_err))
+   flux = np.array([1e-10, 5e-11, 2e-11])  # maggies
+   flux_err = np.array([1e-12, 5e-13, 3e-13])  # maggies
+   mags, mag_errs = magnitude(flux, flux_err)
 
    # Add magnitudes (combine flux from binaries)
    mag1, mag2 = 5.0, 6.0
@@ -65,7 +66,7 @@ Most users won't call these utilities directly (they're used internally by ``Bru
    # Draw samples from multivariate normal
    mean = np.array([0.0, 0.0])
    cov = np.array([[1.0, 0.5], [0.5, 2.0]])
-   samples = sample_multivariate_normal(mean, cov, n_samples=10000)
+   samples = sample_multivariate_normal(mean, cov, size=10000)
 
    # Compute weighted quantiles
    data = np.random.randn(10000)
@@ -103,7 +104,7 @@ Photometry Functions
 Mathematical Functions
 ----------------------
 
-.. autofunction:: _function_wrapper
+.. autofunction:: galactic_to_galactocentric_cyl
 
 .. autofunction:: inverse3
 

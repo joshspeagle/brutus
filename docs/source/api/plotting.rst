@@ -15,6 +15,11 @@ SED Visualization
 
 .. autofunction:: posterior_predictive
 
+Summary Plots
+-------------
+
+.. autofunction:: summary_plot
+
 Distance and Reddening
 ----------------------
 
@@ -58,6 +63,12 @@ For advanced users who need access to internal implementations:
    :no-index:
 
 .. automodule:: brutus.plotting.sed
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :no-index:
+
+.. automodule:: brutus.plotting.summary
    :members:
    :undoc-members:
    :show-inheritance:

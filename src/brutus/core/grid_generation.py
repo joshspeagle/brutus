@@ -66,7 +66,8 @@ measurements (1 mas = 1 kpc) and is documented in the grid attributes.
 where m_0 is the unreddened magnitude, and (a, b) are fitted coefficients.
 This allows fast computation of reddened photometry for arbitrary (A_V, R_V).
 
-**Grid Format**: HDF5 files follow the format established in [1]_ and contain three datasets:
+**Grid Format**: HDF5 files follow the format established in Speagle et al. (2025)
+and contain three datasets:
 - `mag_coeffs`: Structured array (Nmodel, Nfilter, 3) with coefficients
 - `labels`: Structured array (Nmodel,) with input parameters
 - `parameters`: Structured array (Nmodel,) with predicted stellar parameters
@@ -78,8 +79,8 @@ covering a limited parameter space.
 
 References
 ----------
-.. [1] Grid format follows the structure established in Speagle et al.
-       (in prep), optimized for StarGrid interpolation performance.
+- Grid format follows the structure established in Speagle et al. (2025),
+  optimized for StarGrid interpolation performance.
 """
 
 import sys
