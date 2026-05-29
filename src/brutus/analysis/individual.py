@@ -1164,6 +1164,17 @@ class BruteForce:
             data_mask[~clean] = False
         Ndim = sum(data_mask)
 
+        if Ndim == 0:
+            # Fail fast with a clear message. With zero valid bands the
+            # optimizer operates on empty arrays and divides by zero (an opaque
+            # ZeroDivisionError under numba), so this would otherwise abort a
+            # whole batch with an unhelpful error.
+            raise ValueError(
+                "No valid photometric bands for this object (all bands are "
+                "masked or non-finite). Fitting requires at least 4 valid bands "
+                "(3 free parameters scale/A(V)/R(V) plus >=1 DOF); filter such "
+                "objects out of the input before fitting."
+            )
         if Ndim < 4:
             warnings.warn(
                 f"Only {Ndim} valid photometric bands. Minimum 4 recommended "

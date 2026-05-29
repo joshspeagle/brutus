@@ -504,14 +504,14 @@ class TestBruteForcePosterior:
         assert dist_mc.shape[1] >= 1  # Nmc floored to >= 1
         assert not np.any(np.isnan(lnp))
 
-    def test_loglike_grid_all_masked_no_posinf(
+    def test_loglike_grid_all_masked_raises(
         self, bruteforce_fitter, synthetic_observation
     ):
-        """A fully-masked object must not inject +inf via the dim_prior log(0).
+        """A fully-masked object must fail fast with a clear error.
 
-        Regression: the dim_prior term ``-0.5*(3-Ndim)*log(Ndim)`` evaluated
-        ``log(0) = -inf`` for ``Ndim == 0``, producing ``+inf`` log-likelihoods
-        that then crashed posterior computation.
+        Regression: with zero valid bands the optimizer divided by zero (an
+        opaque ZeroDivisionError under numba) and the dim_prior term hit
+        log(0). loglike_grid now raises an actionable ValueError instead.
         """
         import warnings
 
@@ -519,9 +519,8 @@ class TestBruteForcePosterior:
         zero_mask = np.zeros_like(mask, dtype=bool)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            lnl, ndim, _ = bruteforce_fitter.loglike_grid(flux, flux_err, zero_mask)
-        assert ndim == 0
-        assert not np.any(np.isposinf(lnl))
+            with pytest.raises(ValueError, match="valid photometric band"):
+                bruteforce_fitter.loglike_grid(flux, flux_err, zero_mask)
 
     def test_logpost_model_selection(self, bruteforce_fitter, synthetic_observation):
         """Test different model selection methods."""
