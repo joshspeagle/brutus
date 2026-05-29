@@ -881,7 +881,7 @@ class StarEvolTrack:
         return_eep2=False,
         return_dict=True,
         combine_seds=True,
-        tol=1e-6,
+        tol=1e-2,
         **kwargs,
     ):
         r"""
@@ -943,7 +943,13 @@ class StarEvolTrack:
             Default is True.
 
         tol : float, optional
-            Tolerance for binary EEP calculation. Default is 1e-6.
+            Convergence tolerance (in dex) on the log10(age) match when solving
+            for the secondary's EEP in a binary. A companion whose age cannot be
+            matched to within ``tol`` is treated as non-existent and a
+            primary-only SED is returned (rather than discarding the model).
+            Default is 1e-2. The previous default (1e-6) was far tighter than
+            the age emulator's own precision and silently dropped most
+            otherwise-valid binary models.
 
         Returns
         -------
@@ -1048,37 +1054,55 @@ class StarEvolTrack:
                         loga, mini, eep, feh, afe, smf, tol
                     )
 
-                labels2 = {"mini": mini * smf, "eep": eep2, "feh": feh, "afe": afe}
-                labels2 = np.array([labels2[lbl] for lbl in self.tracks.labels])
-
-                try:
-                    params_arr2 = self.tracks.get_predictions(
-                        labels2, apply_corr=apply_corr, corr_params=corr_params
-                    )
-                    params2 = dict(zip(self.tracks.predictions, params_arr2))
-
-                    # Generate secondary SED
-                    sed2 = self.predictor.sed(
-                        logl=params2["logl"],
-                        logt=params2["logt"],
-                        logg=params2["logg"],
-                        feh_surf=params2["feh_surf"],
-                        afe=params2["afe_surf"],
-                        av=av,
-                        rv=rv,
-                        dist=dist,
-                    )
-                    if combine_seds:
-                        # Combine SEDs (magnitude addition)
-                        sed = add_mag(sed, sed2)
-
-                except Exception as e:
+                if not np.isfinite(eep2):
+                    # The companion's age could not be matched to the primary
+                    # within tolerance. Keep the (valid) primary SED rather than
+                    # poisoning it with a NaN secondary via add_mag, which would
+                    # turn the whole combined SED into NaN and silently discard
+                    # an otherwise-valid model during grid generation.
                     warnings.warn(
-                        f"Secondary SED generation failed for binary "
-                        f"(mini={mini}, smf={smf}, eep2={eep2}): {e}",
+                        f"Secondary EEP did not converge for binary "
+                        f"(mini={mini}, smf={smf}); returning primary-only SED.",
                         RuntimeWarning,
                         stacklevel=2,
                     )
+                else:
+                    labels2 = {
+                        "mini": mini * smf,
+                        "eep": eep2,
+                        "feh": feh,
+                        "afe": afe,
+                    }
+                    labels2 = np.array([labels2[lbl] for lbl in self.tracks.labels])
+
+                    try:
+                        params_arr2 = self.tracks.get_predictions(
+                            labels2, apply_corr=apply_corr, corr_params=corr_params
+                        )
+                        params2 = dict(zip(self.tracks.predictions, params_arr2))
+
+                        # Generate secondary SED
+                        sed2 = self.predictor.sed(
+                            logl=params2["logl"],
+                            logt=params2["logt"],
+                            logg=params2["logg"],
+                            feh_surf=params2["feh_surf"],
+                            afe=params2["afe_surf"],
+                            av=av,
+                            rv=rv,
+                            dist=dist,
+                        )
+                        if combine_seds:
+                            # Combine SEDs (magnitude addition)
+                            sed = add_mag(sed, sed2)
+
+                    except Exception as e:
+                        warnings.warn(
+                            f"Secondary SED generation failed for binary "
+                            f"(mini={mini}, smf={smf}, eep2={eep2}): {e}",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
 
         # Format output
         if not return_dict:
@@ -1115,7 +1139,9 @@ class StarEvolTrack:
         smf : float
             Secondary mass fraction (secondary mass = mini * smf)
         tol : float
-            Tolerance for age matching convergence
+            Convergence tolerance (in dex) on the log10(age) match. The
+            squared-age-difference loss is accepted when ``sqrt(loss) < tol``
+            (equivalently ``loss < tol**2``); otherwise NaN is returned.
 
         Returns
         -------
@@ -1163,8 +1189,9 @@ class StarEvolTrack:
                 warnings.simplefilter("ignore")  # ignore bad values during optimization
                 res = minimize(loss, eep, method="Nelder-Mead")
 
-            # Check if solution meets tolerance
-            if res.fun < tol**2:  # Note: loss is squared difference
+            # Check if solution meets tolerance. loss is the squared log-age
+            # difference, so this accepts matches with |dloga| < tol (in dex).
+            if res.fun < tol**2:
                 eep2 = res.x[0]
             else:
                 eep2 = np.nan
