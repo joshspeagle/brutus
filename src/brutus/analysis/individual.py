@@ -1796,6 +1796,31 @@ class BruteForce:
         verbose : bool, optional
             Whether to print progress to stderr. Default is True.
 
+        max_models : int, optional
+            When the number of models selected for an object exceeds this, the
+            models are subsampled (see ``subsample_mode``) to bound memory and
+            runtime. Default is 50000.
+
+        precision_shrinkage : float, optional
+            Fractional shrinkage applied to the off-diagonal terms of the 3x3
+            (scale, A(V), R(V)) precision matrix before Monte Carlo sampling,
+            which stabilizes strongly-correlated fits. 0 disables it; ~0.03 is a
+            reasonable nonzero value. Default is 0.0.
+
+        subsample_mode : str, optional
+            Strategy used to thin models when the selection exceeds
+            ``max_models``: ``'representative'`` (Gumbel-max sampling weighted by
+            likelihood) or ``'topk'`` (the highest-likelihood models). Default
+            is ``'representative'``.
+
+        R_solar : float, optional
+            Solar galactocentric radius in kpc, used by the Galactic structure
+            prior. Default is 8.2.
+
+        Z_solar : float, optional
+            Solar height above the Galactic midplane in kpc, used by the
+            Galactic structure prior. Default is 0.025.
+
         Returns
         -------
         str

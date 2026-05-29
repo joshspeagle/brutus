@@ -16,27 +16,17 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-# Configure numba for testing
-# Use a writable cache directory, but keep JIT enabled due to scipy conflicts
+# Configure numba for testing: use a writable on-disk cache directory.
 os.environ["NUMBA_CACHE_DIR"] = "/tmp/numba_cache"
 
-# IMPORTANT: For accurate coverage measurement, use run_coverage.py script!
+# Coverage note: numba-compiled (@jit/@njit) functions report 0% coverage
+# unless JIT is disabled, so an accurate measurement of the numeric core
+# requires NUMBA_DISABLE_JIT=1 -- this is exactly what CI runs:
 #
-# Due to coverage instrumentation conflicts when mixing test types,
-# running pytest directly may show artificially low coverage for utils modules.
+#   NUMBA_DISABLE_JIT=1 pytest tests/ --cov=brutus --cov-report=term-missing
 #
-# Correct usage:
-#   python run_coverage.py              # Full coverage analysis
-#   python run_coverage.py --utils      # Utils tests only
-#   python run_coverage.py --core       # Core tests only
-#   python run_coverage.py --analysis   # Analysis tests only
-#   python run_coverage.py --data       # Data tests only
-#
-# DO NOT use: pytest --cov=... (may trigger instrumentation conflicts)
-#
-# Note: NUMBA_DISABLE_JIT causes scipy import conflicts, so we keep JIT enabled
-# This means numba-compiled functions won't show in coverage, but we can still
-# measure coverage of the main Python logic
+# Plain functional runs do not need it (and are faster with JIT enabled).
+# (A convenience wrapper, run_coverage.py, is also available.)
 
 
 # Test data and fixtures
