@@ -17,7 +17,7 @@ brutus
 .. raw:: html
 
    <p class="tagline">Derive distances, reddenings, and stellar properties from photometry</p>
-   <p><span class="version-badge">v1.0.0</span></p>
+   <p><span class="version-badge">v1.1.0</span></p>
    </div>
 
 ----

@@ -109,8 +109,13 @@ def real_mist_setup():
         except Exception as e:
             raise AssertionError(f"Failed to load grid from {path}: {e}")
 
-    # If real grid unavailable, skip tests that require it
-    raise AssertionError("Grid file not found - should be available after downloading")
+    # If the real grid is unavailable, skip the tests that require it so the
+    # suite still runs offline. CI pre-downloads the data, so it exercises
+    # these paths.
+    pytest.skip(
+        "MIST grid data not available; run fetch_grids() or set BRUTUS_DATA_DIR "
+        "to enable this data-dependent test"
+    )
 
 
 @pytest.fixture(scope="module")

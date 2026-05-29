@@ -15,11 +15,22 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+# Every test here is slow (loads multi-GB MIST data); deselect with
+# `-m "not slow"`.
+pytestmark = pytest.mark.slow
+
 
 # Global session-scoped fixtures - loaded once for all slow tests
 @pytest.fixture(scope="session")
 def shared_eep_tracks():
     """Load EEPTracks once for all slow tests in this session."""
+    from conftest import find_brutus_data_file
+
+    if find_brutus_data_file("MIST_1.2_EEPtrk.h5") is None:
+        pytest.skip(
+            "MIST track data not available; run fetch_tracks() or set "
+            "BRUTUS_DATA_DIR to enable these slow integration tests"
+        )
     try:
         from brutus.core.individual import EEPTracks
 
