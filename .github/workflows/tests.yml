@@ -13,10 +13,15 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python-version: ["3.9", "3.10", "3.11", "3.12"]
-        # Note: Python 3.8 dropped (EOL October 2024)
-        # Note: Windows is not supported due to healpy dependency
-        # Windows users should use WSL (see README)
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        # Default legs install unpinned dependencies and therefore exercise
+        # numpy 2.x -- the version users actually get. Python 3.8 dropped
+        # (EOL Oct 2024); Windows is unsupported via healpy (use WSL, see README).
+        include:
+          # numpy 1.x floor-compatibility check
+          - os: ubuntu-latest
+            python-version: "3.11"
+            numpy_spec: "numpy>=1.19,<2.0"
 
     steps:
     - uses: actions/checkout@v4
@@ -29,14 +34,14 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip setuptools wheel
-        # Install numpy first and lock the version to prevent binary incompatibility
-        pip install "numpy>=1.19,<2.0"
-        # Install all packages with compiled extensions against this numpy
-        # Use --no-build-isolation to ensure they all use the same numpy
-        pip install --no-build-isolation "scipy>=1.6.0"
-        pip install --no-build-isolation "healpy>=1.14.0"
-        # Now install package (which may include astropy, h5py, etc.)
-        pip install --no-build-isolation -e ".[test]"
+        # The numpy 1.x floor leg pins numpy (and a compatible numba) explicitly;
+        # all other legs install unpinned and resolve numpy 2.x. brutus is pure
+        # Python and the numeric dependencies ship wheels for 3.9-3.13, so no
+        # build-isolation gymnastics are required.
+        if [ -n "${{ matrix.numpy_spec }}" ]; then
+          pip install "${{ matrix.numpy_spec }}" "numba<0.60"
+        fi
+        pip install -e ".[test]"
 
     - name: Cache test data files
       uses: actions/cache@v4
