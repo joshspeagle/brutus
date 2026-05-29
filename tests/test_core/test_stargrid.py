@@ -69,8 +69,11 @@ def mist_grid():
             except Exception as e:
                 continue
 
-    # If real grid unavailable, skip tests that require it
-    raise AssertionError("Grid should be available after downloading")
+    # If the real grid is unavailable, skip dependent tests (CI pre-downloads).
+    pytest.skip(
+        "MIST grid data not available; run fetch_grids() or set BRUTUS_DATA_DIR "
+        "to enable this data-dependent test"
+    )
 
 
 @pytest.fixture(scope="module")

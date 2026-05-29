@@ -94,7 +94,10 @@ def mist_integration_setup():
         except Exception as e:
             raise AssertionError(f"Failed to load grid from {grid_path}: {e}")
 
-    raise AssertionError("Grid should be available after downloading")
+    pytest.skip(
+        "MIST grid data not available; run fetch_grids() or set BRUTUS_DATA_DIR "
+        "to enable this data-dependent test"
+    )
 
 
 class TestCoreIntegration:

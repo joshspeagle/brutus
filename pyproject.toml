@@ -136,7 +136,8 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 markers = [
-    "slow: marks tests as slow-running",
+    "slow: marks tests as slow-running (deselect with '-m \"not slow\"')",
+    "requires_data: marks tests that need downloaded model data (they skip if absent)",
 ]
 filterwarnings = [
     "error",
