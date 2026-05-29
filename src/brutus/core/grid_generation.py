@@ -91,11 +91,6 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-try:
-    from scipy import polyfit as scipy_polyfit
-except ImportError:
-    from numpy import polyfit as scipy_polyfit
-
 # Import brutus components
 from ..data.filters import FILTERS
 from .individual import StarEvolTrack
@@ -572,12 +567,12 @@ class GridGenerator:
         # Fit A_V dependence at each R_V
         # For each (rv, filter): fit m vs A_V
         sfits = np.array(
-            [scipy_polyfit(av_grid, s, 1, w=av_wt).T for s in seds]
+            [np.polyfit(av_grid, s, 1, w=av_wt).T for s in seds]
         )  # Shape: (Nrv, Nfilt, 2) where [..., 0] = slope, [..., 1] = intercept
 
         # Fit R_V dependence of the A_V slope
         # For each filter: fit A_V_slope vs R_V
-        sedr, seda = scipy_polyfit(
+        sedr, seda = np.polyfit(
             rv_grid, sfits[:, :, 0], 1, w=rv_wt
         )  # sedr: Rv dependence, seda: Av vector at Rv=3.3
 

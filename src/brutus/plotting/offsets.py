@@ -78,7 +78,7 @@ def photometric_offsets(
         Distance samples (in kpc) associated with the model indices.
 
     x : `~numpy.ndarray` with shape `(Nobj)` or `(Nobj, Nsamps)`, optional
-        Corresponding values to be plotted on the `x` axis. In not provided,
+        Corresponding values to be plotted on the `x` axis. If not provided,
         the default behavior is to plot as a function of observed magnitude.
 
     flux : bool, optional
@@ -327,11 +327,10 @@ def photometric_offsets_2d(
         Distance samples (in kpc) associated with the model indices.
 
     x : `~numpy.ndarray` with shape `(Nobj)` or `(Nobj, Nsamps)`
-        Corresponding values to be plotted on the `x` axis. In not provided,
-        the default behavior is to plot as a function of observed magnitude.
+        Values to be plotted on the `x` axis. Required.
 
     y : `~numpy.ndarray` with shape `(Nobj)` or `(Nobj, Nsamps)`
-        Corresponding values to be plotted on the `y` axis.
+        Values to be plotted on the `y` axis. Required.
 
     flux : bool, optional
         Whether the photometry provided is in fluxes (instead of magnitudes).

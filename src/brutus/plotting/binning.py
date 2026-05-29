@@ -95,7 +95,8 @@ def bin_pdfs_distred(
         provided parallax prior. Default is `100`.
 
     bins : int or list of ints with length `(ndim,)`, optional
-        The number of bins to be used in each dimension. Default is `300`.
+        The number of bins to be used in each dimension. Default is
+        `(750, 300)` (distance, reddening).
 
     span : iterable with shape `(ndim, 2)`, optional
         A list where each element is a length-2 tuple containing

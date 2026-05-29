@@ -10,10 +10,10 @@ with numba for performance.
 
 Functions
 ---------
-_function_wrapper : Callable wrapper
-    Make functions pickleable with args/kwargs
+galactic_to_galactocentric_cyl : Coordinate transform
+    Convert Galactic (l, b, distance) to galactocentric cylindrical (R, phi, Z)
 inverse3 : Matrix inversion
-    Fast 3x3 matrix inversion with regularization
+    Fast 3x3 matrix inversion with optional diagonal preconditioning
 isPSD : Matrix check
     Check if matrix is positive semi-definite
 chisquare_logpdf : Chi-square log-PDF
@@ -51,8 +51,8 @@ Examples
 >>> # Check if positive semi-definite
 >>> is_valid = isPSD(cov)
 >>>
->>> # Invert with regularization
->>> icov = inverse3(cov, reg_val=1e-10)
+>>> # Invert with diagonal preconditioning / regularization
+>>> icov = inverse3(cov, regularize=True)
 """
 
 from math import lgamma, log
