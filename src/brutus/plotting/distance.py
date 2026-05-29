@@ -226,7 +226,7 @@ def dist_vs_red(
         H.T,
         cmap=cmap,
         aspect="auto",
-        interpolation=None,
+        interpolation="none",
         origin="lower",
         extent=[xlims[0], xlims[1], ylims[0], ylims[1]],
         **plot_kwargs,
