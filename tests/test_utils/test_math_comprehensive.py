@@ -384,8 +384,12 @@ class TestMathIntegration:
         x = np.linspace(a, b, 1000)  # Integration range should match truncation bounds
         pdf_vals = truncnorm_pdf(x, a, b)
 
-        # Numerical integration (trapezoidal rule)
-        integral = np.trapz(pdf_vals, x)
+        # Numerical integration (trapezoidal rule). Use scipy's trapezoid,
+        # which is stable across NumPy versions (np.trapz was removed in
+        # NumPy 2.0 in favor of np.trapezoid).
+        from scipy.integrate import trapezoid
+
+        integral = trapezoid(pdf_vals, x)
         np.testing.assert_almost_equal(integral, 1.0, decimal=2)
 
         # Test that chi-square probabilities are reasonable
