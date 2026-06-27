@@ -109,6 +109,8 @@ brutus uses **systematic grid evaluation** rather than MCMC:
 
 The 3x3 Fisher matrix is in (scale, A_V, R_V) space. Internally, `logpost_grid` transforms to **log-distance space** (eta = ln(d)) for MC sampling, applying a Jacobian correction exp(eta) to weights. This prevents the 1/d^3 bias that occurs when sampling in scale space.
 
+The MC prior integral uses **antithetic sampling** (proposal normals drawn in `(z, -z)` pairs via `sample_multivariate_normal(..., antithetic=True)`). The integrand is monotone along `ln(d)` (galactic-density falloff + `log(d)` Jacobian), the regime where antithetic variates cut variance — measured ~20x lower MC-integration variance and lower finite-`Nmc` Jensen bias, unbiased, at half the Gaussian draws. Consequence: the saved `mc_ess` (`1 / sum(w_i^2)`) is a **weight-concentration diagnostic**, not a strict independent-sample count (the antithetic pairs are correlated).
+
 ## Internal Constants
 
 - **`MIN_SCALE`** = `1e-20`: Floor for scale factor to prevent log-underflow. Defined in `analysis/individual.py`.
@@ -116,12 +118,19 @@ The 3x3 Fisher matrix is in (scale, A_V, R_V) space. Internally, `logpost_grid` 
 
 ## Numba JIT
 
-Performance-critical functions use `@jit(nopython=True, cache=True)`:
-- `_optimize_fit_mag/flux`, `_get_sed_mle` in `analysis/individual.py`
+Performance-critical functions use `@jit(nopython=True, cache=True)`, and the
+per-grid-point loops additionally use `parallel=True` with `prange` (each grid
+row is independent, so parallel execution is bitwise-identical):
+- `_optimize_fit_mag/flux`, `_get_sed_mle`, `_chi2_from_resid`, `_init_mag_resid`
+  in `analysis/individual.py`
+- `_get_seds` in `core/sed_utils.py`
 - `_galactic_prior_fused` in `priors/galactic.py`
-- Matrix operations in `utils/math.py`
+- `_batch_min_eig_sym3` and the matrix operations in `utils/math.py`
+- `_sample_multivariate_normal_jit` in `utils/sampling.py`
 
 `NUMBA_DISABLE_JIT=1` forces pure-Python fallback for coverage and debugging.
+Note: profile and run the test suite with JIT **enabled** to exercise the real
+parallel codegen (the coverage workflow disables JIT and would not).
 
 ## Plotting Module
 

@@ -640,6 +640,15 @@ def logp_galactic_structure(
         Galactic coordinates (l, b) in degrees.
     labels : structured array, optional
         Stellar labels containing 'feh' and/or 'loga' for metallicity/age priors.
+    feh : array_like, optional
+        Per-point [Fe/H] as a plain float array, an alternative to ``labels``
+        for the metallicity prior. Lets callers (e.g. ``logpost_grid``) avoid
+        tiling a structured ``labels`` array; bitwise-identical to passing the
+        same values via ``labels``. Only used on the fused fast path
+        (``len(dists) > 1000``).
+    loga : array_like, optional
+        Per-point log10(age/yr) as a plain float array, an alternative to
+        ``labels`` for the age prior (see ``feh``).
     R_solar : float, optional
         Solar Galactocentric radius in kpc. Default is 8.2.
     Z_solar : float, optional

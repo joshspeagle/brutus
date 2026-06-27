@@ -175,10 +175,23 @@ aggressive variant is worth a dedicated, heavily-validated effort.
 
 ## Reproduce
 
+Requires the real grid + data locally (`fetch_grids()`, `fetch_offsets('mist_v9')`;
+the Orion field ships in `tutorials/`). Verification tooling:
+
 ```bash
-python bench/harness.py bench            # min-of-N per-object timings
-python bench/harness.py capture <tag>    # freeze deterministic + draw outputs
-python bench/harness.py compare a b      # regression compare
-bash    bench/ab.sh                       # stash-based baseline vs optimized A/B
-bash    bench/fullfit_ab.sh               # end-to-end fit() HDF5 bitwise A/B
+python bench/harness.py bench            # min-of-N per-object stage timings
+python bench/harness.py capture <tag>    # freeze deterministic loglike + draws
+python bench/harness.py compare a b      # regression compare two captures
+python bench/disteq.py   run <tag>       # multi-seed posterior summaries (cohort)
+python bench/disteq.py   cmp  a b        # distributional-equivalence z-scores
+python bench/mcvar.py                    # antithetic vs plain MC-integration std
+python bench/mcgold.py                   # antithetic accuracy vs high-Nmc gold
+python bench/fullfit.py  run <tag>       # end-to-end fit() -> HDF5
+python bench/fullfit.py  cmp  a b        # bitwise-compare two fit() HDF5 outputs
+python bench/profile_cohort.py           # per-stage timing + aggregated cProfile
 ```
+
+The `*_ab.sh` wrappers (`ab.sh`, `fullfit_ab.sh`, `verify_cohort.sh`) A/B the
+current **working tree** against committed `HEAD` via `git stash`: make an
+uncommitted change, run the wrapper, and it reports the speedup and the
+regression/distributional deltas. (`bench/artifacts/` outputs are git-ignored.)
