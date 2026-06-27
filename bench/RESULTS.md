@@ -67,6 +67,63 @@ would require changing the statistics (earlier model culling, fewer MC samples),
 which would trade away the exactness verified above; those were intentionally
 not taken.
 
+## Session 2 — statistical efficiency + further compute
+
+After the parallelization above, a second pass targeted statistical efficiency
+and any remaining compute, verified with a distributional-equivalence harness
+(`bench/disteq.py`) calibrated against the procedure's own seed-to-seed Monte
+Carlo scatter, plus a high-Nmc gold-standard accuracy test (`bench/mcgold.py`)
+and a direct MC-variance test (`bench/mcvar.py`).
+
+**Antithetic Monte-Carlo integration (kept).** The prior integral in
+`logpost_grid` now draws the proposal normals in antithetic pairs `(z, -z)`.
+Each sample is still marginally N(mean,cov), so the estimator is unbiased, but:
+- **~4.6× lower std (≈20× lower variance)** of the per-model integrated
+  log-posterior `lnp` (direct measurement, `mcvar.py`).
+- **More accurate, not just different**: vs an Nmc→∞ gold standard, RMSE ratio
+  **0.276** (≈3.6× more accurate) and the finite-Nmc Jensen bias of
+  `log(mean(w))` shrinks 3–65× — at the *same* Nmc=50, using *half* the Gaussian
+  draws.
+- Final-posterior shift is within the procedure's intrinsic MC scatter: across a
+  cohort spanning the full selected-model range (Nsel = 4 … 50000-cap), the
+  antithetic-vs-plain z-profile (frac|z|>3 = 0.07) is no larger than the
+  plain-vs-plain null (0.08), and output scatter drops (log-evidence 0.76×).
+- Benefit concentrates in well-constrained stars (where MC-integration variance
+  dominates); for poorly-constrained stars that hit the `max_models` subsampling
+  cap the subsampling variance dominates and antithetic is neutral (no harm).
+
+  *Adversarial review (resolved).* A reviewer initially objected that antithetic
+  increases variance for even-symmetric integrands. Reconciliation: the brutus
+  integrand is dominated along ln(d) by the galactic-density falloff and the
+  +log(d) Jacobian — both monotone (odd) in the sampling direction — which is the
+  regime where antithetic *reduces* variance; the reviewer reproduced this and
+  withdrew the objection. The one corner where antithetic can mildly *increase*
+  variance (never bias) — a very precise parallax centered on the photometric
+  proposal mode with poorly-constraining photometry — was spot-checked on real
+  high-SNR Orion stars reduced to 4 bands and found negligible (worst std ratio
+  ~1.06). `mc_ess` is documented as a weight-concentration diagnostic (not a
+  strict independent-sample count) under antithetic correlation.
+
+**Parallel multivariate-normal sampler (kept, exact).** `_sample_multivariate_
+normal_jit` now runs `prange` over distributions — bitwise-identical, parallel.
+
+**exp instead of pow (kept, machine-eps).** `_get_seds` flux conversion uses
+`exp(fac·mag)` rather than `10**(-0.4·mag)`: ~1.6× faster on that hot path,
+agreement ~3e-15 (vanishes under float32 storage; verified machine-eps across
+the Nsel = 4 … 50000 cohort).
+
+**Investigated and deliberately NOT taken** (analysis in commit/notes):
+- *Early model culling / iteration capping* — measured that the mag-space
+  optimizer already converges in ≤3 iterations (the top models have zero
+  improvement past iter 3), so capping yields no speedup; the cost is the
+  inherent full-grid SED passes.
+- *Deferred Fisher (icov) for selected models only* — exact but saves only
+  ~20 ms (the icov build is a small part of the MLE) for an invasive
+  loglike/logpost API change; not worth the risk.
+- *float32 SED/optimize path* — a real but partial (~1.3–1.5×, memory-bound
+  parts only) win that requires a full-chain precision change and full
+  distributional re-validation; recommended as a separate opt-in change.
+
 ## Reproduce
 
 ```bash

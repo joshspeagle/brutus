@@ -8,7 +8,7 @@ This module contains functions for computing reddened spectral energy
 distributions (SEDs) from magnitude coefficients and dust parameters.
 """
 
-from math import log
+from math import exp, log
 
 import numpy as np
 from numba import jit, prange
@@ -74,9 +74,11 @@ def _get_seds(mag_coeffs, av, rv, return_flux=False):
             rvecs[i][j] = r0 + rv[i] * dr
             seds[i][j] = mags + av[i] * rvecs[i][j]
 
-            # Convert to flux.
+            # Convert to flux. Use exp(fac * mag) instead of 10**(-0.4*mag):
+            # mathematically identical (fac = -0.4*ln10), agrees to ~3e-15, but
+            # a single exp is ~1.6x faster than a generic pow in this hot loop.
             if return_flux:
-                seds[i][j] = 10.0 ** (-0.4 * seds[i][j])
+                seds[i][j] = exp(fac * seds[i][j])
                 rvecs[i][j] *= fac * seds[i][j]
                 drvecs[i][j] *= fac * seds[i][j]
 
