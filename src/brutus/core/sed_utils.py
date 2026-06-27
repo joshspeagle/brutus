@@ -11,12 +11,12 @@ distributions (SEDs) from magnitude coefficients and dust parameters.
 from math import log
 
 import numpy as np
-from numba import jit
+from numba import jit, prange
 
 __all__ = ["_get_seds", "get_seds"]
 
 
-@jit(nopython=True, cache=True)
+@jit(nopython=True, cache=True, parallel=True)
 def _get_seds(mag_coeffs, av, rv, return_flux=False):
     """
     Compute reddened SEDs from the provided magnitude coefficients.
@@ -56,13 +56,14 @@ def _get_seds(mag_coeffs, av, rv, return_flux=False):
 
     """
     Nmodels, Nbands, Ncoef = mag_coeffs.shape
-    seds = np.zeros((Nmodels, Nbands))
-    rvecs = np.zeros((Nmodels, Nbands))
-    drvecs = np.zeros((Nmodels, Nbands))
+    # Every (i, j) entry is written below, so skip zero-initialization.
+    seds = np.empty((Nmodels, Nbands))
+    rvecs = np.empty((Nmodels, Nbands))
+    drvecs = np.empty((Nmodels, Nbands))
 
     fac = -0.4 * log(10.0)
 
-    for i in range(Nmodels):
+    for i in prange(Nmodels):
         for j in range(Nbands):
             mags = mag_coeffs[i, j, 0]
             r0 = mag_coeffs[i, j, 1]

@@ -72,7 +72,7 @@ from math import log
 
 import h5py
 import numpy as np
-from numba import jit
+from numba import jit, prange
 from scipy.special import logsumexp
 
 # Import StarGrid and SED utilities
@@ -110,7 +110,60 @@ MIN_SCALE = 1e-20
 # ============================================================================
 
 
-@jit(nopython=True, cache=True)
+@jit(nopython=True, cache=True, parallel=True)
+def _chi2_from_resid(resid, tot_var):
+    """
+    Compute per-model chi-square ``sum_j resid[i,j]**2 / tot_var[j]``.
+
+    Parallel numba replacement for ``np.sum(np.square(resid) / tot_var,
+    axis=1)``. The inner sum runs sequentially over filters (j = 0..Nfilt-1),
+    exactly matching the numpy reduction order, so results are
+    bitwise-identical while avoiding two full-size temporary allocations and
+    running across all cores.
+    """
+    Nmodel, Nfilt = resid.shape
+    chi2 = np.empty(Nmodel)
+    for i in prange(Nmodel):
+        c = 0.0
+        for j in range(Nfilt):
+            c += resid[i, j] * resid[i, j] / tot_var[j]
+        chi2[i] = c
+    return chi2
+
+
+@jit(nopython=True, cache=True, parallel=True)
+def _init_mag_resid(mag_coeffs, av, rv, mags):
+    """
+    Compute initial mag-space SEDs/reddening vectors and the data residual.
+
+    Fused parallel replacement for
+    ``models, rvecs, drvecs = _get_seds(mag_coeffs, av, rv, return_flux=False)``
+    immediately followed by ``resid = mags - models``. Folding the residual
+    into the same pass avoids a second full-size broadcast subtraction and its
+    temporary allocation. Arithmetic is identical (``mags[j] - (base + av*rvec)``)
+    so results are bitwise-identical to the two-step form.
+    """
+    Nmodel, Nfilt, _ = mag_coeffs.shape
+    # Every (i, j) entry is written below, so skip zero-initialization.
+    models = np.empty((Nmodel, Nfilt))
+    rvecs = np.empty((Nmodel, Nfilt))
+    drvecs = np.empty((Nmodel, Nfilt))
+    resid = np.empty((Nmodel, Nfilt))
+    for i in prange(Nmodel):
+        for j in range(Nfilt):
+            m0 = mag_coeffs[i, j, 0]
+            r0 = mag_coeffs[i, j, 1]
+            dr = mag_coeffs[i, j, 2]
+            drvecs[i, j] = dr
+            rv_j = r0 + rv[i] * dr
+            rvecs[i, j] = rv_j
+            sed = m0 + av[i] * rv_j
+            models[i, j] = sed
+            resid[i, j] = mags[j] - sed
+    return models, rvecs, drvecs, resid
+
+
+@jit(nopython=True, cache=True, parallel=True)
 def _optimize_fit_mag(
     data,
     tot_var,
@@ -262,7 +315,7 @@ def _optimize_fit_mag(
     # Compute constants.
     s_den, rp_den = np.zeros(Nmodel), np.zeros(Nmodel)
     srp_mix = np.zeros(Nmodel)
-    for i in range(Nmodel):
+    for i in prange(Nmodel):
         for j in range(Nfilt):
             s_den[i] += inv_mags_var[j]
             rp_den[i] += drvecs[i][j] * drvecs[i][j] * inv_mags_var[j]
@@ -274,7 +327,7 @@ def _optimize_fit_mag(
     logwt = np.zeros(Nmodel)
     dav, drv = np.zeros(Nmodel), np.zeros(Nmodel)
     while True:
-        for i in range(Nmodel):
+        for i in prange(Nmodel):
             # --- Fused pass 1: Av solve ---
             # Read resid[i][j] and rvecs[i][j] once to compute all Av terms.
             a_den_i = Av_varinv
@@ -340,36 +393,40 @@ def _optimize_fit_mag(
                 chi2_i += resid[i][j] * resid[i][j] * inv_mags_var[j]
             logwt[i] = -0.5 * chi2_i
 
-        # Find current best-fit model.
+        # Find current best-fit model. Parallel max-reduction; max is exact
+        # and order-independent, so this is bitwise-identical to a serial scan.
         max_logwt = -1e300
-        for i in range(Nmodel):
-            if logwt[i] > max_logwt:
-                max_logwt = logwt[i]
+        for i in prange(Nmodel):
+            max_logwt = max(max_logwt, logwt[i])
 
         # Find relative tolerance (error) to determine convergance.
+        # Parallel max-reduction over the per-model step magnitudes, restricted
+        # to "reasonably good" fits (others contribute -1e300, i.e. nothing).
         err = -1e300
-        for i in range(Nmodel):
-            # Only include models that are "reasonably good" fits.
-            if logwt[i] > max_logwt + log_init_thresh:
-                dav_err, drv_err = abs(dav[i]), abs(drv[i])
-                if dav_err > err:
-                    err = dav_err
-                if drv_err > err:
-                    err = drv_err
+        thresh = max_logwt + log_init_thresh
+        for i in prange(Nmodel):
+            if logwt[i] > thresh:
+                e = abs(dav[i])
+                drv_err = abs(drv[i])
+                if drv_err > e:
+                    e = drv_err
+            else:
+                e = -1e300
+            err = max(err, e)
 
         # Check convergence.
         if err < tol:
             break
 
     # Get MLE models and associated quantities.
-    (models, rvecs, drvecs, scale, icov_sar, resid) = _get_sed_mle(
+    models, rvecs, drvecs, scale, icov_sar, resid = _get_sed_mle(
         data, tot_var, resid, mag_coeffs, av, rv, av_gauss=av_gauss, rv_gauss=rv_gauss
     )
 
     return models, rvecs, drvecs, scale, av, rv, icov_sar, resid
 
 
-@jit(nopython=True, cache=True)
+@jit(nopython=True, cache=True, parallel=True)
 def _optimize_fit_flux(
     data,
     tot_var,
@@ -508,7 +565,7 @@ def _optimize_fit_flux(
 
     # Fused: compute Av and Rv sums in a single pass over filters,
     # since both read the same resid[i][j], rvecs[i][j], drvecs[i][j].
-    for i in range(Nmodel):
+    for i in prange(Nmodel):
         a_num_i = (Av_mean - av[i]) * Av_varinv
         a_den_i = Av_varinv
         r_num_i = (Rv_mean - rv[i]) * Rv_varinv
@@ -544,14 +601,14 @@ def _optimize_fit_flux(
         rv[i] += drv_i
 
     # Get MLE models and associated quantities.
-    (models, rvecs, drvecs, scale, icov_sar, resid) = _get_sed_mle(
+    models, rvecs, drvecs, scale, icov_sar, resid = _get_sed_mle(
         data, tot_var, resid, mag_coeffs, av, rv, av_gauss=av_gauss, rv_gauss=rv_gauss
     )
 
     return models, rvecs, drvecs, scale, av, rv, icov_sar, resid
 
 
-@jit(nopython=True, cache=True)
+@jit(nopython=True, cache=True, parallel=True)
 def _get_sed_mle(
     data, tot_var, resid, mag_coeffs, av, rv, av_gauss=(0.0, 1e6), rv_gauss=(3.32, 0.18)
 ):
@@ -632,7 +689,7 @@ def _get_sed_mle(
 
     # Derive scale-factors (`scale`) between data and models.
     s_num, s_den, scale = np.zeros(Nmodel), np.zeros(Nmodel), np.zeros(Nmodel)
-    for i in range(Nmodel):
+    for i in prange(Nmodel):
         for j in range(Nfilt):
             s_num[i] += models[i][j] * data[j] * inv_tot_var[j]
             s_den[i] += models[i][j] * models[i][j] * inv_tot_var[j]
@@ -645,12 +702,8 @@ def _get_sed_mle(
     a_den, r_den = np.zeros(Nmodel), np.zeros(Nmodel)
     ar_mix = np.zeros(Nmodel)
     Av_varinv, Rv_varinv = 1.0 / Av_std**2, 1.0 / Rv_std**2
-    for i in range(Nmodel):
+    for i in prange(Nmodel):
         for j in range(Nfilt):
-            # Compute reddening effect.
-            models_int = 10.0 ** (-0.4 * mag_coeffs[i][j][0])
-            reddening = models[i][j] - models_int
-
             # Rescale models.
             models[i][j] = models[i][j] * scale[i]
 
@@ -667,7 +720,6 @@ def _get_sed_mle(
             # Rescale reddening quantities.
             rvecs[i][j] = rvecs[i][j] * scale[i]
             drvecs[i][j] = drvecs[i][j] * scale[i]
-            reddening *= scale[i]
 
             # Derive reddening (cross-)terms
             # ar_mix: Gauss-Newton cross-term (∂f/∂Av)(∂f/∂Rv) / var
@@ -681,9 +733,10 @@ def _get_sed_mle(
         a_den[i] += Av_varinv
         r_den[i] += Rv_varinv
 
-    # Construct precision matrices (inverse covariances).
-    icov_sar = np.zeros((Nmodel, 3, 3))
-    for i in range(Nmodel):
+    # Construct precision matrices (inverse covariances). All nine entries are
+    # assigned below, so allocation can skip zero-initialization.
+    icov_sar = np.empty((Nmodel, 3, 3))
+    for i in prange(Nmodel):
         icov_sar[i][0][0] = s_den[i]  # scale
         icov_sar[i][1][1] = a_den[i]  # Av
         icov_sar[i][2][2] = r_den[i]  # Rv
@@ -1216,12 +1269,10 @@ class BruteForce:
         if rv_init is None:
             rv_init = np.zeros(Nmodels) + rv_gauss[0]
 
-        # Compute unreddened photometry
-        models, rvecs, drvecs = _get_seds(mcoeffs, av_init, rv_init, return_flux=False)
-
-        # Compute initial magnitude fit
+        # Compute unreddened photometry and the initial data residual in a
+        # single fused parallel pass (replaces _get_seds + `mags - models`).
         mtol = 2.5 * ltol
-        resid = mags - models
+        models, rvecs, drvecs, resid = _init_mag_resid(mcoeffs, av_init, rv_init, mags)
         stepsize = np.ones(Nmodels)
         results = _optimize_fit_mag(
             flux,
@@ -1247,7 +1298,7 @@ class BruteForce:
 
         if init_thresh is not None:
             # Cull initial bad fits before moving on
-            chi2 = np.sum(np.square(resid) / tot_var, axis=1)
+            chi2 = _chi2_from_resid(resid, tot_var)
             lnl = -0.5 * chi2
 
             # Add parallax to log-likelihood
@@ -1302,12 +1353,12 @@ class BruteForce:
                 rvlim=rvlim,
                 rv_gauss=rv_gauss,
             )
-            (models, rvecs, drvecs, scale_new, av_new, rv_new, icov_sar_new, resid) = (
+            models, rvecs, drvecs, scale_new, av_new, rv_new, icov_sar_new, resid = (
                 results
             )
 
             # Compute chi2
-            chi2_new = np.sum(np.square(resid) / tot_var, axis=1)
+            chi2_new = _chi2_from_resid(resid, tot_var)
 
             # Compute multivariate normal logpdf
             lnl_new = -0.5 * chi2_new
