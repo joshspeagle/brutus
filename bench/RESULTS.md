@@ -124,6 +124,24 @@ the Nsel = 4 … 50000 cohort).
   parts only) win that requires a full-chain precision change and full
   distributional re-validation; recommended as a separate opt-in change.
 
+## Session 3 — logpost galactic-prior block (large Nsel)
+
+For the default galactic-structure prior, `logpost_grid` was tiling the full
+*structured* label array across all `Nmc` MC samples. A numpy structured-dtype
+`np.tile` is ~100× slower than the equivalent float tile (~200 ms vs ~2 ms at
+Nsel=50000) and was the single biggest logpost cost for poorly-constrained
+(large-Nsel) stars. `logp_galactic_structure` now accepts the per-point
+`feh`/`loga` as plain float arrays; logpost float-tiles only the fields the
+prior uses. **Bitwise-identical** across the full Nsel cohort (every fit() output
+0.000e+00, disteq scatter 1.000). Clean A/B (min-of-8): logpost **~1.24×** for
+Nsel=50000 (~165 ms/object saved); no change for small Nsel.
+
+Remaining logpost headroom (large-Nsel tail only, deprioritized): the Gaussian
+RNG generation (`_antithetic_normals`, intrinsic), the prior math itself
+(`_galactic_prior_fused`, intrinsic), and a coordinate-transform fusion (~30 ms
+net, machine-eps, needs a shared-kernel refactor). Typical (small-Nsel) stars
+already spend only ~25–33 ms in logpost.
+
 ## Reproduce
 
 ```bash
