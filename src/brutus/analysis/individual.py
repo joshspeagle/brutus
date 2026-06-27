@@ -1613,29 +1613,43 @@ class BruteForce:
                     logp_galactic_structure, R_solar=R_solar, Z_solar=Z_solar
                 )
 
-            # Galactic prior evaluation (FULLY VECTORIZED)
-            # We have dist_mc shape (Nmc, Nsel) and need to evaluate for each model's labels
-            # Each model has 1 label, each model has Nmc distances
-            # Solution: tile labels to match distances, then evaluate all at once
-
-            # Flatten all distances: shape (Nmc * Nsel,)
+            # Galactic prior evaluation (FULLY VECTORIZED).
+            # dist_mc has shape (Nmc, Nsel); we evaluate the prior for every
+            # (MC sample, model) pair. The labels (feh/loga) repeat across the
+            # Nmc samples of a given model, so they must be broadcast to match
+            # dist_mc.ravel() (row-major: [model0..modelN]*Nmc).
             dist_flat = dist_mc.ravel()
+
+            # Detect the default galactic-structure prior (bare or partial). For
+            # it we hand the fused kernel the per-point feh/loga as plain FLOAT
+            # arrays, which is bitwise-identical to passing a structured `labels`
+            # array but avoids a numpy structured-dtype np.tile -- pathologically
+            # slow (~100x a float tile, ~200 ms at Nsel=50000). Only used on the
+            # large-array fused path (Nmc*Nsel > 1000); smaller cases keep the
+            # structured path (cheap, and exercises the numpy fallback).
+            gal_is_default = lngalprior is logp_galactic_structure or (
+                getattr(lngalprior, "func", None) is logp_galactic_structure
+            )
 
             if dlabels is None:
                 # No labels - evaluate once for all distances
                 lnp_gal_flat = lngalprior(dist_flat, coord, labels=None)
-            else:
-                # Create labels array that matches flattened distances (VECTORIZED)
-                # Extract labels for selected models: shape (Nsel,)
+            elif gal_is_default and Nmc * Nsel > 1000:
                 labels_selected = dlabels[sel]
-
-                # Use np.tile to repeat the label array Nmc times: shape (Nmc * Nsel,)
-                # This creates: [label0, label1, ..., labelN, label0, label1, ..., labelN, ...]
-                #               |---- MC sample 0 ----|  |---- MC sample 1 ----|
-                # which matches dist_mc.ravel() layout (Nmc, Nsel) in row-major order.
-                labels_flat = np.tile(labels_selected, Nmc)
-
-                # Evaluate prior for all distance-label pairs at once
+                names = labels_selected.dtype.names
+                feh_flat = (
+                    np.tile(labels_selected["feh"], Nmc) if "feh" in names else None
+                )
+                loga_flat = (
+                    np.tile(labels_selected["loga"], Nmc) if "loga" in names else None
+                )
+                lnp_gal_flat = lngalprior(
+                    dist_flat, coord, feh=feh_flat, loga=loga_flat
+                )
+            else:
+                # General path (custom prior or small array): tile the full
+                # structured label array to match the flattened distances.
+                labels_flat = np.tile(dlabels[sel], Nmc)
                 lnp_gal_flat = lngalprior(dist_flat, coord, labels=labels_flat)
 
             # Reshape back to (Nmc, Nsel)
