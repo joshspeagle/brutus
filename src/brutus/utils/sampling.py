@@ -62,7 +62,7 @@ Drawing from posterior:
 import warnings
 
 import numpy as np
-from numba import jit
+from numba import jit, prange
 
 __all__ = ["quantile", "draw_sar", "sample_multivariate_normal"]
 
@@ -310,7 +310,7 @@ def _cholesky_3x3(A):
     return L
 
 
-@jit(nopython=True, cache=True)
+@jit(nopython=True, cache=True, parallel=True)
 def _sample_multivariate_normal_jit(mean, cov, size, eps, random_samples):
     """
     Numba-accelerated core multivariate normal sampling.
@@ -332,34 +332,56 @@ def _sample_multivariate_normal_jit(mean, cov, size, eps, random_samples):
     -------
     samples : ndarray of shape (dim, size, Ndist)
         Transformed samples.
+
+    Notes
+    -----
+    Parallelized over the distribution index ``n`` (each distribution's
+    regularization, Cholesky factor, and sample transform are independent),
+    so the result is bitwise-identical to a serial evaluation.
     """
     N, d = mean.shape
 
-    # Add regularization to covariance matrices
-    K = cov.copy()
-    for n in range(N):
-        for i in range(d):
-            K[n, i, i] += eps
-
-    # Cholesky decomposition using custom 3x3 implementation
-    L = np.empty_like(K)
-    for n in range(N):
-        L[n] = _cholesky_3x3(K[n])
-
-    # Transform samples and write directly to output layout: (dim, size, Ndist)
+    # Per-distribution: regularize, Cholesky-factor, transform. All independent
+    # across n, so prange is safe and bitwise-identical to a serial loop.
     result = np.empty((d, size, N))
-    for n in range(N):
+    for n in prange(N):
+        Kn = cov[n].copy()
+        for i in range(d):
+            Kn[i, i] += eps
+        Ln = _cholesky_3x3(Kn)
         for s in range(size):
             for i in range(d):
                 val = mean[n, i]
                 for j in range(d):
-                    val += L[n, i, j] * random_samples[n, j, s]
+                    val += Ln[i, j] * random_samples[n, j, s]
                 result[i, s, n] = val
 
     return result
 
 
-def sample_multivariate_normal(mean, cov, size=1, eps=1e-30, rstate=None):
+def _antithetic_normals(rstate, N, d, size):
+    """
+    Standard-normal draws of shape ``(N, d, size)`` arranged in antithetic
+    pairs along the last (sample) axis.
+
+    For each base draw ``z`` we also emit ``-z``. Because ``z`` and ``-z`` are
+    each marginally standard normal, any Monte-Carlo average over these samples
+    remains unbiased, while the negative correlation within a pair cancels the
+    linear component of the integrand's variance (variance reduction). When
+    ``size`` is odd the final sample is an unpaired ordinary draw. This also
+    halves the number of underlying Gaussian draws generated.
+    """
+    nh = (size + 1) // 2
+    base = rstate.normal(loc=0, scale=1, size=d * nh * N).reshape(N, d, nh)
+    z = np.empty((N, d, size))
+    z[:, :, :nh] = base
+    z[:, :, nh:] = -base[:, :, : size - nh]
+    return z
+
+
+def sample_multivariate_normal(
+    mean, cov, size=1, eps=1e-30, rstate=None, antithetic=False
+):
     """
     Draw samples from many multivariate normal distributions.
 
@@ -391,6 +413,12 @@ def sample_multivariate_normal(mean, cov, size=1, eps=1e-30, rstate=None):
     rstate : `~numpy.random.RandomState`, optional
         `~numpy.random.RandomState` instance. If None, uses default numpy
         random state.
+
+    antithetic : bool, optional
+        If True (only effective for the 3D fast path), draw the underlying
+        standard normals in antithetic pairs ``(z, -z)`` along the sample axis.
+        This leaves every Monte-Carlo estimate unbiased but reduces its variance
+        (and halves the number of Gaussian draws generated). Default is False.
 
     Returns
     -------
@@ -437,7 +465,10 @@ def sample_multivariate_normal(mean, cov, size=1, eps=1e-30, rstate=None):
 
     if d == 3:
         # Use numba-accelerated version for 3D case
-        z = rstate.normal(loc=0, scale=1, size=d * size * N).reshape(N, d, size)
+        if antithetic:
+            z = _antithetic_normals(rstate, N, d, size)
+        else:
+            z = rstate.normal(loc=0, scale=1, size=d * size * N).reshape(N, d, size)
         ans = _sample_multivariate_normal_jit(mean, cov, size, eps, z)
     else:
         # Fall back to numpy for non-3D cases

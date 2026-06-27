@@ -593,6 +593,8 @@ def logp_galactic_structure(
     dists,
     coord,
     labels=None,
+    feh=None,
+    loga=None,
     R_solar=8.2,
     Z_solar=0.025,
     R_thin=2.6,
@@ -638,6 +640,15 @@ def logp_galactic_structure(
         Galactic coordinates (l, b) in degrees.
     labels : structured array, optional
         Stellar labels containing 'feh' and/or 'loga' for metallicity/age priors.
+    feh : array_like, optional
+        Per-point [Fe/H] as a plain float array, an alternative to ``labels``
+        for the metallicity prior. Lets callers (e.g. ``logpost_grid``) avoid
+        tiling a structured ``labels`` array; bitwise-identical to passing the
+        same values via ``labels``. Only used on the fused fast path
+        (``len(dists) > 1000``).
+    loga : array_like, optional
+        Per-point log10(age/yr) as a plain float array, an alternative to
+        ``labels`` for the age prior (see ``feh``).
     R_solar : float, optional
         Solar Galactocentric radius in kpc. Default is 8.2.
     Z_solar : float, optional
@@ -749,11 +760,41 @@ def logp_galactic_structure(
 
     # Fast path: use fused numba kernel when labels are provided and
     # return_components is not needed. Eliminates ~15 temporary arrays.
-    if labels is not None and not return_components and len(dists) > 1000:
-        has_feh = "feh" in labels.dtype.names
-        has_loga = "loga" in labels.dtype.names
-        feh_arr = labels["feh"] if has_feh else np.empty(0)
-        loga_arr = labels["loga"] if has_loga else np.empty(0)
+    #
+    # Callers may pass the per-point ``feh`` / ``loga`` as plain float arrays
+    # directly (instead of a structured ``labels`` array). This is the hot path
+    # from logpost_grid, where it avoids tiling a structured array across all MC
+    # samples -- a numpy structured-dtype ``np.tile`` is ~100x slower than the
+    # equivalent float tile. The values handed to the fused kernel are identical
+    # either way, so results are bitwise-identical to the structured path.
+    use_arrays = feh is not None or loga is not None
+    if use_arrays:
+        # Validate the directly-supplied arrays up front so misuse gives an
+        # actionable error rather than failing later inside the numba kernel.
+        for _name, _arr in (("feh", feh), ("loga", loga)):
+            if _arr is None:
+                continue
+            _arr = np.asarray(_arr)
+            if _arr.ndim != 1 or _arr.shape[0] != len(dists):
+                raise ValueError(
+                    f"`{_name}` must be a 1D array matching len(dists)="
+                    f"{len(dists)}; got shape {np.shape(_arr)}."
+                )
+    if (
+        (labels is not None or use_arrays)
+        and not return_components
+        and len(dists) > 1000
+    ):
+        if use_arrays:
+            has_feh = feh is not None
+            has_loga = loga is not None
+            feh_arr = feh if has_feh else np.empty(0)
+            loga_arr = loga if has_loga else np.empty(0)
+        else:
+            has_feh = "feh" in labels.dtype.names
+            has_loga = "loga" in labels.dtype.names
+            feh_arr = labels["feh"] if has_feh else np.empty(0)
+            loga_arr = labels["loga"] if has_loga else np.empty(0)
         try:
             return _galactic_prior_fused(
                 dists,

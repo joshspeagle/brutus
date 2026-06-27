@@ -5,6 +5,70 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-06-27
+
+Performance pass on the individual-star `BruteForce` fitter (`loglike_grid` ->
+`logpost_grid` -> `_fit`). Benchmarked on the real MIST grid (`grid_mist_v9.h5`,
+613,530 models) and the real Orion field (Gaia parallaxes), across a cohort
+spanning the full selected-model range (4 .. the `max_models=50000` cap).
+End-to-end **~2.6x faster `loglike_grid`, ~2.3x faster `fit()`** on a 4-core host
+(the parallel kernels scale further with physical cores). Every change is either
+verified bitwise-identical in the saved (float32) outputs or proven *more
+accurate* against a high-Nmc reference; see `bench/RESULTS.md` for the full
+methodology and numbers.
+
+### Changed
+
+- **Monte-Carlo prior integration in `logpost_grid` now uses antithetic
+  sampling** *(affects output -- more accurate)*: the per-model prior integral
+  draws the proposal normals in antithetic pairs `(z, -z)`. The estimator stays
+  unbiased; because the integrand is dominated along `ln(d)` by the
+  galactic-density falloff and the `+log(d)` volume Jacobian (both monotone in
+  the sampling direction), this cuts the MC-integration variance ~20x and reduces
+  the finite-`Nmc` (Jensen) bias of `log(mean(w))`. Versus an `Nmc -> inf` gold
+  standard the per-model log-posterior RMSE drops to ~0.28x and the bias 3-65x,
+  at the same `Nmc` and half the Gaussian draws. The resulting shift in posterior
+  summaries is within the procedure's intrinsic Monte-Carlo scatter. An
+  adversarial review confirmed the one regime where antithetic could mildly
+  *increase* variance (a very precise parallax centered on the photometric
+  proposal mode with poorly-constraining photometry) is empirically negligible
+  for real Gaia data (worst observed std ratio ~1.06) and never introduces bias.
+- **`mc_ess` output is now a weight-concentration diagnostic, not a strict
+  effective-sample count**: under antithetic correlation `1 / sum(w_i^2)` no
+  longer counts independent samples (it can read up to ~2x optimistic for
+  well-mixed models). It remains monotone and useful as a proposal/target
+  mismatch indicator -- low values still flag poor overlap.
+- `sample_multivariate_normal` gained an optional `antithetic` keyword (default
+  `False`); `logp_galactic_structure` gained optional `feh`/`loga` array keywords
+  (a fast path for the per-point metallicity/age prior). Existing calls are
+  unaffected.
+
+### Performance
+
+All of the following are verified **bitwise-identical** to the prior results in
+the saved `fit()` outputs (any differences are float64 round-off below float32
+storage precision that flip no discrete selection):
+
+- `loglike_grid`'s per-model numba kernels (`_get_seds`, `_optimize_fit_mag`,
+  `_optimize_fit_flux`, `_get_sed_mle`) and the multivariate-normal sampler are
+  parallelized with `prange` (rows are independent; reductions are exact). The
+  two convergence max-reductions in `_optimize_fit_mag` are parallelized as well.
+- Removed dead computation in `_get_sed_mle` (`models_int`/`reddening` were
+  computed -- 4.9M `pow` calls per evaluation -- but never read).
+- Fused kernels `_chi2_from_resid` and `_init_mag_resid` replace large NumPy
+  temporaries; `np.zeros` -> `np.empty` for fully-overwritten arrays.
+- `_get_seds` flux conversion uses `exp(fac*mag)` instead of `10**(-0.4*mag)`
+  (~1.6x faster on that hot path; agreement ~1e-15).
+- The batched 3x3 covariance regularization uses an analytic symmetric-3x3
+  minimum-eigenvalue kernel instead of `numpy.linalg.eigvalsh` (no less accurate;
+  the regularization decision is unchanged).
+- `logpost_grid` no longer tiles a *structured* label array across all MC
+  samples for the default galactic prior (a numpy structured-dtype `np.tile` is
+  ~100x slower than the float equivalent; it dominated logpost for large
+  selected-model counts). It now hands the prior the per-point `feh`/`loga` as
+  plain float arrays. Bitwise-identical; ~1.24x faster `logpost_grid` at
+  `Nsel=50000` (~165 ms/object), no change for small selections.
+
 ## [1.1.0] - 2026-05-29
 
 Maintenance and polish release: verified bug fixes (several affecting numerical
