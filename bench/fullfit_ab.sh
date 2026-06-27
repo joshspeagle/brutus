@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-cd /home/user/brutus
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"  # repo root (bench/..)
 echo "=== run OPTIMIZED fit() ==="
 python bench/fullfit.py run opt 2>/dev/null
 echo "=== stash -> BASELINE ==="

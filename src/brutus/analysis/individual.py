@@ -393,26 +393,27 @@ def _optimize_fit_mag(
                 chi2_i += resid[i][j] * resid[i][j] * inv_mags_var[j]
             logwt[i] = -0.5 * chi2_i
 
-        # Find current best-fit model. Parallel max-reduction; max is exact
-        # and order-independent, so this is bitwise-identical to a serial scan.
+        # Find current best-fit model. Serial scan (cheap O(Nmodel) over the
+        # already-computed logwt): the per-model compute loop above is the
+        # parallel hot path; this reduction is kept serial for deterministic,
+        # version-robust behavior.
         max_logwt = -1e300
-        for i in prange(Nmodel):
-            max_logwt = max(max_logwt, logwt[i])
+        for i in range(Nmodel):
+            if logwt[i] > max_logwt:
+                max_logwt = logwt[i]
 
-        # Find relative tolerance (error) to determine convergance.
-        # Parallel max-reduction over the per-model step magnitudes, restricted
-        # to "reasonably good" fits (others contribute -1e300, i.e. nothing).
+        # Find relative tolerance (error) to determine convergance, over the
+        # per-model step magnitudes restricted to "reasonably good" fits. Serial
+        # for the same reason.
         err = -1e300
         thresh = max_logwt + log_init_thresh
-        for i in prange(Nmodel):
+        for i in range(Nmodel):
             if logwt[i] > thresh:
-                e = abs(dav[i])
-                drv_err = abs(drv[i])
-                if drv_err > e:
-                    e = drv_err
-            else:
-                e = -1e300
-            err = max(err, e)
+                dav_err, drv_err = abs(dav[i]), abs(drv[i])
+                if dav_err > err:
+                    err = dav_err
+                if drv_err > err:
+                    err = drv_err
 
         # Check convergence.
         if err < tol:

@@ -34,7 +34,6 @@ def run(tag):
     parallax = s["parallax"][sl]
     parallax_err = s["parallax_err"][sl]
     coords = s["coords"][sl]
-    labels = np.arange(NOBJ, dtype=[("id", "i8")][0] if False else "i8")
     labels = np.array([(i,) for i in range(NOBJ)], dtype=[("id", "i8")])
     out = os.path.join(H.OUTDIR, f"fit_{tag}")
     bf.fit(

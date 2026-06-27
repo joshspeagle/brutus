@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-cd /home/user/brutus
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"  # repo root (bench/..)
 OBJ="import bench.harness as h,numpy as np; print(h.benchmark(obj_idx=np.where(h.load_setup()['mask'].all(axis=1)&np.isfinite(h.load_setup()['parallax']))[0][:12], repeats=3))"
 echo "=== OPTIMIZED ==="
 python -c "$OBJ" 2>/dev/null | grep -E "loglike|^\{" | tail -1

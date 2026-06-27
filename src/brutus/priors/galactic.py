@@ -768,6 +768,18 @@ def logp_galactic_structure(
     # equivalent float tile. The values handed to the fused kernel are identical
     # either way, so results are bitwise-identical to the structured path.
     use_arrays = feh is not None or loga is not None
+    if use_arrays:
+        # Validate the directly-supplied arrays up front so misuse gives an
+        # actionable error rather than failing later inside the numba kernel.
+        for _name, _arr in (("feh", feh), ("loga", loga)):
+            if _arr is None:
+                continue
+            _arr = np.asarray(_arr)
+            if _arr.ndim != 1 or _arr.shape[0] != len(dists):
+                raise ValueError(
+                    f"`{_name}` must be a 1D array matching len(dists)="
+                    f"{len(dists)}; got shape {np.shape(_arr)}."
+                )
     if (
         (labels is not None or use_arrays)
         and not return_components

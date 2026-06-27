@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-cd /home/user/brutus
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"  # repo root (bench/..)
 PY_CAP='import bench.harness as h, bench.disteq as d; h.capture("coh_%TAG%", obj_idx=d.COHORT)'
 PY_DEQ='import bench.disteq as d; d.run("deq_%TAG%", K=6, objs=d.COHORT)'
 echo "=== CANDIDATE: capture + disteq on cohort ==="
