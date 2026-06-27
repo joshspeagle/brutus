@@ -1,5 +1,8 @@
 # BruteForce pipeline performance optimization — results
 
+*Internal developer record (v1.1.1 performance pass, 2026-06). Not part of the
+installed package; see `bench/README.md`. User-facing summary is in `CHANGELOG.md`.*
+
 Benchmarks use the **real** MIST grid (`grid_mist_v9.h5`, 613,530 models),
 the **real** Orion field data (207 stars w/ Gaia parallaxes), the realistic
 Orion-tutorial filter set (Pan-STARRS *grizy* + 2MASS *JHKs*, 8 bands), and the

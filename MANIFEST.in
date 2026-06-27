@@ -21,6 +21,8 @@ exclude .gitignore
 
 # Exclude test files from distribution
 recursive-exclude tests *
+# Exclude internal developer benchmark/verification tooling from distribution
+recursive-exclude bench *
 exclude tox.ini
 exclude .travis.yml
 exclude .github
