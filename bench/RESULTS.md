@@ -142,6 +142,37 @@ RNG generation (`_antithetic_normals`, intrinsic), the prior math itself
 net, machine-eps, needs a shared-kernel refactor). Typical (small-Nsel) stars
 already spend only ~25–33 ms in logpost.
 
+## Grid pre-filtering investigation (frontier 2) — analyzed, not implemented
+
+Goal: prune the 613k grid before the per-model `(scale, A_V, R_V)` optimization,
+which dominates loglike for every star. Findings (measured over the Nsel cohort):
+
+- **A pre-screen is safe and prunes hard for typical stars — but only on the
+  right statistic.** A *photometric-only* screen is unsafe: tiny-Nsel stars need
+  a margin of 26–33 (parallax/prior rescues a photometrically-poor model). On the
+  *exact selection statistic* `lnprob = lnl + lnprior + parallax_scale` the margin
+  needed collapses to **2.4–8.9** uniformly, so margin ~15 retains every selected
+  model and prunes to **<3.3% of the grid for well-constrained stars** (≈30–50%
+  for poorly-constrained ones, which are intrinsically ambiguous).
+- **But that statistic requires the full per-model `lnl`** — i.e. the very
+  optimization we wanted to skip. The cheapest reddening-aware fit *is* the
+  existing mag-space optimizer; there is no valid sub-fit lower bound on the
+  extinction-optimized chi² that prunes without first fitting.
+- **Consequence — only post-fit work is bitwise-safely deferrable.** Computing
+  the 3×3 Fisher (`icov`) for screen-surviving candidates only (the rest are
+  never read by logpost) is bitwise-identical but saves just the Fisher build
+  (~20–25 ms, ~1.1× loglike) and needs `lnprior` threaded into `loglike_grid`.
+- A larger ~1.6× (deferring the flux-MLE/refinement to candidates, screening on
+  the mag-space fit) is plausible but requires an *approximate-lnl* screen with
+  its own safety margin and a deep restructure of the core inference loop —
+  higher risk to downstream inference for a moderate gain.
+
+**Recommendation:** the brute-force per-model fit is intrinsic to the method, so
+grid pre-filtering does not yield a clean low-risk large win; deferred-`icov`
+(~1.1×, bitwise-safe) is the only no-harm option and is marginal for the added
+API coupling. Left unimplemented pending a decision on whether the ~1.6×
+aggressive variant is worth a dedicated, heavily-validated effort.
+
 ## Reproduce
 
 ```bash
