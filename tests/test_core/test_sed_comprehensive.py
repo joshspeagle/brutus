@@ -178,6 +178,45 @@ class TestSedUtilsCoverage:
         assert seds.shape == (Nmodels, Nbands)
         assert np.all(np.isfinite(seds))
 
+    def test_get_seds_av_rv_shape_validation(self):
+        """Regression: av/rv arrays shorter than Nmodels must raise, not read
+        out-of-bounds memory in the numba kernel (silent garbage with JIT)."""
+        from brutus.core.sed_utils import get_seds
+
+        Nmodels, Nbands = 10, 3
+        mag_coeffs = np.zeros((Nmodels, Nbands, 3))
+        mag_coeffs[:, :, 0] = 15.0
+        mag_coeffs[:, :, 1] = 1.0
+        mag_coeffs[:, :, 2] = 0.1
+
+        with pytest.raises(ValueError, match="av"):
+            get_seds(mag_coeffs, av=np.full(5, 1.0), rv=3.1)
+        with pytest.raises(ValueError, match="rv"):
+            get_seds(mag_coeffs, av=0.1, rv=np.full(4, 3.1))
+        with pytest.raises(ValueError, match="av"):
+            get_seds(mag_coeffs, av=np.full((Nmodels, 1), 0.1), rv=3.1)
+
+    def test_get_seds_scalar_like_inputs(self):
+        """Numpy scalars, 0-d arrays, and lists must all be accepted and
+        agree with the plain-float path (old code raised numba TypingError
+        for np.float32 / 0-d arrays)."""
+        from brutus.core.sed_utils import get_seds
+
+        Nmodels, Nbands = 4, 3
+        mag_coeffs = np.zeros((Nmodels, Nbands, 3))
+        mag_coeffs[:, :, 0] = 15.0
+        mag_coeffs[:, :, 1] = 1.0
+        mag_coeffs[:, :, 2] = 0.1
+
+        ref = get_seds(mag_coeffs, av=0.1, rv=3.1)
+        for av in (np.float32(0.1), np.float64(0.1), np.array(0.1)):
+            seds = get_seds(mag_coeffs, av=av, rv=np.float32(3.1))
+            npt.assert_allclose(seds, ref, rtol=1e-6)
+
+        # Full-length list input
+        seds = get_seds(mag_coeffs, av=[0.1] * Nmodels, rv=[3.1] * Nmodels)
+        npt.assert_allclose(seds, ref, rtol=1e-12)
+
     def test_get_seds_wrapper_return_combinations(self):
         """Test all return value combinations in get_seds wrapper."""
         from brutus.core.sed_utils import get_seds

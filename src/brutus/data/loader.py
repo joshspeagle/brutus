@@ -11,6 +11,7 @@ stellar fitting and analysis.
 
 import os
 import sys
+import warnings
 from pathlib import Path
 
 import h5py
@@ -94,13 +95,14 @@ def load_models(
         List of filters that will be loaded. If not provided, will default
         to all available filters. See the internally-defined `FILTERS` variable
         for more details on filter names. Any filters that are not available
-        will be skipped over.
+        will be skipped over (a `UserWarning` listing the skipped names and
+        the surviving column order is emitted).
 
     labels : iterable of str with length `Nlabel`, optional
         List of labels associated with the set of imported stellar models.
         Any labels that are not available will be skipped over.
-        The default set is `['mini', 'feh', 'eep', 'smf', 'loga', 'logl',
-        'logt', 'logg', 'Mr', 'agewt']`.
+        The default set is `['mini', 'feh', 'eep', 'smf', 'afe', 'loga',
+        'logl', 'logt', 'logg', 'Mr', 'agewt']`.
 
     include_ms : bool, optional
         Whether to include objects on the Main Sequence. Applied as a cut on
@@ -143,6 +145,10 @@ def load_models(
 
     Notes
     -----
+    Models with non-finite photometric coefficients (invalid grid points
+    written by older `GridGenerator` versions) are dropped so the returned
+    grid is always safe to fit with `BruteForce`.
+
     The `label_mask` return value is a boolean structured array indicating which
     labels are ancillary (derived from the grid) vs. those used to generate
     the grid. For example, if luminosity is predicted from mass/age/metallicity,
@@ -186,11 +192,16 @@ def load_models(
     if filters is None:
         filters = FILTERS
     if labels is None:
+        # 'afe' is a grid input (grids are generated on a 5D
+        # (mini, eep, feh, afe, smf) lattice); omitting it makes multi-afe
+        # grids ambiguous. For single-afe grids the constant column is
+        # harmless, and files without it drop the all-NaN column below.
         labels = [
             "mini",
             "feh",
             "eep",
             "smf",
+            "afe",
             "loga",
             "logl",
             "logt",
@@ -210,6 +221,18 @@ def load_models(
         # Find which requested filters actually exist in the file
         available_filters = list(mag_coeffs_dataset.dtype.names)
         valid_filters = [filt for filt in filters if filt in available_filters]
+        missing_filters = [filt for filt in filters if filt not in available_filters]
+        if missing_filters:
+            # The returned model columns follow `valid_filters`; callers who
+            # zip their original filter list against the columns would
+            # silently mislabel every band, so report the survivors.
+            warnings.warn(
+                f"Requested filters not found in '{filepath}' and skipped: "
+                f"{missing_filters}. The returned model columns correspond "
+                f"(in order) to: {valid_filters}.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         if verbose:
             sys.stderr.write(
@@ -221,7 +244,8 @@ def load_models(
 
         if verbose:
             sys.stderr.write(
-                f"Extracting {len(valid_filters)} requested filters from memory...\n"
+                f"Extracting {len(valid_filters)} requested filters "
+                f"from memory: {valid_filters}\n"
             )
 
         # Pre-allocate array for only the valid filters
@@ -260,34 +284,42 @@ def load_models(
         except KeyError:
             pass
 
-    # Remove extraneous/undefined labels.
-    labels2 = [l for i, l in zip(combined_labels[0], labels) if ~np.isnan(i)]
+    # Remove extraneous/undefined labels. A label is available if ANY model
+    # defines it (all-NaN column = absent from the file); checking only the
+    # first row would silently drop every predicted-parameter column when
+    # row 0 happens to be an invalid model.
+    labels2 = [
+        label for label in labels if not np.all(np.isnan(combined_labels[label]))
+    ]
 
-    # Apply cuts.
-    sel = np.ones(len(combined_labels), dtype="bool")
+    # Apply cuts. Start from a finiteness cut: user-generated grids written
+    # by older GridGenerator versions may contain all-NaN rows for invalid
+    # grid points, which crash BruteForce fitting if they survive loading.
+    sel = np.isfinite(models).all(axis=(1, 2))
+    n_nonfinite = len(models) - int(sel.sum())
+    if n_nonfinite > 0 and verbose:
+        sys.stderr.write(
+            f"Dropping {n_nonfinite} models with non-finite "
+            f"photometric coefficients...\n"
+        )
     if not include_ms and not include_postms:
         raise ValueError(
             "If you don't include the Main Sequence and "
             "Post-Main Sequence models you have nothing left!"
         )
     elif include_postms and not include_ms:
-        try:
-            sel = combined_labels["eep"] > 454.0
-        except KeyError:
-            pass
+        # Gate on actual availability: when the file lacks 'eep' the column
+        # is all-NaN and `NaN > 454.` would silently select ZERO models.
+        if "eep" in labels2:
+            sel &= combined_labels["eep"] > 454.0
     elif include_ms and not include_postms:
-        try:
-            sel = combined_labels["eep"] <= 454.0
-        except KeyError:
-            pass
-    # else: include_ms and include_postms — sel stays all-True
+        if "eep" in labels2:
+            sel &= combined_labels["eep"] <= 454.0
+    # else: include_ms and include_postms — no evolutionary-phase cut
 
     if not include_binaries and "smf" in labels2:
-        try:
-            sel &= combined_labels["smf"] == 0.0
-            labels2 = [x for x in labels2 if x != "smf"]
-        except KeyError:
-            pass
+        sel &= combined_labels["smf"] == 0.0
+        labels2 = [x for x in labels2 if x != "smf"]
 
     # Compile results.
     combined_labels = combined_labels[labels2]

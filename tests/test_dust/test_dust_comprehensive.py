@@ -80,6 +80,18 @@ class TestCoordinateUtils:
         assert pix_arr[1] >= 0  # Valid
         assert pix_arr[2] == -1  # Invalid
 
+    def test_lb2pix_scalar_nan_returns_minus_one(self):
+        """Regression: scalar NaN latitude must return -1 like the array path.
+
+        The old scalar check `(b < -90.) or (b > 90.)` is False for NaN, so
+        NaN fell through to healpy's ang2pix and raised
+        `ValueError: THETA is out of range [0,pi]`.
+        """
+        assert lb2pix(nside=64, l=0.0, b=float("nan")) == -1
+        # Array path (already correct) must agree.
+        arr = lb2pix(nside=64, l=np.array([0.0]), b=np.array([np.nan]))
+        assert arr[0] == -1
+
     def test_lb2pix_nested_vs_ring(self):
         """Test lb2pix with different pixel ordering schemes."""
         l, b = 45.0, 30.0
