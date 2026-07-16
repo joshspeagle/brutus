@@ -666,7 +666,22 @@ def photometric_offsets(
     # Boolean view of the mask: validation accepts numeric 0/1 masks, but
     # the selection logic below requires bools (float & bool raises).
     mask_bool = np.asarray(mask) > 0
-    mask_fit = np.asarray(mask_fit).astype(bool)
+
+    # Per-filter inputs must be 1-D of length nfilt; a scalar or wrong-length
+    # array would otherwise surface much later as an opaque IndexError or
+    # broadcasting error.
+    mask_fit = np.atleast_1d(np.asarray(mask_fit)).astype(bool)
+    if mask_fit.shape != (nfilt,):
+        raise ValueError(f"mask_fit must have shape ({nfilt},), got {mask_fit.shape}")
+    old_offsets = np.atleast_1d(np.asarray(old_offsets, dtype=float))
+    if old_offsets.shape != (nfilt,):
+        raise ValueError(
+            f"old_offsets must have shape ({nfilt},), got {old_offsets.shape}"
+        )
+    # Priors are a pair: silently ignoring a lone prior_mean/prior_std would
+    # discard information the caller clearly intended to supply.
+    if (prior_mean is None) != (prior_std is None):
+        raise ValueError("prior_mean and prior_std must be provided together")
 
     # Generate model SEDs (chunked to bound peak memory)
     if verbose and config.progress_interval > 0:
@@ -686,14 +701,26 @@ def photometric_offsets(
     # additive over bands, so each band's leave-one-out chi-square is the
     # total minus that band's contribution (no per-band likelihood pass).
     # Masked bands contribute 0 (their flux/error placeholders never enter).
+    # Only the 2-D running total is stored; each band's 2-D contribution is
+    # recomputed on demand in the filter loop below, so no second
+    # (nobj, nsamps, nfilt) array is kept alive alongside `seds` (which
+    # would double peak memory for large calibration samples).
     if np.any(mask_fit):
         phot_adj = np.where(mask_bool, phot, 0.0) * old_offsets
         var_adj = np.where(mask_bool, err, 1.0) ** 2 * old_offsets**2
-        contrib = phot_adj[:, None, :] - seds
-        np.square(contrib, out=contrib)
-        contrib /= np.where(var_adj > 0, var_adj, np.inf)[:, None, :]
-        contrib *= mask_bool[:, None, :]
-        chi2_full = contrib.sum(axis=2)
+        var_safe = np.where(var_adj > 0, var_adj, np.inf)
+
+        def _band_chi2(b, rows=slice(None)):
+            """Band b's chi-square contribution, shape (nrows, nsamps)."""
+            resid = phot_adj[rows, b][:, None] - seds[rows, :, b]
+            np.square(resid, out=resid)
+            resid /= var_safe[rows, b][:, None]
+            resid *= mask_bool[rows, b][:, None]
+            return resid
+
+        chi2_full = np.zeros((nobj, nsamps))
+        for b in range(nfilt):
+            chi2_full += _band_chi2(b)
 
     # Process each filter
     for i in range(nfilt):
@@ -747,7 +774,7 @@ def photometric_offsets(
         if mask_fit[i]:
             lnw = _loo_log_weights(
                 chi2_full[obj_indices],
-                contrib[obj_indices, :, i],
+                _band_chi2(i, obj_indices),
                 ndim[obj_indices],
                 dim_prior,
             )
@@ -854,6 +881,12 @@ def photometric_offsets(
         combined_err = offset_errors * prior_std / np.sqrt(var_total)
         offsets = np.where(estimated, combined, prior_mean)
         offset_errors = np.where(estimated, combined_err, prior_std)
+    else:
+        # Without a prior, a band with no informative objects carries no
+        # measurement at all: report infinite (not zero) uncertainty so the
+        # placeholder offset of 1 cannot masquerade as an infinitely precise
+        # estimate downstream.
+        offset_errors = np.where(n_objects_used > 0, offset_errors, np.inf)
 
     if verbose:
         print("Photometric offset computation complete.")

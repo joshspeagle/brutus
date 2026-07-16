@@ -722,7 +722,9 @@ class TestEdgeCases:
             assert offsets.shape == (n_filt,)
             assert np.all(n_used == 0)  # No objects used
             assert np.all(offsets == 1.0)  # Default values
-            assert np.all(errors == 0.0)  # No uncertainty
+            # No data and no prior: infinite (not zero) uncertainty, so
+            # the placeholder offsets cannot pose as measurements
+            assert np.all(np.isinf(errors))
 
 
 class TestPerformance:
