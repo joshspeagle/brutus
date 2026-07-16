@@ -27,9 +27,12 @@ class TestQuantileFunction:
 
         result = quantile(x, q)
 
-        # Should match numpy percentile
-        expected = np.percentile(x, q * 100)
+        # Midpoint-CDF convention: identical to explicit uniform weights.
+        expected = np.array([1.0, 1.75, 3.0, 4.25, 5.0])
         np.testing.assert_array_almost_equal(result, expected, decimal=10)
+        np.testing.assert_array_almost_equal(
+            result, quantile(x, q, weights=np.ones_like(x)), decimal=12
+        )
 
     def test_quantile_weighted_basic(self):
         """Test basic weighted quantile computation."""

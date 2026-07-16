@@ -72,9 +72,11 @@ def quantile(x, q, weights=None):
     Compute (weighted) quantiles from an input set of samples.
 
     This function computes quantiles from a set of samples, optionally
-    with weights. For unweighted samples, it uses numpy.percentile.
-    For weighted samples, it computes the cumulative distribution function
-    and interpolates to find the desired quantiles.
+    with weights, using the midpoint-CDF convention: the empirical CDF is
+    evaluated at ``(cumsum(w) - 0.5 * w) / sum(w)`` and linearly
+    interpolated. Omitting `weights` is exactly equivalent to passing
+    uniform weights, so the reported quantiles do not depend on whether a
+    trivially-uniform weights array happens to be supplied.
 
     Parameters
     ----------
@@ -104,7 +106,7 @@ def quantile(x, q, weights=None):
     >>> x = np.array([1, 2, 3, 4, 5])
     >>> q = np.array([0.25, 0.5, 0.75])
     >>> quantile(x, q)
-    array([2., 3., 4.])
+    array([1.75, 3.  , 4.25])
 
     >>> weights = np.array([1, 1, 1, 1, 10])  # Last sample heavily weighted
     >>> quantile(x, q, weights=weights)
@@ -118,19 +120,21 @@ def quantile(x, q, weights=None):
     if np.any(q < 0.0) or np.any(q > 1.0):
         raise ValueError("Quantiles must be between 0. and 1.")
 
+    # Unweighted samples use unit weights so that both paths share the same
+    # midpoint-CDF quantile convention (weights=None must agree with
+    # explicitly-uniform weights).
     if weights is None:
-        # If no weights provided, this simply calls `np.percentile`.
-        return np.percentile(x, list(100.0 * q))
+        weights = np.ones(len(x))
     else:
-        # If weights are provided, compute the weighted quantiles.
         weights = np.atleast_1d(weights)
         if len(x) != len(weights):
             raise ValueError("Dimension mismatch: len(weights) != len(x).")
-        idx = np.argsort(x)  # sort samples
-        sw = weights[idx]  # sort weights
-        # Compute CDF at sample midpoints for proper quantile calculation
-        cdf = (np.cumsum(sw, dtype=float) - 0.5 * sw) / np.sum(sw)
-        return np.interp(q, cdf, x[idx])
+
+    idx = np.argsort(x)  # sort samples
+    sw = weights[idx]  # sort weights
+    # Compute CDF at sample midpoints for proper quantile calculation
+    cdf = (np.cumsum(sw, dtype=float) - 0.5 * sw) / np.sum(sw)
+    return np.interp(q, cdf, x[idx])
 
 
 def draw_sar(
@@ -142,6 +146,7 @@ def draw_sar(
     avlim=(0.0, 6.0),
     rvlim=(1.0, 8.0),
     rstate=None,
+    max_attempts=10000,
 ):
     """
     Generate random draws from the joint scale-A_V-R_V posterior for a
@@ -174,9 +179,16 @@ def draw_sar(
     rvlim : 2-tuple, optional
         The R_V limits used to truncate results. Default is `(1., 8.)`.
 
-    rstate : `~numpy.random.RandomState`, optional
-        `~numpy.random.RandomState` instance. If None, uses default numpy
-        random state (or intel-specific version if available).
+    rstate : `~numpy.random.RandomState`, `~numpy.random.Generator`, or
+        module, optional
+        Random state used for the draws (anything exposing a
+        ``normal(loc, scale, size)`` method, including the `numpy.random`
+        module itself). If None, uses the default numpy random state.
+
+    max_attempts : int, optional
+        Maximum number of rejection-sampling passes per posterior sample
+        before the remaining slots are padded with the mean values (with a
+        warning). Default is `10000`.
 
     Returns
     -------
@@ -196,6 +208,14 @@ def draw_sar(
     rejection sampling to ensure all samples fall within the specified
     limits for A_V and R_V.
 
+    All `Nsamps` distributions are drawn in a single batched
+    `sample_multivariate_normal` call per rejection pass (rather than one
+    `numpy.random.multivariate_normal` call per distribution), which avoids
+    per-call dispatch and per-matrix SVD overhead. The accepted draws follow
+    the same truncated Gaussian distribution as before, but the underlying
+    RNG stream differs, so individual draws are not reproducible against
+    older versions even with a fixed seed.
+
     Examples
     --------
     >>> import numpy as np
@@ -211,71 +231,65 @@ def draw_sar(
     if rstate is None:
         rstate = np.random
 
+    scales = np.asarray(scales, dtype=float)
+    avs = np.asarray(avs, dtype=float)
+    rvs = np.asarray(rvs, dtype=float)
+    covs_sar = np.asarray(covs_sar, dtype=float)
+
     # Generate realizations for each (scale, av, rv, cov_sar) set.
     nsamps = len(scales)
     sdraws, adraws, rdraws = np.zeros((3, nsamps, ndraws))
+    means = np.column_stack((scales, avs, rvs))
 
-    max_attempts = 10000
+    # Rejection-sample all still-deficient distributions together: each pass
+    # draws `ndraws` candidates per active distribution in ONE batched
+    # Cholesky-based call (instead of one numpy `multivariate_normal` per
+    # distribution) and fills accepted draws in order.
+    nfilled = np.zeros(nsamps, dtype=np.int64)
+    active = np.arange(nsamps)
+    n_attempts = 0
+    while active.size > 0 and n_attempts < max_attempts:
+        n_attempts += 1
+        # Draw samples; shape (3, ndraws, Nactive).
+        draws = sample_multivariate_normal(
+            means[active], covs_sar[active], size=ndraws, rstate=rstate
+        )
+        s_mc, a_mc, r_mc = draws[0].T, draws[1].T, draws[2].T  # (Nactive, ndraws)
+        # Flag draws that are out of bounds.
+        inbounds = (
+            (s_mc >= 0.0)
+            & (a_mc >= avlim[0])
+            & (a_mc <= avlim[1])
+            & (r_mc >= rvlim[0])
+            & (r_mc <= rvlim[1])
+        )
+        for k in range(active.size):
+            i = active[k]
+            good = np.flatnonzero(inbounds[k])
+            take = min(good.size, ndraws - nfilled[i])
+            if take > 0:
+                sel = good[:take]
+                fill = slice(nfilled[i], nfilled[i] + take)
+                sdraws[i, fill] = s_mc[k, sel]
+                adraws[i, fill] = a_mc[k, sel]
+                rdraws[i, fill] = r_mc[k, sel]
+                nfilled[i] += take
+        active = active[nfilled[active] < ndraws]
 
-    for i, (s, a, r, c) in enumerate(zip(scales, avs, rvs, covs_sar)):
-        s_chunks, a_chunks, r_chunks = [], [], []
-        n_collected = 0
-        n_attempts = 0
-
-        # Loop in case a significant chunk of draws are out-of-bounds.
-        while n_collected < ndraws:
-            n_attempts += 1
-            # Draw samples.
-            s_mc, a_mc, r_mc = rstate.multivariate_normal([s, a, r], c, size=ndraws).T
-            # Flag draws that are out of bounds.
-            inbounds = (
-                (s_mc >= 0.0)
-                & (a_mc >= avlim[0])
-                & (a_mc <= avlim[1])
-                & (r_mc >= rvlim[0])
-                & (r_mc <= rvlim[1])
-            )
-            s_mc, a_mc, r_mc = s_mc[inbounds], a_mc[inbounds], r_mc[inbounds]
-
-            # Accumulate in-bounds samples.
-            s_chunks.append(s_mc)
-            a_chunks.append(a_mc)
-            r_chunks.append(r_mc)
-            n_collected += len(s_mc)
-
-            if n_attempts >= max_attempts:
-                warnings.warn(
-                    f"draw_sar: only collected {n_collected}/{ndraws} "
-                    f"in-bounds samples after {max_attempts} attempts for "
-                    f"sample {i}. Padding with mean values.",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-                break
-
-        # Concatenate collected samples.
-        if n_collected > 0:
-            s_temp = np.concatenate(s_chunks)
-            a_temp = np.concatenate(a_chunks)
-            r_temp = np.concatenate(r_chunks)
-        else:
-            s_temp = np.array([])
-            a_temp = np.array([])
-            r_temp = np.array([])
-
-        # If we have enough, cull extras; otherwise pad with mean values.
-        if n_collected >= ndraws:
-            sdraws[i] = s_temp[:ndraws]
-            adraws[i] = a_temp[:ndraws]
-            rdraws[i] = r_temp[:ndraws]
-        else:
-            sdraws[i, :n_collected] = s_temp[:n_collected]
-            adraws[i, :n_collected] = a_temp[:n_collected]
-            rdraws[i, :n_collected] = r_temp[:n_collected]
-            # Pad remaining slots with the mean values.
-            sdraws[i, n_collected:] = s
-            adraws[i, n_collected:] = a
-            rdraws[i, n_collected:] = r
+    # Any distribution still deficient after `max_attempts` passes gets its
+    # remaining slots padded with the mean values (matching the historical
+    # per-sample fallback).
+    for i in active:
+        warnings.warn(
+            f"draw_sar: only collected {nfilled[i]}/{ndraws} "
+            f"in-bounds samples after {max_attempts} attempts for "
+            f"sample {i}. Padding with mean values.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        sdraws[i, nfilled[i] :] = scales[i]
+        adraws[i, nfilled[i] :] = avs[i]
+        rdraws[i, nfilled[i] :] = rvs[i]
 
     return sdraws, adraws, rdraws
 
@@ -283,29 +297,37 @@ def draw_sar(
 @jit(nopython=True, cache=True)
 def _cholesky_3x3(A):
     """
-    Compute Cholesky decomposition of a 3x3 positive definite matrix.
+    Compute the Cholesky factor of a 3x3 positive SEMI-definite matrix.
 
-    Uses explicit formulas optimized for 3x3 case to avoid numba limitations.
+    Uses explicit formulas optimized for the 3x3 case. Semi-definite inputs
+    are handled with the standard rank-deficient completion: each pivot
+    argument is clamped at zero before the square root, and the entries below
+    an exactly-zero pivot are set to zero rather than divided (their target
+    values are zero for any exact PSD matrix). For strictly positive-definite
+    input this is bit-identical to the textbook factorization; for singular
+    PSD input it returns a valid factor with ``L @ L.T == A`` instead of
+    dividing by zero (which, inside a parallel numba kernel, silently leaves
+    the output buffer uninitialized).
     """
     L = np.zeros_like(A)
 
     # L[0,0] = sqrt(A[0,0])
-    L[0, 0] = np.sqrt(A[0, 0])
+    L[0, 0] = np.sqrt(max(A[0, 0], 0.0))
 
-    # L[1,0] = A[1,0] / L[0,0]
-    L[1, 0] = A[1, 0] / L[0, 0]
+    if L[0, 0] > 0.0:
+        # L[1,0] = A[1,0] / L[0,0]; L[2,0] = A[2,0] / L[0,0]
+        L[1, 0] = A[1, 0] / L[0, 0]
+        L[2, 0] = A[2, 0] / L[0, 0]
 
     # L[1,1] = sqrt(A[1,1] - L[1,0]^2)
-    L[1, 1] = np.sqrt(A[1, 1] - L[1, 0] * L[1, 0])
+    L[1, 1] = np.sqrt(max(A[1, 1] - L[1, 0] * L[1, 0], 0.0))
 
-    # L[2,0] = A[2,0] / L[0,0]
-    L[2, 0] = A[2, 0] / L[0, 0]
-
-    # L[2,1] = (A[2,1] - L[2,0] * L[1,0]) / L[1,1]
-    L[2, 1] = (A[2, 1] - L[2, 0] * L[1, 0]) / L[1, 1]
+    if L[1, 1] > 0.0:
+        # L[2,1] = (A[2,1] - L[2,0] * L[1,0]) / L[1,1]
+        L[2, 1] = (A[2, 1] - L[2, 0] * L[1, 0]) / L[1, 1]
 
     # L[2,2] = sqrt(A[2,2] - L[2,0]^2 - L[2,1]^2)
-    L[2, 2] = np.sqrt(A[2, 2] - L[2, 0] * L[2, 0] - L[2, 1] * L[2, 1])
+    L[2, 2] = np.sqrt(max(A[2, 2] - L[2, 0] * L[2, 0] - L[2, 1] * L[2, 1], 0.0))
 
     return L
 

@@ -59,7 +59,7 @@ from math import lgamma, log
 
 import numpy as np
 from numba import jit, prange
-from scipy.special import erf
+from scipy.special import log_ndtr
 
 __all__ = [
     "galactic_to_galactocentric_cyl",
@@ -138,9 +138,17 @@ def _invert_3x3_analytical(A):
     # Calculate determinant
     det = _matrix_det_3x3(A)
 
-    # Check for singular matrix
-    if abs(det) < 1e-15:  # Essentially zero determinant
-        # Return matrix filled with inf/nan for singular case
+    # Singularity test must be relative to the matrix scale: det scales as
+    # (matrix scale)^3, so an absolute cutoff misclassifies well-conditioned
+    # small-magnitude matrices (e.g. diag(1e-6)) as singular. Compare against
+    # the product of row inf-norms (~Hadamard bound), which tracks the
+    # magnitude det would have for a well-conditioned matrix of this scale.
+    r0 = max(abs(a11), abs(a12), abs(a13))
+    r1 = max(abs(a21), abs(a22), abs(a23))
+    r2 = max(abs(a31), abs(a32), abs(a33))
+    det_scale = r0 * r1 * r2
+    if abs(det) < 1e-15 * det_scale or det_scale == 0.0:
+        # Return matrix filled with inf for the (numerically) singular case
         inv = np.empty_like(A)
         inv.fill(np.inf)
         return inv
@@ -519,6 +527,43 @@ def chisquare_logpdf(x, df, loc=0, scale=1):
     return ans
 
 
+def _truncnorm_lognorm(a, b):
+    """
+    Compute ``log(Phi(b) - Phi(a))`` for standardized bounds ``a < b``.
+
+    Evaluated tail-stably with `scipy.special.log_ndtr`: when both bounds sit
+    in the upper tail the mass is mirrored to the lower tail (Phi(b) - Phi(a)
+    = Phi(-a) - Phi(-b)), so the result keeps full relative precision even
+    when a direct CDF difference would cancel catastrophically (e.g. bounds
+    beyond ~8 sigma, where erf differences underflow to exactly 0).
+
+    Parameters
+    ----------
+    a, b : float or `~numpy.ndarray`
+        Standardized truncation bounds (``a`` lower, ``b`` upper).
+
+    Returns
+    -------
+    lognorm : float or `~numpy.ndarray`
+        Natural log of the enclosed Gaussian mass. ``-inf`` when ``a == b``.
+    """
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    # Where both bounds are in the upper tail, mirror to the lower tail
+    # (Phi(b) - Phi(a) = Phi(-a) - Phi(-b)) so log_ndtr keeps precision.
+    flip = a > 0
+    lo = np.where(flip, -b, a)
+    hi = np.where(flip, -a, b)
+    # log(exp(hi_mass) - exp(lo_mass)) with hi_mass >= lo_mass.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        log_mass_lo = log_ndtr(lo)
+        log_mass_hi = log_ndtr(hi)
+        out = log_mass_hi + np.log1p(-np.exp(log_mass_lo - log_mass_hi))
+    if out.ndim == 0:
+        return float(out)
+    return out
+
+
 def truncnorm_pdf(x, a, b, loc=0.0, scale=1.0):
     """
     Compute PDF of a truncated normal distribution.
@@ -555,11 +600,12 @@ def truncnorm_pdf(x, a, b, loc=0.0, scale=1.0):
     _b = scale * b + loc
     xi = (x - loc) / scale
 
-    phix = np.exp(-0.5 * xi**2) / np.sqrt(2.0 * np.pi)
-    Phia = 0.5 * (1 + erf(a / np.sqrt(2)))
-    Phib = 0.5 * (1 + erf(b / np.sqrt(2)))
-
-    ans = phix / (scale * (Phib - Phia))
+    # Exponentiate the log-density so the normalization shares the
+    # tail-stable log-space computation (a direct CDF difference underflows
+    # to 0 for same-side bounds beyond ~8 sigma, yielding inf here).
+    lnphi = -np.log(np.sqrt(2.0 * np.pi)) - 0.5 * np.square(xi)
+    lndenom = np.log(scale) + _truncnorm_lognorm(a, b)
+    ans = np.exp(lnphi - lndenom)
 
     if not isinstance(x, (float, int)):
         keys = np.logical_or(x < _a, x > _b)
@@ -609,9 +655,10 @@ def truncnorm_logpdf(x, a, b, loc=0.0, scale=1.0):
     xi = (x - loc) / scale
 
     lnphi = -np.log(np.sqrt(2 * np.pi)) - 0.5 * np.square(xi)
-    lndenom = np.log(scale / 2.0) + np.log(
-        np.maximum(erf(b / np.sqrt(2)) - erf(a / np.sqrt(2)), 1e-300)
-    )
+    # Tail-stable normalization: an erf difference underflows to 0 for
+    # same-side bounds beyond ~8 sigma, which (with the old 1e-300 clamp)
+    # returned wildly wrong finite values instead of the correct log-mass.
+    lndenom = np.log(scale) + _truncnorm_lognorm(a, b)
 
     ans = np.subtract(lnphi, lndenom)
 
