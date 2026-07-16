@@ -79,6 +79,7 @@ References
   Models", ApJS, 222, 8
 """
 
+import os
 import sys
 import warnings
 from copy import deepcopy
@@ -122,7 +123,10 @@ class Isochrone:
         provided, defaults to the standard MIST v1.2 isochrone file.
 
     predictions : list of str, optional
-        The names of stellar parameters to predict. Default is:
+        The names of stellar parameters to predict. Must be a subset of the
+        parameters available in the isochrone file (`pred_labels`); the
+        columns returned by `get_predictions` follow this list's order.
+        Unknown names raise a `ValueError`. Default is:
         `["mini", "mass", "logl", "logt", "logr", "logg", "feh_surf", "afe_surf"]`.
 
     verbose : bool, optional
@@ -166,6 +170,18 @@ class Isochrone:
             package_root = Path(__file__).parent.parent.parent.parent
             mistfile = package_root / "data" / "DATAFILES" / "MIST_1.2_iso_vvcrit0.0.h5"
 
+            # If the repo-relative default doesn't exist (e.g. pip-installed
+            # package), fall back to the pooch cache directory that
+            # brutus.data downloads into (mirrors EEPTracks.__init__).
+            # Convert to string for os.path.exists() - helps with mocks.
+            if not os.path.exists(str(mistfile)):
+                import pooch
+
+                cache_dir = Path(pooch.os_cache("astro-brutus"))
+                cache_path = cache_dir / "MIST_1.2_iso_vvcrit0.0.h5"
+                if os.path.exists(str(cache_path)):
+                    mistfile = cache_path
+
         # Set default predictions
         if predictions is None:
             predictions = [
@@ -198,6 +214,21 @@ class Isochrone:
                 ]
         except (OSError, KeyError) as e:
             raise RuntimeError(f"Failed to load isochrone data from {mistfile}: {e}")
+
+        # Validate the requested predictions against the file's labels and
+        # build the column map used to subset/reorder interpolator output.
+        # Without this, `get_predictions` columns would silently follow the
+        # file's `pred_labels` order regardless of `self.predictions`.
+        missing = [p for p in self.predictions if p not in self.pred_labels]
+        if missing:
+            raise ValueError(
+                f"Requested predictions {missing} are not available in "
+                f"{mistfile}; available predictions are {self.pred_labels}."
+            )
+        self._pred_idxs = np.array(
+            [self.pred_labels.index(p) for p in self.predictions], dtype=int
+        )
+        self._pred_identity = list(self.predictions) == list(self.pred_labels)
 
         # Initialize interpolator
         self._build_interpolator()
@@ -280,12 +311,12 @@ class Isochrone:
             xgrid[1] = np.array([afe_val - 1e-5, afe_val + 1e-5])
             self.xgrid = tuple(xgrid)
 
-            # Duplicate values in padded dimension
+            # Duplicate values in the padded dimension via a read-only
+            # broadcast view: both afe layers share the original grid's
+            # memory, so this costs nothing (materializing a copy would
+            # double the ~176 MB grid and transiently hold both arrays).
             self.grid_dims[1] += 1
-            ygrid = np.empty(self.grid_dims)
-            ygrid[:, 0, :, :, :] = self.pred_grid[:, 0, :, :, :]
-            ygrid[:, 1, :, :, :] = self.pred_grid[:, 0, :, :, :]
-            self.pred_grid = ygrid
+            self.pred_grid = np.broadcast_to(self.pred_grid, tuple(self.grid_dims))
 
         # Initialize interpolator
         self.interpolator = RegularGridInterpolator(
@@ -326,7 +357,8 @@ class Isochrone:
         -------
         preds : numpy.ndarray of shape (Neep, Npred)
             Stellar parameter predictions for each EEP value. The columns
-            correspond to the parameters listed in `self.pred_labels`.
+            correspond to the parameters listed in `self.predictions`
+            (a subset/reordering of the file's `self.pred_labels`).
 
         See Also
         --------
@@ -394,6 +426,13 @@ class Isochrone:
 
             except Exception as e:
                 warnings.warn(f"Correction application failed: {e}")
+
+        # Subset/reorder the interpolator output (file `pred_labels` order)
+        # into the order the user requested via `self.predictions`. The
+        # corrections above index columns by `pred_labels`, so they must be
+        # applied before this remapping.
+        if not self._pred_identity:
+            preds = preds[:, self._pred_idxs]
 
         return preds
 
@@ -767,6 +806,137 @@ class StellarPop:
         ...     av=0.2, dist=2000.0
         ... )
         """
+        seds, params_arr, params = self._compute_primary(
+            feh, afe, loga, eep, av, rv, dist, mini_bound, apply_corr, corr_params
+        )
+
+        # The EEP grid actually used for the predictions above (needed to
+        # restrict binary companions; must match the caller's grid rather
+        # than always assuming the isochrone default).
+        eep_used = self.isochrone.eep_u if eep is None else np.asarray(eep)
+
+        return self._apply_binaries(
+            seds,
+            params_arr,
+            params,
+            binary_fraction,
+            feh,
+            afe,
+            loga,
+            eep_used,
+            mini_bound,
+            eep_binary_max,
+            av,
+            rv,
+            dist,
+            apply_corr,
+            corr_params,
+            return_dict,
+        )
+
+    def get_seds_smf_grid(
+        self,
+        smf_values,
+        feh=0.0,
+        afe=0.0,
+        loga=8.5,
+        eep=None,
+        av=0.0,
+        rv=3.3,
+        dist=1000.0,
+        mini_bound=0.5,
+        eep_binary_max=480.0,
+        apply_corr=True,
+        corr_params=None,
+        return_dict=True,
+    ):
+        """
+        Generate synthetic photometry for several binary mass fractions.
+
+        Equivalent to calling :meth:`get_seds` once per entry of
+        ``smf_values`` (with ``binary_fraction`` set to that entry), but the
+        primary isochrone predictions and primary SEDs — which do not depend
+        on the binary mass fraction — are computed only once and reused
+        across all values. Only the (per-SMF) secondary components are
+        recomputed, roughly halving the cost of building a full
+        (mass, SMF) population grid.
+
+        Parameters
+        ----------
+        smf_values : array-like of float
+            Binary mass fractions (secondary mass fractions) to evaluate.
+            Each entry is interpreted exactly like ``binary_fraction`` in
+            :meth:`get_seds`.
+
+        feh, afe, loga, eep, av, rv, dist, mini_bound, eep_binary_max, \
+apply_corr, corr_params, return_dict
+            Same as in :meth:`get_seds`; shared by every SMF value.
+
+        Returns
+        -------
+        results : list of (seds, params, params2) tuples
+            One :meth:`get_seds`-style result per entry of ``smf_values``,
+            in order. The primary-parameter outputs (``params`` arrays)
+            share underlying arrays across entries and must not be modified
+            in place.
+
+        See Also
+        --------
+        get_seds : Single binary-mass-fraction evaluation.
+        brutus.analysis.populations.generate_isochrone_population_grid :
+            Main consumer of this method.
+        """
+        seds0, params_arr, params = self._compute_primary(
+            feh, afe, loga, eep, av, rv, dist, mini_bound, apply_corr, corr_params
+        )
+        eep_used = self.isochrone.eep_u if eep is None else np.asarray(eep)
+
+        results = []
+        for smf in np.atleast_1d(smf_values):
+            # Binary handling mutates the SED array in place, so each SMF
+            # slice starts from a fresh copy of the shared primary SEDs.
+            results.append(
+                self._apply_binaries(
+                    seds0.copy(),
+                    params_arr,
+                    dict(params),
+                    float(smf),
+                    feh,
+                    afe,
+                    loga,
+                    eep_used,
+                    mini_bound,
+                    eep_binary_max,
+                    av,
+                    rv,
+                    dist,
+                    apply_corr,
+                    corr_params,
+                    return_dict,
+                )
+            )
+        return results
+
+    def _compute_primary(
+        self, feh, afe, loga, eep, av, rv, dist, mini_bound, apply_corr, corr_params
+    ):
+        """
+        Compute primary-component stellar parameters and SEDs.
+
+        These are independent of the binary mass fraction, so callers that
+        evaluate several binary fractions (see :meth:`get_seds_smf_grid`)
+        compute them once and reuse them.
+
+        Returns
+        -------
+        seds : numpy.ndarray of shape (Neep, Nfilt)
+            Primary-only SEDs (NaN where the primary is invalid).
+        params_arr : numpy.ndarray of shape (Neep, Npred)
+            Primary stellar parameters (columns follow
+            ``self.isochrone.predictions``).
+        params : dict
+            ``params_arr`` keyed by prediction name (column views).
+        """
         if self.predictor is None:
             raise RuntimeError("Neural network predictor not available")
 
@@ -790,14 +960,37 @@ class StellarPop:
         mass_valid = params["mini"] >= mini_bound
         seds = self._evaluate_seds(params, mass_valid, av, rv, dist, label="primary ")
 
+        return seds, params_arr, params
+
+    def _apply_binaries(
+        self,
+        seds,
+        params_arr,
+        params,
+        binary_fraction,
+        feh,
+        afe,
+        loga,
+        eep_used,
+        mini_bound,
+        eep_binary_max,
+        av,
+        rv,
+        dist,
+        apply_corr,
+        corr_params,
+        return_dict,
+    ):
+        """
+        Add the binary-fraction-dependent secondary component to primary SEDs.
+
+        Mutates ``seds`` in place (primary + secondary combined) and returns
+        the final ``(seds, params, params2)`` tuple of :meth:`get_seds`.
+        ``params_arr``/``params`` are read, never modified.
+        """
         # Initialize secondary parameters
         params_arr2 = np.full_like(params_arr, np.nan)
         params2 = dict(zip(self.isochrone.predictions, params_arr2.T))
-
-        # The EEP grid actually used for the predictions above (needed to
-        # restrict binary companions; must match the caller's grid rather
-        # than always assuming the isochrone default).
-        eep_used = self.isochrone.eep_u if eep is None else np.asarray(eep)
 
         # Handle binary stars
         if 0.0 < binary_fraction < 1.0:
