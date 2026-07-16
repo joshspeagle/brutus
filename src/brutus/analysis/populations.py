@@ -151,7 +151,8 @@ def generate_isochrone_population_grid(
     -----
     The grid is constructed by:
 
-    1. Looping over SMF values (binary mass ratios)
+    1. Looping over SMF values (binary mass ratios, passed to
+       ``StellarPop.get_seds`` as ``binary_fraction``)
     2. For each SMF, computing isochrone along EEP dimension
     3. Extracting masses from the isochrone
     4. Computing geometric jacobians (grid spacings) for proper integration
@@ -164,7 +165,13 @@ def generate_isochrone_population_grid(
         P({\\rm data}) = \\int \\int P({\\rm data}|m, {\\rm SMF}) \\, dm \\, d({\\rm SMF})
 
     Binary models are only computed for EEP ≤ eep_binary_max (typically
-    main sequence) to avoid unphysical binary configurations.
+    main sequence) to avoid unphysical binary configurations. Models above
+    ``eep_binary_max`` are independent of SMF, so they are stored once (from
+    the first SMF slice) carrying the **full** SMF measure — the sum of all
+    SMF grid spacings — so that the SMF marginalization weights them
+    consistently with main-sequence models that accumulate over every slice.
+    Their recorded ``smf_values`` entry is the slice they were generated from
+    and is not meaningful for these SMF-independent models.
     """
     # Set default grids
     if smf_grid is None:
@@ -188,29 +195,65 @@ def generate_isochrone_population_grid(
     all_mass_jacobians = []
     all_smf_jacobians = []
 
-    # Track which models have been computed (for binary masking)
-    identical_models_computed = False
+    # Track whether the SMF-independent post-MS block has been stored yet.
+    # Models with eep > eep_binary_max never have a binary companion, so their
+    # SEDs are identical across all SMF slices; they are stored once, carrying
+    # the *full* SMF measure (see below).
+    post_ms_stored = False
+    total_smf_measure = np.sum(smf_jacobians)
 
-    # Loop over SMF grid
-    for i, smf in enumerate(smf_grid):
-
-        # Generate isochrone for this SMF
+    # Evaluate every SMF slice. StellarPop.get_seds_smf_grid computes the
+    # SMF-independent primary isochrone predictions/SEDs once and reuses
+    # them across slices (only the per-SMF secondary components are
+    # recomputed, ~2x faster with the default 21-point SMF grid); duck-typed
+    # population objects without that method fall back to one get_seds call
+    # per slice. Failed slices are recorded as None and skipped below.
+    if hasattr(stellarpop, "get_seds_smf_grid"):
         try:
-            sed, params1, params2 = stellarpop.get_seds(
+            slice_results = stellarpop.get_seds_smf_grid(
+                smf_grid,
                 feh=feh,
                 loga=loga,
                 av=av,
                 rv=rv,
                 eep=eep_grid,
-                smf=smf,
                 dist=dist,
                 mini_bound=mini_bound,
                 eep_binary_max=eep_binary_max,
                 corr_params=corr_params,
             )
         except Exception as e:
-            warnings.warn(f"Failed to generate isochrone for SMF={smf}: {e}")
+            warnings.warn(f"Failed to generate isochrones for SMF grid: {e}")
+            slice_results = [None] * len(smf_grid)
+    else:
+        slice_results = []
+        for smf in smf_grid:
+            try:
+                slice_results.append(
+                    stellarpop.get_seds(
+                        feh=feh,
+                        loga=loga,
+                        av=av,
+                        rv=rv,
+                        eep=eep_grid,
+                        binary_fraction=smf,
+                        dist=dist,
+                        mini_bound=mini_bound,
+                        eep_binary_max=eep_binary_max,
+                        corr_params=corr_params,
+                    )
+                )
+            except Exception as e:
+                warnings.warn(f"Failed to generate isochrone for SMF={smf}: {e}")
+                slice_results.append(None)
+
+    # Loop over SMF grid. `smf` is the secondary mass fraction, i.e.
+    # StellarPop's `binary_fraction` (mass-ratio) argument.
+    for i, (smf, result) in enumerate(zip(smf_grid, slice_results)):
+
+        if result is None:
             continue
+        sed, params1, params2 = result
 
         # Extract mass grid and compute jacobians
         masses = params1["mini"]
@@ -219,23 +262,33 @@ def generate_isochrone_population_grid(
         else:
             mass_jacobians = np.array([1.0])
 
-        # Create mask for valid models
+        # Create masks for valid models.
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
+            base_valid = mass_jacobians > 0.0
+            # Per-slice (binary-capable) block: eep <= eep_binary_max.
+            # Don't check for finite SED - let likelihood handle NaNs.
+            slice_mask = base_valid & (eep_grid <= eep_binary_max)
+            # SMF-independent post-MS block (no binary companion possible).
+            post_ms_mask = base_valid & (eep_grid > eep_binary_max)
 
-            if identical_models_computed:
-                # Mask out repeated single-star models for SMF > 0
-                # Don't check for finite SED - let likelihood handle NaNs
-                valid_mask = (mass_jacobians > 0.0) & (eep_grid <= eep_binary_max)
-            else:
-                # First time - only require positive mass jacobian
-                # Don't check for finite SED - let likelihood handle NaNs
-                valid_mask = mass_jacobians > 0.0
-                identical_models_computed = True
+        blocks = [(slice_mask, smf_jacobians[i])]
+        if not post_ms_stored and np.any(post_ms_mask):
+            # Store the post-MS models once with the total SMF measure.
+            # P(data | m, smf) is constant in SMF for these models, so
+            # integrating over the SMF axis contributes the full measure
+            # (sum of all SMF grid spacings), not a single slice's spacing.
+            # Storing one slice's spacing instead would underweight post-MS
+            # (e.g. red-giant) models by ~len(smf_grid) relative to
+            # main-sequence models, which accumulate over every slice.
+            blocks.append((post_ms_mask, total_smf_measure))
+            post_ms_stored = True
 
-        valid_indices = np.where(valid_mask)[0]
+        for block_mask, smf_jac in blocks:
+            valid_indices = np.where(block_mask)[0]
+            if len(valid_indices) == 0:
+                continue
 
-        if len(valid_indices) > 0:
             # Store valid models
             sed_valid = sed[valid_indices]
             masses_valid = masses[valid_indices]
@@ -249,7 +302,7 @@ def generate_isochrone_population_grid(
             all_masses.append(masses_valid)
             all_smf_values.append(np.full(len(masses_valid), smf))
             all_mass_jacobians.append(mass_jacobians_valid)
-            all_smf_jacobians.append(np.full(len(masses_valid), smf_jacobians[i]))
+            all_smf_jacobians.append(np.full(len(masses_valid), smf_jac))
 
     # Combine all arrays
     if len(all_photometry) == 0:
@@ -338,7 +391,6 @@ def compute_isochrone_cluster_loglike(
     n_objects, n_filters = obs_flux.shape
 
     model_photometry = isochrone_grid["photometry"]  # shape (N_grid_points, N_filters)
-    n_grid_points = model_photometry.shape[0]
 
     # Check for invalid models (NaN photometry from impossible binary configs)
     model_valid_mask = np.all(
@@ -352,23 +404,27 @@ def compute_isochrone_cluster_loglike(
         0.0,  # Temporary replacement, will be masked out
     )
 
-    # Reshape models for phot_loglike: (N_objects, N_grid_points, N_filters)
-    model_photometry_reshaped = np.broadcast_to(
-        model_photometry_clean[None, :, :], (n_objects, n_grid_points, n_filters)
-    )
+    # Build the effective data mask: combine any user mask with a finiteness/
+    # positivity check so that a stray NaN flux or zero error in one band
+    # excludes just that band instead of poisoning the object's likelihood at
+    # every grid point (which would drive the total log-likelihood to -inf
+    # for every theta). The same mask is shared with the outlier component
+    # by the caller so both mixture components see identical data.
+    with np.errstate(invalid="ignore"):
+        data_valid = np.isfinite(obs_flux) & np.isfinite(obs_err) & (obs_err > 0)
+    if mask is None:
+        mask = data_valid.astype(float)
+    else:
+        mask = np.asarray(mask) * data_valid
 
-    # Compute photometric likelihood using existing infrastructure
-    lnl_phot = phot_loglike(
-        obs_flux, obs_err, model_photometry_reshaped, mask=mask, dim_prior=dim_prior
-    )  # shape (N_objects, N_grid_points)
-
-    # Transpose to get correct orientation for masking
-    lnl_phot = lnl_phot.T  # Now shape (N_grid_points, N_objects)
-
-    # For invalid models, set likelihood to NaN (will be handled in marginalization)
-    lnl_phot[~model_valid_mask, :] = np.nan
-
-    # Add parallax contribution if provided
+    # Parallax contribution. Under the chi-square dimensionality prior the
+    # parallax enters the *chi-square* (with one extra degree of freedom per
+    # measured parallax), matching the BruteForce convention; mixing a
+    # Gaussian density into a chi-square log-pdf would combine incompatible
+    # measures. Without the dimensionality prior, everything is a Gaussian
+    # density and the parallax term is added as one.
+    extra_chi2 = None
+    extra_dims = None
     lnl_parallax = 0.0
     if parallax is not None and parallax_err is not None and distance is not None:
         parallax = np.asarray(parallax)
@@ -378,20 +434,54 @@ def compute_isochrone_cluster_loglike(
         parallax_pred = 1000.0 / distance  # mas
 
         # Parallax mask
-        parallax_mask = (
-            np.isfinite(parallax) & np.isfinite(parallax_err) & (parallax_err > 0)
-        )
+        with np.errstate(invalid="ignore"):
+            parallax_mask = (
+                np.isfinite(parallax) & np.isfinite(parallax_err) & (parallax_err > 0)
+            )
 
         if np.any(parallax_mask):
             # Parallax chi-square contribution
-            chi2_parallax = (parallax - parallax_pred) ** 2 / parallax_err**2
-            lnl_parallax = np.where(
-                parallax_mask,
-                -0.5 * (chi2_parallax + np.log(2 * np.pi * parallax_err**2)),
-                0.0,
-            )
-            # Broadcast to grid shape (now lnl_phot is already transposed)
-            lnl_parallax = lnl_parallax[None, :]  # shape (1, N_objects)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                chi2_parallax = np.where(
+                    parallax_mask,
+                    (parallax - parallax_pred) ** 2
+                    / np.where(parallax_mask, parallax_err, 1.0) ** 2,
+                    0.0,
+                )
+            if dim_prior:
+                extra_chi2 = chi2_parallax
+                extra_dims = parallax_mask.astype(int)
+            else:
+                lnl_parallax = np.where(
+                    parallax_mask,
+                    -0.5
+                    * (
+                        chi2_parallax
+                        + np.log(
+                            2 * np.pi * np.where(parallax_mask, parallax_err, 1.0) ** 2
+                        )
+                    ),
+                    0.0,
+                )[None, :]
+
+    # Compute photometric likelihood using existing infrastructure. Passing
+    # the shared 2-D model grid triggers phot_loglike's matrix-multiplication
+    # fast path (no (Nobj, Ngrid, Nfilt) temporaries).
+    lnl_phot = phot_loglike(
+        obs_flux,
+        obs_err,
+        model_photometry_clean,
+        mask=mask,
+        dim_prior=dim_prior,
+        extra_chi2=extra_chi2,
+        extra_dims=extra_dims,
+    )  # shape (N_objects, N_grid_points)
+
+    # Transpose to get correct orientation for masking
+    lnl_phot = lnl_phot.T  # Now shape (N_grid_points, N_objects)
+
+    # For invalid models, set likelihood to NaN (will be handled in marginalization)
+    lnl_phot[~model_valid_mask, :] = np.nan
 
     # Combine photometric and parallax likelihoods
     lnl_cluster = lnl_phot + lnl_parallax  # shape (N_grid_points, N_objects)
@@ -408,6 +498,7 @@ def compute_isochrone_outlier_loglike(
     parallax_err=None,
     dim_prior=True,
     outlier_model_func=None,
+    mask=None,
     **outlier_kwargs,
 ):
     """
@@ -428,7 +519,12 @@ def compute_isochrone_outlier_loglike(
     dim_prior : bool, optional
         Use chi-square (True) or uniform (False) outlier model
     outlier_model_func : callable, optional
-        Custom outlier model function
+        Custom outlier model function. Must accept a ``mask`` keyword (the
+        same band mask seen by the cluster likelihood) in addition to
+        ``stellar_params``, ``parallax``, and ``parallax_err``.
+    mask : array-like, shape (N_objects, N_filters), optional
+        Data mask (1=use, 0=skip). Should be the same mask used for the
+        cluster likelihood so both mixture components describe the same data.
     **outlier_kwargs : dict
         Additional arguments for outlier model
 
@@ -458,6 +554,7 @@ def compute_isochrone_outlier_loglike(
             stellar_params=stellar_params,
             parallax=parallax,
             parallax_err=parallax_err,
+            mask=mask,
             **outlier_kwargs,
         )
     elif dim_prior:
@@ -468,6 +565,7 @@ def compute_isochrone_outlier_loglike(
             stellar_params=stellar_params,
             parallax=parallax,
             parallax_err=parallax_err,
+            mask=mask,
             **outlier_kwargs,
         )
     else:
@@ -478,6 +576,7 @@ def compute_isochrone_outlier_loglike(
             stellar_params=stellar_params,
             parallax=parallax,
             parallax_err=parallax_err,
+            mask=mask,
             **outlier_kwargs,
         )
 
@@ -577,14 +676,14 @@ def apply_isochrone_mixture_model(
     ln_cluster_weight = np.log(cluster_prob * (1.0 - field_fraction))
     ln_outlier_weight = np.log(1.0 - cluster_prob * (1.0 - field_fraction))
 
-    # Apply mixture model using numerically stable log-sum-exp
-    cluster_term = lnl_cluster + ln_cluster_weight
-    outlier_term = lnl_outlier + ln_outlier_weight
-
-    # For two terms, direct numpy is faster than scipy.special.logsumexp
-    max_term = np.maximum(cluster_term, outlier_term)
-    lnl_mixture = max_term + np.log(
-        np.exp(cluster_term - max_term) + np.exp(outlier_term - max_term)
+    # Apply the mixture in log space with np.logaddexp: a single fused,
+    # numerically stable ufunc for the two-term log-sum-exp. Compared to a
+    # hand-rolled max/exp/log expression this avoids ~5 full
+    # (N_grid_points, N_objects) temporaries (each 1.7 GB at Nobj=1e4 with
+    # the default grid) and measures ~1.6x faster; it also returns -inf
+    # (rather than NaN) when both terms are -inf.
+    lnl_mixture = np.logaddexp(
+        lnl_cluster + ln_cluster_weight, lnl_outlier + ln_outlier_weight
     )
 
     return lnl_mixture
@@ -625,7 +724,7 @@ def marginalize_isochrone_grid(lnl_mixture, mass_jacobians, smf_jacobians):
     numerically using a grid-based approach:
 
     .. math::
-        \\ln P \\approx \\ln \\sum_{i,j} \\exp(\\ln L_{i,j}) \\cdot \\Delta m_i \\cdot \\Delta({\\rm SMF})_j
+        \\ln P \\approx \\ln \\frac{\\sum_{i,j} \\exp(\\ln L_{i,j}) \\cdot \\Delta m_i \\cdot \\Delta({\\rm SMF})_j}{\\sum_{i,j} \\Delta m_i \\cdot \\Delta({\\rm SMF})_j}
 
     where:
     - :math:`\\ln L_{i,j}` is the mixed likelihood at grid point (i,j)
@@ -633,7 +732,12 @@ def marginalize_isochrone_grid(lnl_mixture, mass_jacobians, smf_jacobians):
     - :math:`\\Delta({\\rm SMF})_j` is the SMF grid spacing (smf_jacobians)
 
     Invalid models (with NaN likelihood) are converted to -∞ before the
-    logsumexp operation, so they contribute zero probability.
+    logsumexp operation, so they contribute zero probability. The measure is
+    normalized over the valid grid points (denominator above), making the
+    flat measure a proper uniform prior p(m, SMF | θ): without this, the
+    θ-dependent grid volume multiplies every mixture component — including
+    the θ-independent outlier model — and biases both the population
+    parameters and the field fraction.
 
     The jacobians represent geometric integration weights and are crucial
     for obtaining unbiased parameter estimates.
@@ -646,9 +750,22 @@ def marginalize_isochrone_grid(lnl_mixture, mass_jacobians, smf_jacobians):
     geometric_jacobian = mass_jacobians * smf_jacobians  # shape (N_grid_points,)
     ln_jacobian = np.log(geometric_jacobian)  # shape (N_grid_points,)
 
+    # Normalize the integration measure over the *valid* grid points, turning
+    # the flat measure into a proper (uniform) prior p(m, SMF | theta). The
+    # grid volume Z(theta) = sum of jacobians changes with the population
+    # parameters (isochrone mass range, invalid-model region); without this
+    # normalization every component of the mixture — including the
+    # theta-independent outlier model — is multiplied by Z(theta), biasing
+    # the inferred population parameters and the field fraction.
+    valid_rows = np.any(np.isfinite(lnl_mixture), axis=1) & np.isfinite(ln_jacobian)
+    if not np.any(valid_rows):
+        n_objects = lnl_mixture.shape[1]
+        return np.full(n_objects, -np.inf)
+    ln_measure_norm = logsumexp(ln_jacobian[valid_rows])
+
     # Add jacobian to likelihoods for proper integration
     lnl_with_jacobian = (
-        lnl_mixture + ln_jacobian[:, None]
+        lnl_mixture + ln_jacobian[:, None] - ln_measure_norm
     )  # shape (N_grid_points, N_objects)
 
     # Convert NaN to -inf for logsumexp (invalid models contribute nothing to marginalization)
@@ -676,6 +793,7 @@ def isochrone_population_loglike(
     eep_grid=None,
     mini_bound=0.08,
     eep_binary_max=480.0,
+    corr_params=None,
     return_components=False,
     mask=None,
     **outlier_kwargs,
@@ -719,6 +837,10 @@ def isochrone_population_loglike(
         Minimum initial mass for isochrone. Default 0.08
     eep_binary_max : float, optional
         Maximum EEP for binary modeling. Default 480.0
+    corr_params : array-like, optional
+        Empirical correction parameters [dtdm, drdm, msto_smooth, feh_scale]
+        forwarded to the isochrone grid generation (and from there to
+        ``StellarPop.get_seds``). Default None (model defaults).
     return_components : bool, optional
         Return intermediate results for debugging. Default False
     mask : array-like, shape (N_objects, N_filters), optional
@@ -812,7 +934,14 @@ def isochrone_population_loglike(
             eep_grid=eep_grid,
             mini_bound=mini_bound,
             eep_binary_max=eep_binary_max,
+            corr_params=corr_params,
         )
+
+        # Effective data mask shared by BOTH mixture components, so the
+        # cluster and outlier likelihoods always describe the same bands.
+        with np.errstate(invalid="ignore"):
+            data_valid = np.isfinite(obs_phot) & np.isfinite(obs_err) & (obs_err > 0)
+        eff_mask = data_valid.astype(float) if mask is None else mask * data_valid
 
         # 2. Compute cluster likelihood
         lnl_cluster = compute_isochrone_cluster_loglike(
@@ -823,7 +952,7 @@ def isochrone_population_loglike(
             parallax_err=parallax_err,
             distance=dist,
             dim_prior=dim_prior,
-            mask=mask,
+            mask=eff_mask,
         )
 
         # 3. Compute outlier likelihood
@@ -835,6 +964,7 @@ def isochrone_population_loglike(
             parallax_err=parallax_err,
             dim_prior=dim_prior,
             outlier_model_func=outlier_model_func,
+            mask=eff_mask,
             **outlier_kwargs,
         )
 

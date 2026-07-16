@@ -105,12 +105,19 @@ class FastNN:
     before evaluation.
 
     Expected input parameters (in order):
-    - log10(Teff) : Effective temperature in Kelvin
+    - Teff : Effective temperature in Kelvin (linear, NOT log10;
+      `FastNNPredictor.sed` converts its `logt` argument via `10**logt`
+      before calling the network)
     - log g : Surface gravity in cgs units
     - [Fe/H] : Surface metallicity (log scale)
     - [α/Fe] : Alpha enhancement (log scale)
     - Av : V-band extinction in magnitudes
     - Rv : Reddening parameter R(V) = A(V)/E(B-V)
+
+    `encode` and `nneval` perform NO bounds checking: inputs outside the
+    training ranges (`xmin`/`xmax`) silently produce extrapolated garbage.
+    Use `FastNNPredictor.sed`/`sed_batch`, which validate bounds and return
+    NaN for out-of-range parameters.
     """
 
     def __init__(self, filters=None, nnfile=None, verbose=True):
@@ -170,8 +177,12 @@ class FastNN:
             xmin = np.array([f[fltr]["xmin"] for fltr in filters])
             xmax = np.array([f[fltr]["xmax"] for fltr in filters])
 
-            # Verify all networks have consistent parameter ranges
-            if len(np.unique(xmin)) == 6 and len(np.unique(xmax)) == 6:
+            # Verify all networks share the same per-parameter bounds.
+            # (Counting unique scalar values across the flattened arrays
+            # would wrongly reject valid files where two different
+            # parameters share a bound value, and wrongly accept files
+            # whose per-filter bounds are permutations of the same values.)
+            if np.all(xmin == xmin[0]) and np.all(xmax == xmax[0]):
                 self.xmin = xmin[0]
                 self.xmax = xmax[0]
                 self.xspan = self.xmax - self.xmin
@@ -192,7 +203,8 @@ class FastNN:
         ----------
         x : numpy.ndarray of shape (Ninput,) or (Ninput, Nsamples)
             Input stellar parameters. Expected parameters are:
-            [log10(Teff), log g, [Fe/H], [alpha/Fe], Av, Rv]
+            [Teff (K, linear — not log10), log g, [Fe/H], [alpha/Fe], Av, Rv].
+            No bounds checking is performed; see the class Notes.
 
         Returns
         -------
@@ -252,8 +264,11 @@ class FastNN:
 
         Parameters
         ----------
-        x : numpy.ndarray of shape (Ninput,)
-            Stellar parameters: [log10(Teff), log g, [Fe/H], [alpha/Fe], Av, Rv]
+        x : numpy.ndarray of shape (Ninput,) or (Ninput, Nsamples)
+            Stellar parameters:
+            [Teff (K, linear — not log10), log g, [Fe/H], [alpha/Fe], Av, Rv].
+            No bounds checking is performed; out-of-range inputs silently
+            return extrapolated garbage (see the class Notes).
 
         Returns
         -------
@@ -533,8 +548,11 @@ class FastNNPredictor(FastNN):
 
         n_valid = np.sum(valid)
         if n_valid > 0:
-            # Evaluate NN for all valid stars at once
-            BC = self.nneval(x[:, valid])  # shape (NFILT, n_valid)
+            # Evaluate NN for all valid stars at once. nneval's np.squeeze
+            # drops the filter axis when NFILT == 1 (and the sample axis
+            # when n_valid == 1), so restore the (NFILT, n_valid) shape
+            # explicitly before broadcasting against logl.
+            BC = self.nneval(x[:, valid]).reshape(self.NFILT, -1)
 
             # Convert to apparent magnitudes
             seds[valid] = -2.5 * logl[valid, None] + 4.74 - BC.T + mu
