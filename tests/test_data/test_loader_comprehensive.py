@@ -175,6 +175,16 @@ class TestLoadModelsRegressions:
             _warnings.simplefilter("error")
             load_models(str(p), filters=["PS_g", "PS_r"], verbose=False)
 
+    def test_raises_when_no_filters_survive(self, tmp_path):
+        """If none of the requested filters exist, fail fast with a clear
+        error instead of returning a (Nmodel, 0, 3) array that breaks
+        StarGrid/BruteForce with an opaque shape error later."""
+        p = tmp_path / "grid_nofilt.h5"
+        _write_grid(p, n_models=4)
+
+        with pytest.raises(ValueError, match="None of the requested filters"):
+            load_models(str(p), filters=["TYPO_x", "TYPO_y"], verbose=False)
+
     def test_default_labels_include_afe(self, tmp_path):
         """Multi-afe grids must keep 'afe' so label tuples stay unique."""
         p = tmp_path / "grid_afe.h5"
