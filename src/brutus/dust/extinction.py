@@ -64,8 +64,10 @@ def lb2pix(nside, l, b, nest=True):  # noqa: E741
 
     # Handle scalar inputs
     if not hasattr(gal_l, "__len__"):
-        # Check for valid coordinate
-        if (b < -90.0) or (b > 90.0):
+        # Check for valid coordinate. The chained comparison is False for
+        # NaN, matching the array branch's mask (which treats NaN as
+        # invalid) instead of falling through to a healpy ValueError.
+        if not (-90.0 <= b <= 90.0):
             return -1
 
         # Query HEALPix pixel

@@ -87,8 +87,12 @@ def _fetch(name, symlink_dir):
     import os
     import shutil
 
-    # In CI, try to use cached file directly if it exists to avoid re-downloads
-    if os.environ.get("CI") == "true":
+    # Hash verification can be skipped ONLY via an explicit brutus-specific
+    # opt-in. (Keying this off the generic `CI` variable — exported by GitHub
+    # Actions, GitLab, Travis, etc., including for downstream packages that
+    # merely depend on brutus — silently disabled integrity checking and kept
+    # corrupt cached files forever.)
+    if os.environ.get("BRUTUS_SKIP_HASH_CHECK") == "1":
         cache_path = pathlib.Path(strato.path) / name
         if cache_path.exists():
             # File exists in cache, use it directly without SHA verification
@@ -114,13 +118,32 @@ def _fetch(name, symlink_dir):
     # symlink_to() raise FileExistsError.
     if target_path.is_symlink() and not target_path.exists():
         target_path.unlink()
+    # A pre-existing regular file may be a truncated leftover from an
+    # interrupted copy: compare its size against the (hash-verified) cache
+    # copy and replace it on mismatch instead of returning it forever.
+    if target_path.exists() and not target_path.is_symlink():
+        try:
+            same_file = target_path.samefile(fpath)
+        except OSError:
+            same_file = False
+        if not same_file and target_path.stat().st_size != fpath.stat().st_size:
+            target_path.unlink()
     if not target_path.exists() and not target_path.is_symlink():
         try:
             target_path.symlink_to(fpath)
         except OSError:
             # Filesystems without symlink support (some Windows/network/
-            # container mounts) or insufficient privilege: fall back to a copy.
-            shutil.copy2(fpath, target_path)
+            # container mounts) or insufficient privilege: fall back to a
+            # copy. Copy to a temp name and atomically rename so an
+            # interrupted copy can never leave a truncated file at the
+            # final path.
+            tmp_path = target_path.with_name(f"{target_path.name}.tmp{os.getpid()}")
+            try:
+                shutil.copy2(fpath, tmp_path)
+                os.replace(tmp_path, target_path)
+            finally:
+                if tmp_path.exists():
+                    tmp_path.unlink()
 
     return target_path
 

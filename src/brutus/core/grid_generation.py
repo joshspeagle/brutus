@@ -61,10 +61,14 @@ reference distance. This choice provides consistency with Gaia parallax
 measurements (1 mas = 1 kpc) and is documented in the grid attributes.
 
 **Reddening Parameterization**: Photometry is parameterized as:
-    m(A_V, R_V) = m_0 + A_V · (a + b · (R_V - 3.3))
+    m(A_V, R_V) = m_0 + A_V · (a + b · R_V)
 
-where m_0 is the unreddened magnitude, and (a, b) are fitted coefficients.
-This allows fast computation of reddened photometry for arbitrary (A_V, R_V).
+where m_0 is the unreddened magnitude and (a, b) are fitted coefficients:
+`a` is the A_V reddening vector extrapolated to R_V=0 (the linear-fit
+intercept) and `b` is its change per unit R_V. This matches how the
+coefficients are consumed in `brutus.core.sed_utils._get_seds`
+(`rvec = a + b * R_V`) and allows fast computation of reddened photometry
+for arbitrary (A_V, R_V).
 
 **Grid Format**: HDF5 files follow the format established in Speagle et al. (2025)
 and contain three datasets:
@@ -94,6 +98,7 @@ import numpy as np
 
 # Import brutus components
 from ..data.filters import FILTERS
+from ..utils.photometry import add_mag
 from .individual import StarEvolTrack
 
 __all__ = ["GridGenerator"]
@@ -107,16 +112,19 @@ class GridGenerator:
     predictions. Grids are computed at 1 kpc reference distance and include
     polynomial coefficients for A_V and R_V reddening corrections.
 
-    The generator uses evolutionary tracks (EEPTracks or Isochrone) combined
-    with neural network bolometric corrections to compute photometry across
-    a multi-dimensional parameter grid, then fits reddening vectors to enable
+    The generator uses evolutionary tracks (EEPTracks) combined with neural
+    network bolometric corrections to compute photometry across a
+    multi-dimensional parameter grid, then fits reddening vectors to enable
     fast interpolation.
 
     Parameters
     ----------
-    tracks : EEPTracks or Isochrone
+    tracks : EEPTracks
         Stellar evolutionary track model providing parameter predictions.
-        Must have compatible interface (get_predictions method).
+        Must expose the EEPTracks interface: `labels`, `predictions`, and a
+        `get_predictions(label_array, ...)` method. `Isochrone` objects are
+        NOT supported (they lack `labels` and use a keyword-based
+        `get_predictions` signature).
 
     filters : list of str, optional
         Names of photometric filters for which to generate models.
@@ -132,7 +140,7 @@ class GridGenerator:
 
     Attributes
     ----------
-    tracks : EEPTracks or Isochrone
+    tracks : EEPTracks
         Evolutionary track model
 
     star_track : StarEvolTrack
@@ -163,7 +171,7 @@ class GridGenerator:
     Notes
     -----
     The GridGenerator uses dependency injection rather than inheritance,
-    accepting an EEPTracks (or Isochrone) instance. This design:
+    accepting an EEPTracks instance. This design:
     - Maintains consistency with StarEvolTrack architecture
     - Allows flexibility in track implementations
     - Enables easier testing with mock tracks
@@ -177,6 +185,21 @@ class GridGenerator:
 
     def __init__(self, tracks, filters=None, nnfile=None, verbose=True):
         """Initialize grid generator with evolutionary tracks."""
+        # Fail fast with a clear error for incompatible track objects
+        # (e.g. Isochrone, which lacks `labels` and takes keyword scalars in
+        # get_predictions) instead of an opaque AttributeError mid-grid.
+        missing = [
+            attr
+            for attr in ("labels", "predictions", "get_predictions")
+            if not hasattr(tracks, attr)
+        ]
+        if missing:
+            raise TypeError(
+                "`tracks` must provide the EEPTracks interface; missing "
+                f"attributes: {missing}. Note that Isochrone objects are "
+                "not supported by GridGenerator."
+            )
+
         # Store tracks
         self.tracks = tracks
 
@@ -314,7 +337,8 @@ class GridGenerator:
         1. Computes SEDs across (av_grid × rv_grid) combinations
         2. Fits linear dependence on A_V at each R_V value
         3. Fits linear dependence of A_V slope on R_V
-        4. Stores [m_0, a, b] where m = m_0 + A_V·(a + b·(R_V-3.3))
+        4. Stores [m_0, a, b] where m = m_0 + A_V·(a + b·R_V), i.e. `a` is
+           the A_V reddening vector extrapolated to R_V=0
 
         Examples
         --------
@@ -414,55 +438,63 @@ class GridGenerator:
         ttot, t1 = 0.0, time.time()
 
         for i, (mini, eep, feh, afe, smf) in enumerate(self.grid_labels):
-            # Compute model and parameters at base reddening
-            (sed, params, params2, eep2) = self.star_track.get_seds(
-                mini=mini,
-                eep=eep,
-                feh=feh,
-                afe=afe,
-                smf=smf,
-                av=0.0,
-                rv=3.3,
-                dist=dist,
-                loga_max=loga_max,
-                eep_binary_max=eep_binary_max,
-                mini_bound=mini_bound,
-                apply_corr=apply_corr,
-                corr_params=corr_params,
-                return_dict=False,
-                return_eep2=True,
-            )
-
-            # Save parameters for primary
-            self.grid_params[i] = tuple(params)
-
-            # Check if SED is valid
-            if np.any(np.isnan(sed)) or np.any(np.isnan(params)):
-                # Flag as invalid and fill with NaNs
+            if mini < mini_bound:
+                # Documented contract: primaries below `mini_bound` are
+                # masked (previously the bound only gated binary secondaries,
+                # silently keeping sub-threshold primaries as valid).
                 self.grid_sel[i] = False
-                self.grid_seds[i] = tuple(np.full((len(self.filters), 3), np.nan))
+                sed = params = None  # storage rows stay NaN-filled
             else:
-                # Fit reddening coefficients
-                coeffs = self._fit_reddening_coefficients(
+                # Compute model and parameters at base reddening
+                sed, params, params2, eep2 = self.star_track.get_seds(
                     mini=mini,
                     eep=eep,
                     feh=feh,
                     afe=afe,
                     smf=smf,
-                    eep2=eep2,
-                    sed_base=sed,
-                    av_grid=av_grid,
-                    av_wt=av_wt,
-                    rv_grid=rv_grid,
-                    rv_wt=rv_wt,
+                    av=0.0,
+                    rv=3.3,
                     dist=dist,
                     loga_max=loga_max,
                     eep_binary_max=eep_binary_max,
                     mini_bound=mini_bound,
                     apply_corr=apply_corr,
                     corr_params=corr_params,
+                    return_dict=False,
+                    return_eep2=True,
                 )
-                self.grid_seds[i] = tuple(coeffs)
+
+                # Save parameters for primary
+                self.grid_params[i] = tuple(params)
+
+            # Check if SED is valid
+            if sed is None or np.any(np.isnan(sed)) or np.any(np.isnan(params)):
+                # Flag as invalid; storage rows are pre-filled with NaN
+                self.grid_sel[i] = False
+                self.grid_seds[i] = tuple(np.full((len(self.filters), 3), np.nan))
+            else:
+                # Fit reddening coefficients. Stellar parameters are
+                # independent of (A_V, R_V), so pass the already-computed
+                # primary/secondary predictions instead of re-interpolating
+                # the tracks for every reddening-grid point.
+                coeffs = self._fit_reddening_coefficients(
+                    params=params,
+                    params2=params2,
+                    sed_base=sed,
+                    av_grid=av_grid,
+                    av_wt=av_wt,
+                    rv_grid=rv_grid,
+                    rv_wt=rv_wt,
+                    dist=dist,
+                )
+                if np.any(np.isnan(coeffs)):
+                    # A reddening-grid point outside the NN training bounds
+                    # yields NaN photometry which polyfit silently propagates;
+                    # such models must not be flagged as valid.
+                    self.grid_sel[i] = False
+                    self.grid_seds[i] = tuple(np.full((len(self.filters), 3), np.nan))
+                else:
+                    self.grid_seds[i] = tuple(coeffs)
 
             # Update timing
             t2 = time.time()
@@ -501,69 +533,69 @@ class GridGenerator:
 
     def _fit_reddening_coefficients(
         self,
-        mini,
-        eep,
-        feh,
-        afe,
-        smf,
-        eep2,
+        params,
+        params2,
         sed_base,
         av_grid,
         av_wt,
         rv_grid,
         rv_wt,
         dist,
-        loga_max,
-        eep_binary_max,
-        mini_bound,
-        apply_corr,
-        corr_params,
     ):
         """
         Fit polynomial coefficients for reddening dependence.
 
         Computes SEDs across a grid of (A_V, R_V) values and fits a bilinear
-        model: m(A_V, R_V) = m_0 + A_V · (a + b · (R_V - 3.3))
+        model: m(A_V, R_V) = m_0 + A_V · (a + b · R_V), where `a` is the A_V
+        reddening vector extrapolated to R_V=0 (linear-fit intercept) and `b`
+        is its change per unit R_V, matching the consumer
+        `brutus.core.sed_utils._get_seds` (`rvec = a + b * R_V`).
+
+        Stellar parameters do not depend on (A_V, R_V), so the neural network
+        is evaluated in a single batched call over the reddening lattice using
+        the track predictions already computed for the base model (avoiding
+        Nav × Nrv redundant track interpolations per grid point).
 
         Parameters
         ----------
-        [parameters same as make_grid where applicable]
+        params : numpy.ndarray
+            Primary-component track predictions (ordered as
+            ``self.tracks.predictions``) from the base A_V=0 evaluation.
+        params2 : numpy.ndarray
+            Secondary-component predictions (same ordering); all-NaN when the
+            model has no contributing binary companion.
         sed_base : numpy.ndarray
-            Base SED at A_V=0, R_V=3.3
-        eep2 : float
-            EEP of secondary component for binary systems
+            Base SED at A_V=0, R_V=3.3.
+        av_grid, av_wt, rv_grid, rv_wt : numpy.ndarray
+            Reddening lattice points and fit weights (see `make_grid`).
+        dist : float
+            Reference distance in parsecs.
 
         Returns
         -------
         coeffs : numpy.ndarray of shape (Nfilters, 3)
             Coefficients [m_0, a, b] for each filter
         """
-        # Compute SEDs across reddening grid
-        seds = np.array(
-            [
-                [
-                    self.star_track.get_seds(
-                        mini=mini,
-                        eep=eep,
-                        feh=feh,
-                        afe=afe,
-                        smf=smf,
-                        eep2=eep2,
-                        av=av,
-                        rv=rv,
-                        dist=dist,
-                        loga_max=loga_max,
-                        eep_binary_max=eep_binary_max,
-                        mini_bound=mini_bound,
-                        apply_corr=apply_corr,
-                        corr_params=corr_params,
-                        return_dict=False,
-                    )[0]
-                    for av in av_grid
-                ]
-                for rv in rv_grid
-            ]
-        )  # Shape: (Nrv, Nav, Nfilt)
+        # Reddening lattice, flattened in (Nrv, Nav) order.
+        rv_mesh, av_mesh = np.meshgrid(rv_grid, av_grid, indexing="ij")
+        av_pts = av_mesh.ravel()
+        rv_pts = rv_mesh.ravel()
+
+        # Primary SEDs across the reddening lattice (single batched NN call).
+        p1 = dict(zip(self.tracks.predictions, params))
+        seds = self._sed_reddening_grid(p1, av_pts, rv_pts, dist)
+
+        # Add binary companion if it contributed to the base SED. The
+        # secondary predictions are all-NaN unless the companion existed and
+        # converged during the base evaluation (its presence conditions are
+        # independent of A_V/R_V).
+        p2 = dict(zip(self.tracks.predictions, params2))
+        sed_fields = ("logl", "logt", "logg", "feh_surf", "afe_surf")
+        if np.all(np.isfinite([p2[k] for k in sed_fields])):
+            seds2 = self._sed_reddening_grid(p2, av_pts, rv_pts, dist)
+            seds = add_mag(seds, seds2)
+
+        seds = seds.reshape(len(rv_grid), len(av_grid), -1)  # Shape: (Nrv, Nav, Nfilt)
 
         # Fit A_V dependence at each R_V
         # For each (rv, filter): fit m vs A_V
@@ -575,16 +607,73 @@ class GridGenerator:
         # For each filter: fit A_V_slope vs R_V
         sedr, seda = np.polyfit(
             rv_grid, sfits[:, :, 0], 1, w=rv_wt
-        )  # sedr: Rv dependence, seda: Av vector at Rv=3.3
+        )  # sedr: Rv dependence, seda: Av vector extrapolated to Rv=0
 
         # Combine: [base_magnitude, av_vector, rv_vector]
         coeffs = np.c_[sed_base, seda, sedr]
 
         return coeffs
 
+    def _sed_reddening_grid(self, pdict, av_pts, rv_pts, dist):
+        """
+        Evaluate NN photometry on an (A_V, R_V) lattice at fixed stellar
+        parameters.
+
+        Batched equivalent of ``FastNNPredictor.sed`` for one star and many
+        reddening points: the stellar inputs are constant across columns and
+        only the (av, rv) columns vary. Out-of-bounds points return NaN rows,
+        mirroring the scalar path.
+
+        Parameters
+        ----------
+        pdict : dict
+            Track predictions for one component; must contain 'logl', 'logt',
+            'logg', 'feh_surf', and 'afe_surf'.
+        av_pts, rv_pts : numpy.ndarray of shape (Npts,)
+            Flattened reddening lattice coordinates.
+        dist : float
+            Distance in parsecs.
+
+        Returns
+        -------
+        seds : numpy.ndarray of shape (Npts, Nfilters)
+            Apparent magnitudes at each lattice point (NaN where the NN
+            inputs fall outside its training bounds).
+        """
+        predictor = self.predictor
+        mu = 5.0 * np.log10(dist) - 5.0
+
+        npts = len(av_pts)
+        x = np.empty((6, npts))
+        x[0] = 10.0 ** pdict["logt"]
+        x[1] = pdict["logg"]
+        x[2] = pdict["feh_surf"]
+        x[3] = pdict["afe_surf"]
+        x[4] = av_pts
+        x[5] = rv_pts
+
+        valid = (
+            np.all(np.isfinite(x), axis=0)
+            & np.all(x >= predictor.xmin[:, None], axis=0)
+            & np.all(x <= predictor.xmax[:, None], axis=0)
+        )
+
+        seds = np.full((npts, predictor.NFILT), np.nan)
+        if valid.any():
+            # nneval squeezes trailing singleton axes; restore (NFILT, n).
+            BC = predictor.nneval(x[:, valid]).reshape(predictor.NFILT, -1)
+            seds[valid] = -2.5 * pdict["logl"] + 4.74 - BC.T + mu
+
+        return seds
+
     def _save_grid(self, output_file, dist, verbose=True):
         """
         Save grid to HDF5 file in StarGrid-compatible format.
+
+        Only valid models (``grid_sel == True``) are written: invalid grid
+        points carry all-NaN coefficients/parameters that would otherwise
+        poison every downstream likelihood evaluation in BruteForce. This
+        matches the published grid files, which contain only valid models.
 
         Parameters
         ----------
@@ -600,24 +689,31 @@ class GridGenerator:
         if verbose:
             sys.stderr.write(f"Saving grid to {output_path}...\n")
 
+        # Persist only valid models; invalid rows are NaN-filled and would
+        # crash BruteForce fitting if written (NaN lnl poisons np.max).
+        sel = self.grid_sel
+
         with h5py.File(output_path, "w") as f:
             # Save magnitude coefficients
             f.create_dataset(
                 "mag_coeffs",
-                data=self.grid_seds,
+                data=self.grid_seds[sel],
                 compression="gzip",
                 compression_opts=4,
             )
 
             # Save labels (inputs)
             f.create_dataset(
-                "labels", data=self.grid_labels, compression="gzip", compression_opts=4
+                "labels",
+                data=self.grid_labels[sel],
+                compression="gzip",
+                compression_opts=4,
             )
 
             # Save parameters (predictions)
             f.create_dataset(
                 "parameters",
-                data=self.grid_params,
+                data=self.grid_params[sel],
                 compression="gzip",
                 compression_opts=4,
             )

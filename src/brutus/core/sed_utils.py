@@ -139,6 +139,11 @@ def get_seds(
     drvecs : `~numpy.ndarray` of shape `(Nmodels, Nbands)`, optional
         Differential reddening vectors. Only returned if `return_drvec=True`.
 
+    Raises
+    ------
+    ValueError
+        If `av` or `rv` is an array whose shape is not `(Nmodels,)`.
+
     Examples
     --------
     >>> import numpy as np
@@ -173,16 +178,27 @@ def get_seds(
     """
     Nmodels, Nbands, Ncoef = mag_coeffs.shape
 
-    # Handle default parameters
-    if av is None:
-        av = np.zeros(Nmodels)
-    elif isinstance(av, (int, float)):
-        av = np.full(Nmodels, av)
+    def _coerce(value, default, name):
+        # Coerce to a float64 (Nmodels,) array. The numba kernel indexes
+        # value[i] for i in range(Nmodels) with NO bounds checking, so a
+        # short array would silently read out-of-bounds memory; validate the
+        # length here. np.asarray also handles numpy scalars (np.float32,
+        # 0-d arrays) that the old isinstance(int, float) check rejected
+        # with an opaque numba TypingError.
+        if value is None:
+            return np.full(Nmodels, default)
+        value = np.asarray(value, dtype=np.float64)
+        if value.ndim == 0:
+            return np.full(Nmodels, float(value))
+        if value.shape != (Nmodels,):
+            raise ValueError(
+                f"`{name}` must be a scalar or have shape ({Nmodels},) to "
+                f"match `mag_coeffs`; got shape {value.shape}."
+            )
+        return np.ascontiguousarray(value)
 
-    if rv is None:
-        rv = np.full(Nmodels, 3.3)
-    elif isinstance(rv, (int, float)):
-        rv = np.full(Nmodels, rv)
+    av = _coerce(av, 0.0, "av")
+    rv = _coerce(rv, 3.3, "rv")
 
     # Compute SEDs using the core function
     seds, rvecs, drvecs = _get_seds(mag_coeffs, av, rv, return_flux=return_flux)
