@@ -222,6 +222,13 @@ def load_models(
         available_filters = list(mag_coeffs_dataset.dtype.names)
         valid_filters = [filt for filt in filters if filt in available_filters]
         missing_filters = [filt for filt in filters if filt not in available_filters]
+        if not valid_filters:
+            # Fail fast: a zero-filter model array (Nmodel, 0, 3) would only
+            # produce a confusing shape error later in StarGrid/BruteForce.
+            raise ValueError(
+                f"None of the requested filters {list(filters)} exist in "
+                f"'{filepath}'. Available filters: {available_filters}."
+            )
         if missing_filters:
             # The returned model columns follow `valid_filters`; callers who
             # zip their original filter list against the columns would
