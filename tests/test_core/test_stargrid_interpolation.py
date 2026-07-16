@@ -370,13 +370,15 @@ class TestMultilinearEquivalence:
             _reference_multilinear(grid, **q)
         t_ref = time.perf_counter() - t0
 
+        # Timing is reported as a diagnostic only: a hard "new beats old"
+        # assertion is a coin-flip on a loaded CI runner and the correctness
+        # equivalence above is what this test actually guards.
         print(
             f"\nmultilinear neighbor lookup ({grid.nmodels} models, "
             f"{len(queries)} queries): new {1e3 * t_new / len(queries):.3f} "
             f"ms/query vs reference {1e3 * t_ref / len(queries):.3f} ms/query "
             f"({t_ref / t_new:.0f}x)"
         )
-        assert t_new < t_ref
 
 
 if __name__ == "__main__":
