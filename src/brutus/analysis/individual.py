@@ -989,7 +989,6 @@ class BruteForce:
         phot_offsets=None,
         parallax=None,
         parallax_err=None,
-        av_gauss=None,
         lnprior=None,
         wt_thresh=1e-3,
         cdf_thresh=2e-3,
@@ -1069,6 +1068,11 @@ class BruteForce:
                 lnprior = logp_ps1_luminosity_function(self.models_labels["Mr"])
             else:
                 lnprior = np.zeros(self.nmodels)
+        else:
+            # Defensive copy: the age-weight and grid-gradient corrections
+            # below are applied in place and must never mutate the caller's
+            # array (re-using it across fit() calls would compound them).
+            lnprior = np.array(lnprior, dtype=float)
 
         # Apply age weighting if requested
         if apply_agewt:
@@ -1099,7 +1103,13 @@ class BruteForce:
                 logp_galactic_structure, R_solar=R_solar, Z_solar=Z_solar
             )
 
-        # Initialize dust prior
+        # Initialize dust prior. The dust map is queried by sky position, so
+        # fail fast here rather than per-object inside logpost_grid.
+        if dustfile is not None and data_coords is None:
+            raise ValueError(
+                "`data_coords` must be provided when using a dust-map "
+                "extinction prior (`dustfile`)."
+            )
         if lndustprior is None and dustfile is not None:
             lndustprior = logp_extinction
 
@@ -1129,8 +1139,8 @@ class BruteForce:
         """
         Compute log-likelihood over the stellar model grid.
 
-        This is a wrapper around the module-level loglike_grid function
-        that uses the instance's model grid.
+        Optimizes (scale, A(V), R(V)) for each model in the instance's grid
+        and evaluates the corresponding maximum-likelihood fit to the data.
 
         Parameters
         ----------
@@ -1419,19 +1429,34 @@ class BruteForce:
         """
         Compute log-posterior over the stellar model grid.
 
-        This is a wrapper around the module-level logpost_grid function.
+        Applies model priors, parallax constraints, Galactic structure and
+        dust-map priors on top of the grid log-likelihoods, integrating over
+        (distance, A(V), R(V)) uncertainty via Monte Carlo sampling.
 
         Parameters
         ----------
         results : tuple
             Results from loglike_grid with return_vals=True.
 
-        Other parameters are passed to logpost_grid.
+        apply_av_prior : bool, optional
+            Whether to apply the dust-map extinction prior when ``dustfile``
+            is provided. Default is True.
+
+        Other parameters mirror the corresponding ``fit()`` options.
 
         Returns
         -------
         Results from logpost_grid.
         """
+        # The dust-map prior is a function of sky position; without one it
+        # would crash deep inside the map query with an opaque IndexError.
+        if dustfile is not None and apply_av_prior and coord is None:
+            raise ValueError(
+                "`dustfile` (dust-map extinction prior) requires a sky "
+                "position: pass `coord` to logpost_grid (or `data_coords` "
+                "to fit())."
+            )
+
         # Use instance's labels if not provided
         if dlabels is None:
             dlabels = self.models_labels
@@ -1460,10 +1485,28 @@ class BruteForce:
         # sample weights where the exact logp_parallax is used instead.
         lnprob_sel = lnprob_base.copy()
         if parallax is not None and parallax_err is not None:
-            # Convert parallax to scale (VECTORIZED)
+            # Convert parallax to scale (VECTORIZED).
+            # Use the MARGINAL scale std sqrt(cov[0,0]) obtained from the 3x3
+            # precision matrix via the cofactor formula. The conditional
+            # 1/sqrt(icov[0,0]) (A_V, R_V held fixed) understates the
+            # uncertainty when the scale-A(V) degeneracy is strong and would
+            # over-prune models that are consistent with the parallax.
             scales_err = np.full(Nmodels, 1e10)  # Large error = uninformative
-            valid_mask = icovs_sar[:, 0, 0] > 0
-            scales_err[valid_mask] = 1.0 / np.sqrt(icovs_sar[valid_mask, 0, 0])
+            i00, i01, i02 = icovs_sar[:, 0, 0], icovs_sar[:, 0, 1], icovs_sar[:, 0, 2]
+            i11, i12, i22 = icovs_sar[:, 1, 1], icovs_sar[:, 1, 2], icovs_sar[:, 2, 2]
+            minor00 = i11 * i22 - i12 * i12
+            det = (
+                i00 * minor00
+                - i01 * (i01 * i22 - i02 * i12)
+                + i02 * (i01 * i12 - i02 * i11)
+            )
+            with np.errstate(divide="ignore", invalid="ignore"):
+                var00 = minor00 / det  # marginal scale variance
+                cond_var00 = 1.0 / i00  # conditional fallback
+            marg_ok = (det > 0) & np.isfinite(var00) & (var00 > 0)
+            cond_ok = ~marg_ok & (i00 > 0)  # degenerate matrix: old behavior
+            scales_err[marg_ok] = np.sqrt(var00[marg_ok])
+            scales_err[cond_ok] = np.sqrt(cond_var00[cond_ok])
 
             lnprob_sel += logp_parallax_scale(
                 scales, scales_err, parallax, parallax_err
@@ -1657,7 +1700,7 @@ class BruteForce:
             lnp_gal_reshaped = lnp_gal_flat.reshape(Nmc, Nsel)
             lnp_mc += lnp_gal_reshaped
 
-        if dustfile is not None:
+        if dustfile is not None and apply_av_prior:
             # Load dust map from file path if needed
             if isinstance(dustfile, str):
                 from ..dust import Bayestar
@@ -1793,8 +1836,12 @@ class BruteForce:
             (min, max) bounds on A(V). Default is (0.0, 20.0).
 
         av_gauss : tuple, optional
-            (mean, std) for Gaussian prior on A(V). If provided, this is used
-            instead of the distance-reddening prior during fitting.
+            (mean, std) for a Gaussian prior on A(V) applied during the
+            per-model likelihood optimization. Default is None, which maps
+            to the essentially-flat `(0.0, 1e6)`. Note this is applied in
+            *addition* to any dust-map prior from ``dustfile`` (they are
+            not exclusive), so passing an informative ``av_gauss`` together
+            with ``dustfile`` counts the A(V) constraint twice.
 
         rvlim : tuple, optional
             (min, max) bounds on R(V). Default is (1.0, 8.0).
@@ -1975,7 +2022,6 @@ class BruteForce:
             phot_offsets=phot_offsets,
             parallax=parallax,
             parallax_err=parallax_err,
-            av_gauss=av_gauss,
             lnprior=lnprior,
             wt_thresh=wt_thresh,
             cdf_thresh=cdf_thresh,
