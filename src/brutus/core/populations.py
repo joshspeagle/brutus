@@ -82,7 +82,6 @@ References
 import os
 import sys
 import warnings
-from copy import deepcopy
 from pathlib import Path
 
 import h5py
@@ -1022,11 +1021,12 @@ apply_corr, corr_params, return_dict
                 warnings.simplefilter("ignore")  # NaN comparisons
                 is_binary = (eep_used <= eep_binary_max) & ~np.isnan(seds[:, 0])
             seds[is_binary] -= 2.5 * np.log10(2.0)
-            params2 = deepcopy(params)
-            for p in params2:
-                params2[p] = np.where(is_binary, params2[p], np.nan)
-            params_arr2 = deepcopy(params_arr.T)
-            params_arr2[:, ~is_binary] = np.nan
+            # np.where already returns fresh arrays, so no copies are needed;
+            # keep params_arr2 in the same (Neep, Npred) orientation as the
+            # 0 < binary_fraction < 1 path so return_dict=False is consistent.
+            params2 = {p: np.where(is_binary, arr, np.nan) for p, arr in params.items()}
+            params_arr2 = np.array(params_arr, copy=True)
+            params_arr2[~is_binary, :] = np.nan
 
         # Format output
         if not return_dict:

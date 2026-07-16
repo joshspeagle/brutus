@@ -239,6 +239,23 @@ class TestReturnDictFalse:
         assert params2.shape == (n_eep, n_pred)
         assert seds.shape == (n_eep, 4)
 
+    def test_return_dict_false_shape_equal_mass_binary(self):
+        """binary_fraction=1.0 must return params2 in the same (Neep, Npred)
+        orientation as every other path (it previously returned the
+        transpose)."""
+        n_eep = 6
+        iso = _make_mock_isochrone(n_eep=n_eep)
+        pop = _make_stellar_pop(iso, has_sed_batch=True, nfilt=4)
+
+        seds, params, params2 = pop.get_seds(
+            feh=0.0, loga=9.0, binary_fraction=1.0, return_dict=False
+        )
+
+        n_pred = len(iso.predictions)
+        assert params.shape == (n_pred, n_eep)
+        assert params2.shape == (n_eep, n_pred)
+        assert seds.shape == (n_eep, 4)
+
     def test_return_dict_true_returns_dicts(self):
         """Verify default return_dict=True returns dicts (contrast test)."""
         iso = _make_mock_isochrone(n_eep=6)
