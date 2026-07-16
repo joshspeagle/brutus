@@ -56,7 +56,7 @@ def mock_data():
 
 @pytest.fixture
 def simple_mocks():
-    """Set up simple, working mocks for basic functionality tests."""
+    """Set up a simple, working get_seds mock for basic functionality tests."""
 
     def mock_get_seds(models_input, av=None, rv=None, return_flux=True):
         n_requested = len(models_input) if hasattr(models_input, "__len__") else 1
@@ -70,22 +70,7 @@ def simple_mocks():
         else:
             return np.random.uniform(14, 20, (n_requested, n_filt))
 
-    def mock_phot_loglike(
-        flux, err, mfluxes, mask=None, dim_prior=True, dof_reduction=0
-    ):
-        nobj, nfilt = flux.shape
-        nmod = mfluxes.shape[1] if len(mfluxes.shape) > 1 else 1
-        return np.random.normal(-5, 2, (nobj, nmod))
-
-    def mock_logsumexp(x, axis=1):
-        if hasattr(x, "shape") and len(x.shape) > 1:
-            return np.log(
-                np.sum(np.exp(x - np.max(x, axis=1, keepdims=True)), axis=1)
-            ) + np.max(x, axis=1)
-        else:
-            return np.log(np.sum(np.exp(x - np.max(x)))) + np.max(x)
-
-    return mock_get_seds, mock_phot_loglike, mock_logsumexp
+    return mock_get_seds
 
 
 class TestPhotometricOffsetsConfig:
@@ -156,15 +141,9 @@ class TestPhotometricOffsetsCore:
 
     def test_basic_functionality(self, mock_data, simple_mocks):
         """Test basic function execution."""
-        mock_get_seds, mock_phot_loglike, mock_logsumexp = simple_mocks
+        mock_get_seds = simple_mocks
 
-        with (
-            patch("brutus.analysis.offsets.get_seds", side_effect=mock_get_seds),
-            patch(
-                "brutus.analysis.offsets.phot_loglike", side_effect=mock_phot_loglike
-            ),
-            patch("brutus.analysis.offsets.logsumexp", side_effect=mock_logsumexp),
-        ):
+        with patch("brutus.analysis.offsets.get_seds", side_effect=mock_get_seds):
 
             from brutus.analysis.offsets import (
                 PhotometricOffsetsConfig,
@@ -204,15 +183,9 @@ class TestPhotometricOffsetsCore:
 
     def test_uncertainty_methods(self, mock_data, simple_mocks):
         """Test different uncertainty estimation methods."""
-        mock_get_seds, mock_phot_loglike, mock_logsumexp = simple_mocks
+        mock_get_seds = simple_mocks
 
-        with (
-            patch("brutus.analysis.offsets.get_seds", side_effect=mock_get_seds),
-            patch(
-                "brutus.analysis.offsets.phot_loglike", side_effect=mock_phot_loglike
-            ),
-            patch("brutus.analysis.offsets.logsumexp", side_effect=mock_logsumexp),
-        ):
+        with patch("brutus.analysis.offsets.get_seds", side_effect=mock_get_seds):
 
             from brutus.analysis.offsets import (
                 PhotometricOffsetsConfig,
@@ -256,15 +229,9 @@ class TestPhotometricOffsetsCore:
 
     def test_vectorized_vs_loop_bootstrap(self, mock_data, simple_mocks):
         """Test vectorized vs loop bootstrap implementations."""
-        mock_get_seds, mock_phot_loglike, mock_logsumexp = simple_mocks
+        mock_get_seds = simple_mocks
 
-        with (
-            patch("brutus.analysis.offsets.get_seds", side_effect=mock_get_seds),
-            patch(
-                "brutus.analysis.offsets.phot_loglike", side_effect=mock_phot_loglike
-            ),
-            patch("brutus.analysis.offsets.logsumexp", side_effect=mock_logsumexp),
-        ):
+        with patch("brutus.analysis.offsets.get_seds", side_effect=mock_get_seds):
 
             from brutus.analysis.offsets import (
                 PhotometricOffsetsConfig,
@@ -298,15 +265,9 @@ class TestPhotometricOffsetsCore:
 
     def test_optional_parameters(self, mock_data, simple_mocks):
         """Test optional parameter handling."""
-        mock_get_seds, mock_phot_loglike, mock_logsumexp = simple_mocks
+        mock_get_seds = simple_mocks
 
-        with (
-            patch("brutus.analysis.offsets.get_seds", side_effect=mock_get_seds),
-            patch(
-                "brutus.analysis.offsets.phot_loglike", side_effect=mock_phot_loglike
-            ),
-            patch("brutus.analysis.offsets.logsumexp", side_effect=mock_logsumexp),
-        ):
+        with patch("brutus.analysis.offsets.get_seds", side_effect=mock_get_seds):
 
             from brutus.analysis.offsets import (
                 PhotometricOffsetsConfig,
@@ -349,15 +310,9 @@ class TestPhotometricOffsetsCore:
 
     def test_prior_application(self, mock_data, simple_mocks):
         """Test Gaussian prior application."""
-        mock_get_seds, mock_phot_loglike, mock_logsumexp = simple_mocks
+        mock_get_seds = simple_mocks
 
-        with (
-            patch("brutus.analysis.offsets.get_seds", side_effect=mock_get_seds),
-            patch(
-                "brutus.analysis.offsets.phot_loglike", side_effect=mock_phot_loglike
-            ),
-            patch("brutus.analysis.offsets.logsumexp", side_effect=mock_logsumexp),
-        ):
+        with patch("brutus.analysis.offsets.get_seds", side_effect=mock_get_seds):
 
             from brutus.analysis.offsets import (
                 PhotometricOffsetsConfig,
@@ -582,48 +537,27 @@ class TestParameterRecovery:
             dreds[i] = np.clip(dreds[i], 2.9, 3.9)
             dists[i] = np.clip(dists[i], 0.6, 1.5)
 
-        # Mock only the likelihood functions
-        def mock_phot_loglike(
-            flux, err_in, mfluxes, mask=None, dim_prior=True, dof_reduction=0
-        ):
-            nobj = flux.shape[0]
-            nmod = mfluxes.shape[1] if len(mfluxes.shape) > 1 else 1
-            return np.zeros((nobj, nmod))
+        # Run the algorithm (real likelihood reweighting)
+        config = PhotometricOffsetsConfig(
+            n_bootstrap=20,
+            min_bands_used=3,
+            min_bands_unused=2,
+            validate_inputs=False,
+            progress_interval=0,
+        )
 
-        def mock_logsumexp(x, axis=1):
-            if hasattr(x, "shape") and len(x.shape) > 1:
-                return np.zeros(x.shape[0])
-            else:
-                return 0.0
-
-        # Run the algorithm
-        with (
-            patch(
-                "brutus.analysis.offsets.phot_loglike", side_effect=mock_phot_loglike
-            ),
-            patch("brutus.analysis.offsets.logsumexp", side_effect=mock_logsumexp),
-        ):
-
-            config = PhotometricOffsetsConfig(
-                n_bootstrap=20,
-                min_bands_used=3,
-                min_bands_unused=2,
-                validate_inputs=False,
-                progress_interval=0,
-            )
-
-            offsets, errors, n_used = photometric_offsets(
-                observed_phot,
-                err,
-                mask,
-                models,
-                idxs,
-                reds,
-                dreds,
-                dists,
-                config=config,
-                verbose=False,
-            )
+        offsets, errors, n_used = photometric_offsets(
+            observed_phot,
+            err,
+            mask,
+            models,
+            idxs,
+            reds,
+            dreds,
+            dists,
+            config=config,
+            verbose=False,
+        )
 
         # Check unity recovery
         max_deviation = np.max(np.abs(offsets - 1.0))
@@ -701,48 +635,27 @@ class TestParameterRecovery:
             dreds[i] = np.clip(dreds[i], 3.0, 3.8)
             dists[i] = np.clip(dists[i], 0.7, 1.3)
 
-        # Mock likelihood functions
-        def mock_phot_loglike(
-            flux, err_in, mfluxes, mask=None, dim_prior=True, dof_reduction=0
-        ):
-            nobj = flux.shape[0]
-            nmod = mfluxes.shape[1] if len(mfluxes.shape) > 1 else 1
-            return np.zeros((nobj, nmod))
+        # Run algorithm (real likelihood reweighting)
+        config = PhotometricOffsetsConfig(
+            n_bootstrap=25,
+            min_bands_used=3,
+            min_bands_unused=2,
+            validate_inputs=False,
+            progress_interval=0,
+        )
 
-        def mock_logsumexp(x, axis=1):
-            if hasattr(x, "shape") and len(x.shape) > 1:
-                return np.zeros(x.shape[0])
-            else:
-                return 0.0
-
-        # Run algorithm
-        with (
-            patch(
-                "brutus.analysis.offsets.phot_loglike", side_effect=mock_phot_loglike
-            ),
-            patch("brutus.analysis.offsets.logsumexp", side_effect=mock_logsumexp),
-        ):
-
-            config = PhotometricOffsetsConfig(
-                n_bootstrap=25,
-                min_bands_used=3,
-                min_bands_unused=2,
-                validate_inputs=False,
-                progress_interval=0,
-            )
-
-            recovered_corrections, errors, n_used = photometric_offsets(
-                observed_phot,
-                err,
-                mask,
-                models,
-                idxs,
-                reds,
-                dreds,
-                dists,
-                config=config,
-                verbose=False,
-            )
+        recovered_corrections, errors, n_used = photometric_offsets(
+            observed_phot,
+            err,
+            mask,
+            models,
+            idxs,
+            reds,
+            dreds,
+            dists,
+            config=config,
+            verbose=False,
+        )
 
         # Check recovery
         abs_errors = np.abs(recovered_corrections - expected_corrections)
@@ -764,15 +677,9 @@ class TestEdgeCases:
 
     def test_no_valid_objects(self, simple_mocks):
         """Test behavior when no objects meet selection criteria."""
-        mock_get_seds, mock_phot_loglike, mock_logsumexp = simple_mocks
+        mock_get_seds = simple_mocks
 
-        with (
-            patch("brutus.analysis.offsets.get_seds", side_effect=mock_get_seds),
-            patch(
-                "brutus.analysis.offsets.phot_loglike", side_effect=mock_phot_loglike
-            ),
-            patch("brutus.analysis.offsets.logsumexp", side_effect=mock_logsumexp),
-        ):
+        with patch("brutus.analysis.offsets.get_seds", side_effect=mock_get_seds):
 
             from brutus.analysis.offsets import (
                 PhotometricOffsetsConfig,
@@ -823,15 +730,9 @@ class TestPerformance:
 
     def test_large_dataset_performance(self, simple_mocks):
         """Test performance with larger datasets."""
-        mock_get_seds, mock_phot_loglike, mock_logsumexp = simple_mocks
+        mock_get_seds = simple_mocks
 
-        with (
-            patch("brutus.analysis.offsets.get_seds", side_effect=mock_get_seds),
-            patch(
-                "brutus.analysis.offsets.phot_loglike", side_effect=mock_phot_loglike
-            ),
-            patch("brutus.analysis.offsets.logsumexp", side_effect=mock_logsumexp),
-        ):
+        with patch("brutus.analysis.offsets.get_seds", side_effect=mock_get_seds):
 
             from brutus.analysis.offsets import (
                 PhotometricOffsetsConfig,
