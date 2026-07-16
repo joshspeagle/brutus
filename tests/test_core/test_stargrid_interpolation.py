@@ -262,19 +262,25 @@ class TestKDTreeNotFrozen:
         assert np.isclose(preds["pidx"], expected, atol=1e-6)
 
 
-class TestUnspecifiedParameterWarning:
-    """Finding: unspecified multi-valued axes are silently pinned."""
+class TestUnspecifiedParameterError:
+    """Finding: unspecified multi-valued axes were silently pinned to the
+    axis minimum; omission now raises instead (there is no sensible
+    default, and a warning is too easy to miss in pipeline logs)."""
 
-    def test_warns_when_axis_pinned(self, complete_grid):
-        with pytest.warns(UserWarning, match="pinning"):
+    def test_raises_when_multivalued_axis_omitted(self, complete_grid):
+        with pytest.raises(ValueError, match="feh"):
             complete_grid.get_seds(mini=1.0, eep=300.0)  # feh unspecified
 
-    def test_no_warning_when_all_specified(self, complete_grid):
+    def test_error_names_the_axis_range(self, complete_grid):
+        with pytest.raises(ValueError, match="not specified"):
+            complete_grid.get_seds(mini=1.0, eep=300.0)
+
+    def test_no_error_when_all_specified(self, complete_grid):
         with warnings.catch_warnings():
             warnings.simplefilter("error", UserWarning)
             complete_grid.get_seds(mini=1.0, eep=300.0, feh=0.0)
 
-    def test_no_warning_for_single_valued_axis(self, incomplete_grid):
+    def test_single_valued_axis_may_be_omitted(self, incomplete_grid):
         # feh axis has a single value; omitting it is unambiguous
         with warnings.catch_warnings():
             warnings.simplefilter("error", UserWarning)
@@ -321,16 +327,17 @@ class TestMultilinearEquivalence:
             for k in ref_map:
                 assert np.isclose(new_map[k], ref_map[k], atol=1e-12), q
 
-    def test_equivalence_with_pinned_axis(self):
+    def test_omitted_axis_now_raises_instead_of_pinning(self):
+        # The old implementation pinned an omitted multi-valued axis to its
+        # minimum; that behavior is retired in favor of an immediate error
+        # (see TestUnspecifiedParameterError), so no pinned-equivalence
+        # check remains.
         tuples = [
             (m, e, z) for m in (0.5, 1.0) for e in (200.0, 300.0) for z in (-0.5, 0.0)
         ]
         grid = _make_grid(tuples)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            new = grid._find_neighbors_multilinear(mini=0.75, eep=250.0)
-        ref = _reference_multilinear(grid, mini=0.75, eep=250.0)
-        assert _as_weight_map(*new) == pytest.approx(_as_weight_map(*ref))
+        with pytest.raises(ValueError, match="feh"):
+            grid._find_neighbors_multilinear(mini=0.75, eep=250.0)
 
     def test_first_model_wins_on_duplicate_labels(self):
         # Two models share identical labels; the first must win (matches

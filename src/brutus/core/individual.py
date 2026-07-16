@@ -1716,10 +1716,11 @@ class StarGrid:
         Corners are resolved via the precomputed corner-index lookup (O(1)
         per corner) rather than boolean scans over all models.
 
-        Grid axes with more than one value that are NOT specified in the
-        query are pinned to their first (smallest) value and a UserWarning
-        is emitted, since silently defaulting e.g. ``feh`` to the grid
-        minimum (-3.0 for MIST) is surprising.
+        Grid axes with more than one value MUST be specified in the query;
+        omitting one raises a ``ValueError``. (The historical behavior
+        silently evaluated at the axis minimum — e.g. ``feh = -3.0`` for
+        MIST — which corrupted results without any signal.) Single-valued
+        axes may be omitted since there is nothing to choose.
 
         Falls back to the KD-tree method when the bracketing corners are
         missing from the (incomplete) grid: entirely, or when the surviving
@@ -1735,28 +1736,34 @@ class StarGrid:
             if key in kwargs and kwargs[key] is not None:
                 req_params[key] = kwargs[key]
 
-        if not req_params:
-            # No parameters specified, return first model with weight 1
-            return np.array([0]), np.array([1.0])
-
-        # Warn when a real grid dimension is being silently pinned
-        pinned = [
+        # Omitting a multi-valued grid axis has no sensible default: the old
+        # behavior silently evaluated at the axis MINIMUM (e.g. feh = -3 for
+        # MIST), corrupting results without any error. There is no value we
+        # can substitute that the caller plausibly meant, so fail fast.
+        # Single-valued axes are exempt (there is nothing to choose).
+        missing = [
             name
             for name in self._axis_names
             if name not in req_params and len(self.grid_axes[name]) > 1
         ]
-        if pinned:
-            pin_vals = {name: self.grid_axes[name][0] for name in pinned}
-            warnings.warn(
-                f"Grid parameter(s) {pinned} not specified; pinning to the "
-                f"first (smallest) grid value(s) {pin_vals}. Specify them "
-                f"explicitly to avoid surprising defaults.",
-                UserWarning,
-                stacklevel=3,
+        if missing:
+            ranges = {
+                name: (self.grid_axes[name][0], self.grid_axes[name][-1])
+                for name in missing
+            }
+            raise ValueError(
+                f"Grid parameter(s) {missing} not specified. These axes span "
+                f"{ranges} and have no sensible default (the old behavior "
+                f"silently used the axis minimum). Specify them explicitly."
             )
 
+        if not req_params:
+            # Degenerate grid (every axis single-valued): return the first
+            # model with weight 1
+            return np.array([0]), np.array([1.0])
+
         # For each grid axis, find bracketing (axis index, weight) pairs;
-        # unspecified axes are pinned to their first value
+        # unspecified single-valued axes take their only value
         axis_brackets = []
         for name in self._axis_names:
             if name not in req_params:
