@@ -238,6 +238,13 @@ def logp_extinction(
     else:
         truncate = True
         av_lo, av_hi = float(avlim[0]), float(avlim[1])
+        # Reversed or non-finite bounds would silently corrupt the
+        # truncation normalization (the log-mass floor turns it into a huge
+        # constant offset instead of an error).
+        if not (np.isfinite(av_lo) and np.isfinite(av_hi)) or av_lo >= av_hi:
+            raise ValueError(
+                f"avlim must be finite with avlim[0] < avlim[1]; got {avlim}"
+            )
 
     # A dust map must expose query(); silently returning a uniform prior for
     # e.g. a pathlib.Path would disable the dust prior for the whole fit.
