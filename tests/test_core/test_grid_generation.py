@@ -370,6 +370,223 @@ class TestGridGenerator:
             assert mag_binary < mag_single
 
 
+class TestGridGeneratorValidity:
+    """Tests for invalid-model handling and the save/load round trip."""
+
+    def test_saved_grid_excludes_invalid_models_roundtrip(self):
+        """Invalid (NaN) models must not be written to file, and a loaded
+        user-generated grid must be immediately fit-ready.
+
+        Old behavior wrote the full arrays including all-NaN rows and
+        load_models passed them through, crashing BruteForce.loglike_grid
+        with 'zero-size array to reduction operation maximum' for every star.
+        """
+        filters = ["SDSS_g", "SDSS_r", "SDSS_i", "SDSS_z"]
+        tracks = EEPTracks(verbose=False)
+        gen = GridGenerator(tracks, filters=filters, verbose=False)
+
+        with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            # eep=800 is unreachable within loga_max for the low-mass models,
+            # producing a mix of valid and invalid grid points.
+            gen.make_grid(
+                mini_grid=np.array([0.5, 0.9, 1.0, 1.1]),
+                eep_grid=np.array([800.0, 350.0]),
+                feh_grid=np.array([0.0]),
+                afe_grid=np.array([0.0]),
+                smf_grid=np.array([0.0]),
+                output_file=tmp_path,
+                verbose=False,
+            )
+            n_valid = int(gen.grid_sel.sum())
+            assert 0 < n_valid < len(gen.grid_sel), "need a mixed grid"
+
+            # File must contain only the valid models, with finite data.
+            with h5py.File(tmp_path, "r") as f:
+                assert f["mag_coeffs"].shape[0] == n_valid
+                assert f["labels"].shape[0] == n_valid
+                assert f["parameters"].shape[0] == n_valid
+                for filt in filters:
+                    assert np.all(np.isfinite(f["mag_coeffs"][filt]))
+                assert f.attrs["n_models_valid"] == n_valid
+
+            # Round trip: load and check fit-readiness end to end.
+            models, labels, label_mask = load_models(
+                tmp_path, filters=filters, verbose=False
+            )
+            assert len(models) == n_valid
+            assert np.all(np.isfinite(models))
+            for name in ("mini", "eep", "feh", "loga"):
+                assert name in labels.dtype.names
+
+            from brutus.analysis import BruteForce
+
+            grid = StarGrid(models, labels, filters=filters, verbose=False)
+            fitter = BruteForce(grid, verbose=False)
+
+            # Clean synthetic photometry from the first model at 1 kpc.
+            flux = 10.0 ** (-0.4 * models[0, :, 0].astype(np.float64))
+            err = 0.05 * flux
+            mask = np.ones(len(filters), dtype=bool)
+            results = fitter.loglike_grid(flux, err, mask)
+            lnl = results[0]
+            assert np.isfinite(lnl).any()
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
+    def test_mini_bound_masks_subthreshold_primaries(self):
+        """Primaries below mini_bound must be masked per the documented
+        contract (old code only gated binary secondaries with it)."""
+        tracks = EEPTracks(verbose=False)
+        gen = GridGenerator(tracks, filters=["SDSS_g"], verbose=False)
+
+        gen.make_grid(
+            mini_grid=np.array([0.3, 1.0]),
+            eep_grid=np.array([250.0]),
+            feh_grid=np.array([0.0]),
+            afe_grid=np.array([0.0]),
+            smf_grid=np.array([0.0]),
+            mini_bound=0.5,
+            verbose=False,
+        )
+
+        assert not gen.grid_sel[0], "0.3 Msun primary must be masked"
+        assert gen.grid_sel[1], "1.0 Msun primary must stay valid"
+        assert np.all(np.isnan(np.array(gen.grid_seds[0].tolist())))
+
+    def test_out_of_bounds_reddening_grid_flagged_invalid(self):
+        """(av, rv) lattice points outside the NN training bounds yield NaN
+        photometry; such models must be flagged invalid, not stored as valid
+        NaN coefficients (old code checked validity only at the base SED)."""
+        tracks = EEPTracks(verbose=False)
+        gen = GridGenerator(tracks, filters=["SDSS_g"], verbose=False)
+
+        av_beyond = gen.predictor.xmax[4] + 1.0  # above the NN A_V bound
+        gen.make_grid(
+            mini_grid=np.array([1.0]),
+            eep_grid=np.array([350.0]),
+            feh_grid=np.array([0.0]),
+            afe_grid=np.array([0.0]),
+            smf_grid=np.array([0.0]),
+            av_grid=np.array([0.0, 1.0, av_beyond]),
+            verbose=False,
+        )
+
+        assert not gen.grid_sel[0]
+        # n_models_valid must reflect the flagging (no overcounting).
+        assert gen.grid_sel.sum() == 0
+
+    def test_rejects_incompatible_tracks(self):
+        """Objects lacking the EEPTracks interface (e.g. Isochrone) must be
+        rejected with a clear TypeError at construction."""
+
+        class NotTracks:
+            pass
+
+        with pytest.raises(TypeError, match="EEPTracks interface"):
+            GridGenerator(NotTracks(), filters=["SDSS_g"], verbose=False)
+
+
+class TestReddeningFitEquivalence:
+    """The batched reddening fit must reproduce the old scalar-loop fit."""
+
+    @pytest.mark.filterwarnings("ignore::RuntimeWarning")
+    def test_matches_scalar_reference_and_is_faster(self):
+        import time
+
+        filters = ["SDSS_g", "SDSS_r", "SDSS_i"]
+        tracks = EEPTracks(verbose=False)
+        gen = GridGenerator(tracks, filters=filters, verbose=False)
+
+        dist = 1000.0
+        av_grid = np.arange(0.0, 1.5 + 1e-5, 0.3)
+        av_grid[-1] -= 1e-5
+        av_wt = (1e-5 + av_grid) ** -1.0
+        rv_grid = np.arange(2.4, 4.2 + 1e-5, 0.3)
+        rv_wt = np.exp(-np.abs(rv_grid - 3.3) / 0.5)
+
+        def reference_fit(mini, eep, feh, afe, smf, eep2, sed_base):
+            """Old implementation: Nav x Nrv scalar get_seds calls."""
+            seds = np.array(
+                [
+                    [
+                        gen.star_track.get_seds(
+                            mini=mini,
+                            eep=eep,
+                            feh=feh,
+                            afe=afe,
+                            smf=smf,
+                            eep2=eep2,
+                            av=av,
+                            rv=rv,
+                            dist=dist,
+                            loga_max=10.14,
+                            eep_binary_max=480.0,
+                            mini_bound=0.5,
+                            apply_corr=True,
+                            corr_params=None,
+                            return_dict=False,
+                        )[0]
+                        for av in av_grid
+                    ]
+                    for rv in rv_grid
+                ]
+            )
+            sfits = np.array([np.polyfit(av_grid, s, 1, w=av_wt).T for s in seds])
+            sedr, seda = np.polyfit(rv_grid, sfits[:, :, 0], 1, w=rv_wt)
+            return np.c_[sed_base, seda, sedr]
+
+        cases = [
+            dict(mini=1.0, eep=350.0, feh=0.0, afe=0.0, smf=0.0),  # single
+            dict(mini=1.2, eep=400.0, feh=-0.2, afe=0.0, smf=0.6),  # binary
+            dict(mini=1.1, eep=454.0, feh=0.0, afe=0.0, smf=0.0),  # turnoff
+        ]
+
+        t_old = t_new = 0.0
+        for c in cases:
+            sed, params, params2, eep2 = gen.star_track.get_seds(
+                av=0.0,
+                rv=3.3,
+                dist=dist,
+                loga_max=10.14,
+                eep_binary_max=480.0,
+                mini_bound=0.5,
+                apply_corr=True,
+                corr_params=None,
+                return_dict=False,
+                return_eep2=True,
+                **c,
+            )
+            assert np.all(np.isfinite(sed)), c
+
+            t0 = time.perf_counter()
+            ref = reference_fit(
+                c["mini"], c["eep"], c["feh"], c["afe"], c["smf"], eep2, sed
+            )
+            t_old += time.perf_counter() - t0
+
+            t0 = time.perf_counter()
+            new = gen._fit_reddening_coefficients(
+                params=params,
+                params2=params2,
+                sed_base=sed,
+                av_grid=av_grid,
+                av_wt=av_wt,
+                rv_grid=rv_grid,
+                rv_wt=rv_wt,
+                dist=dist,
+            )
+            t_new += time.perf_counter() - t0
+
+            np.testing.assert_allclose(new, ref, rtol=1e-8, atol=1e-8)
+
+        # Measured ~17x on the dev machine; require only a loose margin so
+        # the check is robust on loaded CI runners.
+        assert t_new < t_old, f"batched fit slower than scalar ({t_new} vs {t_old})"
+
+
 class TestGridGeneratorEdgeCases:
     """Test edge cases and error handling."""
 
