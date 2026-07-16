@@ -405,7 +405,8 @@ class TestDegenerateWeightHandling:
         )
         assert n_used[0] == 0
         assert offsets[0] == 1.0
-        assert errors[0] == 0.0
+        # collapsed weights leave no measurement: infinite uncertainty
+        assert np.isinf(errors[0])
 
 
 class TestBandCountThresholds:
@@ -474,6 +475,93 @@ class TestPriorHandling:
         # estimated bands still get the product-of-Gaussians combination
         assert np.all(errors[1:] > 0)
         assert np.all(errors[1:] < 0.02 + 1e-12)
+
+    def test_band_without_data_and_without_prior_has_infinite_error(self):
+        """No data and no prior means no measurement: the placeholder
+        offset of 1 must carry infinite (not zero) uncertainty."""
+        phot, err, mask, models, idxs, reds, dreds, dists = _small_setup()
+        mask = mask.copy()
+        mask[:, 0] = 0  # band 0 never observed
+
+        # Relax the band-count thresholds so the OTHER bands still qualify
+        # with one band masked (the small fixture has few filters).
+        config = PhotometricOffsetsConfig(
+            n_bootstrap=20,
+            progress_interval=0,
+            random_seed=1,
+            min_bands_used=3,
+            min_bands_unused=3,
+        )
+        offsets, errors, n_used = photometric_offsets(
+            phot,
+            err,
+            mask,
+            models,
+            idxs,
+            reds,
+            dreds,
+            dists,
+            config=config,
+            verbose=False,
+        )
+        assert n_used[0] == 0
+        assert offsets[0] == 1.0
+        assert np.isinf(errors[0])
+        assert np.all(np.isfinite(errors[1:]))
+
+    def test_one_sided_prior_raises(self):
+        """Supplying only one of prior_mean/prior_std must fail fast
+        instead of silently ignoring the prior."""
+        phot, err, mask, models, idxs, reds, dreds, dists = _small_setup()
+        with pytest.raises(ValueError, match="provided together"):
+            photometric_offsets(
+                phot,
+                err,
+                mask,
+                models,
+                idxs,
+                reds,
+                dreds,
+                dists,
+                prior_mean=np.ones(phot.shape[1]),
+                verbose=False,
+            )
+
+
+class TestPerFilterInputValidation:
+    """mask_fit / old_offsets must be validated up front."""
+
+    def test_wrong_length_mask_fit_raises(self):
+        phot, err, mask, models, idxs, reds, dreds, dists = _small_setup()
+        with pytest.raises(ValueError, match="mask_fit must have shape"):
+            photometric_offsets(
+                phot,
+                err,
+                mask,
+                models,
+                idxs,
+                reds,
+                dreds,
+                dists,
+                mask_fit=np.ones(3, dtype=bool),
+                verbose=False,
+            )
+
+    def test_scalar_old_offsets_raises(self):
+        phot, err, mask, models, idxs, reds, dreds, dists = _small_setup()
+        with pytest.raises(ValueError, match="old_offsets must have shape"):
+            photometric_offsets(
+                phot,
+                err,
+                mask,
+                models,
+                idxs,
+                reds,
+                dreds,
+                dists,
+                old_offsets=1.0,
+                verbose=False,
+            )
 
 
 class TestChunkedSedGeneration:
