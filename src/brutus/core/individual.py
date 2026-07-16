@@ -101,6 +101,39 @@ from .neural_nets import FastNNPredictor
 __all__ = ["EEPTracks", "StarEvolTrack"]
 
 
+# EEPTracks pickle-cache format version. Bump whenever the set of cached
+# attributes (or their semantics) changes so that stale caches written by
+# older versions are ignored rather than mis-loaded. v2: caches only the
+# runtime attribute whitelist (construction intermediates X/libparams/output
+# are no longer stored or retained).
+_EEPTRACKS_CACHE_VERSION = 2
+
+# Runtime attributes required after construction; everything else is a
+# construction-only intermediate and is neither cached nor retained.
+_EEPTRACKS_CACHE_ATTRS = (
+    "labels",
+    "predictions",
+    "ndim",
+    "npred",
+    "null",
+    "mini_idx",
+    "eep_idx",
+    "feh_idx",
+    "logt_idx",
+    "logl_idx",
+    "logg_idx",
+    "_ageidx",
+    "mistfile",
+    "grid_dims",
+    "gridpoints",
+    "binwidths",
+    "mini_bound",
+    "xgrid",
+    "ygrid",
+    "interpolator",
+)
+
+
 # Rename parameters from MIST HDF5 file for easier use as keyword arguments
 rename = {
     "mini": "initial_mass",  # input parameters
@@ -236,9 +269,12 @@ class EEPTracks:
 
         self.mistfile = Path(mistfile)
 
-        # Generate cache file path based on original file and configuration
+        # Generate cache file path based on original file and configuration.
+        # The cache format version is part of the filename so caches written
+        # by incompatible older versions are ignored, not mis-loaded.
         cache_key = (
             f"{self.mistfile.stem}_ageweight{ageweight}_pred{''.join(predictions)}"
+            f"_cachev{_EEPTRACKS_CACHE_VERSION}"
         )
         cache_file = self.mistfile.parent / f"{cache_key}.pkl"
 
@@ -294,42 +330,22 @@ class EEPTracks:
             # Build interpolation grid
             self._build_interpolator()
 
+            # Free construction-only intermediates: nothing reads them after
+            # the interpolator exists, and retaining them roughly doubles the
+            # memory footprint (and, previously, the cache size on disk).
+            for attr in ("libparams", "output", "X"):
+                if hasattr(self, attr):
+                    delattr(self, attr)
+
             # Save to cache if enabled
             if use_cache:
                 try:
-                    # Collect all relevant attributes for caching
-                    cache_data = {}
-                    cache_attrs = [
-                        "labels",
-                        "predictions",
-                        "ndim",
-                        "npred",
-                        "null",
-                        "mini_idx",
-                        "eep_idx",
-                        "feh_idx",
-                        "logt_idx",
-                        "logl_idx",
-                        "logg_idx",
-                        "_ageidx",
-                        "mistfile",
-                        "grid_dims",
-                        "interpolator",
-                    ]
-
-                    # Add dynamic attributes that get created during processing
-                    for attr in dir(self):
-                        if not attr.startswith("__") and attr not in cache_attrs:
-                            if hasattr(self, attr):
-                                value = getattr(self, attr)
-                                # Only cache serializable objects
-                                if not callable(value):
-                                    cache_attrs.append(attr)
-
-                    # Cache all attributes
-                    for attr in cache_attrs:
-                        if hasattr(self, attr):
-                            cache_data[attr] = getattr(self, attr)
+                    # Cache only the runtime attribute whitelist
+                    cache_data = {
+                        attr: getattr(self, attr)
+                        for attr in _EEPTRACKS_CACHE_ATTRS
+                        if hasattr(self, attr)
+                    }
 
                     with open(cache_file, "wb") as f:
                         pickle.dump(cache_data, f)
@@ -366,19 +382,20 @@ class EEPTracks:
         -----
         This method handles the case where alpha enhancement data ([α/Fe])
         is not available in the file by setting it to zero.
+
+        Each track dataset is read from disk exactly once; label and output
+        fields are then sliced from the in-memory record array. Compound HDF5
+        datasets are stored row-wise, so per-field reads would re-scan (and
+        re-decompress) every record once per column.
         """
         if verbose:
             sys.stderr.write("  Constructing track library...\n")
 
-        # Extract input parameters (mini, eep, feh, afe)
-        cols = [rename[p] for p in self.labels]
-        self.libparams = np.concatenate(
-            [np.array(misth5[z])[cols] for z in misth5["index"]]
-        )
-        self.libparams.dtype.names = tuple(self.labels)
+        # Input parameter (mini, eep, feh, afe) and output columns
+        label_cols = [rename[p] for p in self.labels]
+        cols = [rename[p] for p in self.predictions]
 
         # Handle alpha enhancement availability
-        cols = [rename[p] for p in self.predictions]
         afe_col = rename["afe_surf"]
         afe_available = True
         afe_surf_idx = None
@@ -386,7 +403,7 @@ class EEPTracks:
         try:
             # Test alpha enhancement column availability
             first_z = list(misth5["index"])[0]
-            _ = misth5[first_z][afe_col]
+            _ = misth5[first_z].dtype[afe_col]
         except (KeyError, ValueError):
             afe_available = False
             for i, pred in enumerate(self.predictions):
@@ -396,7 +413,6 @@ class EEPTracks:
             if verbose:
                 sys.stderr.write("    [alpha/Fe] column not found, will set to zero\n")
 
-        # Read output parameters efficiently
         cols_to_read = []
         read_to_pred_mapping = []
 
@@ -410,16 +426,35 @@ class EEPTracks:
         if verbose:
             sys.stderr.write(f"    Reading {len(cols_to_read)} parameter columns\n")
 
-        output_data = [
-            np.concatenate([misth5[z][p] for z in misth5["index"]])
-            for p in cols_to_read
-        ]
+        # Single pass over the file: read each track group once, then copy
+        # the needed fields out of the in-memory record array.
+        label_dtype = None
+        label_chunks = []
+        output_chunks = []
+        for z in misth5["index"]:
+            arr = np.asarray(misth5[z])
+            if label_dtype is None:
+                label_dtype = np.dtype(
+                    [(lbl, arr.dtype[col]) for lbl, col in zip(self.labels, label_cols)]
+                )
+            lp = np.empty(len(arr), dtype=label_dtype)
+            for lbl, col in zip(self.labels, label_cols):
+                lp[lbl] = arr[col]
+            label_chunks.append(lp)
+
+            out = np.empty((len(arr), len(cols_to_read)), dtype="f8")
+            for j, col in enumerate(cols_to_read):
+                out[:, j] = arr[col]
+            output_chunks.append(out)
+
+        self.libparams = np.concatenate(label_chunks)
+        output_data = np.concatenate(output_chunks)
 
         # Create and fill output array
-        self.output = np.empty((len(output_data[0]), len(self.predictions)), dtype="f8")
+        self.output = np.empty((len(output_data), len(self.predictions)), dtype="f8")
 
         for read_idx, pred_idx in enumerate(read_to_pred_mapping):
-            self.output[:, pred_idx] = output_data[read_idx]
+            self.output[:, pred_idx] = output_data[:, read_idx]
 
         # Handle missing alpha enhancement
         if not afe_available and afe_surf_idx is not None:
@@ -483,6 +518,11 @@ class EEPTracks:
 
         The gradient is computed as d(age)/d(EEP) where age is in linear
         (not logarithmic) units, even though ages are stored as log(age).
+        The EEP values are passed to ``np.gradient`` as the coordinate array
+        (after sorting each track by EEP), so the Jacobian remains correct
+        for track libraries with non-unit or non-uniform EEP sampling. For
+        unit-spaced tracks (e.g. the shipped MIST file) this is identical to
+        the index-spacing gradient.
         """
         if verbose:
             sys.stderr.write("  Computing age weights...\n")
@@ -496,6 +536,7 @@ class EEPTracks:
                 "mini": self.libparams["mini"],
                 "feh": self.libparams["feh"],
                 "afe": self.libparams["afe"],
+                "eep": self.libparams["eep"],
                 "loga": self.output[:, age_ind],
                 "index": np.arange(len(self.libparams)),
             }
@@ -506,11 +547,14 @@ class EEPTracks:
             for (m, z, a), group in df.groupby(["mini", "feh", "afe"]):
                 indices = group["index"].values
                 log_ages = group["loga"].values
+                eeps = group["eep"].values.astype(float)
 
                 if len(log_ages) > 1:
-                    linear_ages = 10**log_ages
-                    age_gradients = np.gradient(linear_ages)
-                    ageweights[indices] = age_gradients
+                    # d(age)/d(EEP): differentiate against the EEP coordinate
+                    order = np.argsort(eeps, kind="stable")
+                    linear_ages = 10 ** log_ages[order]
+                    age_gradients = np.gradient(linear_ages, eeps[order])
+                    ageweights[indices[order]] = age_gradients
 
         except ImportError:
             # Fallback to original method
@@ -523,13 +567,22 @@ class EEPTracks:
             for i, m in enumerate(self.gridpoints["mini"]):
                 for j, z in enumerate(self.gridpoints["feh"]):
                     for k, a in enumerate(self.gridpoints["afe"]):
-                        inds = (
+                        inds = np.where(
                             (self.libparams["mini"] == m)
                             & (self.libparams["feh"] == z)
                             & (self.libparams["afe"] == a)
-                        )
+                        )[0]
+                        if len(inds) < 2:
+                            continue
+                        # d(age)/d(EEP): differentiate against the EEP
+                        # coordinate, sorted by EEP within each track
+                        eeps = self.libparams["eep"][inds].astype(float)
+                        order = np.argsort(eeps, kind="stable")
+                        inds = inds[order]
                         try:
-                            agewts = np.gradient(10 ** self.output[inds, age_ind])
+                            agewts = np.gradient(
+                                10 ** self.output[inds, age_ind], eeps[order]
+                            )
                             ageweights[inds] = agewts
                         except (ValueError, IndexError):
                             pass
@@ -622,6 +675,14 @@ class EEPTracks:
         get_corrections : Computes empirical corrections applied when apply_corr=True
         StarEvolTrack.get_seds : Uses these predictions to generate photometry
 
+        Notes
+        -----
+        When ``apply_corr=True`` the empirical corrections are applied as
+        ``logt += dlogt``, ``logl += 2*dlogr``, ``logg -= 2*dlogr``. This is
+        an effective map calibrated as-is; see `get_corrections` for why the
+        luminosity shift intentionally omits the Stefan-Boltzmann ``4*dlogt``
+        term.
+
         Examples
         --------
         Single star prediction:
@@ -650,10 +711,12 @@ class EEPTracks:
         # Apply empirical corrections if requested
         if apply_corr:
             corrs = self.get_corrections(labels, corr_params=corr_params)
+            # NOTE: logl gets +2*dlogr only (no +4*dlogt): an effective map
+            # calibrated as-is -- see get_corrections Notes before changing.
             if ndim == 1:
                 dlogt, dlogr = corrs
                 preds[self.logt_idx] += dlogt
-                preds[self.logl_idx] += 2.0 * dlogr  # L ∝ R^2
+                preds[self.logl_idx] += 2.0 * dlogr  # L ∝ R^2 (effective)
                 preds[self.logg_idx] -= 2.0 * dlogr  # g ∝ M/R^2
             elif ndim == 2:
                 dlogt, dlogr = corrs.T
@@ -708,9 +771,22 @@ class EEPTracks:
             \\Delta \\log R = f_{\\rm EEP} \\cdot f_{\\rm [Fe/H]} \\cdot \\log(1 + \\Delta M \\cdot \\alpha_R)
 
         where :math:`\\Delta M = M_{\\rm ini} - 1.0` and the EEP factor smoothly
-        transitions from 0 (pre-main sequence) to 1 (post-turnoff).
+        transitions from 1 (main sequence) to 0 (post-turnoff): the empirical
+        low-mass corrections apply on the main sequence and are switched off
+        after the main-sequence turnoff (EEP 454).
 
         Corrections are set to zero for stars with :math:`M_{\\rm ini} \\geq 1.0 M_\\odot`.
+
+        The corrections are applied by `get_predictions` as an *effective*,
+        calibrated-as-is map: the temperature shift is ``dlogt``, while the
+        luminosity/gravity shifts are ``+2*dlogr``/``-2*dlogr``. The
+        luminosity shift deliberately omits the ``4*dlogt`` term that strict
+        Stefan-Boltzmann consistency (:math:`L = 4\\pi R^2 \\sigma T^4`) would
+        require, so the corrected (logl, logt, logg) do not describe a
+        perfectly self-consistent star. The default `corr_params` were
+        calibrated against data in exactly this form (inherited from the
+        original brutus v0.8 implementation), so do not "fix" the propagation
+        without recalibrating them.
         """
         labels = np.array(labels)
         ndim = labels.ndim
@@ -1123,7 +1199,11 @@ class StarEvolTrack:
 
         This method solves the inverse problem: given a target age (from the primary),
         find the EEP that produces that age for the secondary star with mass mini*smf.
-        Uses scipy.optimize.minimize with Nelder-Mead to find the best-fit EEP.
+        Age is monotonically increasing along a track, so the interpolated
+        age(EEP) curve is inverted directly with a single vectorized
+        interpolator call over the EEP grid axis. A scalar Nelder-Mead solve
+        is kept as a fallback for track objects that do not expose the EEP
+        grid axis (``tracks.gridpoints``) or whose age curve is not monotone.
 
         Parameters
         ----------
@@ -1132,7 +1212,8 @@ class StarEvolTrack:
         mini : float
             Primary star initial mass in solar masses
         eep : float
-            Primary star EEP (used as initial guess for optimization)
+            Primary star EEP (used as initial guess for the Nelder-Mead
+            fallback)
         feh : float
             Metallicity [Fe/H] in logarithmic solar units
         afe : float
@@ -1140,15 +1221,15 @@ class StarEvolTrack:
         smf : float
             Secondary mass fraction (secondary mass = mini * smf)
         tol : float
-            Convergence tolerance (in dex) on the log10(age) match. The
-            squared-age-difference loss is accepted when ``sqrt(loss) < tol``
-            (equivalently ``loss < tol**2``); otherwise NaN is returned.
+            Convergence tolerance (in dex) on the log10(age) match. A match
+            is accepted when ``|dloga| < tol``; otherwise NaN is returned.
 
         Returns
         -------
         eep2 : float
             EEP for secondary star that produces the target age.
-            Returns NaN if optimization fails or doesn't converge within tolerance.
+            Returns NaN if the inversion fails or doesn't converge within
+            tolerance.
 
         See Also
         --------
@@ -1157,28 +1238,47 @@ class StarEvolTrack:
 
         Notes
         -----
-        The optimization minimizes the squared age difference:
+        The secondary is evaluated at the primary's [α/Fe] clamped to the
+        track library's available range (so the age matching is consistent
+        with the [α/Fe] later used for the secondary's parameters and SED in
+        `get_seds`). When the library's [α/Fe] range is unknown (no
+        ``gridpoints`` attribute on the tracks object), [α/Fe] = 0.0 is used,
+        matching the historical behavior for the solar-scaled MIST grids.
 
-        .. math::
-            L(EEP_2) = (\\log_{10} age(M_2, EEP_2) - \\log_{10} age_{\\rm target})^2
-
-        where :math:`M_2 = M_1 \\times smf` is the secondary mass.
-
-        The alpha enhancement parameter is currently fixed to solar ([α/Fe] = 0.0)
-        for secondary stars, regardless of the primary's value. This is intentional
-        because the current MIST model grids do not include α-enhanced tracks.
-        The `afe` parameter is accepted for API consistency but not used.
+        Empirical corrections never touch ``loga``, so the age lookups skip
+        them (``apply_corr=False``).
         """
         # Get age index from tracks
         aidx = self.tracks.predictions.index("loga")
+        mini2 = mini * smf
 
-        # Define loss function: minimize difference between predicted and target age
+        # Secondary [a/Fe]: primary's value clamped to the library's range.
+        # (Previously hard-coded to 0.0, which mismatched ages on
+        # alpha-enhanced track libraries.)
+        gridpoints = getattr(self.tracks, "gridpoints", None)
+        if isinstance(gridpoints, dict) and "afe" in gridpoints:
+            afe_grid = np.asarray(gridpoints["afe"], dtype=float)
+            afe2 = float(np.clip(afe, afe_grid.min(), afe_grid.max()))
+        else:
+            afe2 = 0.0
+
+        # Fast path: invert the monotone age(EEP) curve directly.
+        if isinstance(gridpoints, dict) and "eep" in gridpoints:
+            eep2 = self._invert_age_curve(loga, mini2, feh, afe2, aidx, tol)
+            if eep2 is not None:
+                return eep2
+
+        # Fallback: scalar Nelder-Mead solve on the squared log-age
+        # difference (duck-typed tracks without an EEP grid axis, or a
+        # non-monotone age curve).
         def loss(x):
             if isinstance(x, np.ndarray) and x.size == 1:
                 x = x[0]
             # Get predicted age for secondary star with mass mini*smf at EEP x
             try:
-                loga_pred = self.tracks.get_predictions([mini * smf, x, feh, 0.0])[aidx]
+                loga_pred = self.tracks.get_predictions(
+                    [mini2, x, feh, afe2], apply_corr=False
+                )[aidx]
                 return (loga_pred - loga) ** 2
             except Exception:
                 # Return large loss if prediction fails
@@ -1207,6 +1307,86 @@ class StarEvolTrack:
             eep2 = np.nan
 
         return eep2
+
+    def _invert_age_curve(self, loga, mini2, feh, afe2, aidx, tol):
+        """
+        Invert the interpolated age(EEP) curve for a star of mass `mini2`.
+
+        Evaluates log10(age) along the full EEP grid axis at fixed
+        (mini2, feh, afe2) with one vectorized interpolator call, then
+        inverts the piecewise-linear curve with ``np.interp``. Because the
+        underlying interpolant is linear in EEP with knots at the grid
+        values, this inversion is exact (up to the acceptance check).
+
+        Parameters
+        ----------
+        loga : float
+            Target log10(age in years).
+        mini2 : float
+            Secondary initial mass in solar masses.
+        feh : float
+            Metallicity [Fe/H].
+        afe2 : float
+            Alpha enhancement [α/Fe], already clamped to the library range.
+        aidx : int
+            Index of 'loga' in the tracks' predictions.
+        tol : float
+            Acceptance tolerance in dex on |loga(eep2) - loga|.
+
+        Returns
+        -------
+        eep2 : float or None
+            The matching EEP; NaN if no EEP matches the target age within
+            `tol`; None if this method is unusable for these inputs (caller
+            should fall back to the scalar Nelder-Mead solve).
+        """
+        try:
+            eep_axis = np.asarray(self.tracks.gridpoints["eep"], dtype=float)
+            values = {"mini": mini2, "eep": eep_axis, "feh": feh, "afe": afe2}
+            labels = np.column_stack(
+                [
+                    np.broadcast_to(values[lbl], eep_axis.shape)
+                    for lbl in self.tracks.labels
+                ]
+            )
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                preds = self.tracks.get_predictions(labels, apply_corr=False)
+            loga_curve = np.asarray(preds, dtype=float)[:, aidx]
+        except Exception:
+            return None
+
+        # Restrict to the EEP range where the track exists (NaN = off-track)
+        finite = np.isfinite(loga_curve)
+        if not np.any(finite):
+            return np.nan
+        eeps_f = eep_axis[finite]
+        loga_f = loga_curve[finite]
+
+        # Age must be (weakly) monotone increasing for a direct inversion
+        if np.any(np.diff(loga_f) < 0):
+            return None
+
+        eep2 = float(np.interp(loga, loga_f, eeps_f))
+
+        # Acceptance check against the actual interpolant (also rejects
+        # targets outside the track's age range, which np.interp clamps)
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                check = self.tracks.get_predictions(
+                    [
+                        values[lbl] if lbl != "eep" else eep2
+                        for lbl in self.tracks.labels
+                    ],
+                    apply_corr=False,
+                )[aidx]
+        except Exception:
+            return None
+
+        if np.isfinite(check) and abs(check - loga) < tol:
+            return eep2
+        return np.nan
 
 
 class StarGrid:
@@ -1376,9 +1556,10 @@ class StarGrid:
         # Build lookup indices for efficient interpolation
         self._build_grid_indices()
 
-        # Initialize KD-tree placeholder (built on first use)
+        # Initialize KD-tree placeholders (built lazily, cached per label set)
         self.kdtree = None
-        self._kdtree_labels = None  # Track which labels are in KD-tree
+        self._kdtree_labels = None  # Labels of the most recently used KD-tree
+        self._kdtree_cache = {}  # tuple(active_labels) -> cKDTree or None
 
         if verbose:
             print(
@@ -1389,7 +1570,16 @@ class StarGrid:
                 print(f"Additional parameters: {', '.join(self.param_names)}")
 
     def _build_grid_indices(self):
-        """Build indices for efficient grid lookup and interpolation."""
+        """
+        Build indices for efficient grid lookup and interpolation.
+
+        Populates ``grid_axes`` (unique values per label), ``grid_shape``,
+        and a corner-index lookup mapping per-axis indices to the model row
+        (-1 / absent = no model at that grid combination; grids need not be
+        complete Cartesian products, e.g. tracks truncate at different EEPs).
+        The lookup is a dense int64 array when the full Cartesian size is
+        modest, otherwise a dict keyed by index tuples.
+        """
         # Create unique value arrays for each label dimension
         self.grid_axes = {}
         self.grid_shape = []
@@ -1400,20 +1590,58 @@ class StarGrid:
                 self.grid_axes[label] = unique_vals
                 self.grid_shape.append(len(unique_vals))
 
-        # Create mapping from label values to grid indices
-        self.label_to_idx = {}
-        for label, values in self.grid_axes.items():
-            self.label_to_idx[label] = {val: idx for idx, val in enumerate(values)}
+        # Corner-index lookup: axis indices -> model row (first match wins)
+        self._axis_names = list(self.grid_axes.keys())
+        self._grid_idx_map = None
+        if self._axis_names:
+            # Models with non-finite label values are unreachable by an
+            # equality match, so keep them out of the lookup
+            valid = np.ones(self.nmodels, dtype=bool)
+            for name in self._axis_names:
+                valid &= np.isfinite(np.asarray(self.labels[name], dtype=float))
+            rows = np.where(valid)[0]
+
+            # Per-model axis indices (exact: axes come from np.unique of
+            # these same label values)
+            coords = tuple(
+                np.searchsorted(self.grid_axes[name], self.labels[name][rows])
+                for name in self._axis_names
+            )
+            shape = tuple(len(self.grid_axes[name]) for name in self._axis_names)
+            if np.prod(shape, dtype=np.int64) <= 20_000_000:
+                # The FIRST model at duplicated coordinates must win (matches
+                # the previous scan behavior); fancy assignment with repeated
+                # indices has no write-order guarantee, so resolve duplicates
+                # explicitly via np.unique (returns first occurrences).
+                flat = np.ravel_multi_index(coords, shape)
+                uniq, first = np.unique(flat, return_index=True)
+                idx_map = np.full(shape, -1, dtype=np.int64)
+                idx_map.ravel()[uniq] = rows[first]
+                self._grid_idx_map = idx_map
+            else:
+                idx_map = {}
+                for i in range(len(rows) - 1, -1, -1):
+                    idx_map[tuple(int(c[i]) for c in coords)] = int(rows[i])
+                self._grid_idx_map = idx_map
+
+    def _lookup_corner(self, axis_indices):
+        """Return the model row at the given per-axis indices, or -1."""
+        if isinstance(self._grid_idx_map, dict):
+            return self._grid_idx_map.get(axis_indices, -1)
+        return int(self._grid_idx_map[axis_indices])
 
     def _build_kdtree(self, **kwargs):
         """
-        Build KD-tree for efficient nearest neighbor queries.
+        Build (or fetch a cached) KD-tree for this query's active label set.
 
-        Only built on first use to avoid overhead if only using via BruteForce.
+        Trees are cached per active label set: a query specifying only
+        ``mini`` and a query specifying (mini, eep, feh) use different trees,
+        so an early partial query can no longer freeze the tree with a
+        reduced label set and silently ignore parameters of later queries.
+
+        Sets ``self.kdtree`` / ``self._kdtree_labels`` to the tree matching
+        THIS call's active labels.
         """
-        if self.kdtree is not None:
-            return  # Already built
-
         from scipy.spatial import cKDTree
 
         # Determine which labels to use for KD-tree
@@ -1434,6 +1662,12 @@ class StarGrid:
                 if lbl in self.label_names
             ]
 
+        key = tuple(active_labels)
+        if key in self._kdtree_cache:
+            self.kdtree = self._kdtree_cache[key]
+            self._kdtree_labels = active_labels if self.kdtree is not None else None
+            return
+
         # Build normalized coordinates for KD-tree
         coords = []
         for label in active_labels:
@@ -1446,9 +1680,10 @@ class StarGrid:
                 normalized = np.zeros_like(vals)
             coords.append(normalized)
 
-        if coords:
-            self.kdtree = cKDTree(np.column_stack(coords))
-            self._kdtree_labels = active_labels
+        tree = cKDTree(np.column_stack(coords)) if coords else None
+        self._kdtree_cache[key] = tree
+        self.kdtree = tree
+        self._kdtree_labels = active_labels if tree is not None else None
 
     def _find_neighbors_multilinear(self, **kwargs):
         """
@@ -1478,8 +1713,19 @@ class StarGrid:
         3. Generating all 2^N corner points for N dimensions
         4. Weighting each corner by product of dimension weights
 
-        Falls back to KD-tree method if grid structure is irregular or
-        interpolation fails.
+        Corners are resolved via the precomputed corner-index lookup (O(1)
+        per corner) rather than boolean scans over all models.
+
+        Grid axes with more than one value that are NOT specified in the
+        query are pinned to their first (smallest) value and a UserWarning
+        is emitted, since silently defaulting e.g. ``feh`` to the grid
+        minimum (-3.0 for MIST) is surprising.
+
+        Falls back to the KD-tree method when the bracketing corners are
+        missing from the (incomplete) grid: entirely, or when the surviving
+        corners carry less than half of the total interpolation weight.
+        Renormalizing low-weight surviving corners would silently return a
+        far-away model (e.g. beyond a truncated track's last EEP).
         """
         import itertools
 
@@ -1493,101 +1739,95 @@ class StarGrid:
             # No parameters specified, return first model with weight 1
             return np.array([0]), np.array([1.0])
 
-        # For each parameter, find bracketing indices and weights
-        bracket_info = {}
-        for param, value in req_params.items():
-            if param in self.grid_axes:
-                axis_values = self.grid_axes[param]
+        # Warn when a real grid dimension is being silently pinned
+        pinned = [
+            name
+            for name in self._axis_names
+            if name not in req_params and len(self.grid_axes[name]) > 1
+        ]
+        if pinned:
+            pin_vals = {name: self.grid_axes[name][0] for name in pinned}
+            warnings.warn(
+                f"Grid parameter(s) {pinned} not specified; pinning to the "
+                f"first (smallest) grid value(s) {pin_vals}. Specify them "
+                f"explicitly to avoid surprising defaults.",
+                UserWarning,
+                stacklevel=3,
+            )
 
-                # Find bracketing indices using searchsorted
-                idx = np.searchsorted(axis_values, value)
+        # For each grid axis, find bracketing (axis index, weight) pairs;
+        # unspecified axes are pinned to their first value
+        axis_brackets = []
+        for name in self._axis_names:
+            if name not in req_params:
+                axis_brackets.append([(0, 1.0)])
+                continue
 
-                if idx == 0:
-                    # Before first point
-                    idx_low = idx_high = 0
-                    weight_high = 1.0
-                elif idx >= len(axis_values):
-                    # After last point
-                    idx_low = idx_high = len(axis_values) - 1
-                    weight_high = 1.0
+            value = req_params[name]
+            axis_values = self.grid_axes[name]
+
+            # Find bracketing indices using searchsorted
+            idx = np.searchsorted(axis_values, value)
+
+            if idx == 0:
+                # Before first point
+                axis_brackets.append([(0, 1.0)])
+            elif idx >= len(axis_values):
+                # After last point
+                axis_brackets.append([(len(axis_values) - 1, 1.0)])
+            else:
+                # Between points
+                idx_low, idx_high = idx - 1, idx
+                val_low = axis_values[idx_low]
+                val_high = axis_values[idx_high]
+                if val_high > val_low:
+                    weight_high = (value - val_low) / (val_high - val_low)
                 else:
-                    # Between points
-                    idx_low = idx - 1
-                    idx_high = idx
-                    # Linear interpolation weight
-                    val_low = axis_values[idx_low]
-                    val_high = axis_values[idx_high]
-                    if val_high > val_low:
-                        weight_high = (value - val_low) / (val_high - val_low)
-                    else:
-                        weight_high = 0.5
+                    weight_high = 0.5
+                axis_brackets.append(
+                    [(idx_low, 1.0 - weight_high), (idx_high, weight_high)]
+                )
 
-                bracket_info[param] = {
-                    "indices": (
-                        [idx_low, idx_high] if idx_low != idx_high else [idx_low]
-                    ),
-                    "weights": (
-                        [1.0 - weight_high, weight_high]
-                        if idx_low != idx_high
-                        else [1.0]
-                    ),
-                    "values": (
-                        axis_values[[idx_low, idx_high]]
-                        if idx_low != idx_high
-                        else axis_values[[idx_low]]
-                    ),
-                }
-
-        # Generate all combinations of bracket points
-        param_names = list(bracket_info.keys())
-        index_combinations = itertools.product(
-            *[bracket_info[p]["indices"] for p in param_names]
-        )
-        weight_combinations = itertools.product(
-            *[bracket_info[p]["weights"] for p in param_names]
-        )
-
-        # Find actual grid indices for each combination
+        # Resolve each corner combination with an O(1) index lookup
         indices = []
         weights = []
+        n_missing = 0
 
-        for idx_combo, wt_combo in zip(index_combinations, weight_combinations):
-            # Build selection criteria
-            sel = np.ones(self.nmodels, dtype=bool)
-            for param_name, param_idx in zip(param_names, idx_combo):
-                param_val = bracket_info[param_name]["values"][
-                    bracket_info[param_name]["indices"].index(param_idx)
-                ]
-                sel &= self.labels[param_name] == param_val
+        if self._grid_idx_map is None:
+            # No grid axes at all: degenerate to the first model
+            return np.array([0]), np.array([1.0])
 
-            # Handle other parameters not being interpolated
-            for param in self.label_names:
-                if param not in req_params and param in [
-                    "mini",
-                    "eep",
-                    "feh",
-                    "afe",
-                    "smf",
-                ]:
-                    # Use first available value for unspecified parameters
-                    if param in self.grid_axes:
-                        sel &= self.labels[param] == self.grid_axes[param][0]
-
-            # Find matching grid point
-            grid_idx = np.where(sel)[0]
-            if len(grid_idx) > 0:
-                indices.append(grid_idx[0])
+        for combo in itertools.product(*axis_brackets):
+            model_idx = self._lookup_corner(tuple(c[0] for c in combo))
+            if model_idx >= 0:
+                indices.append(model_idx)
                 # Weight is product of all dimension weights
-                weights.append(np.prod(wt_combo))
+                weights.append(float(np.prod([c[1] for c in combo])))
+            else:
+                n_missing += 1
 
-        if not indices:
-            # Fallback to KD-tree nearest neighbor if multi-linear fails
+        wsum = float(np.sum(weights)) if weights else 0.0
+        if not indices or wsum < 0.5:
+            # All bracketing corners are missing, or the surviving corners
+            # carry a minority of the interpolation weight (the query's
+            # dominant corner is absent from the grid). Renormalizing the
+            # survivors would silently snap to a far-away model, so use the
+            # nearest-neighbor fallback instead.
             return self._find_neighbors_kdtree(**kwargs)
+
+        if n_missing > 0:
+            warnings.warn(
+                f"{n_missing} bracketing grid corner(s) missing from the "
+                f"model grid for query {req_params}; renormalizing over the "
+                f"surviving corners (total weight {wsum:.3f}).",
+                UserWarning,
+                stacklevel=3,
+            )
 
         # Normalize weights
         indices = np.array(indices)
         weights = np.array(weights)
-        weights /= weights.sum()
+        weights /= wsum
 
         return indices, weights
 
@@ -1716,6 +1956,13 @@ class StarGrid:
         get_seds : Generate photometry along with parameter predictions
         _find_neighbors_multilinear : Multi-linear interpolation method
         _find_neighbors_kdtree : KD-tree nearest neighbor method
+
+        Notes
+        -----
+        Grid dimensions left unspecified are pinned to their first
+        (smallest) grid value; a UserWarning is emitted when such a
+        dimension has more than one value (e.g. omitting ``feh`` on a MIST
+        grid would otherwise silently select the most metal-poor models).
 
         Examples
         --------
@@ -1856,6 +2103,10 @@ class StarGrid:
 
         where :math:`m_0` is the unreddened magnitude, :math:`r_0` and :math:`dr`
         are the reddening vector coefficients from the grid.
+
+        Grid dimensions left unspecified are pinned to their first
+        (smallest) grid value; a UserWarning is emitted when such a
+        dimension has more than one value (see `get_predictions`).
 
         Examples
         --------
