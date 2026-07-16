@@ -213,25 +213,39 @@ class TestCoreIntegration:
 
             indices = np.arange(n_models)
 
-            start = time.time()
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", RuntimeWarning)
-                lnl, _, _ = fitter.loglike_grid(
-                    obs, obs_err, obs_mask, indices=indices, ltol=5e-2, verbose=False
-                )
-            elapsed = time.time() - start
-            times.append(elapsed)
+            # Min-of-3 timing: a single wall-clock sample on a shared CI
+            # runner is dominated by scheduling noise (observed 25x per-model
+            # "ratios" on loaded macOS runners); the minimum is a stable
+            # estimate of the true cost.
+            reps = []
+            for _ in range(3):
+                start = time.time()
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)
+                    lnl, _, _ = fitter.loglike_grid(
+                        obs,
+                        obs_err,
+                        obs_mask,
+                        indices=indices,
+                        ltol=5e-2,
+                        verbose=False,
+                    )
+                reps.append(time.time() - start)
+            times.append(min(reps))
 
             # Verify results
             assert lnl.shape == (n_models,)
             assert np.all(np.isfinite(lnl))
 
-        # Performance should scale reasonably (after warmup)
+        # Performance should scale reasonably (after warmup): per-model cost
+        # must not grow with the model count. Small counts legitimately look
+        # expensive per model (fixed per-call overhead dominates), so only a
+        # super-linear GROWTH from the smallest to the largest count is a
+        # regression signal; a generous factor absorbs runner variance.
         if len(times) >= 2:
-            # Time per model should be roughly constant (within factor of 5 to account for overhead)
             time_per_model = [t / n for t, n in zip(times, model_counts[: len(times)])]
-            ratio = max(time_per_model) / min(time_per_model)
-            assert ratio < 5.0, f"Poor performance scaling: {time_per_model}"
+            growth = time_per_model[-1] / time_per_model[0]
+            assert growth < 10.0, f"Poor performance scaling: {time_per_model}"
 
         print(
             f"Performance: {time_per_model} s/model for {model_counts[:len(times)]} models"
