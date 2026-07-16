@@ -77,6 +77,8 @@ Photometric likelihood:
 >>> # lnl.shape is (1, 10) - likelihood for each model
 """
 
+import warnings
+
 import numpy as np
 from scipy.special import gammaln, xlogy
 
@@ -287,7 +289,16 @@ def add_mag(mag1, mag2):
     return mag_combined
 
 
-def phot_loglike(flux, err, mfluxes, mask=None, dim_prior=False, dof_reduction=0):
+def phot_loglike(
+    flux,
+    err,
+    mfluxes,
+    mask=None,
+    dim_prior=False,
+    dof_reduction=0,
+    extra_chi2=None,
+    extra_dims=None,
+):
     r"""
     Compute the log-likelihood between observed and model fluxes.
 
@@ -299,12 +310,17 @@ def phot_loglike(flux, err, mfluxes, mask=None, dim_prior=False, dof_reduction=0
     err : `~numpy.ndarray` with shape (Nobj, Nfilt)
         Associated flux errors.
 
-    mfluxes : `~numpy.ndarray` with shape (Nobj, Nmod, Nfilt)
-        Model fluxes (for each model).
+    mfluxes : `~numpy.ndarray` with shape (Nobj, Nmod, Nfilt) or (Nmod, Nfilt)
+        Model fluxes (for each model). A 2-D array means every object is
+        compared against the same shared model grid; this triggers a much
+        faster matrix-multiplication evaluation of the chi-square that avoids
+        materializing any (Nobj, Nmod, Nfilt) intermediates.
 
     mask : `~numpy.ndarray` with shape (Nobj, Nfilt), optional
         Binary mask indicating whether each observed band can be
-        used (1) or should be skipped (0).
+        used (1) or should be skipped (0). Bands with non-finite flux/error
+        or non-positive error are always excluded (they contribute neither
+        to the chi-square nor to the effective dimensionality).
 
     dim_prior : bool, optional
         Whether to apply a dimensionality prior from the
@@ -320,6 +336,20 @@ def phot_loglike(flux, err, mfluxes, mask=None, dim_prior=False, dof_reduction=0
         when using dim_prior=True. This accounts for parameters being
         fitted simultaneously (e.g., scale factors, extinction).
         Default is 0.
+
+    extra_chi2 : `~numpy.ndarray` with shape (Nobj,) or (Nobj, Nmod), optional
+        Additional chi-square contributions (e.g., from a parallax
+        measurement) added to the photometric chi-square *before* any
+        dimensionality prior is applied. This keeps auxiliary Gaussian
+        constraints in the same chi-square "measure" as the photometry when
+        `dim_prior=True` (mirroring how `BruteForce` counts parallax as an
+        extra band). Note that for `dim_prior=False` the Gaussian
+        normalization constant of the extra term is *not* added; callers
+        needing a proper density should add it themselves.
+
+    extra_dims : `~numpy.ndarray` with shape (Nobj,), optional
+        Additional dimensionality (number of extra data points) associated
+        with `extra_chi2`, added to the per-object effective DOF.
 
     Returns
     -------
@@ -345,17 +375,41 @@ def phot_loglike(flux, err, mfluxes, mask=None, dim_prior=False, dof_reduction=0
     With dimensionality prior (dim_prior=True), this becomes the log-PDF
     of a chi-square distribution, which weights models by goodness-of-fit
     relative to the number of degrees of freedom.
+
+    For the shared-model (2-D `mfluxes`) fast path, the chi-square is
+    expanded as :math:`\\sum w f^2 - 2 (w f) M^T + w (M^2)^T` and evaluated
+    with matrix products. This is algebraically identical to the direct
+    residual sum but reassociates the floating-point additions, so results
+    can differ from the 3-D path at machine precision.
     """
+    flux = np.asarray(flux)
+    err = np.asarray(err)
+    mfluxes = np.asarray(mfluxes)
+
     # Initialize values.
     Nobj, Nfilt = flux.shape[:2]
-    Nmod = mfluxes.shape[1]
+    shared_models = mfluxes.ndim == 2
 
     # Ensure proper dimensions.
-    if mfluxes.shape != (Nobj, Nmod, Nfilt):
-        raise ValueError("Inconsistent dimensions between flux and mfluxes")
+    if shared_models:
+        Nmod = mfluxes.shape[0]
+        if mfluxes.shape != (Nmod, Nfilt):
+            raise ValueError("Inconsistent dimensions between flux and mfluxes")
+    else:
+        Nmod = mfluxes.shape[1]
+        if mfluxes.shape != (Nobj, Nmod, Nfilt):
+            raise ValueError("Inconsistent dimensions between flux and mfluxes")
 
     if mask is None:
         mask = np.ones_like(flux)
+
+    # Fold data validity into the mask: non-finite fluxes/errors and
+    # non-positive errors cannot contribute a meaningful chi-square term.
+    # Without this, a single unmasked NaN flux poisons every model for that
+    # object, and a zero error yields +inf log-likelihood via log(var).
+    with np.errstate(invalid="ignore"):
+        valid = np.isfinite(flux) & np.isfinite(err) & (err > 0)
+    mask = np.asarray(mask) * valid
 
     # Sanitize NaN/invalid values in masked bands to prevent NaN propagation.
     # In numpy, NaN * 0 = NaN, so masked bands with NaN flux or error would
@@ -369,16 +423,39 @@ def phot_loglike(flux, err, mfluxes, mask=None, dim_prior=False, dof_reduction=0
     # Compute variance (including errors).
     var = err**2
 
-    # Mask fluxes and model fluxes.
-    flux_masked = flux[:, None, :] * mask[:, None, :]  # (Nobj, 1, Nfilt)
-    mfluxes_masked = mfluxes * mask[:, None, :]  # (Nobj, Nmod, Nfilt)
-    var_masked = var[:, None, :] * mask[:, None, :]  # (Nobj, 1, Nfilt)
+    if shared_models:
+        # Shared-model fast path: expand the chi-square into three matrix
+        # products instead of materializing (Nobj, Nmod, Nfilt) temporaries.
+        w = mask / var  # (Nobj, Nfilt); zero in masked bands
+        chi2 = (
+            np.sum(flux**2 * w, axis=1)[:, None]
+            - 2.0 * (flux * w) @ mfluxes.T
+            + w @ (mfluxes.T**2)
+        )
+        # Guard against tiny negative values from floating-point cancellation.
+        np.maximum(chi2, 0.0, out=chi2)
+    else:
+        # Mask fluxes and model fluxes.
+        flux_masked = flux[:, None, :] * mask[:, None, :]  # (Nobj, 1, Nfilt)
+        mfluxes_masked = mfluxes * mask[:, None, :]  # (Nobj, Nmod, Nfilt)
+        var_masked = var[:, None, :] * mask[:, None, :]  # (Nobj, 1, Nfilt)
 
-    # Compute residuals.
-    resid = flux_masked - mfluxes_masked  # (Nobj, Nmod, Nfilt)
+        # Compute residuals.
+        resid = flux_masked - mfluxes_masked  # (Nobj, Nmod, Nfilt)
 
-    # Compute chi-squared.
-    chi2 = np.sum(resid**2 / np.where(var_masked > 0, var_masked, np.inf), axis=2)
+        # Compute chi-squared.
+        chi2 = np.sum(resid**2 / np.where(var_masked > 0, var_masked, np.inf), axis=2)
+
+    # Fold in any auxiliary chi-square contributions (e.g. parallax) so they
+    # share the same measure as the photometry under the dimensionality prior.
+    if extra_chi2 is not None:
+        extra_chi2 = np.asarray(extra_chi2)
+        if extra_chi2.ndim == 1:
+            chi2 = chi2 + extra_chi2[:, None]
+        else:
+            chi2 = chi2 + extra_chi2
+    if extra_dims is not None:
+        Ndim = Ndim + np.asarray(extra_dims)
 
     # Compute log-likelihood.
     lnl = -0.5 * chi2
@@ -414,13 +491,23 @@ def phot_loglike(flux, err, mfluxes, mask=None, dim_prior=False, dof_reduction=0
 
 
 def chisquare_outlier_loglike(
-    flux, err, stellar_params=None, parallax=None, parallax_err=None, p_value_cut=1e-5
+    flux,
+    err,
+    stellar_params=None,
+    parallax=None,
+    parallax_err=None,
+    p_value_cut=1e-5,
+    mask=None,
+    dof_reduction=0,
 ):
     """
     Compute chi-square based outlier model log-likelihood.
 
     Uses a chi-square distribution with a p-value cut to model outlier
-    probabilities. This is the default outlier model for dim_prior=True.
+    probabilities. This is the default outlier model for dim_prior=True:
+    an outlier is "as likely as" an inlier model sitting at the chi-square
+    value corresponding to the given p-value tail, evaluated with the same
+    degrees of freedom the inlier likelihood uses.
 
     Parameters
     ----------
@@ -437,11 +524,21 @@ def chisquare_outlier_loglike(
         Parallax errors (mas)
     p_value_cut : float, optional
         P-value threshold for outlier definition. Default 1e-5.
+    mask : array-like, shape (Nobj, Nfilt), optional
+        Binary mask (1=use, 0=skip) of the bands used by the *inlier*
+        likelihood. Combined with the internal finiteness check so that the
+        outlier model counts exactly the same bands as the inlier model it
+        is mixed with.
+    dof_reduction : int, optional
+        Number of degrees of freedom to subtract from the effective DOF,
+        matching the `dof_reduction` used by the inlier `phot_loglike`.
+        Default is 0.
 
     Returns
     -------
     lnl_outlier : array-like, shape (Nobj,)
-        Log-likelihood for outlier model for each object
+        Log-likelihood for outlier model for each object. Objects with no
+        usable bands (DOF <= 0) get -inf.
     """
     from scipy.stats import chi2 as chisquare
 
@@ -449,8 +546,11 @@ def chisquare_outlier_loglike(
     err = np.asarray(err)
 
     # Get effective dimensionality per object
-    mask = np.isfinite(flux) & np.isfinite(err) & (err > 0)
-    ndim = np.sum(mask, axis=1)  # shape (Nobj,)
+    with np.errstate(invalid="ignore"):
+        valid = np.isfinite(flux) & np.isfinite(err) & (err > 0)
+    if mask is not None:
+        valid = valid & (np.asarray(mask) > 0)
+    ndim = np.sum(valid, axis=1)  # shape (Nobj,)
 
     # Add parallax contribution to dimensionality
     if parallax is not None and parallax_err is not None:
@@ -461,21 +561,40 @@ def chisquare_outlier_loglike(
         )
         ndim = ndim + parallax_mask.astype(int)
 
-    # Compute chi-square threshold and log-probability
-    chi2_threshold = chisquare.ppf(1.0 - p_value_cut, ndim)
-    lnl_outlier = chisquare.logpdf(chi2_threshold, ndim)
+    dof = ndim - dof_reduction
+
+    # Compute chi-square threshold and log-probability (guarding DOF <= 0,
+    # where the chi-square distribution is undefined and scipy returns NaN).
+    dof_safe = np.where(dof > 0, dof, 1)
+    chi2_threshold = chisquare.ppf(1.0 - p_value_cut, dof_safe)
+    lnl_outlier = np.where(dof > 0, chisquare.logpdf(chi2_threshold, dof_safe), -np.inf)
 
     return lnl_outlier
 
 
 def uniform_outlier_loglike(
-    flux, err, stellar_params=None, parallax=None, parallax_err=None, sigma_clip=3.0
+    flux,
+    err,
+    stellar_params=None,
+    parallax=None,
+    parallax_err=None,
+    sigma_clip=3.0,
+    mask=None,
 ):
-    """
-    Compute quasi-uniform outlier model log-likelihood.
+    r"""
+    Compute uniform outlier model log-likelihood.
 
-    Assumes uniform distribution within +/- sigma_clip * error bounds
-    around the data. This is the default outlier model for dim_prior=False.
+    Models outliers as uniformly distributed over the observed data range in
+    each band (padded by ``sigma_clip`` errors), following the standard
+    mixture-model construction (e.g. Hogg, Bovy & Lang 2010). The returned
+    value is a proper log *density* in flux space,
+
+    .. math::
+        \ln P({\rm data}_i \,|\, {\rm outlier}) =
+        -\sum_{b \in {\rm valid}} \ln({\rm flux\ range}_b),
+
+    directly comparable to the Gaussian inlier density used when
+    ``dim_prior=False``.
 
     Parameters
     ----------
@@ -490,33 +609,57 @@ def uniform_outlier_loglike(
     parallax_err : array-like, shape (Nobj,), optional
         Parallax errors (mas)
     sigma_clip : float, optional
-        Number of sigma for uniform bounds. Default 3.0.
+        Number of sigma used to pad the observed flux range (and as the
+        per-object fallback half-width when the population range is
+        degenerate, e.g. a single object). Default 3.0.
+    mask : array-like, shape (Nobj, Nfilt), optional
+        Binary mask (1=use, 0=skip) of the bands used by the *inlier*
+        likelihood, so both mixture components integrate over the same data.
 
     Returns
     -------
     lnl_outlier : array-like, shape (Nobj,)
-        Log-likelihood for outlier model for each object
+        Log-likelihood (log density) for the outlier model for each object.
+
+    Notes
+    -----
+    The previous implementation returned
+    ``-sum(log(2 * sigma_clip * err / range))``, which is dimensionless
+    (a flux density to the power 0) and *increases* as measurement errors
+    shrink. Mixing that with the Gaussian inlier density made the
+    inlier/outlier classification depend on the absolute flux units and
+    could make the outlier model beat the inlier model precisely for the
+    best-measured objects. The corrected version is a proper density.
     """
     flux = np.asarray(flux)
     err = np.asarray(err)
 
     # Create mask for valid data
-    mask = np.isfinite(flux) & np.isfinite(err) & (err > 0)
+    with np.errstate(invalid="ignore"):
+        valid = np.isfinite(flux) & np.isfinite(err) & (err > 0)
+    if mask is not None:
+        valid = valid & (np.asarray(mask) > 0)
 
-    # Compute uniform bounds for each filter
-    flux_max = np.nanmax(flux + sigma_clip * err, axis=0)  # shape (Nfilt,)
-    flux_min = np.nanmin(flux - sigma_clip * err, axis=0)  # shape (Nfilt,)
+    # Compute the observed flux range in each band (padded by sigma_clip
+    # errors), ignoring invalid entries.
+    flux_pad_hi = np.where(valid, flux + sigma_clip * err, np.nan)
+    flux_pad_lo = np.where(valid, flux - sigma_clip * err, np.nan)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # all-NaN bands handled below
+        flux_max = np.nanmax(flux_pad_hi, axis=0)  # shape (Nfilt,)
+        flux_min = np.nanmin(flux_pad_lo, axis=0)  # shape (Nfilt,)
+    side = flux_max - flux_min  # shape (Nfilt,)
 
-    # Compute side length for uniform distribution in each filter
-    side_lengths = (2.0 * sigma_clip * err) / (
-        flux_max - flux_min
-    )  # shape (Nobj, Nfilt)
+    # Per-band log density: -log(range). If the population range is
+    # degenerate (single object, or identical fluxes), fall back to the
+    # object's own +/- sigma_clip * err window, which has the correct units.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        log_side = np.where(
+            side > 0, np.log(side), np.log(2.0 * sigma_clip * err)
+        )  # (Nobj, Nfilt) after broadcasting
 
-    # Set invalid entries to 1 (no contribution)
-    side_lengths = np.where(mask, side_lengths, 1.0)
-
-    # Compute volume (product over valid filters only)
-    volume = np.prod(side_lengths * mask + (1.0 * ~mask), axis=1)  # shape (Nobj,)
+    # Sum log densities over valid bands only.
+    lnl_outlier = -np.sum(np.where(valid, log_side, 0.0), axis=1)  # (Nobj,)
 
     # Add parallax contribution if present
     if parallax is not None and parallax_err is not None:
@@ -529,11 +672,12 @@ def uniform_outlier_loglike(
         if np.any(parallax_mask):
             p_max = np.nanmax((parallax + sigma_clip * parallax_err)[parallax_mask])
             p_min = np.nanmin((parallax - sigma_clip * parallax_err)[parallax_mask])
-            parallax_side = (2.0 * sigma_clip * parallax_err) / (p_max - p_min)
-            volume = np.where(parallax_mask, volume * parallax_side, volume)
-
-    # Compute log-likelihood of uniform distribution
-    lnl_outlier = np.log(1.0 / volume)
+            p_side = p_max - p_min
+            with np.errstate(divide="ignore", invalid="ignore"):
+                log_p_side = np.where(
+                    p_side > 0, np.log(p_side), np.log(2.0 * sigma_clip * parallax_err)
+                )
+            lnl_outlier = lnl_outlier - np.where(parallax_mask, log_p_side, 0.0)
 
     # Handle edge cases
     lnl_outlier = np.where(np.isfinite(lnl_outlier), lnl_outlier, -np.inf)
