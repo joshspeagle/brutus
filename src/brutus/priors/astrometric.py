@@ -205,14 +205,25 @@ def convert_parallax_to_scale(p_meas, p_err, snr_lim=4.0):
         s_{\\text{std}} = \\sqrt{2\\sigma_\\pi^4 + 4\\pi_{\\text{meas}}^2\\sigma_\\pi^2}
 
     The parallax is floored at zero to handle negative measurements.
-    For low SNR, returns uninformative statistics (tiny mean, huge std).
+    For low SNR or invalid measurements (non-finite values, or
+    ``p_err <= 0``), returns uninformative statistics (tiny mean, huge std).
 
     Examples
     --------
     >>> s_mean, s_std = convert_parallax_to_scale(1.0, 0.1)  # 10-sigma detection
     >>> print(f"Scale factor: {s_mean:.3f} ± {s_std:.3f}")
     """
-    if np.isfinite(p_meas) and np.isfinite(p_err) and abs(p_meas / p_err) > snr_lim:
+    # Guard p_err > 0 before dividing (mirrors logp_parallax /
+    # logp_parallax_scale): p_err == 0 would raise ZeroDivisionError for
+    # Python floats or silently return a delta-function prior for numpy
+    # scalars (inf > snr_lim), instead of the documented uninformative
+    # fallback.
+    if (
+        np.isfinite(p_meas)
+        and np.isfinite(p_err)
+        and p_err > 0
+        and abs(p_meas / p_err) > snr_lim
+    ):
         # Floor parallax at zero to handle negative measurements
         p_positive = max(0.0, p_meas)
 
