@@ -196,6 +196,32 @@ class TestLoadModelsRegressions:
         assert "afe" in labels.dtype.names
         assert len(np.unique(labels["afe"])) == 3
 
+    def test_constant_afe_dropped_from_default_labels(self, tmp_path):
+        """Single-afe grids drop the constant 'afe' column under default
+        labels (pre-existing schema preserved; mirrors the constant-'smf'
+        convention)."""
+        p = tmp_path / "grid_afe_const.h5"
+        _write_grid(p, n_models=6, afe_values=(0.0,))
+
+        _, labels, _ = load_models(
+            str(p), filters=["PS_g", "PS_r", "PS_i"], verbose=False
+        )
+        assert "afe" not in labels.dtype.names
+
+    def test_explicit_afe_kept_even_when_constant(self, tmp_path):
+        """An explicitly requested 'afe' label is honored even if constant."""
+        p = tmp_path / "grid_afe_expl.h5"
+        _write_grid(p, n_models=6, afe_values=(0.0,))
+
+        _, labels, _ = load_models(
+            str(p),
+            filters=["PS_g", "PS_r", "PS_i"],
+            labels=["mini", "feh", "eep", "afe"],
+            verbose=False,
+        )
+        assert "afe" in labels.dtype.names
+        assert np.all(labels["afe"] == 0.0)
+
 
 class TestLoadOffsetsSingleRow:
     """Regression: a single-filter offsets file must not crash."""

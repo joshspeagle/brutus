@@ -191,11 +191,14 @@ def load_models(
     # Initialize values.
     if filters is None:
         filters = FILTERS
-    if labels is None:
+    labels_defaulted = labels is None
+    if labels_defaulted:
         # 'afe' is a grid input (grids are generated on a 5D
         # (mini, eep, feh, afe, smf) lattice); omitting it makes multi-afe
-        # grids ambiguous. For single-afe grids the constant column is
-        # harmless, and files without it drop the all-NaN column below.
+        # grids ambiguous. For single-afe grids the constant column carries
+        # no information and is dropped below (matching how a constant 'smf'
+        # is dropped when include_binaries=False); pass `labels` explicitly
+        # including 'afe' to keep the constant column.
         labels = [
             "mini",
             "feh",
@@ -327,6 +330,23 @@ def load_models(
     if not include_binaries and "smf" in labels2:
         sel &= combined_labels["smf"] == 0.0
         labels2 = [x for x in labels2 if x != "smf"]
+
+    # The default label set includes 'afe' only to disambiguate multi-afe
+    # grids. When the file is single-afe the column is constant and carries
+    # no information, so tracking it would just change the output schema
+    # (e.g. a 4th "grid parameter" in BruteForce); drop it, mirroring the
+    # constant-'smf' convention above. Explicitly requested labels are
+    # always honored.
+    if labels_defaulted and "afe" in labels2:
+        afe_vals = combined_labels["afe"]
+        afe_finite = afe_vals[np.isfinite(afe_vals)]
+        if afe_finite.size > 0 and np.all(afe_finite == afe_finite[0]):
+            labels2 = [x for x in labels2 if x != "afe"]
+            if verbose:
+                sys.stderr.write(
+                    "Dropping constant 'afe' label column "
+                    f"(single-afe grid, afe={afe_finite[0]:g})...\n"
+                )
 
     # Compile results.
     combined_labels = combined_labels[labels2]
