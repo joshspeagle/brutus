@@ -667,7 +667,6 @@ class StellarPop:
         apply_corr=True,
         corr_params=None,
         return_dict=True,
-        **kwargs,
     ):
         """
         Generate synthetic photometry for a stellar population.
@@ -697,6 +696,11 @@ class StellarPop:
             - 0.0: No binaries
             - 0 < binary_fraction < 1: Mass ratio binaries
             - 1.0: Equal mass binaries
+
+            Binary companions are only added for primaries with
+            ``eep <= eep_binary_max``; other stars (and stars whose companion
+            falls below ``mini_bound`` or has no age-consistent EEP) keep
+            their primary-only SED.
 
         dist : float, optional
             Distance in parsecs. Default is 1000.0.
@@ -790,6 +794,11 @@ class StellarPop:
         params_arr2 = np.full_like(params_arr, np.nan)
         params2 = dict(zip(self.isochrone.predictions, params_arr2.T))
 
+        # The EEP grid actually used for the predictions above (needed to
+        # restrict binary companions; must match the caller's grid rather
+        # than always assuming the isochrone default).
+        eep_used = self.isochrone.eep_u if eep is None else np.asarray(eep)
+
         # Handle binary stars
         if 0.0 < binary_fraction < 1.0:
             self._add_binary_components(
@@ -809,12 +818,22 @@ class StellarPop:
                 dist,
                 apply_corr,
                 corr_params,
+                eep_used,
             )
         elif binary_fraction == 1.0:
-            # Equal-mass binary: flux doubles -> magnitude decreases by 2.5*log10(2)
-            seds[~np.isnan(seds[:, 0])] -= 2.5 * np.log10(2.0)
+            # Equal-mass binary: flux doubles -> magnitude decreases by
+            # 2.5*log10(2). Binaries are only modeled on the main sequence
+            # (eep <= eep_binary_max), matching _add_binary_components:
+            # post-MS stars keep their primary-only SED and get no secondary.
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")  # NaN comparisons
+                is_binary = (eep_used <= eep_binary_max) & ~np.isnan(seds[:, 0])
+            seds[is_binary] -= 2.5 * np.log10(2.0)
             params2 = deepcopy(params)
+            for p in params2:
+                params2[p] = np.where(is_binary, params2[p], np.nan)
             params_arr2 = deepcopy(params_arr.T)
+            params_arr2[:, ~is_binary] = np.nan
 
         # Format output
         if not return_dict:
@@ -841,12 +860,18 @@ class StellarPop:
         dist,
         apply_corr,
         corr_params,
+        eep=None,
     ):
         """Add binary star components to the population synthesis."""
         # Calculate secondary masses and EEPs
         mini = params["mini"]
         mini2 = mini * binary_fraction
-        eep = self.isochrone.eep_u
+        # Use the same EEP grid the primary predictions were generated on;
+        # falling back to the isochrone default grid otherwise. (Using the
+        # default grid for a caller-supplied `eep` would misalign — or crash
+        # on — every secondary computation.)
+        if eep is None:
+            eep = self.isochrone.eep_u
 
         # Interpolate secondary EEPs
         mini_mask = np.where(np.isfinite(mini))[0]
@@ -896,5 +921,11 @@ class StellarPop:
             params2, sec_valid, av, rv, dist, label="secondary "
         )
 
-        # Combine primary and secondary SEDs
-        seds[:] = add_mag(seds, seds2)
+        # Combine primary and secondary SEDs only where a valid secondary
+        # exists. A star without a resolvable companion (post-MS primary,
+        # secondary below the mass bound, or failed EEP match) keeps its
+        # primary-only SED — combining with a NaN secondary via add_mag would
+        # silently discard the (valid) primary as well.
+        has_secondary = np.all(np.isfinite(seds2), axis=1)
+        if np.any(has_secondary):
+            seds[has_secondary] = add_mag(seds[has_secondary], seds2[has_secondary])
