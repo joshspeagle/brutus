@@ -334,8 +334,10 @@ class TestNonFiniteSamples:
         dsamps[0, 0] = np.nan
         ll_d = los_clouds_loglike_samples(self.theta, dsamps, self.rsamps)
 
-        # both are finite; each drops exactly one sample of object 0
+        # both are finite, and dropping the SAME sample by either route
+        # must give the identical likelihood (both zero its weight)
         assert np.isfinite(ll_r) and np.isfinite(ll_d)
+        assert ll_r == ll_d
 
     def test_inf_reddening_sample_is_masked(self):
         rsamps = self.rsamps.copy()
@@ -420,6 +422,22 @@ class TestKernelTruncation:
         peak = fred_grid[int(np.argmax(lnl))]
         # untruncated kernels peaked near ~0.1 (about +0.7 kernel widths)
         assert peak <= 0.02
+
+
+class TestPriorTransformValidation:
+    """Degenerate hyperparameters must raise instead of quietly making NaN."""
+
+    def test_nonpositive_std_raises(self):
+        u = np.full(6, 0.5)
+        with pytest.raises(ValueError, match="pb_params.*standard deviation"):
+            los_clouds_priortransform(u, pb_params=(-3.0, 0.0, -np.inf, 0.0))
+        with pytest.raises(ValueError, match="s_params.*standard deviation"):
+            los_clouds_priortransform(u, s_params=(-3.0, -0.3, -np.inf, 0.0))
+
+    def test_inverted_bounds_raise(self):
+        u = np.full(6, 0.5)
+        with pytest.raises(ValueError, match="pb_params.*lower bound"):
+            los_clouds_priortransform(u, pb_params=(-3.0, 0.7, 0.0, -1.0))
 
 
 class TestPriorTransformClosedForm:

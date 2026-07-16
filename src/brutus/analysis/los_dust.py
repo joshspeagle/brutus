@@ -76,11 +76,16 @@ Typical workflow:
 When comparing evidences in step 3 with ``monotonic=True`` (the default in
 `los_clouds_loglike_samples`), note that the prior transform draws the
 reddening amplitudes as independent uniforms and the monotone constraint is
-imposed by rejection in the likelihood. Only a fraction 1/(n+1)! of the
-sampled prior volume survives for an n-cloud model, so reported
-log-evidences include a -ln((n+1)!) offset relative to a properly
-normalized monotone prior. Add ln((n+1)!) back to each lnZ before comparing
-models with different numbers of clouds.
+imposed by rejection in the likelihood. The surviving prior fraction — and
+hence the lnZ offset to add back before comparing models with different
+numbers of clouds — depends on the mode: in the default mode the foreground
+and the n cloud amplitudes form one ordered chain, so 1/(n+1)! survives
+(add ln((n+1)!) to lnZ); with a dust template or ``additive_foreground=True``
+the foreground is not part of the ordering, so only the n cloud amplitudes
+are ordered and 1/n! survives (add ln(n!)). (The additive-foreground mode
+also requires a non-negative first increment, but the default prior
+transform only draws non-negative amplitudes, so that cut removes no
+additional volume.)
 
 Examples
 --------
@@ -259,12 +264,14 @@ def los_clouds_priortransform(
     The reddening amplitudes are drawn as *independent* uniforms (only the
     distances are sorted). When the likelihood is evaluated with
     ``monotonic=True`` (the default in `los_clouds_loglike_samples`),
-    non-monotone amplitude orderings are rejected with -inf, so only a
-    fraction 1/(n+1)! of the sampled prior volume is retained for an
-    n-cloud model. The evidence computed by nested sampling is therefore
-    lnZ = lnZ_monotone - ln((n+1)!) relative to a properly normalized
-    monotone prior: add ln((n+1)!) back to each lnZ before comparing
-    models with different numbers of clouds.
+    non-monotone amplitude orderings are rejected with -inf. In the default
+    mode the foreground and the n cloud amplitudes form one ordered chain,
+    so only a fraction 1/(n+1)! of the sampled prior volume is retained
+    (the nested-sampling evidence carries a -ln((n+1)!) offset); with a
+    dust template or an additive foreground the foreground is not part of
+    the ordering, so the retained fraction is 1/n! and the offset is
+    -ln(n!). Add the corresponding ln((n+1)!) or ln(n!) back to each lnZ
+    before comparing models with different numbers of clouds.
 
     Examples
     --------
@@ -287,6 +294,18 @@ def los_clouds_priortransform(
         raise ValueError("rlims must be a 2-tuple with rlims[0] < rlims[1]")
     if len(dlims) != 2 or dlims[0] >= dlims[1]:
         raise ValueError("dlims must be a 2-tuple with dlims[0] < dlims[1]")
+    # The closed-form truncated log-normal transform quietly produces
+    # NaN/divide-by-zero for degenerate parameters (scipy's ppf would have
+    # raised), so fail fast with a clear message instead.
+    for name, params in (("pb_params", pb_params), ("s_params", s_params)):
+        _mean, _std, _low, _high = params
+        if not _std > 0:
+            raise ValueError(f"{name}: standard deviation must be > 0, got {_std}")
+        if not _low < _high:
+            raise ValueError(
+                f"{name}: lower bound must be below upper bound, "
+                f"got ({_low}, {_high})"
+            )
 
     # Initialize values
     x = np.array(u)
@@ -400,9 +419,12 @@ def los_clouds_loglike_samples(
 
         Note that with `monotonic=True` the sampled prior
         (`los_clouds_priortransform`) is *not* renormalized to the monotone
-        region, so nested-sampling evidences carry a -ln((n+1)!) offset for
-        an n-cloud model; add ln((n+1)!) back before comparing evidences
-        across different numbers of clouds.
+        region, so nested-sampling evidences carry a mode-dependent offset
+        for an n-cloud model: -ln((n+1)!) in the default mode (foreground
+        and clouds form one ordered chain), but -ln(n!) with a dust
+        template or additive foreground (the foreground is not part of the
+        ordering). Add the corresponding ln((n+1)!) or ln(n!) back before
+        comparing evidences across different numbers of clouds.
 
     Returns
     -------
