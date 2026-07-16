@@ -70,7 +70,7 @@ def photometric_offsets(
     reds : `~numpy.ndarray` of shape `(Nobj, Nsamps)`
         Reddening samples (in Av) associated with the model indices.
 
-    dreds : `~numpy.ndarray` of shape `(Nsamps)`
+    dreds : `~numpy.ndarray` of shape `(Nobj, Nsamps)`
         "Differential" reddening samples (in Rv) associated with
         the model indices.
 
@@ -144,6 +144,9 @@ def photometric_offsets(
     # Initialize values.
     nmodels, nfilt, ncoeff = models.shape
     nobj, nsamps = idxs.shape
+    # Coerce to boolean: an integer 0/1 mask would otherwise fancy-index
+    # (selecting rows 0/1) instead of masking.
+    mask = np.asarray(mask, dtype=bool)
     if plot_kwargs is None:
         plot_kwargs = dict()
     if weights is None:
@@ -181,7 +184,9 @@ def photometric_offsets(
         if flux:
             magobs, mageobs = magnitude(phot * offset, err * offset)
         else:
-            magobs, mageobs = phot + offset, err
+            # `offset` is a multiplicative *flux* correction; in magnitude
+            # space it is applied as -2.5 log10(offset).
+            magobs, mageobs = phot - 2.5 * np.log10(offset), err
 
     # Generate figure.
     if fig is None:
@@ -197,10 +202,13 @@ def photometric_offsets(
         # Compute selection ignoring current band.
         mtemp = np.array(mask)
         mtemp[:, i] = False
+        # Require finite magnitudes only in *observed* bands: unobserved
+        # (masked) bands routinely hold nonpositive/NaN fluxes that map to
+        # non-finite magnitudes and must not disqualify the object.
         s = (
             mask[:, i]
             & (np.sum(mtemp, axis=1) > 3)
-            & (np.all(np.isfinite(magobs), axis=1))
+            & (np.all(np.isfinite(magobs) | ~mask, axis=1))
         )
         # Compute weights from ignoring current band.
         # TODO: vectorize this loop over objects for performance
@@ -319,7 +327,7 @@ def photometric_offsets_2d(
     reds : `~numpy.ndarray` of shape `(Nobj, Nsamps)`
         Reddening samples (in Av) associated with the model indices.
 
-    dreds : `~numpy.ndarray` of shape `(Nsamps)`
+    dreds : `~numpy.ndarray` of shape `(Nobj, Nsamps)`
         "Differential" reddening samples (in Rv) associated with
         the model indices.
 
@@ -405,6 +413,9 @@ def photometric_offsets_2d(
     # Initialize values.
     nmodels, nfilt, ncoeff = models.shape
     nobj, nsamps = idxs.shape
+    # Coerce to boolean: an integer 0/1 mask would otherwise fancy-index
+    # (selecting rows 0/1) and make `~mask` a bitwise complement (-1/-2).
+    mask = np.asarray(mask, dtype=bool)
     if plot_kwargs is None:
         plot_kwargs = dict()
     if weights is None:
@@ -444,7 +455,9 @@ def photometric_offsets_2d(
         if flux:
             magobs, mageobs = magnitude(phot * offset, err * offset)
         else:
-            magobs, mageobs = phot + offset, err
+            # `offset` is a multiplicative *flux* correction; in magnitude
+            # space it is applied as -2.5 log10(offset).
+            magobs, mageobs = phot - 2.5 * np.log10(offset), err
 
         # Magnitude offsets.
         dm = mpred - magobs[:, None]
@@ -473,10 +486,13 @@ def photometric_offsets_2d(
         # Compute selection ignoring current band.
         mtemp = np.array(mask)
         mtemp[:, i] = False
+        # Require finite magnitudes only in *observed* bands: unobserved
+        # (masked) bands routinely hold nonpositive/NaN fluxes that map to
+        # non-finite magnitudes and must not disqualify the object.
         s = (
             mask[:, i]
             & (np.sum(mtemp, axis=1) > 3)
-            & (np.all(np.isfinite(magobs), axis=1))
+            & (np.all(np.isfinite(magobs) | ~mask, axis=1))
         )
         # Compute weights from ignoring current band.
         # TODO: vectorize this loop over objects for performance
