@@ -853,9 +853,12 @@ class TestStarEvolTrackMethods:
                 use_cache=False,
             )
 
-            # Verify all major attributes were created
-            assert hasattr(tracks, "libparams")
-            assert hasattr(tracks, "output")
+            # Verify all major runtime attributes were created; the
+            # construction-only intermediates (libparams/output/X) are
+            # deliberately freed once the interpolator is built
+            assert not hasattr(tracks, "libparams")
+            assert not hasattr(tracks, "output")
+            assert not hasattr(tracks, "X")
             assert hasattr(tracks, "gridpoints")
             assert hasattr(tracks, "interpolator")
             assert tracks.ndim == 4
@@ -899,10 +902,11 @@ class TestIndividualStarsEdgeCases:
 
                 tracks = EEPTracks(verbose=True)  # Test verbose path
 
-                # Should have built libparams and gridpoints from H5 data
-                assert hasattr(tracks, "libparams")
-                assert hasattr(tracks, "output")
+                # Should have built runtime grid structures (either from the
+                # pickle cache or from the mocked H5 data); construction
+                # intermediates like libparams/output are freed after init
                 assert hasattr(tracks, "gridpoints")
+                assert hasattr(tracks, "interpolator")
 
     def _create_mock_track_data(self, n_points, n_cols):
         """Create mock stellar evolution track data."""
