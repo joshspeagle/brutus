@@ -246,6 +246,45 @@ class TestFehLogaArrayPaths:
         assert np.all(np.isfinite(logp))
 
 
+class TestMixedArrayAndLabels:
+    """A plain feh/loga array must override only its own field: any field
+    not given as an array is sourced from a structured `labels`, so mixing
+    the two call styles cannot silently drop a prior term."""
+
+    COORD = (90.0, 30.0)
+
+    @pytest.mark.parametrize("N", [500, 2000])  # small-N and fused paths
+    def test_feh_array_plus_labels_with_loga_keeps_age_prior(self, N):
+        rng = np.random.default_rng(1)
+        d = np.linspace(0.1, 5.0, N)
+        feh = rng.normal(-0.5, 0.3, N)
+        loga = rng.uniform(8.5, 10.1, N)
+
+        mixed = logp_galactic_structure(
+            d, self.COORD, feh=feh, labels=_make_labels(feh, loga)
+        )
+        both_arrays = logp_galactic_structure(d, self.COORD, feh=feh, loga=loga)
+        feh_only = logp_galactic_structure(d, self.COORD, feh=feh)
+
+        # the age prior from labels must be applied...
+        assert np.array_equal(mixed, both_arrays)
+        # ...and it must actually change the result
+        assert not np.allclose(mixed, feh_only)
+
+    def test_loga_array_plus_labels_with_feh_keeps_feh_prior(self):
+        N = 800
+        rng = np.random.default_rng(2)
+        d = np.linspace(0.1, 5.0, N)
+        feh = rng.normal(-0.5, 0.3, N)
+        loga = rng.uniform(8.5, 10.1, N)
+
+        mixed = logp_galactic_structure(
+            d, self.COORD, loga=loga, labels=_make_labels(feh, loga)
+        )
+        both_arrays = logp_galactic_structure(d, self.COORD, feh=feh, loga=loga)
+        assert np.array_equal(mixed, both_arrays)
+
+
 class TestJointFehAgePrior:
     """The (feh, age) prior must be the mixture sum_c w_c p(feh|c) p(age|c),
     not the product of marginal mixtures."""
@@ -325,6 +364,31 @@ class TestJointFehAgePrior:
         )
         logp = logp_galactic_structure(d, self.COORD, labels=labels)
         assert logp[0] > logp[1]
+
+
+class TestExtinctionAvlimValidation:
+    """Degenerate avlim bounds must raise instead of silently corrupting
+    the truncation normalization."""
+
+    def _mock_map(self):
+        m = Mock()
+        m.query.return_value = (1.0, 0.3)  # (mean, std) simple-map form
+        return m
+
+    def test_reversed_bounds_raise(self):
+        with pytest.raises(ValueError, match="avlim"):
+            logp_extinction(
+                np.array([0.5]), self._mock_map(), (90.0, 30.0), avlim=(6.0, 0.0)
+            )
+
+    def test_nonfinite_bounds_raise(self):
+        with pytest.raises(ValueError, match="avlim"):
+            logp_extinction(
+                np.array([0.5]),
+                self._mock_map(),
+                (90.0, 30.0),
+                avlim=(0.0, np.inf),
+            )
 
 
 class TestExtinctionDustmapValidation:

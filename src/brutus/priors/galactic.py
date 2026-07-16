@@ -842,6 +842,16 @@ def logp_galactic_structure(
                     f"`loga` must be a 1D array matching len(dists)="
                     f"{len(dists)}; got shape {np.shape(loga)}."
                 )
+        # A plain array overrides only its own field. Any field not supplied
+        # as an array is sourced from a caller-provided structured `labels`,
+        # so mixing the two call styles cannot silently drop the metallicity
+        # or age prior (previously `feh=` alongside labels containing 'loga'
+        # discarded the age term).
+        if labels is not None:
+            if feh is None and "feh" in labels.dtype.names:
+                feh = np.ascontiguousarray(labels["feh"], dtype=np.float64)
+            if loga is None and "loga" in labels.dtype.names:
+                loga = np.ascontiguousarray(labels["loga"], dtype=np.float64)
 
     # Fast path: use fused numba kernel when labels are provided and
     # return_components is not needed. Eliminates ~15 temporary arrays
