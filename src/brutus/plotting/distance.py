@@ -48,7 +48,9 @@ def dist_vs_red(
         `(dists, reds, dreds)` that were saved, or a collection of
         `(scales, avs, rvs, covs_sar)` that will be used to regenerate
         `(dists, reds)` in conjunction with any applied distance
-        and/or parallax priors.
+        and/or parallax priors. Arrays of shape `(Nobj, Nsamps)` are also
+        accepted; the plotted histogram is then the average of the
+        per-object 2-D PDFs.
 
     ebv : bool, optional
         If provided, will convert from Av to E(B-V) when plotting using
@@ -73,7 +75,7 @@ def dist_vs_red(
     rvlim : 2-tuple, optional
         The Rv limits used to truncate results. Default is `(1., 8.)`.
 
-    weights : `~numpy.ndarray` of shape `(Nsamps)`, optional
+    weights : `~numpy.ndarray` of shape `(Nsamps)` or `(Nobj, Nsamps)`, optional
         An optional set of importance weights used to reweight the samples.
 
     parallax : float, optional
@@ -165,6 +167,10 @@ def dist_vs_red(
         if coord is not None:
             coord = [coord]
 
+        # Convert weights to (Nobj, Nsamps) format
+        if weights is not None:
+            weights = np.atleast_2d(np.asarray(weights))
+
         # Convert parallax info to array format
         if parallax is not None:
             parallax = np.array([parallax])
@@ -184,6 +190,7 @@ def dist_vs_red(
         coord=coord,
         avlim=avlim,
         rvlim=rvlim,
+        weights=weights,
         parallaxes=parallax,
         parallax_errors=parallax_err,
         Nr=Nr,
@@ -198,9 +205,9 @@ def dist_vs_red(
     if single_object:
         H = binned_vals[0]
     else:
-        # For multiple objects, we need to decide how to combine them
-        # Default behavior: use the first object
-        H = binned_vals[0]
+        # For multiple objects, stack (average) the per-object 2-D PDFs so the
+        # plot reflects the whole sample, as in dust-mapping sightline stacks.
+        H = binned_vals.mean(axis=0)
 
     # Set up axis labels
     if ebv:

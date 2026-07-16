@@ -33,6 +33,7 @@ def bin_pdfs_distred(
     coord=None,
     avlim=(0.0, 6.0),
     rvlim=(1.0, 8.0),
+    weights=None,
     parallaxes=None,
     parallax_errors=None,
     Nr=100,
@@ -83,6 +84,9 @@ def bin_pdfs_distred(
 
     rvlim : 2-tuple, optional
         The Rv limits used to truncate results. Default is `(1., 8.)`.
+
+    weights : `~numpy.ndarray` of shape `(Nobj, Nsamps)`, optional
+        An optional set of importance weights used to reweight the samples.
 
     parallaxes : `~numpy.ndarray` of shape `(Nobj,)`, optional
         The parallax estimates for the sources.
@@ -139,6 +143,12 @@ def bin_pdfs_distred(
         parallaxes = np.full(nobjs, np.nan)
     if parallax_errors is None:
         parallax_errors = np.full(nobjs, np.nan)
+    if weights is not None:
+        weights = np.asarray(weights)
+        if weights.shape != (nobjs, nsamps):
+            raise ValueError(
+                f"`weights` must have shape {(nobjs, nsamps)}; " f"got {weights.shape}."
+            )
 
     # Set up bins.
     if dist_type not in ["parallax", "scale", "distance", "distance_modulus"]:
@@ -214,7 +224,8 @@ def bin_pdfs_distred(
             # Print progress.
             if verbose:
                 sys.stderr.write(f"\rBinning object {i + 1}/{nobjs}")
-            H, xedges, yedges = np.histogram2d(xs, ys, bins=(xbins, ybins))
+            wt = None if weights is None else weights[i]
+            H, xedges, yedges = np.histogram2d(xs, ys, bins=(xbins, ybins), weights=wt)
             binned_vals[i] = H / nsamps
     except (AttributeError, KeyError):
         # Regenerate distance and reddening samples from inputs.
@@ -227,6 +238,9 @@ def bin_pdfs_distred(
             raise ValueError(
                 "`coord` must be passed if the default distance " "prior was used."
             )
+        if coord is None:
+            # Custom `lndistprior` without coordinates: pass `None` per object.
+            coord = [None] * nobjs
 
         # Generate parallax and Av realizations.
         for i, stuff in enumerate(
@@ -262,13 +276,22 @@ def bin_pdfs_distred(
             dmdraws = 5.0 * np.log10(ddraws) + 10.0
 
             # Re-apply distance and parallax priors to realizations.
-            lnp_draws = lndistprior(ddraws, crd)
+            # Draws come from a Gaussian proposal in *scale* space (s = d^-2),
+            # while `lndistprior` is a density over distance, so the
+            # importance weight needs the change-of-variables Jacobian
+            # |dd/ds| = d^3 / 2 (constant factor irrelevant after
+            # normalization). Matches the ln-distance Jacobian handling in
+            # `analysis.individual.logpost_grid`.
+            lnp_draws = lndistprior(ddraws, crd) + 3.0 * np.log(ddraws)
             if parallax is not None and parallax_err is not None:
                 lnp_draws += logp_parallax(pdraws, parallax, parallax_err)
             lnp = logsumexp(lnp_draws, axis=1)
-            weights = np.exp(lnp_draws - lnp[:, None])
-            weights /= weights.sum(axis=1)[:, None]
-            weights = weights.flatten()
+            pwt = np.exp(lnp_draws - lnp[:, None])
+            pwt /= pwt.sum(axis=1)[:, None]
+            if weights is not None:
+                # Fold per-sample importance weights into the per-draw ones.
+                pwt *= weights[i][:, None]
+            pwt = pwt.flatten()
 
             # Grab draws.
             ydraws = adraws.flatten()
@@ -285,7 +308,7 @@ def bin_pdfs_distred(
 
             # Generate 2-D histogram.
             H, xedges, yedges = np.histogram2d(
-                xdraws, ydraws, bins=(xbins, ybins), weights=weights
+                xdraws, ydraws, bins=(xbins, ybins), weights=pwt
             )
             binned_vals[i] = H / nsamps
 
@@ -319,6 +342,9 @@ def bin_pdfs_distred(
     # Compute CDFs.
     if cdf:
         for i, H in enumerate(binned_vals):
-            binned_vals[i] = H.cumsum(axis=0)
+            # H has axis 0 = distance, axis 1 = reddening; the documented CDF
+            # (used to evaluate MAP LOS reddening profiles) accumulates along
+            # the *reddening* axis within each distance column.
+            binned_vals[i] = H.cumsum(axis=1)
 
     return binned_vals, xedges, yedges

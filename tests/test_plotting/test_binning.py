@@ -184,13 +184,17 @@ class TestBinPdfsDistred:
         assert np.all(binned_vals >= 0)
 
     def test_bin_pdfs_cdf_mode(self, direct_test_data):
-        """Test CDF computation mode."""
+        """Test CDF computation mode.
+
+        The documented CDF accumulates along the *reddening* axis (axis 2)
+        within each distance column, for evaluating MAP LOS reddening fits.
+        """
         binned_vals, xedges, yedges = bin_pdfs_distred(direct_test_data, cdf=True)
 
-        # CDFs should be monotonically non-decreasing along x-axis
+        # CDFs should be monotonically non-decreasing along the reddening axis
         for i in range(binned_vals.shape[0]):
-            for j in range(binned_vals.shape[2]):  # For each y bin
-                cdf_slice = binned_vals[i, :, j]
+            for j in range(binned_vals.shape[1]):  # For each distance bin
+                cdf_slice = binned_vals[i, j, :]
                 # Check monotonicity (allowing for numerical precision)
                 assert np.all(np.diff(cdf_slice) >= -1e-10)
 
