@@ -293,13 +293,12 @@ class TestStarGridEdgeCases:
     """Test edge cases and error handling."""
 
     def test_missing_parameters(self, mock_grid):
-        """Test with missing required parameters."""
-        # The get_seds method should handle missing parameters gracefully
-        # by using defaults or nearest neighbor
-        sed, params, _ = mock_grid.get_seds(mini=1.0, eep=300)  # Missing feh
-
-        # Should still return something
-        assert sed is not None
+        """Omitting a multi-valued grid parameter raises a clear error."""
+        # Historically this silently evaluated at the grid-minimum feh
+        # (about -3 for MIST), corrupting results with no signal; there is
+        # no sensible default, so it must fail fast.
+        with pytest.raises(ValueError, match="feh"):
+            mock_grid.get_seds(mini=1.0, eep=300)  # Missing feh
 
     def test_negative_distance(self, mock_grid):
         """Test with invalid distance."""
