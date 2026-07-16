@@ -216,6 +216,18 @@ For posterior predictive validation, compare the **posterior predictive width** 
 
 ## Common Pitfalls
 
+- **`load_models` default labels include `afe`**: grids are generated on a 5D
+  (mini, eep, feh, afe, smf) lattice; single-afe grids simply carry one
+  constant label column.
+- **Bayestar reliability masking is on by default**: queries return NaN
+  outside each sightline's `DM_reliable_min/max` range and in non-converged
+  pixels, degrading the dust prior to uniform there. Pass
+  `Bayestar(apply_reliability_mask=False)` for raw map values.
+- **EEPTracks caches are versioned** (`*_cachev2.pkl`); unversioned `.pkl`
+  caches from older versions are ignored and can be deleted.
+- **`quantile` uses the midpoint-CDF convention** for both weighted and
+  unweighted samples (not `np.percentile`'s linear interpolation).
+
 - **`np.tile` vs `np.repeat` for label alignment**: When broadcasting labels across MC samples, use `np.tile(labels, Nmc)` (repeats entire array), NOT `np.repeat(labels, Nmc)` (repeats each element). Wrong order silently scrambles label-to-sample mapping.
 - **ar_mix cross-term**: The A_V-R_V Fisher cross-term must include the `av[i]` factor to un-normalize `drvecs`. Missing this makes the precision matrix singular.
 - **Scale factor guard**: Always clamp scale to `MIN_SCALE` before taking `log(scale)`. Without this, NaN propagates through distance priors.

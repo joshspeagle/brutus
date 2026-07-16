@@ -139,7 +139,11 @@ class TestCoreIntegration:
         assert len(sed) == nfilters
         assert np.all(np.isfinite(sed))
 
-        # Step 2: Use BruteForce to fit observations
+        # Step 2: Use BruteForce to fit observations.
+        # Warm-up call so numba JIT compilation (order-dependent across the
+        # test session) is excluded from the timed section below.
+        fitter.loglike_grid(obs, obs_err, obs_mask, ltol=5e-2, verbose=False)
+
         start_time = time.time()
         lnl, ndim, chi2 = fitter.loglike_grid(
             obs,
