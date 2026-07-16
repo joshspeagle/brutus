@@ -164,21 +164,37 @@ def logp_imf(
         alpha_high - alpha_low
     ) * np.log(mass_break)
 
-    # Compute normalization factor over [mass_min, mass_max]
-    # Low-mass regime: mass_min to min(mass_break, mass_max)
-    if mass_max >= mass_break:
-        # Both regimes present
+    # Compute normalization factor over [mass_min, mass_max], integrating
+    # only over the power-law regime(s) the range actually overlaps. The
+    # high-mass piece carries the continuity factor
+    # mass_break^(alpha_high - alpha_low) so the density is continuous at
+    # mass_break.
+    if mass_min <= 0 or mass_max <= mass_min:
+        raise ValueError(
+            f"Invalid mass range: require 0 < mass_min < mass_max, "
+            f"got mass_min={mass_min}, mass_max={mass_max}."
+        )
+    continuity_factor = mass_break ** (alpha_high - alpha_low)
+    if mass_min < mass_break <= mass_max:
+        # Range straddles the break: both regimes contribute
         norm_low = _powerlaw_mass_integral(mass_min, mass_break, alpha_low)
-        # High-mass regime: mass_break to mass_max
-        # The high-mass PDF includes continuity factor: mass_break^(alpha_high - alpha_low)
-        continuity_factor = mass_break ** (alpha_high - alpha_low)
         norm_high = continuity_factor * _powerlaw_mass_integral(
             mass_break, mass_max, alpha_high
         )
         norm = norm_low + norm_high
+    elif mass_min >= mass_break:
+        # Entire range in the high-mass regime
+        norm = continuity_factor * _powerlaw_mass_integral(
+            mass_min, mass_max, alpha_high
+        )
     else:
-        # Only low-mass regime present
+        # Entire range in the low-mass regime (mass_max < mass_break)
         norm = _powerlaw_mass_integral(mass_min, mass_max, alpha_low)
+    if not np.isfinite(norm) or norm <= 0:
+        raise ValueError(
+            f"IMF normalization is non-positive or non-finite (norm={norm}); "
+            f"check mass_min/mass_max/mass_break and the power-law slopes."
+        )
 
     # Handle binary component if provided
     if mgrid2 is not None:

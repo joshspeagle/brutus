@@ -431,9 +431,9 @@ class TestExtinctionPriors:
         dustmap = Mock()
         dustmap.query.side_effect = TypeError("Query failed")
 
-        logp = logp_extinction(avs, dustmap, coord)
-
-        # Should return uniform prior on error
+        # Should return uniform prior on error, but warn about it
+        with pytest.warns(RuntimeWarning, match="query failed"):
+            logp = logp_extinction(avs, dustmap, coord)
         assert np.allclose(logp, 0.0)
 
     # --- Tests for 3D dust maps (Bayestar-like 3-tuple) ---
@@ -494,7 +494,8 @@ class TestExtinctionPriors:
         dustmap = Mock()
         dustmap.query.return_value = (map_distances, av_profile, std_profile)
 
-        logp = logp_extinction(avs, dustmap, coord, distance=distances)
+        # avlim=None: plain (untruncated) Gaussian for the manual check below
+        logp = logp_extinction(avs, dustmap, coord, distance=distances, avlim=None)
 
         assert logp.shape == avs.shape
         assert np.all(np.isfinite(logp))
@@ -547,13 +548,18 @@ class TestExtinctionPriors:
         assert np.isclose(err, 0.1)
 
     def test_logp_extinction_string_dustfile(self):
-        """Test that passing a string (file path) returns uniform prior."""
+        """Test that passing a string (file path) raises TypeError.
+
+        Regression: an unloaded path (str or pathlib.Path) used to be
+        silently treated as 'no coverage', disabling the dust prior for
+        the whole fit with no warning.
+        """
         avs = np.array([0.1, 0.5])
         coord = SkyCoord(l=90.0, b=0.0, unit="deg", frame="galactic")
 
-        # String has no .query() method — should return uniform
-        logp = logp_extinction(avs, "bayestar2019_v1.h5", coord, distance=1.0)
-        assert np.allclose(logp, 0.0)
+        # String has no .query() method — must fail loudly
+        with pytest.raises(TypeError, match="query"):
+            logp_extinction(avs, "bayestar2019_v1.h5", coord, distance=1.0)
 
 
 class TestUtilities:
