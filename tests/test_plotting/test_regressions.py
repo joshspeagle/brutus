@@ -8,6 +8,9 @@ Each test here fails on the pre-fix code:
 - missing scale-to-distance Jacobian (d^3) when reweighting SAR draws
   (`cornerplot`, `bin_pdfs_distred`),
 - `dist_vs_red` silently ignoring `weights` and multi-object input,
+- weighted PDFs in `bin_pdfs_distred` scaling with the absolute size of
+  `weights` instead of being normalized per object; single-coord zip
+  mis-pairing,
 - CDF accumulated along the wrong axis in `bin_pdfs_distred`,
 - SAR path crash with a custom `lndistprior` and `coord=None`,
 - `cornerplot` mutating caller kwargs dicts / freezing per-panel contour flags,
@@ -269,9 +272,10 @@ class TestDistVsRedFixes:
         plt.close()
 
         assert not np.allclose(H_w, H_unw)
-        np.testing.assert_allclose(
-            H_w / H_w.sum(), H_sub / H_sub.sum(), rtol=1e-4, atol=1e-7
-        )
+        # With per-object total-weight normalization, 0/1 weights must
+        # reproduce the kept subset's histogram exactly (same samples,
+        # same total weight), not merely up to a scale factor.
+        np.testing.assert_allclose(H_w, H_sub, rtol=1e-4, atol=1e-7)
 
     def test_multi_object_combines_all_objects(self):
         """Multi-object input must average the per-object PDFs rather than
@@ -332,6 +336,123 @@ class TestDistVsRedFixes:
         # A 1-D weights array of the wrong length must fail loudly.
         with pytest.raises(ValueError, match="weights"):
             dist_vs_red(data, weights=w[:-1], **kwargs)
+
+
+class TestBinPdfsWeightsAndCoords:
+    """Weighted binned PDFs must be invariant to the absolute scale of
+    `weights` (each object normalized by its total weight), invalid weights
+    must fail loudly, and a single (l, b) coord must be shared across all
+    objects instead of being silently mis-paired by zip."""
+
+    KW = dict(
+        dist_type="distance",
+        span=((0.0, 2.0), (0.4, 4.5)),
+        bins=(20, 10),
+        smooth=1e-6,
+        verbose=False,
+    )
+
+    @staticmethod
+    def _direct_data(nobj=2, nsamps=300, seed=11):
+        rng = np.random.RandomState(seed)
+        dists = rng.uniform(0.6, 3.5, (nobj, nsamps))
+        reds = rng.uniform(0.1, 1.9, (nobj, nsamps))
+        dreds = np.full((nobj, nsamps), 3.3)
+        return dists, reds, dreds
+
+    def test_direct_path_weight_scale_invariance(self):
+        """Rescaling all weights by a constant must not change the PDFs,
+        and all-ones weights must match the unweighted result; previously
+        the histogram was divided by nsamps regardless of total weight."""
+        data = self._direct_data()
+        nobj, nsamps = data[0].shape
+        w = np.random.RandomState(3).uniform(0.5, 1.5, (nobj, nsamps))
+
+        H_none, _, _ = bin_pdfs_distred(data, **self.KW)
+        H_ones, _, _ = bin_pdfs_distred(
+            data, weights=np.ones((nobj, nsamps)), **self.KW
+        )
+        H_w, _, _ = bin_pdfs_distred(data, weights=w, **self.KW)
+        H_5w, _, _ = bin_pdfs_distred(data, weights=5.0 * w, **self.KW)
+
+        np.testing.assert_allclose(H_ones, H_none, rtol=1e-5, atol=1e-9)
+        np.testing.assert_allclose(H_5w, H_w, rtol=1e-5, atol=1e-9)
+        assert not np.allclose(H_w, H_none)
+
+    def _sar_binned(self, weights=None, coord=None, nobj=2, seed=5):
+        nsamps = 4
+        scales = np.full((nobj, nsamps), 1.0)
+        avs = np.full((nobj, nsamps), 1.0)
+        rvs = np.full((nobj, nsamps), 3.3)
+        covs = np.tile(np.diag([0.09, 1e-10, 1e-10]), (nobj, nsamps, 1, 1))
+        if coord is None:
+            # Custom prior so no coordinates are required.
+            lndistprior = lambda d, c: -0.5 * ((d - 2.0) / 0.5) ** 2  # noqa: E731
+        else:
+            lndistprior = None  # default galactic prior, consumes coord
+        H, _, _ = bin_pdfs_distred(
+            (scales, avs, rvs, covs),
+            lndistprior=lndistprior,
+            coord=coord,
+            weights=weights,
+            avlim=(0.5, 1.5),
+            dist_type="distance",
+            span=((0.5, 1.5), (0.5, 4.0)),
+            bins=(30, 4),
+            smooth=1e-6,
+            Nr=500,
+            rstate=np.random.RandomState(seed),
+            verbose=False,
+        )
+        return H
+
+    def test_sar_path_weight_scale_invariance(self):
+        """Same invariances for the SAR-regeneration path, where caller
+        weights are folded into the per-draw importance weights."""
+        nobj, nsamps = 2, 4
+        w = np.random.RandomState(9).uniform(0.5, 1.5, (nobj, nsamps))
+
+        H_none = self._sar_binned()
+        H_ones = self._sar_binned(weights=np.ones((nobj, nsamps)))
+        H_w = self._sar_binned(weights=w)
+        H_3w = self._sar_binned(weights=3.0 * w)
+
+        np.testing.assert_allclose(H_ones, H_none, rtol=1e-5, atol=1e-9)
+        np.testing.assert_allclose(H_3w, H_w, rtol=1e-5, atol=1e-9)
+
+    def test_single_coord_broadcasts_to_all_objects(self):
+        """A bare (l, b) pair must be shared across all objects; previously
+        zip paired l with object 0, b with object 1, and dropped the rest."""
+        H_single = self._sar_binned(coord=(90.0, 20.0), nobj=3)
+        H_list = self._sar_binned(coord=[(90.0, 20.0)] * 3, nobj=3)
+        np.testing.assert_allclose(H_single, H_list, rtol=1e-6, atol=1e-10)
+        # Every object must actually be binned (none silently skipped).
+        assert np.all(H_single.sum(axis=(1, 2)) > 0)
+
+        # A coord list of the wrong length must fail loudly.
+        with pytest.raises(ValueError, match="coord"):
+            self._sar_binned(coord=[(90.0, 20.0)] * 2, nobj=3)
+
+    def test_invalid_weights_raise(self):
+        """Negative, non-finite, and all-zero-per-object weights are
+        rejected up front rather than silently corrupting the PDFs."""
+        data = self._direct_data()
+        nobj, nsamps = data[0].shape
+
+        w_neg = np.ones((nobj, nsamps))
+        w_neg[0, 0] = -1.0
+        with pytest.raises(ValueError, match="non-negative"):
+            bin_pdfs_distred(data, weights=w_neg, **self.KW)
+
+        w_nan = np.ones((nobj, nsamps))
+        w_nan[0, 0] = np.nan
+        with pytest.raises(ValueError, match="finite"):
+            bin_pdfs_distred(data, weights=w_nan, **self.KW)
+
+        w_zero = np.ones((nobj, nsamps))
+        w_zero[1] = 0.0
+        with pytest.raises(ValueError, match="sum to zero"):
+            bin_pdfs_distred(data, weights=w_zero, **self.KW)
 
 
 def _offsets_dataset(nobj=30, nfilt=6, nsamps=8, seed=3):

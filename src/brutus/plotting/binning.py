@@ -75,9 +75,10 @@ def bin_pdfs_distred(
         The log-distsance prior function used. If not provided, the galactic
         model from Green et al. (2014) will be assumed.
 
-    coord : 2-tuple, optional
-        The galactic `(l, b)` coordinates for the object, which is passed to
-        `lndistprior` when re-generating the fits.
+    coord : 2-tuple or `~numpy.ndarray` of shape `(Nobj, 2)`, optional
+        The galactic `(l, b)` coordinates passed to `lndistprior` when
+        re-generating the fits. A single `(l, b)` pair is shared across
+        all objects; otherwise provide one pair per object.
 
     avlim : 2-tuple, optional
         The Av limits used to truncate results. Default is `(0., 6.)`.
@@ -87,6 +88,9 @@ def bin_pdfs_distred(
 
     weights : `~numpy.ndarray` of shape `(Nobj, Nsamps)`, optional
         An optional set of importance weights used to reweight the samples.
+        Must be finite and non-negative, with at least one positive weight
+        per object. Each object's binned PDF is normalized by its total
+        weight, so results are invariant to the absolute scale of `weights`.
 
     parallaxes : `~numpy.ndarray` of shape `(Nobj,)`, optional
         The parallax estimates for the sources.
@@ -148,6 +152,15 @@ def bin_pdfs_distred(
         if weights.shape != (nobjs, nsamps):
             raise ValueError(
                 f"`weights` must have shape {(nobjs, nsamps)}; " f"got {weights.shape}."
+            )
+        if not np.all(np.isfinite(weights)) or np.any(weights < 0):
+            raise ValueError("`weights` must be finite and non-negative.")
+        wtots = weights.sum(axis=1)
+        if np.any(wtots == 0):
+            bad = np.where(wtots == 0)[0]
+            raise ValueError(
+                f"`weights` sum to zero for object(s) {bad}; each object "
+                "needs at least one positive weight."
             )
 
     # Set up bins.
@@ -226,7 +239,11 @@ def bin_pdfs_distred(
                 sys.stderr.write(f"\rBinning object {i + 1}/{nobjs}")
             wt = None if weights is None else weights[i]
             H, xedges, yedges = np.histogram2d(xs, ys, bins=(xbins, ybins), weights=wt)
-            binned_vals[i] = H / nsamps
+            # Normalize by the total weight (nsamps when unweighted) so the
+            # binned mass equals the weighted fraction of samples inside the
+            # span, independent of the absolute scale of `weights`.
+            wtot = nsamps if weights is None else weights[i].sum()
+            binned_vals[i] = H / wtot
     except (AttributeError, KeyError):
         # Regenerate distance and reddening samples from inputs.
         scales, avs, rvs, covs_sar = copy.deepcopy(data)
@@ -241,6 +258,19 @@ def bin_pdfs_distred(
         if coord is None:
             # Custom `lndistprior` without coordinates: pass `None` per object.
             coord = [None] * nobjs
+        else:
+            # A bare (l, b) pair is shared by every object (e.g. a stack of
+            # stars along one sightline). Anything else must supply one pair
+            # per object -- a mis-shaped coord would otherwise be silently
+            # mis-paired (and truncated) by the zip below.
+            coord = np.asarray(coord)
+            if coord.shape == (2,):
+                coord = np.tile(coord, (nobjs, 1))
+            elif coord.shape != (nobjs, 2):
+                raise ValueError(
+                    f"`coord` must be a single (l, b) pair or have shape "
+                    f"{(nobjs, 2)}; got {coord.shape}."
+                )
 
         # Generate parallax and Av realizations.
         for i, stuff in enumerate(
@@ -310,7 +340,11 @@ def bin_pdfs_distred(
             H, xedges, yedges = np.histogram2d(
                 xdraws, ydraws, bins=(xbins, ybins), weights=pwt
             )
-            binned_vals[i] = H / nsamps
+            # Each sample's Nr draw weights sum to 1, so the total weight is
+            # nsamps unweighted and sum(weights[i]) otherwise; dividing by it
+            # keeps the result invariant to the absolute scale of `weights`.
+            wtot = nsamps if weights is None else weights[i].sum()
+            binned_vals[i] = H / wtot
 
     # Apply smoothing.
     for i, (H, parallax, parallax_err) in enumerate(
