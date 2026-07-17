@@ -18,10 +18,11 @@ Output Structure
        distances = f['samps_dist'][:]    # Distance in kpc
        av_values = f['samps_red'][:]     # A_V extinction (mag)
        rv_values = f['samps_dred'][:]    # R_V values
-       log_posts = f['samps_logp'][:]    # Log-posterior values (log-weights)
-                                         # of the draws; the draws are already
-                                         # resampled, so treat them as
-                                         # equally weighted
+       log_posts = f['samps_logp'][:]    # Log-posterior values at the draws,
+                                         # for diagnostics only -- the draws
+                                         # are already resampled, so treat
+                                         # them as equally weighted (do NOT
+                                         # reweight by samps_logp)
 
        # Model indices into the grid
        model_idx = f['model_idx'][:]     # Shape (Nstars, Ndraws)
