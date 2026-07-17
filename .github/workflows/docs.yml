@@ -7,15 +7,13 @@ on:
     branches: [ master, main ]
 
 jobs:
+  # Build runs everywhere (PRs included). It must NOT declare the
+  # github-pages environment: that environment's protection rules only
+  # allow master, so a job tied to it is rejected instantly on every PR
+  # (the historical always-failing "docs" check). Keeping the job name
+  # "docs" preserves the check name PRs have always shown.
   docs:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
     - uses: actions/checkout@v4
@@ -35,17 +33,31 @@ jobs:
         cd docs
         make html
 
-    - name: Setup Pages
-      if: github.ref == 'refs/heads/master' && github.event_name == 'push'
-      uses: actions/configure-pages@v4
-
-    - name: Upload artifact
+    - name: Upload Pages artifact
       if: github.ref == 'refs/heads/master' && github.event_name == 'push'
       uses: actions/upload-pages-artifact@v3
       with:
         path: docs/build/html
 
+  # Deploy only on pushes to master; this job carries the github-pages
+  # environment and never runs for PRs, so the environment gate is
+  # never violated.
+  deploy-pages:
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    needs: docs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+    - name: Setup Pages
+      uses: actions/configure-pages@v4
+
     - name: Deploy to GitHub Pages
-      if: github.ref == 'refs/heads/master' && github.event_name == 'push'
       id: deployment
       uses: actions/deploy-pages@v4
