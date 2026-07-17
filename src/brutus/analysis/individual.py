@@ -64,6 +64,7 @@ Basic usage with grid-based fitting:
 ... )
 """
 
+import os
 import sys
 import time
 import warnings
@@ -1701,8 +1702,8 @@ class BruteForce:
             lnp_mc += lnp_gal_reshaped
 
         if dustfile is not None and apply_av_prior:
-            # Load dust map from file path if needed
-            if isinstance(dustfile, str):
+            # Load dust map from file path (str or os.PathLike) if needed
+            if isinstance(dustfile, (str, os.PathLike)):
                 from ..dust import Bayestar
 
                 dustfile = Bayestar(dustfile=dustfile)
@@ -1881,10 +1882,11 @@ class BruteForce:
             ``f(avs, dustmap, coord, distance=None)``. If not provided
             and dustfile is given, uses ``logp_extinction``.
 
-        dustfile : str or `~brutus.dust.Bayestar`, optional
-            3D dust map for extinction priors. Can be a file path (string)
-            to a Bayestar HDF5 file, which will be loaded automatically,
-            or a pre-loaded ``Bayestar`` object.
+        dustfile : str, path-like, or `~brutus.dust.Bayestar`, optional
+            3D dust map for extinction priors. Can be a file path (string
+            or `os.PathLike`, e.g. `pathlib.Path`) to a Bayestar HDF5
+            file, which will be loaded automatically, or a pre-loaded
+            ``Bayestar`` object.
 
         apply_dlabels : bool, optional
             Whether to pass model labels to Galactic prior. Default is True.
@@ -2007,8 +2009,9 @@ class BruteForce:
         ...     data_coords=coords
         ... )
         """
-        # Load dust map from file path if needed (once for all objects)
-        if dustfile is not None and isinstance(dustfile, str):
+        # Load dust map from file path (str or os.PathLike) if needed
+        # (once for all objects)
+        if dustfile is not None and isinstance(dustfile, (str, os.PathLike)):
             from ..dust import Bayestar
 
             dustfile = Bayestar(dustfile=dustfile)
@@ -2361,8 +2364,9 @@ class BruteForce:
             Galactic structure prior function.
         lndustprior : callable, optional
             Dust prior function.
-        dustfile : str, optional
-            Path to 3D dust map file.
+        dustfile : str, path-like, or `~brutus.dust.Bayestar`, optional
+            Path to a 3D dust map file (loaded automatically), or a
+            pre-loaded ``Bayestar`` object.
         dlabels : numpy.ndarray, optional
             Model labels for prior evaluation.
         logl_dim_prior : bool, optional

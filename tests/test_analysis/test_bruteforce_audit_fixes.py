@@ -11,6 +11,8 @@ Covers:
 3. logpost_grid must honor apply_av_prior=False.
 4. A dust-map prior (dustfile) without a sky position must raise a clear
    ValueError instead of crashing deep inside the map query.
+5. A pathlib.Path dustfile must be auto-loaded exactly like a str path
+   rather than being mistaken for a pre-loaded dust-map object.
 """
 
 import numpy as np
@@ -312,6 +314,41 @@ class TestDustPriorGating:
         )
         assert len(out[0]) > 0
         assert calls == []
+
+    def test_dustfile_accepts_pathlib_path(
+        self, fitter, observation, monkeypatch, tmp_path
+    ):
+        """A pathlib.Path dustfile must trigger the same auto-load as a str
+        path; previously the isinstance(dustfile, str) gate let a Path fall
+        through as a "pre-loaded map" and crash downstream."""
+        import brutus.dust as dust_mod
+
+        loaded = []
+
+        class FakeBayestar:
+            def __init__(self, dustfile=None, **kwargs):
+                loaded.append(dustfile)
+
+        monkeypatch.setattr(dust_mod, "Bayestar", FakeBayestar)
+
+        flux, flux_err, mask = observation
+        like = fitter.loglike_grid(flux, flux_err, mask.copy(), return_vals=True)
+
+        calls = []
+        dust_path = tmp_path / "bayestar_fake.h5"
+        out = fitter.logpost_grid(
+            like,
+            coord=(120.0, 45.0),
+            dustfile=dust_path,
+            lndustprior=self._mock_dust(calls),
+            apply_av_prior=True,
+            Nmc_prior=5,
+            wt_thresh=0.1,
+            rstate=np.random.RandomState(0),
+        )
+        assert len(out[0]) > 0
+        assert loaded == [dust_path], "Path dustfile was not auto-loaded"
+        assert len(calls) == 1
 
     def test_setup_dustfile_without_data_coords_raises(self, fitter):
         data = 10 ** (-0.4 * np.array([15, 14.8, 14.7, 14.6, 14.55]))
