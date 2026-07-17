@@ -113,7 +113,7 @@ Prior Distributions
 
 .. math::
 
-   \pi(\theta, \phi) = \pi(M_{\rm init}) \times \pi({\rm EEP}) \times \pi([{\rm Fe/H}], t_{\rm age} \,|\, d, \ell, b) \times \pi(A_V \,|\, d, \ell, b) \times \pi(R_V)
+   \pi(\theta, \phi) = \pi(M_{\rm init}) \times \pi({\rm EEP}) \times \pi(d \,|\, \ell, b) \times \pi([{\rm Fe/H}], t_{\rm age} \,|\, d, \ell, b) \times \pi(A_V \,|\, d, \ell, b) \times \pi(R_V)
 
 The components are:
 
