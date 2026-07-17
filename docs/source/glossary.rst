@@ -37,7 +37,7 @@ Stellar Evolution
 
    IMF
    Initial Mass Function
-      The probability distribution of stellar masses at birth. brutus uses the Kroupa IMF: P(M) ∝ M⁻¹·³ for 0.08-0.5 M☉, P(M) ∝ M⁻²·³ for 0.5-150 M☉.
+      The probability distribution of stellar masses at birth. brutus uses the Kroupa IMF: P(M) ∝ M⁻¹·³ for 0.08-0.5 M☉, P(M) ∝ M⁻²·³ above 0.5 M☉ (normalized over 0.08-100 M☉ by default).
 
 Chemical Abundances
 -------------------
@@ -50,7 +50,7 @@ Chemical Abundances
 
    alpha enhancement
    [α/Fe]
-      The abundance of alpha-process elements (O, Mg, Si, Ca, Ti) relative to iron, compared to solar. Old halo and thick disk stars typically have [α/Fe] ~ +0.3. *Note: Alpha enhancement is not currently exposed as a user-facing parameter in brutus; models assume solar-scaled abundances.*
+      The abundance of alpha-process elements (O, Mg, Si, Ca, Ti) relative to iron, compared to solar. Old halo and thick disk stars typically have [α/Fe] ~ +0.3. *Note: brutus model interfaces accept alpha enhancement (the afe argument to get_seds and a grid label in load_models), but the shipped MIST data files are computed at [α/Fe] = 0, so models are effectively solar-scaled unless you supply alpha-enhanced grids.*
 
 Photometry
 ----------

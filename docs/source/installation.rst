@@ -4,7 +4,7 @@ Installation
 Requirements
 ------------
 
-- **Python**: 3.8 or higher
+- **Python**: 3.9 or higher
 - **Operating System**: Linux, macOS, or Windows with WSL (see Windows note below)
 
 Quick Install
@@ -58,7 +58,7 @@ Core dependencies that will be automatically installed:
 - ``matplotlib`` (≥3.3) - Plotting
 - ``h5py`` (≥3.0) - HDF5 file support
 - ``healpy`` (≥1.14) - HEALPix utilities for incorporating dust maps
-- ``numba`` (≥0.53) - Just-in-time compilation for performance
+- ``numba`` (≥0.59) - Just-in-time compilation for performance
 - ``pooch`` (≥1.4) - Data downloading and management
 - ``tqdm`` (≥4.50) - Progress bars and live tracking
 

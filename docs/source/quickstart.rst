@@ -132,7 +132,7 @@ Loading Models and Preparing Data
    grid = StarGrid(models, labels)
 
    # Load photometric calibration offsets (recommended)
-   offsets = load_offsets('offsets_mist_v9.h5', filters=filters)
+   offsets = load_offsets('offsets_mist_v9.txt', filters=filters)
 
 Using Dust Map Priors (Optional)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -176,6 +176,14 @@ extinction priors based on Galactic coordinates and distance:
    sightlines south of this limit, the dust map prior will not be applied and
    fitting will rely on the other priors instead.
 
+   By default, queries also honor the map's per-pixel reliability metadata:
+   distance bins outside a sightline's reliable distance range, and pixels
+   whose fits did not converge, are returned as NaN (so the above example can
+   print NaN for some sightlines). NaN values degrade to an uninformative
+   extinction prior during fitting. Pass
+   ``Bayestar(dustfile=..., apply_reliability_mask=False)`` (or the same
+   keyword to ``query``) to disable this masking.
+
 Running the Fitter
 ^^^^^^^^^^^^^^^^^^
 
@@ -207,7 +215,9 @@ uncertainties and a validity mask.
    **Minimum 4 photometric bands recommended.** The fitter has 3 free
    parameters per star (scale/distance, A_V, R_V), so at least 4 bands are
    needed for a constrained fit. The code will emit a ``RuntimeWarning`` if
-   fewer than 4 valid bands are provided but will not hard-fail. Optical +
+   fewer than 4 valid bands are provided but will not hard-fail; an object
+   with **zero** valid bands (all bands masked or non-finite) raises a
+   ``ValueError``, so filter such objects out before fitting. Optical +
    near-IR coverage (e.g., Gaia + 2MASS) is recommended to break color-extinction
    degeneracies.
 
