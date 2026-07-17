@@ -84,7 +84,9 @@ For **stellar clusters** with MCMC:
    obs_err = np.array([...])   # shape (N, M)
 
    # Define log-likelihood for MCMC
-   # theta = [feh, loga, av, rv, dist]
+   # theta = [feh, loga, av, rv, dist, field_frac]
+   # (field_frac is the field contamination fraction, 0 to 1;
+   # a 5-element theta raises ValueError)
    def lnprob(theta):
        return isochrone_population_loglike(
            theta,
@@ -95,7 +97,7 @@ For **stellar clusters** with MCMC:
        )
 
    # Run MCMC
-   ndim, nwalkers = 5, 32
+   ndim, nwalkers = 6, 32
    sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob)
    sampler.run_mcmc(initial_pos, 5000, progress=True)
 

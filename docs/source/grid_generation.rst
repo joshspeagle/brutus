@@ -91,7 +91,7 @@ Download grids with :func:`~brutus.data.fetch_grids`:
    * - ``bayestar_v5``
      - Bayestar-compatible grid (Pan-STARRS + 2MASS filters only).
 
-All grids include photometry for the full set of :ref:`available-filters`. When loading, specify which filters you need:
+The MIST grids include photometry for the full set of :ref:`available-filters`; the Bayestar grid includes only its Pan-STARRS and 2MASS bands. When loading, specify which filters you need:
 
 .. code-block:: python
 
@@ -176,7 +176,7 @@ At each surviving grid point, draw samples from the approximate likelihood and c
 - Metallicity and age distributions
 - 3-D dust extinction (if dust map provided)
 
-This step dominates the computation time.
+The cost of this stage scales with ``Nmc_prior``, but the grid screening in Stages 1--2 dominates the overall computation time (see the timing benchmarks below).
 
 **Stage 4: Posterior Resampling**
 
@@ -327,7 +327,7 @@ Grids are loaded entirely into memory. To reduce footprint, load only the filter
 
 **Sampling Resolution** (``Nmc_prior``, ``Ndraws``):
 
-- ``Nmc_prior`` (default 50): Monte Carlo samples per grid point for prior integration. The dominant computational cost.
+- ``Nmc_prior`` (default 50): Monte Carlo samples per grid point for prior integration; sets the cost of ``logpost_grid``.
 - ``Ndraws`` (default 250): Number of posterior samples saved per star.
 
 For faster exploratory fits, reduce these:
