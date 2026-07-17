@@ -65,9 +65,10 @@ def dist_vs_red(
         The log-distsance prior function used. If not provided, the galactic
         model from Green et al. (2014) will be assumed.
 
-    coord : 2-tuple, optional
-        The galactic `(l, b)` coordinates for the object, which is passed to
-        `lndistprior`.
+    coord : 2-tuple or list of 2-tuples, optional
+        The galactic `(l, b)` coordinates passed to `lndistprior`. A single
+        `(l, b)` pair is shared across all objects; for multi-object input
+        a list with one pair per object is also accepted.
 
     avlim : 2-tuple, optional
         The Av limits used to truncate results. Default is `(0., 6.)`.
