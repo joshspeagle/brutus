@@ -94,8 +94,10 @@ def _logsumexp3(a, b, c):
 @jit(nopython=True, parallel=True, cache=True)
 def _galactic_prior_fused(
     dists,
-    R_arr,
-    Z_arr,
+    sin_l,
+    cos_l,
+    sin_b,
+    cos_b,
     feh_arr,
     loga_arr,
     has_feh,
@@ -106,7 +108,6 @@ def _galactic_prior_fused(
     R_thin,
     Z_thin,
     Rs_thin,
-    f_thin,
     # Thick disk
     R_thick,
     Z_thick,
@@ -135,11 +136,20 @@ def _galactic_prior_fused(
     max_sigma_age,
     min_sigma_age,
 ):
-    """Fused galactic prior: computes density + vol + met + age in one pass."""
+    """Fused galactic prior: coords + density + vol + met + age in one pass.
+
+    ``sin_l``/``cos_l``/``sin_b``/``cos_b`` are the precomputed sine/cosine
+    of the (scalar) Galactic longitude/latitude; the Galactocentric (R, Z)
+    conversion is folded into the parallel loop with the exact operation
+    order of ``galactic_to_galactocentric_cyl`` (bitwise-identical results,
+    no full-size temporaries).
+    """
     N = len(dists)
     logp_out = np.empty(N)
 
-    # Solar halo normalization (scalar, computed once)
+    # --- Loop-invariant constants (hoisted out of the prange loop) ---
+
+    # Solar halo normalization
     r_solar = sqrt(R_solar**2 + Z_solar**2)
     r_prime_solar = sqrt(r_solar**2 + r_q_halo**2)
     q_solar = q_halo_inf - (q_halo_inf - q_halo_ctr) * exp(
@@ -147,10 +157,54 @@ def _galactic_prior_fused(
     )
     R_eff_solar_halo = sqrt(R_solar**2 + (Z_solar / q_solar) ** 2 + Rs_halo**2)
 
+    # Solar disk normalizations use the SMOOTHED solar radius so the disk
+    # density is exactly 1 at the solar position (consistent with the halo
+    # normalization above and with ``logn_disk``); otherwise the f_thick /
+    # f_halo mixture fractions are silently rescaled by ~10%.
+    R_solar_eff_thin = sqrt(R_solar**2 + Rs_thin**2)
+    R_solar_eff_thick = sqrt(R_solar**2 + Rs_thick**2)
+    abs_Z_solar = abs(Z_solar)
+    ln_f_thick = log(f_thick)
+    ln_f_halo = log(f_halo)
+
+    # Age-prior constants depend only on the component metallicity means,
+    # not on the grid point: 3 exp + 6 erf + logs hoisted out of the loop.
+    age_mean_c = np.empty(3)
+    age_sigma_c = np.empty(3)
+    lndenom_c = np.empty(3)
+    for comp_idx in range(3):
+        if comp_idx == 0:
+            fm = feh_thin_mean
+        elif comp_idx == 1:
+            fm = feh_thick_mean
+        else:
+            fm = feh_halo_mean
+        age_mean = (max_age - min_age) / (
+            1.0 + exp((fm - feh_age_ctr) / feh_age_scale)
+        ) + min_age
+        age_sigma = (max_age - age_mean) / nsigma_from_max_age
+        if age_sigma < min_sigma_age:
+            age_sigma = min_sigma_age
+        if age_sigma > max_sigma_age:
+            age_sigma = max_sigma_age
+        alpha = (min_age - age_mean) / age_sigma
+        beta = (max_age - age_mean) / age_sigma
+        denom = max(erf(beta / _SQRT2) - erf(alpha / _SQRT2), 1e-300)
+        age_mean_c[comp_idx] = age_mean
+        age_sigma_c[comp_idx] = age_sigma
+        lndenom_c[comp_idx] = log(age_sigma / 2.0) + log(denom)
+
     for i in prange(N):
         d = dists[i]
-        R = R_arr[i]
-        Z = Z_arr[i]
+
+        # Galactocentric cylindrical coordinates (same operation order as
+        # galactic_to_galactocentric_cyl for bitwise-identical results;
+        # explicit multiplication instead of **2 matches numpy's squaring
+        # fast path in both JIT and NUMBA_DISABLE_JIT modes)
+        x = d * cos_b * cos_l - R_solar
+        y = d * cos_b * sin_l
+        R = sqrt(x * x + y * y)
+        Z = d * sin_b + Z_solar
 
         # Volume factor
         vol = 2.0 * log(d + 1e-300)
@@ -158,16 +212,18 @@ def _galactic_prior_fused(
         # Thin disk
         R_eff_thin = sqrt(R**2 + Rs_thin**2)
         lnp_thin = (
-            -(R_eff_thin - R_solar) / R_thin - (abs(Z) - abs(Z_solar)) / Z_thin + vol
+            -(R_eff_thin - R_solar_eff_thin) / R_thin
+            - (abs(Z) - abs_Z_solar) / Z_thin
+            + vol
         )
 
         # Thick disk
         R_eff_thick = sqrt(R**2 + Rs_thick**2)
         lnp_thick = (
-            -(R_eff_thick - R_solar) / R_thick
-            - (abs(Z) - abs(Z_solar)) / Z_thick
+            -(R_eff_thick - R_solar_eff_thick) / R_thick
+            - (abs(Z) - abs_Z_solar) / Z_thick
             + vol
-            + log(f_thick)
+            + ln_f_thick
         )
 
         # Halo
@@ -175,7 +231,7 @@ def _galactic_prior_fused(
         r_prime = sqrt(r**2 + r_q_halo**2)
         q = q_halo_inf - (q_halo_inf - q_halo_ctr) * exp(1.0 - r_prime / r_q_halo)
         R_eff_halo = sqrt(R**2 + (Z / q) ** 2 + Rs_halo**2)
-        lnp_halo = -eta_halo * log(R_eff_halo / R_eff_solar_halo) + vol + log(f_halo)
+        lnp_halo = -eta_halo * log(R_eff_halo / R_eff_solar_halo) + vol + ln_f_halo
 
         # logsumexp3
         mx = max(lnp_thin, max(lnp_thick, lnp_halo))
@@ -184,6 +240,10 @@ def _galactic_prior_fused(
         )
 
         # Metallicity prior
+        feh_lnp = 0.0
+        feh_lnp_thin = 0.0
+        feh_lnp_thick = 0.0
+        feh_lnp_halo = 0.0
         if has_feh:
             feh_val = feh_arr[i]
             # Component membership
@@ -231,41 +291,32 @@ def _galactic_prior_fused(
         # Age prior
         if has_loga:
             age_val = 10.0 ** loga_arr[i] / 1e9  # Gyr
-            if not has_feh:
-                feh_lnp = 0.0
-            ln_w_thin = lnp_thin - (logp_total - feh_lnp if has_feh else logp_total)
-            ln_w_thick = lnp_thick - (logp_total - feh_lnp if has_feh else logp_total)
-            ln_w_halo = lnp_halo - (logp_total - feh_lnp if has_feh else logp_total)
+            if has_feh:
+                # Metallicity-updated membership weights: the joint mixture
+                # prior is sum_c w_c(pos) p(feh|c) p(age|c), so the age term
+                # must weight components by w_c(pos) p(feh|c) / Z_feh rather
+                # than by the position-only w_c(pos).
+                ln_w_thin = feh_lnp_thin - feh_lnp
+                ln_w_thick = feh_lnp_thick - feh_lnp
+                ln_w_halo = feh_lnp_halo - feh_lnp
+            else:
+                ln_w_thin = lnp_thin - logp_total
+                ln_w_thick = lnp_thick - logp_total
+                ln_w_halo = lnp_halo - logp_total
 
             # Compute truncated normal for each component
             age_lnp_total = -1e300
             for comp_idx in range(3):
                 if comp_idx == 0:
-                    fm = feh_thin_mean
                     ln_w = ln_w_thin
                 elif comp_idx == 1:
-                    fm = feh_thick_mean
                     ln_w = ln_w_thick
                 else:
-                    fm = feh_halo_mean
                     ln_w = ln_w_halo
 
-                age_mean = (max_age - min_age) / (
-                    1.0 + exp((fm - feh_age_ctr) / feh_age_scale)
-                ) + min_age
-                age_sigma = (max_age - age_mean) / nsigma_from_max_age
-                if age_sigma < min_sigma_age:
-                    age_sigma = min_sigma_age
-                if age_sigma > max_sigma_age:
-                    age_sigma = max_sigma_age
-
-                xi = (age_val - age_mean) / age_sigma
-                alpha = (min_age - age_mean) / age_sigma
-                beta = (max_age - age_mean) / age_sigma
+                xi = (age_val - age_mean_c[comp_idx]) / age_sigma_c[comp_idx]
                 lnphi = -0.5 * (_LOG_2PI + xi * xi)
-                denom = max(erf(beta / _SQRT2) - erf(alpha / _SQRT2), 1e-300)
-                lndenom = log(age_sigma / 2.0) + log(denom)
-                age_comp = lnphi - lndenom + ln_w
+                age_comp = lnphi - lndenom_c[comp_idx] + ln_w
 
                 # Bounds check
                 if age_val < min_age or age_val > max_age:
@@ -340,10 +391,15 @@ def logn_disk(R, Z, R_solar=8.2, Z_solar=0.025, R_scale=2.6, Z_scale=0.3, R_smoo
     The disk number density follows:
 
     .. math::
-        n_{\\text{disk}}(R, Z) \\propto \\exp\\left(-\\frac{R_{\\text{eff}} - R_\\odot}{R_{\\text{scale}}} - \\frac{|Z| - |Z_\\odot|}{Z_{\\text{scale}}}\\right)
+        n_{\\text{disk}}(R, Z) \\propto \\exp\\left(-\\frac{R_{\\text{eff}} - R_{\\text{eff},\\odot}}{R_{\\text{scale}}} - \\frac{|Z| - |Z_\\odot|}{Z_{\\text{scale}}}\\right)
 
     where :math:`R_{\\text{eff}} = \\sqrt{R^2 + R_{\\text{smooth}}^2}` provides
-    smoothing near the Galactic center.
+    smoothing near the Galactic center and
+    :math:`R_{\\text{eff},\\odot} = \\sqrt{R_\\odot^2 + R_{\\text{smooth}}^2}`
+    is the smoothed solar radius, so the normalized density is exactly 1 at
+    the solar position (consistent with :func:`logn_halo`). This keeps the
+    mixture fractions (``f_thick``, ``f_halo``) in
+    :func:`logp_galactic_structure` exact at the solar position.
 
     References
     ----------
@@ -355,8 +411,10 @@ def logn_disk(R, Z, R_solar=8.2, Z_solar=0.025, R_scale=2.6, Z_scale=0.3, R_smoo
     # Smoothed effective radius
     R_eff = np.sqrt(R**2 + R_smooth**2)
 
-    # Exponential disk components
-    radial_term = (R_eff - R_solar) / R_scale
+    # Exponential disk components, normalized at the SMOOTHED solar radius
+    # so that logn_disk(R_solar, Z_solar) == 0 (as for logn_halo).
+    R_eff_solar = np.sqrt(R_solar**2 + R_smooth**2)
+    radial_term = (R_eff - R_eff_solar) / R_scale
     vertical_term = (np.abs(Z) - np.abs(Z_solar)) / Z_scale
 
     return -(radial_term + vertical_term)
@@ -643,9 +701,10 @@ def logp_galactic_structure(
     feh : array_like, optional
         Per-point [Fe/H] as a plain float array, an alternative to ``labels``
         for the metallicity prior. Lets callers (e.g. ``logpost_grid``) avoid
-        tiling a structured ``labels`` array; bitwise-identical to passing the
-        same values via ``labels``. Only used on the fused fast path
-        (``len(dists) > 1000``).
+        tiling a structured ``labels`` array; equivalent to passing the same
+        values via ``labels``. Honored on every code path (fused kernel,
+        numpy fallback, and small arrays). If both ``labels`` and
+        ``feh``/``loga`` are given, the plain arrays take precedence.
     loga : array_like, optional
         Per-point log10(age/yr) as a plain float array, an alternative to
         ``labels`` for the age prior (see ``feh``).
@@ -735,16 +794,21 @@ def logp_galactic_structure(
     - Metallicity: Gaussian distributions with different means/dispersions
     - Age: Age-metallicity relation with truncated normal distributions
 
+    When both metallicity and age are supplied, the joint prior is the
+    proper mixture ``sum_c w_c(pos) p(feh|c) p(age|c)``: the age term
+    weights each component by its metallicity-updated membership
+    probability ``w_c(pos) p(feh|c) / sum_c' w_c'(pos) p(feh|c')``, not by
+    the position-only weight. This matters for chemically extreme stars
+    (e.g. nearby metal-poor stars are correctly weighted toward old,
+    halo-like ages).
+
     References
     ----------
     Bland-Hawthorn & Gerhard (2016) - The Galaxy in Context
     """
-    dists = np.asarray(dists)
+    dists = np.asarray(dists, dtype=float)
 
-    # Volume correction factor (dV ∝ r² dr)
-    vol_factor = 2.0 * np.log(dists + 1e-300)
-
-    # Convert to galactocentric cylindrical coordinates
+    # Extract Galactic (l, b) in degrees
     if hasattr(coord, "galactic"):
         # coord is already a SkyCoord object
         ell = coord.galactic.l.deg
@@ -753,14 +817,6 @@ def logp_galactic_structure(
         # coord is a tuple of (l, b) in degrees
         ell, b = coord[0], coord[1]
 
-    # Convert to Galactocentric cylindrical coordinates using fast NumPy math
-    R, Z = galactic_to_galactocentric_cyl(
-        dists, ell, b, R_solar=R_solar, Z_solar=Z_solar
-    )
-
-    # Fast path: use fused numba kernel when labels are provided and
-    # return_components is not needed. Eliminates ~15 temporary arrays.
-    #
     # Callers may pass the per-point ``feh`` / ``loga`` as plain float arrays
     # directly (instead of a structured ``labels`` array). This is the hot path
     # from logpost_grid, where it avoids tiling a structured array across all MC
@@ -769,21 +825,44 @@ def logp_galactic_structure(
     # either way, so results are bitwise-identical to the structured path.
     use_arrays = feh is not None or loga is not None
     if use_arrays:
-        # Validate the directly-supplied arrays up front so misuse gives an
-        # actionable error rather than failing later inside the numba kernel.
-        for _name, _arr in (("feh", feh), ("loga", loga)):
-            if _arr is None:
-                continue
-            _arr = np.asarray(_arr)
-            if _arr.ndim != 1 or _arr.shape[0] != len(dists):
+        # Normalize to contiguous float64 up front so the numba kernel types
+        # cleanly (lists, float32, object arrays) and misuse gives an
+        # actionable error rather than failing later inside the kernel.
+        if feh is not None:
+            feh = np.ascontiguousarray(feh, dtype=np.float64)
+            if feh.ndim != 1 or feh.shape[0] != len(dists):
                 raise ValueError(
-                    f"`{_name}` must be a 1D array matching len(dists)="
-                    f"{len(dists)}; got shape {np.shape(_arr)}."
+                    f"`feh` must be a 1D array matching len(dists)="
+                    f"{len(dists)}; got shape {np.shape(feh)}."
                 )
+        if loga is not None:
+            loga = np.ascontiguousarray(loga, dtype=np.float64)
+            if loga.ndim != 1 or loga.shape[0] != len(dists):
+                raise ValueError(
+                    f"`loga` must be a 1D array matching len(dists)="
+                    f"{len(dists)}; got shape {np.shape(loga)}."
+                )
+        # A plain array overrides only its own field. Any field not supplied
+        # as an array is sourced from a caller-provided structured `labels`,
+        # so mixing the two call styles cannot silently drop the metallicity
+        # or age prior (previously `feh=` alongside labels containing 'loga'
+        # discarded the age term).
+        if labels is not None:
+            if feh is None and "feh" in labels.dtype.names:
+                feh = np.ascontiguousarray(labels["feh"], dtype=np.float64)
+            if loga is None and "loga" in labels.dtype.names:
+                loga = np.ascontiguousarray(labels["loga"], dtype=np.float64)
+
+    # Fast path: use fused numba kernel when labels are provided and
+    # return_components is not needed. Eliminates ~15 temporary arrays
+    # (the coordinate conversion and volume factor are computed per point
+    # inside the kernel). Requires a single (scalar) sky position.
     if (
         (labels is not None or use_arrays)
         and not return_components
         and len(dists) > 1000
+        and np.ndim(ell) == 0
+        and np.ndim(b) == 0
     ):
         if use_arrays:
             has_feh = feh is not None
@@ -795,11 +874,15 @@ def logp_galactic_structure(
             has_loga = "loga" in labels.dtype.names
             feh_arr = labels["feh"] if has_feh else np.empty(0)
             loga_arr = labels["loga"] if has_loga else np.empty(0)
+        ell_rad = np.deg2rad(float(ell))
+        b_rad = np.deg2rad(float(b))
         try:
             return _galactic_prior_fused(
                 dists,
-                R,
-                Z,
+                np.sin(ell_rad),
+                np.cos(ell_rad),
+                np.sin(b_rad),
+                np.cos(b_rad),
                 feh_arr,
                 loga_arr,
                 has_feh,
@@ -809,7 +892,6 @@ def logp_galactic_structure(
                 R_thin,
                 Z_thin,
                 Rs_thin,
-                1.0,
                 R_thick,
                 Z_thick,
                 Rs_thick,
@@ -840,6 +922,33 @@ def logp_galactic_structure(
                 RuntimeWarning,
                 stacklevel=2,
             )
+
+    # ---- Numpy path (small arrays, return_components, array coordinates,
+    # or fused-kernel fallback; also the NUMBA_DISABLE_JIT coverage path) ----
+
+    # Volume correction factor (dV ∝ r² dr); the fused kernel computes this
+    # per point, so it is only materialized here.
+    vol_factor = 2.0 * np.log(dists + 1e-300)
+
+    # Convert to Galactocentric cylindrical coordinates using fast NumPy math
+    R, Z = galactic_to_galactocentric_cyl(
+        dists, ell, b, R_solar=R_solar, Z_solar=Z_solar
+    )
+
+    # Plain feh/loga arrays must receive the exact same priors as the fused
+    # kernel: synthesize a structured labels array so the code below applies
+    # them (previously these were silently dropped on this path).
+    if use_arrays:
+        _dtype = []
+        if feh is not None:
+            _dtype.append(("feh", np.float64))
+        if loga is not None:
+            _dtype.append(("loga", np.float64))
+        labels = np.empty(len(dists), dtype=_dtype)
+        if feh is not None:
+            labels["feh"] = feh
+        if loga is not None:
+            labels["loga"] = loga
 
     # Thin disk component
     logp_thin = logn_disk(
@@ -892,6 +1001,14 @@ def logp_galactic_structure(
         lnprior_thick = logp_thick - logp
         lnprior_halo = logp_halo - logp
 
+        # Membership weights for the age mixture. Position-only by default;
+        # updated with the metallicity evidence below when 'feh' is present,
+        # so the joint prior is sum_c w_c(pos) p(feh|c) p(age|c) (matching
+        # the fused kernel) rather than a product of marginal mixtures.
+        age_w_thin = lnprior_thin
+        age_w_thick = lnprior_thick
+        age_w_halo = lnprior_halo
+
         # Metallicity prior — fused computation to minimize temporaries
         if "feh" in labels.dtype.names:
             try:
@@ -927,6 +1044,11 @@ def logp_galactic_structure(
                 feh_lnp = _logsumexp3(feh_lnp_thin, feh_lnp_thick, feh_lnp_halo)
                 logp += feh_lnp
                 components["feh"] = [feh_lnp_thin, feh_lnp_thick, feh_lnp_halo]
+
+                # Metallicity-updated membership weights for the age mixture
+                age_w_thin = feh_lnp_thin - feh_lnp
+                age_w_thick = feh_lnp_thick - feh_lnp
+                age_w_halo = feh_lnp_halo - feh_lnp
             except (KeyError, IndexError, ValueError) as e:
                 warnings.warn(
                     f"Metallicity prior computation failed: {e}",
@@ -944,9 +1066,9 @@ def logp_galactic_structure(
                 # computation to avoid 3 separate function calls + temporaries.
                 age_params = []
                 for fm, lnp_comp in [
-                    (feh_thin, lnprior_thin),
-                    (feh_thick, lnprior_thick),
-                    (feh_halo, lnprior_halo),
+                    (feh_thin, age_w_thin),
+                    (feh_thick, age_w_thick),
+                    (feh_halo, age_w_halo),
                 ]:
                     age_mean = (max_age - min_age) / (
                         1.0 + np.exp((fm - feh_age_ctr) / feh_age_scale)
