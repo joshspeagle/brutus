@@ -1486,12 +1486,37 @@ class BruteForce:
         # sample weights where the exact logp_parallax is used instead.
         lnprob_sel = lnprob_base.copy()
         if parallax is not None and parallax_err is not None:
-            # Convert parallax to scale (VECTORIZED).
-            # Use the MARGINAL scale std sqrt(cov[0,0]) obtained from the 3x3
-            # precision matrix via the cofactor formula. The conditional
-            # 1/sqrt(icov[0,0]) (A_V, R_V held fixed) understates the
-            # uncertainty when the scale-A(V) degeneracy is strong and would
-            # over-prune models that are consistent with the parallax.
+            # Gate each model on "is its fitted scale consistent with the
+            # measured parallax?", treating the photometric scale as a
+            # Gaussian with std scales_err. Two stds can be read off the
+            # 3x3 (scale, A_V, R_V) precision matrix, and the choice
+            # matters:
+            #
+            # * conditional, 1/sqrt(icov[0,0]): scale uncertainty with
+            #   (A_V, R_V) HELD FIXED at their best-fit values;
+            # * marginal, sqrt(cov[0,0]): scale uncertainty after
+            #   propagating the (A_V, R_V) uncertainties and their
+            #   correlation with scale. For two correlated parameters,
+            #   marginal variance = conditional variance / (1 - rho^2).
+            #
+            # Distance and extinction both dim a star, so the scale-A(V)
+            # correlation reaches rho ~ 0.95-0.998 for reddened stars and
+            # the conditional std understates the truth by 3-16x there.
+            # Using it here scored models genuinely ~2 sigma from the
+            # parallax as ~20+ sigma away and pruned them -- irreversibly,
+            # because this gate only selects which models proceed; the
+            # exact parallax likelihood applied to the MC samples later
+            # can reweight survivors but cannot resurrect pruned models.
+            # The marginal std is therefore the correct choice, and being
+            # more permissive here costs only compute, never accuracy.
+            #
+            # cov[0,0] follows from the cofactor identity
+            # cov[0,0] = (i11*i22 - i12^2) / det(icov), so no full matrix
+            # inverse is needed. Degenerate matrices (det <= 0, or a
+            # nonfinite/nonpositive variance) fall back to the conditional
+            # estimate -- the pre-fix behavior -- rather than inventing a
+            # number; if even icov[0,0] <= 0, scales_err stays huge and
+            # the parallax simply does not prune that model.
             scales_err = np.full(Nmodels, 1e10)  # Large error = uninformative
             i00, i01, i02 = icovs_sar[:, 0, 0], icovs_sar[:, 0, 1], icovs_sar[:, 0, 2]
             i11, i12, i22 = icovs_sar[:, 1, 1], icovs_sar[:, 1, 2], icovs_sar[:, 2, 2]
