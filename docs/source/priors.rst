@@ -33,7 +33,9 @@ The Galactic Model
 
 .. math::
 
-   \pi(\theta, \phi) \propto \pi(M_{\rm init}) \times \pi({\rm EEP}) \times \pi(d\,|\,\ell,b) \times \pi([{\rm Fe/H}]\,|\,d,\ell,b) \times \pi(t_{\rm age}\,|\,d,\ell,b) \times \pi(A_V\,|\,d,\ell,b) \times \pi(R_V)
+   \pi(\theta, \phi) \propto \pi(M_{\rm init}) \times \pi({\rm EEP}) \times \pi(d\,|\,\ell,b) \times \pi([{\rm Fe/H}]\,|\,d,\ell,b) \times \pi(t_{\rm age}\,|\,[{\rm Fe/H}],d,\ell,b) \times \pi(A_V\,|\,d,\ell,b) \times \pi(R_V)
+
+Note that the age prior conditions on the star's metallicity as well as its position: each Galactic component's age distribution is weighted by that component's metallicity-updated membership probability, so (for example) a nearby metal-poor star is correctly weighted toward old, halo-like ages.
 
 Prior Components
 ----------------
@@ -45,9 +47,9 @@ The Kroupa (2001) :term:`IMF` describes stellar masses at formation as a two-par
 
 .. math::
 
-   \pi(M) \propto \begin{cases} M^{-1.3} & 0.08 < M/M_\odot < 0.5 \\ M^{-2.3} & 0.5 < M/M_\odot < 150 \end{cases}
+   \pi(M) \propto \begin{cases} M^{-1.3} & 0.08 < M/M_\odot < 0.5 \\ M^{-2.3} & 0.5 < M/M_\odot < 100 \end{cases}
 
-Low-mass stars strongly dominate; a randomly drawn star is ~10× more likely to be 0.5 M☉ than 1.0 M☉.
+Low-mass stars strongly dominate; a randomly drawn star is ~5× more likely to be 0.5 M☉ than 1.0 M☉.
 
 **Implementation**: :func:`brutus.priors.logp_imf`
 
@@ -97,15 +99,21 @@ The combined prior weights each component by its stellar density at the 3-D posi
 
    \pi(A_V\,|\,d,\ell,b) \sim \mathcal{N}(\mu_{A_V}, \sigma_{A_V}^2)
 
-where the mean :math:`\mu_{A_V}` and uncertainty :math:`\sigma_{A_V}` come from the dust map at that sightline and distance.
+where the mean :math:`\mu_{A_V}` and uncertainty :math:`\sigma_{A_V}` come from the dust map at that sightline and distance. The Gaussian is truncated and renormalized over the fitted A_V range (``avlim``), so distances where the map profile sits near an A_V boundary are not artificially disfavored.
 
 .. note::
 
    The Bayestar 3D dust map is based on Pan-STARRS 1 photometry and is only
    available north of declination -30 degrees (the Pan-STARRS 1 footprint). For
-   sightlines south of this limit, the dust map prior will not be applied.
+   sightlines south of this limit, the prior falls back to being uniform
+   (uninformative). In addition, ``Bayestar`` queries by default honor the
+   map's per-pixel reliability metadata (``converged``,
+   ``DM_reliable_min``/``DM_reliable_max``): distance bins outside a
+   sightline's reliable range, and sightlines whose fits did not converge,
+   also degrade to a uniform prior. Pass
+   ``Bayestar(..., apply_reliability_mask=False)`` to disable this masking.
 
-**Implementation**: Enabled via ``dustfile`` parameter in ``fit()``
+**Implementation**: Enabled via the ``dustfile`` parameter in ``fit()``, which accepts a path to a Bayestar HDF5 file (``str`` or ``pathlib.Path``) or a pre-loaded :class:`brutus.dust.Bayestar` object; the prior itself is evaluated by :func:`brutus.priors.logp_extinction`
 
 R_V Variation
 ^^^^^^^^^^^^^
@@ -132,14 +140,17 @@ For diagnostic purposes, priors can be disabled or made uninformative:
 
 .. code-block:: python
 
+   import numpy as np
+
    from brutus.analysis import BruteForce
 
    fitter = BruteForce(grid)
 
-   # Fit without Galactic structure prior
+   # Fit without Galactic structure prior. The function receives an array
+   # of distances (kpc) and must return an array of the same shape.
    fitter.fit(
        data, data_err, data_mask, labels, save_file='results.h5',
-       lngalprior=lambda *args, **kwargs: 0.0,  # Uniform prior
+       lngalprior=lambda dist, *args, **kwargs: np.zeros_like(dist),  # Uniform
    )
 
 **Extinction priors:**
@@ -149,11 +160,15 @@ For diagnostic purposes, priors can be disabled or made uninformative:
    # Fit with uninformative (wide) priors on A_V and R_V
    fitter.fit(
        data, data_err, data_mask, labels, save_file='results.h5',
-       avlim=(0.0, 10.0),            # Wide A_V range
-       av_gauss=(0.0, 1e6),          # Effectively uniform A_V prior
-       rvlim=(1.0, 8.0),             # Wide R_V range
+       avlim=(0.0, 20.0),            # Full A_V range (the default)
+       av_gauss=(0.0, 1e6),          # Effectively uniform A_V prior (the default)
+       rvlim=(1.0, 8.0),             # Full R_V range (the default)
        rv_gauss=(3.32, 1e6),         # Effectively uniform R_V prior
    )
+
+Note that ``av_gauss`` is applied *in addition* to any dust-map prior from
+``dustfile`` (they are not exclusive), so passing an informative ``av_gauss``
+together with ``dustfile`` counts the A(V) constraint twice.
 
 .. warning::
    Disabling priors can lead to highly degenerate parameter estimates. Only disable when you understand the implications.
@@ -165,18 +180,21 @@ Pass custom Galactic structure prior functions via ``lngalprior``:
 
 .. code-block:: python
 
+   import numpy as np
+
    from brutus.priors import logp_galactic_structure
 
    def custom_galactic_prior(dist, coord, labels=None):
        """Custom prior: uniform within 100 pc, default otherwise.
 
-       ``dist`` is in kpc and ``coord`` is a single ``(l, b)`` tuple in
-       degrees, matching how ``fit()`` calls ``lngalprior``.
+       ``dist`` is an array of distances in kpc and ``coord`` is a single
+       ``(l, b)`` tuple in degrees, matching how ``fit()`` calls
+       ``lngalprior``.
        """
-       if dist < 0.1:  # kpc
-           # Return value at boundary to ensure continuity
-           return logp_galactic_structure(0.1, coord, labels=labels)
-       return logp_galactic_structure(dist, coord, labels=labels)
+       # Evaluate distances inside 100 pc at the boundary value so the
+       # prior is flat there and continuous at 0.1 kpc
+       return logp_galactic_structure(np.maximum(dist, 0.1), coord,
+                                      labels=labels)
 
    fitter.fit(
        data, data_err, data_mask, labels, save_file='results.h5',
@@ -209,7 +227,7 @@ Compare results with and without priors to assess prior influence:
    fitter.fit(data, data_err, data_mask, labels, save_file='with.h5',
               data_coords=coords)
    fitter.fit(data, data_err, data_mask, labels, save_file='without.h5',
-              lngalprior=lambda *args, **kwargs: 0.0)
+              lngalprior=lambda dist, *args, **kwargs: np.zeros_like(dist))
 
    # Compare
    with h5py.File('with.h5', 'r') as f:

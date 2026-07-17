@@ -101,3 +101,10 @@ tutorials/plots/diagnostics/
 # Tutorial notebooks copied into the docs tree at build time by conf.py
 # (_copy_tutorials); the source of truth is tutorials/*.ipynb.
 docs/source/tutorials/tutorial_*.ipynb
+
+# Intermediates generated in tutorials/ when the notebooks execute there
+# (the committed result files live under tutorials/plots/)
+tutorials/Orion_l209.1_b-19.9_mist.h5
+tutorials/Orion_l209.1_b-19.9_mist_nodust.h5
+tutorials/grid_mist_v9.h5
+tutorials/mist_v9/

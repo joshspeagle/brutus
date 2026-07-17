@@ -33,10 +33,12 @@ Most users won't call these utilities directly (they're used internally by ``Bru
    mag1, mag2 = 5.0, 6.0
    mag_combined = add_mag(mag1, mag2)  # Brighter than either component
 
-   # Compute photometric log-likelihood
-   obs_flux = np.array([1.2e-10, 4.8e-11, 2.1e-11])
-   obs_err = np.array([1e-12, 5e-13, 3e-13])
-   model_flux = np.array([1.15e-10, 5.0e-11, 2.0e-11])
+   # Compute photometric log-likelihood. Data are 2-D with shape
+   # (Nobj, Nfilt); models are either a shared (Nmod, Nfilt) grid or a
+   # per-object (Nobj, Nmod, Nfilt) array. Returns shape (Nobj, Nmod).
+   obs_flux = np.array([[1.2e-10, 4.8e-11, 2.1e-11]])
+   obs_err = np.array([[1e-12, 5e-13, 3e-13]])
+   model_flux = np.array([[1.15e-10, 5.0e-11, 2.0e-11]])
 
    lnl = phot_loglike(obs_flux, obs_err, model_flux, dim_prior=True)
 

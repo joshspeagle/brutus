@@ -36,11 +36,13 @@ We use pytest for testing. Run tests with:
    # Basic tests
    pytest
 
-   # Include slow tests
-   RUN_SLOW_TESTS=1 pytest
+   # Skip slow tests (marked with the "slow" marker; they load large
+   # model data files and skip automatically if the data are absent)
+   pytest -m "not slow"
 
-   # With coverage
-   python run_coverage.py
+   # With coverage (NUMBA_DISABLE_JIT=1 is required: numba-compiled
+   # functions otherwise report 0% coverage even when exercised)
+   NUMBA_DISABLE_JIT=1 pytest --cov=brutus
 
 Code Style
 ----------

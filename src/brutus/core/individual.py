@@ -1966,10 +1966,11 @@ class StarGrid:
 
         Notes
         -----
-        Grid dimensions left unspecified are pinned to their first
-        (smallest) grid value; a UserWarning is emitted when such a
-        dimension has more than one value (e.g. omitting ``feh`` on a MIST
-        grid would otherwise silently select the most metal-poor models).
+        Every grid dimension with more than one value must be specified;
+        omitting one raises a ``ValueError`` (e.g. omitting ``feh`` on a
+        MIST grid would otherwise silently select the most metal-poor
+        models). Single-valued dimensions may be omitted and take their
+        only value.
 
         Examples
         --------
@@ -2111,9 +2112,9 @@ class StarGrid:
         where :math:`m_0` is the unreddened magnitude, :math:`r_0` and :math:`dr`
         are the reddening vector coefficients from the grid.
 
-        Grid dimensions left unspecified are pinned to their first
-        (smallest) grid value; a UserWarning is emitted when such a
-        dimension has more than one value (see `get_predictions`).
+        Every grid dimension with more than one value must be specified;
+        omitting one raises a ``ValueError``. Single-valued dimensions may
+        be omitted (see `get_predictions`).
 
         Examples
         --------

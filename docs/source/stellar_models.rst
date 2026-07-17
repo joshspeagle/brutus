@@ -321,7 +321,7 @@ Model Limitations
 MIST models have known limitations:
 
 - **Non-rotating**: Rotation affects stellar structure and lifetimes, especially for massive stars
-- **Single stars**: Binary evolution (mass transfer, mergers) not included. However, unresolved binary companions can be partially modeled via the ``binary_fraction`` parameter in ``StellarPop.get_seds()``, which adds flux from a secondary star drawn from a mass ratio distribution.
+- **Single stars**: Binary evolution (mass transfer, mergers) not included. However, unresolved binary companions can be partially modeled via the ``binary_fraction`` parameter in ``StellarPop.get_seds()``, which adds flux from a secondary star at the specified mass ratio (the secondary mass fraction).
 - **Solar-scaled abundances**: No alpha-enhancement or individual element variations
 - **M dwarf temperatures**: Models predict slightly incorrect temperatures for low-mass stars
 - **Radius inflation**: Magnetic activity inflates radii of active low-mass stars by 5–15%

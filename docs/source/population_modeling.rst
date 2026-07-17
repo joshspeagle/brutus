@@ -61,6 +61,9 @@ The **parallax likelihood** (if available) constrains distance:
 
    \ln \mathcal{L}_{\rm parallax} = -\frac{1}{2} \frac{(\hat{\varpi}_i - 1000/d)^2}{\sigma_{\varpi,i}^2}
 
+.. note::
+   With the default ``dim_prior=True``, the photometric and parallax chi-squares are combined — the parallax counts as one extra degree of freedom, matching the ``BruteForce`` convention — and evaluated under a chi-square *distribution* log-PDF rather than as the Gaussian log-densities shown above. Set ``dim_prior=False`` to use the Gaussian formulation.
+
 Outlier Likelihood
 ^^^^^^^^^^^^^^^^^^
 
@@ -70,7 +73,7 @@ Field contaminants are modeled with an adaptive outlier distribution. By default
 
    \mathcal{L}_{\rm outlier}(\hat{F}_i) = \mathcal{L}_{\rm cluster}(\chi^2_{\rm max}(k_i), k_i)
 
-where :math:`\chi^2_{\rm max}` is the chi-square value at a cumulative probability threshold (default 99.9%), and :math:`k_i` is the number of photometric bands plus parallax if available. This adaptive threshold is more conservative than a uniform outlier model, retaining borderline members.
+where :math:`\chi^2_{\rm max}` is the chi-square value at a cumulative probability threshold (99.999% by default, i.e. ``p_value_cut=1e-5``), and :math:`k_i` is the number of photometric bands plus parallax if available. An alternative uniform outlier model (used when ``dim_prior=False``) instead treats outliers as uniformly distributed over the observed flux range in each band, giving a proper flux density directly comparable to the Gaussian inlier likelihood.
 
 Mixture Model
 ^^^^^^^^^^^^^
@@ -97,7 +100,7 @@ After applying the mixture model, ``brutus`` marginalizes over stellar parameter
 
    P(\hat{F}_i | \boldsymbol{\theta}) = \int \int P(\hat{F}_i | M, q, \boldsymbol{\theta}) \, \frac{dM}{dEEP} \, dEEP \, dq
 
-This integral is computed numerically over a grid of (EEP, SMF) points, with Jacobian corrections for the non-uniform mass spacing along the isochrone.
+This integral is computed numerically over a grid of (EEP, SMF) points, with Jacobian corrections for the non-uniform mass spacing along the isochrone. The integration measure is normalized over the valid grid points, making the flat (mass, SMF) measure a proper uniform prior — without this, the :math:`\boldsymbol{\theta}`-dependent grid volume would multiply every mixture component (including the :math:`\boldsymbol{\theta}`-independent outlier model), biasing the population parameters and the field fraction.
 
 Total Likelihood
 ^^^^^^^^^^^^^^^^
@@ -128,7 +131,7 @@ Binary photometry is computed by adding the fluxes of both components:
 The default SMF grid uses 21 uniformly-spaced values from 0.0 to 1.0.
 
 .. note::
-   Binary modeling is restricted to main-sequence stars (EEP < 480) to avoid unphysical configurations like two red giants in a close binary.
+   Binary modeling is restricted to main-sequence stars (EEP ≤ 480, the ``eep_binary_max`` default) to avoid unphysical configurations like two red giants in a close binary. Models above this cutoff are SMF-independent and are stored once, carrying the full SMF integration measure so they are weighted consistently with the main-sequence models.
 
 Basic Usage
 -----------
@@ -362,7 +365,7 @@ Performance Considerations
 Timing Benchmarks
 ^^^^^^^^^^^^^^^^^
 
-The following benchmarks were measured on a typical workstation (2024) using 3 Gaia bands. All times are per evaluation of the full log-likelihood.
+The following benchmarks were measured with version 1.2.0 on a 4-core Linux host using 3 Gaia bands and a synthetic 100-star cluster at 1 kpc (min-of-N wall-clock; the script is ``bench/bench_populations.py`` in the repository). All times are per evaluation of the full log-likelihood. Version 1.2.0 made binary modeling functional (previously every SMF slice silently evaluated to the same single-star isochrone), so grid generation now does real per-SMF work and the convergence behavior below reflects a genuinely binary-aware likelihood.
 
 **Pipeline stage breakdown** (100 stars, default grid):
 
@@ -374,23 +377,25 @@ The following benchmarks were measured on a typical workstation (2024) using 3 G
      - Time (ms)
      - Fraction
    * - Grid generation (fixed cost)
-     - 15
-     - 17%
+     - 47
+     - 29%
    * - Cluster loglike
-     - 50-90
-     - 54%
+     - 33
+     - 21%
    * - Mixture model
-     - 25
-     - 15%
+     - 27
+     - 17%
    * - Marginalization
      - 23
      - 14%
    * - Outlier loglike
      - <1
      - <1%
-   * - **Total**
-     - **~120**
+   * - **Total (end-to-end)**
+     - **~160**
      -
+
+The individual stages sum to ~130 ms; the remainder of the end-to-end time is array bookkeeping in the wrapper.
 
 **Scaling with number of stars:**
 
@@ -402,27 +407,27 @@ The following benchmarks were measured on a typical workstation (2024) using 3 G
      - Time per eval (ms)
      - Per-star cost (ms)
    * - 10
-     - 40
-     - 4.0
+     - 58
+     - 5.8
    * - 50
-     - 65
-     - 1.3
+     - 90
+     - 1.8
    * - 100
-     - 120
-     - 1.2
+     - 163
+     - 1.6
    * - 200
-     - 200
-     - 1.0
+     - 337
+     - 1.7
    * - 500
-     - 600
-     - 1.2
+     - 952
+     - 1.9
 
-Grid generation is a fixed cost (~15 ms), so per-star cost decreases for larger samples. Adding more photometric bands increases cost modestly.
+Grid generation is a fixed cost (~47 ms), so per-star cost flattens to ~1.6-1.9 ms for larger samples. Adding more photometric bands increases cost modestly.
 
 Grid Resolution and Convergence
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The default grid uses 1000 EEP points :math:`\times` 21 SMF values. After applying mass bounds and binary constraints (EEP < 480 for binaries), the effective grid size is typically 7,000-10,000 points per evaluation.
+The default grid uses 1000 EEP points :math:`\times` 21 SMF values. After applying mass bounds and binary constraints (EEP ≤ 480 for binaries; post-main-sequence models are stored once, not per SMF slice), the effective grid size is typically ~9,500-10,200 points per evaluation.
 
 **EEP convergence** (measured as :math:`\Delta \ln \mathcal{L}` vs 5000-point reference, 100 stars):
 
@@ -435,27 +440,27 @@ The default grid uses 1000 EEP points :math:`\times` 21 SMF values. After applyi
      - :math:`\Delta \ln \mathcal{L}`
      - Time (ms)
    * - 200
-     - 1,368
-     - -1.4
-     - 11
+     - 2,040
+     - -25.6
+     - 38
    * - 500
-     - 3,451
-     - -0.4
-     - 26
+     - 5,080
+     - -5.7
+     - 70
    * - **1000 (default)**
-     - **6,916**
-     - **-0.2**
-     - **75**
+     - **10,180**
+     - **+7.0**
+     - **152**
    * - 2000
-     - 13,862
-     - -0.05
-     - 170
+     - 20,360
+     - +2.3
+     - 338
    * - 5000 (reference)
-     - 34,581
+     - 50,880
      - 0
-     - 529
+     - 1064
 
-EEP convergence is fast: 500 points are within :math:`|\Delta \ln \mathcal{L}| < 0.5` of the reference, and 1000 points are essentially converged.
+With binary modeling active the likelihood surface is richer than in earlier releases, so EEP convergence is somewhat slower: the default 1000 points sit within :math:`|\Delta \ln \mathcal{L}| \approx 7` of the reference per 100 stars (:math:`\lesssim 0.1` per star), and 2000 points within :math:`\approx 2`.
 
 **SMF convergence** (measured vs 31-point uniform reference, 100 stars):
 
@@ -468,27 +473,27 @@ EEP convergence is fast: 500 points are within :math:`|\Delta \ln \mathcal{L}| <
      - :math:`\Delta \ln \mathcal{L}`
      - Time (ms)
    * - Singles only (N=1)
-     - 1,934
-     - +0.8
-     - 14
+     - 1,000
+     - -184.4
+     - 10
    * - 7 uniform
-     - 7,046
-     - +12.6
-     - 67
+     - 3,754
+     - +4.0
+     - 43
    * - 15 uniform
-     - 13,862
-     - +3.8
-     - 165
+     - 7,426
+     - -1.1
+     - 112
    * - **21 uniform (default)**
-     - **18,974**
-     - **+1.7**
-     - **269**
+     - **10,180**
+     - **+0.4**
+     - **166**
    * - 31 uniform (reference)
-     - 27,494
+     - 14,770
      - 0
-     - 370
+     - 273
 
-SMF convergence is slower than EEP — at least 15-21 uniformly-spaced points are needed for :math:`|\Delta \ln \mathcal{L}| < 4` per 100 stars. Uniform spacing outperforms non-uniform grids at equal point counts.
+The singles-only configuration is catastrophically wrong for a population containing unresolved binaries (:math:`\Delta \ln \mathcal{L} \approx -184` per 100 stars) — binary modeling matters. Among binary-aware grids, convergence is quick: 7 uniform points are within :math:`|\Delta \ln \mathcal{L}| \approx 4` per 100 stars and the default 21 points within :math:`\approx 0.4`.
 
 Custom grids can be specified for faster iteration during development:
 

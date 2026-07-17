@@ -168,9 +168,10 @@ def get_seds(
 
     Notes
     -----
-    This function implements the dust reddening law parameterization from
-    Cardelli, Clayton, & Mathis (1989) and O'Donnell (1994). The reddening
-    is applied as:
+    This function evaluates per-band reddening from the grid's precomputed
+    coefficients, which parameterize the R(V)-dependent extinction curve of
+    Fitzpatrick & Massa (2009) used throughout brutus (see the stellar
+    models documentation). The reddening is applied as:
 
     A(λ) = A(V) * [R(V)=0 + R(V) * dR/dR(V)]
 

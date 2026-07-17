@@ -26,7 +26,6 @@ os.environ["NUMBA_CACHE_DIR"] = "/tmp/numba_cache"
 #   NUMBA_DISABLE_JIT=1 pytest tests/ --cov=brutus --cov-report=term-missing
 #
 # Plain functional runs do not need it (and are faster with JIT enabled).
-# (A convenience wrapper, run_coverage.py, is also available.)
 
 
 # Test data and fixtures

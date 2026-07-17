@@ -5,6 +5,78 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-07-17
+
+Systematic audit of every module outside the `BruteForce` hot path (covered in
+1.1.1): population fitting, LOS dust, offsets, stellar models, priors, dust
+maps, plotting, data loading, and utilities. 113 verified findings were fixed
+across pull requests #61-#69, each with a regression test (the suite grew from
+725 to over 1000 tests). Highlights below; full details are in the PR
+descriptions. Items marked *(output-changing)* alter numerical results — in
+every case toward the statistically correct answer.
+
+### Fixed — statistical correctness *(output-changing)*
+
+- **Cluster fitting**: binary modeling was silently non-functional (an
+  `smf=` keyword typo swallowed by `**kwargs`); post-MS models were
+  underweighted ~21x; the (mass, SMF) integration measure is now normalized;
+  the uniform outlier model is a proper density (it previously *favored*
+  flagging the best-measured stars as outliers).
+- **LOS dust**: monotonicity constraints now apply to the effective
+  extinction profile, and kernels renormalize for truncation at the
+  reddening bounds.
+- **Photometric offsets**: leave-one-out reweighting used incorrect
+  importance weights, shrinking fitted-band offsets toward 1.
+- **Priors**: metallicity/age priors were silently dropped when passed as
+  plain arrays; the disk/halo normalization was inconsistent near the Sun;
+  age-prior weights now condition on metallicity; the dust-map A(V) prior
+  renormalizes over `avlim`.
+- **Dust maps**: Bayestar queries honor the map's per-pixel reliability
+  metadata by default (`apply_reliability_mask=False` restores raw values).
+- **Plotting / post-processing**: distance posteriors regenerated from fit
+  summaries were biased low (missing scale-to-distance Jacobian);
+  `bin_pdfs_distred(cdf=True)` now cumulates along the reddening axis as
+  documented; offset-diagnostic mask indexing fixed.
+- **BruteForce**: parallax-based model pre-selection now uses the marginal
+  (not conditional) scale uncertainty, so heavily reddened stars with good
+  parallaxes no longer lose valid models before the posterior stage.
+- **Utilities**: `quantile` uses one midpoint-CDF convention for weighted
+  and unweighted input (unweighted values shift slightly); truncated-normal
+  densities are tail-stable; a singular covariance in a batch no longer
+  corrupts the parallel sampler.
+
+### Fixed — robustness and API contracts
+
+- Silent failure modes now raise clear errors: omitting a multi-valued grid
+  axis (was quietly pinned to the grid edge), zero surviving filters in
+  `load_models` (which also now drops a constant `afe` column), a dust map
+  without sky coordinates, invalid `avlim`, mis-shaped weights/coordinates
+  in the plotting utilities, and half-specified offset priors.
+- NaN fluxes and zero errors are masked per band instead of invalidating
+  the whole object; generated grids no longer contain invalid models;
+  caller-supplied arrays (`lnprior`, `hist2d_kwargs`, labels) are no longer
+  mutated in place.
+- Additions: `dustfile` accepts `pathlib.Path`; `bin_pdfs_distred` /
+  `dist_vs_red` support importance weights and multi-object input;
+  `phot_loglike` supports shared model grids and extra chi-square terms;
+  `draw_sar` gained `max_attempts` (its RNG stream changed, so fixed-seed
+  draws differ; the distribution is verified identical).
+
+### Performance (equivalence-tested)
+
+Grid generation 16.7x per model; photometric-offset calibration ~12x
+end-to-end; LOS dust likelihood up to 4.2x (prior transform 51x);
+`draw_sar` 2.6-4.5x; `Bayestar()` init 8x; galactic prior 1.75x
+(`logp_extinction` ~9x); `Isochrone` memory roughly halved; `EEPTracks`
+caches ~264 MB smaller (now versioned `_cachev2.pkl`).
+
+### Infrastructure
+
+- The `docs` CI check no longer fails instantly on every pull request: the
+  build was decoupled from the master-only GitHub Pages deployment
+  environment, so PRs now actually build the documentation (deploys still
+  run only from master).
+
 ## [1.1.1] - 2026-06-27
 
 Performance pass on the individual-star `BruteForce` fitter (`loglike_grid` ->

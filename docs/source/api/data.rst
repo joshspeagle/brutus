@@ -26,7 +26,7 @@ Data files are automatically downloaded on first use and cached locally. The def
    from brutus.data import fetch_grids, fetch_isos, fetch_dustmaps
 
    # Download MIST stellar evolution grids
-   fetch_grids()  # Downloads default grids for common filter sets
+   fetch_grids()  # Downloads the default grid ('mist_v9', all supported filters)
 
    # Download MIST isochrones
    fetch_isos()
@@ -58,8 +58,8 @@ Data files are automatically downloaded on first use and cached locally. The def
 
 - **Grids**: HDF5 with datasets for models, labels, reddening coefficients
 - **Isochrones**: HDF5 with structured arrays
-- **Dust Maps**: HEALPix FITS files (via ``healpy``)
-- **Neural Networks**: Pickle files with layer weights
+- **Dust Maps**: HDF5 files on a HEALPix pixelization (pixel lookups via ``healpy``)
+- **Neural Networks**: HDF5 files with layer weights
 
 **Storage Requirements:**
 

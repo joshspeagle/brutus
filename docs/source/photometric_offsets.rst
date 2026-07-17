@@ -178,9 +178,10 @@ Use :class:`~brutus.analysis.offsets.PhotometricOffsetsConfig` to customize beha
 .. code-block:: python
 
    config = PhotometricOffsetsConfig(
-       min_bands_used=5,        # Minimum bands for reweighted objects
+       min_bands_used=5,        # Min. bands besides the one being calibrated
+                                # for reweighted objects (default 4)
        min_bands_unused=3,      # Minimum bands for non-reweighted objects
-       n_bootstrap=500,         # Bootstrap iterations
+       n_bootstrap=500,         # Bootstrap iterations (default 300)
        uncertainty_method='bootstrap_iqr',  # 'bootstrap_iqr' or 'bootstrap_std'
        random_seed=42           # For reproducibility
    )
@@ -207,14 +208,22 @@ Additional Parameters
        verbose=True
    )
 
+``prior_mean`` and ``prior_std`` must be provided together; passing only one
+raises a ``ValueError``.
+
 Interpreting Results
 ^^^^^^^^^^^^^^^^^^^^
 
 The function returns:
 
 - ``offsets``: Multiplicative flux corrections (model/data ratios). Apply as ``phot_corrected = phot * offsets``
-- ``errors``: Uncertainties from bootstrap distribution
+- ``errors``: Uncertainties from bootstrap distribution (combined with the Gaussian prior when one is supplied)
 - ``n_used``: Number of objects used per filter (useful for quality assessment)
+
+A band with no usable objects (``n_used == 0``) carries no measurement: its
+result is ``prior_mean +/- prior_std`` when a Gaussian prior is supplied, and
+an offset of 1 with **infinite** uncertainty otherwise — never a spuriously
+precise value.
 
 Offsets near 1.0 indicate good agreement between models and data. Values significantly different from 1.0 suggest systematic calibration differences.
 

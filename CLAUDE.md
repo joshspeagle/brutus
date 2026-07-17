@@ -5,7 +5,7 @@
 `brutus` is a Python package for Bayesian inference of stellar properties, distances, and extinctions from photometry. It supports individual star fitting, cluster analysis, and 3D dust mapping.
 
 **Package name on PyPI**: `astro-brutus`
-**Version**: 1.0.0
+**Version**: 1.2.0
 **Paper**: Speagle et al. (2025), [arXiv:2503.02227](https://arxiv.org/abs/2503.02227)
 
 ## Repository Structure
@@ -216,6 +216,23 @@ For posterior predictive validation, compare the **posterior predictive width** 
 
 ## Common Pitfalls
 
+- **`load_models` handles `afe` adaptively**: grids are generated on a 5D
+  (mini, eep, feh, afe, smf) lattice, but under default labels the `afe`
+  column joins the label set only when it actually varies across the grid —
+  a constant column is dropped (mirroring the constant-`smf` convention).
+  Explicitly requesting `afe` always honors it.
+- **Bayestar reliability masking is on by default**: queries return NaN
+  outside each sightline's `DM_reliable_min/max` range and in non-converged
+  pixels, degrading the dust prior to uniform there. NaN bounds mean "no
+  reliable range" and mask the whole sightline. Pass
+  `Bayestar(apply_reliability_mask=False)` for raw map values.
+- **EEPTracks caches are versioned** (`*_cachev2.pkl`); unversioned `.pkl`
+  caches from older versions are ignored and can be deleted.
+- **`quantile` uses the midpoint-CDF convention** for both weighted and
+  unweighted samples (not `np.percentile`'s linear interpolation).
+- **Omitting a multi-valued grid axis in `StarGrid.get_seds` raises
+  `ValueError`** (it is never silently pinned to a grid edge); single-valued
+  axes may be omitted.
 - **`np.tile` vs `np.repeat` for label alignment**: When broadcasting labels across MC samples, use `np.tile(labels, Nmc)` (repeats entire array), NOT `np.repeat(labels, Nmc)` (repeats each element). Wrong order silently scrambles label-to-sample mapping.
 - **ar_mix cross-term**: The A_V-R_V Fisher cross-term must include the `av[i]` factor to un-normalize `drvecs`. Missing this makes the precision matrix singular.
 - **Scale factor guard**: Always clamp scale to `MIN_SCALE` before taking `log(scale)`. Without this, NaN propagates through distance priors.
