@@ -226,6 +226,37 @@ class TestReliabilityMask:
         assert np.all(np.isfinite(av_mean))
         assert np.all(np.isfinite(av_std))
 
+    def test_nan_bounds_mask_entire_profile(self, tmp_path):
+        """A pixel with NaN reliable-range bounds has NO determined reliable
+        range and must be fully masked. (NaN comparisons are always False,
+        so without the explicit remap the pixel would be fully UNmasked —
+        the opposite of the conservative intent.)"""
+        path = str(
+            _write_bayestar_file(
+                tmp_path / "nan_bounds.h5", dm_min=np.nan, dm_max=np.nan
+            )
+        )
+        bm = Bayestar(dustfile=path)
+        _, av_mean, av_std = bm.query([120.0, 30.0])
+        assert np.all(np.isnan(av_mean))
+        assert np.all(np.isnan(av_std))
+        # masking off restores the raw profile
+        _, av_mean, _ = bm.query([120.0, 30.0], apply_reliability_mask=False)
+        assert np.all(np.isfinite(av_mean))
+
+    def test_infinite_bounds_do_not_mask(self, tmp_path):
+        """-inf/+inf bounds are legitimate limiting values ("no cut on that
+        side") and must leave converged pixels unmasked."""
+        path = str(
+            _write_bayestar_file(
+                tmp_path / "inf_bounds.h5", dm_min=-np.inf, dm_max=np.inf
+            )
+        )
+        bm = Bayestar(dustfile=path)
+        _, av_mean, av_std = bm.query([120.0, 30.0])
+        assert np.all(np.isfinite(av_mean))
+        assert np.all(np.isfinite(av_std))
+
     def test_mask_off_at_constructor_level(self, synthetic_map_file):
         bm = Bayestar(dustfile=synthetic_map_file, apply_reliability_mask=False)
         _, av_mean, _ = bm.query([120.0, 30.0])
@@ -321,11 +352,12 @@ class TestSortEquivalence:
         new = np.lexsort((pix["healpix_index"], pix["nside"]))
         t_new = time.perf_counter() - t0
         np.testing.assert_array_equal(ref, new)
+        # Timing is diagnostic only: the index-equivalence assertion above
+        # is the test; a single wall-clock race can flake on shared runners.
         print(
             f"\nsort 500k rows: argsort(order=) {t_ref:.3f}s, "
             f"lexsort {t_new:.3f}s ({t_ref / max(t_new, 1e-9):.0f}x)"
         )
-        assert t_new < t_ref
 
 
 def _find_data_idx_reference(bm, gal_l, b):
