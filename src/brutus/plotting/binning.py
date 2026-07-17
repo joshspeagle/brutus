@@ -33,6 +33,7 @@ def bin_pdfs_distred(
     coord=None,
     avlim=(0.0, 6.0),
     rvlim=(1.0, 8.0),
+    weights=None,
     parallaxes=None,
     parallax_errors=None,
     Nr=100,
@@ -74,15 +75,22 @@ def bin_pdfs_distred(
         The log-distsance prior function used. If not provided, the galactic
         model from Green et al. (2014) will be assumed.
 
-    coord : 2-tuple, optional
-        The galactic `(l, b)` coordinates for the object, which is passed to
-        `lndistprior` when re-generating the fits.
+    coord : 2-tuple or `~numpy.ndarray` of shape `(Nobj, 2)`, optional
+        The galactic `(l, b)` coordinates passed to `lndistprior` when
+        re-generating the fits. A single `(l, b)` pair is shared across
+        all objects; otherwise provide one pair per object.
 
     avlim : 2-tuple, optional
         The Av limits used to truncate results. Default is `(0., 6.)`.
 
     rvlim : 2-tuple, optional
         The Rv limits used to truncate results. Default is `(1., 8.)`.
+
+    weights : `~numpy.ndarray` of shape `(Nobj, Nsamps)`, optional
+        An optional set of importance weights used to reweight the samples.
+        Must be finite and non-negative, with at least one positive weight
+        per object. Each object's binned PDF is normalized by its total
+        weight, so results are invariant to the absolute scale of `weights`.
 
     parallaxes : `~numpy.ndarray` of shape `(Nobj,)`, optional
         The parallax estimates for the sources.
@@ -139,6 +147,21 @@ def bin_pdfs_distred(
         parallaxes = np.full(nobjs, np.nan)
     if parallax_errors is None:
         parallax_errors = np.full(nobjs, np.nan)
+    if weights is not None:
+        weights = np.asarray(weights)
+        if weights.shape != (nobjs, nsamps):
+            raise ValueError(
+                f"`weights` must have shape {(nobjs, nsamps)}; " f"got {weights.shape}."
+            )
+        if not np.all(np.isfinite(weights)) or np.any(weights < 0):
+            raise ValueError("`weights` must be finite and non-negative.")
+        wtots = weights.sum(axis=1)
+        if np.any(wtots == 0):
+            bad = np.where(wtots == 0)[0]
+            raise ValueError(
+                f"`weights` sum to zero for object(s) {bad}; each object "
+                "needs at least one positive weight."
+            )
 
     # Set up bins.
     if dist_type not in ["parallax", "scale", "distance", "distance_modulus"]:
@@ -214,8 +237,13 @@ def bin_pdfs_distred(
             # Print progress.
             if verbose:
                 sys.stderr.write(f"\rBinning object {i + 1}/{nobjs}")
-            H, xedges, yedges = np.histogram2d(xs, ys, bins=(xbins, ybins))
-            binned_vals[i] = H / nsamps
+            wt = None if weights is None else weights[i]
+            H, xedges, yedges = np.histogram2d(xs, ys, bins=(xbins, ybins), weights=wt)
+            # Normalize by the total weight (nsamps when unweighted) so the
+            # binned mass equals the weighted fraction of samples inside the
+            # span, independent of the absolute scale of `weights`.
+            wtot = nsamps if weights is None else weights[i].sum()
+            binned_vals[i] = H / wtot
     except (AttributeError, KeyError):
         # Regenerate distance and reddening samples from inputs.
         scales, avs, rvs, covs_sar = copy.deepcopy(data)
@@ -227,6 +255,22 @@ def bin_pdfs_distred(
             raise ValueError(
                 "`coord` must be passed if the default distance " "prior was used."
             )
+        if coord is None:
+            # Custom `lndistprior` without coordinates: pass `None` per object.
+            coord = [None] * nobjs
+        else:
+            # A bare (l, b) pair is shared by every object (e.g. a stack of
+            # stars along one sightline). Anything else must supply one pair
+            # per object -- a mis-shaped coord would otherwise be silently
+            # mis-paired (and truncated) by the zip below.
+            coord = np.asarray(coord)
+            if coord.shape == (2,):
+                coord = np.tile(coord, (nobjs, 1))
+            elif coord.shape != (nobjs, 2):
+                raise ValueError(
+                    f"`coord` must be a single (l, b) pair or have shape "
+                    f"{(nobjs, 2)}; got {coord.shape}."
+                )
 
         # Generate parallax and Av realizations.
         for i, stuff in enumerate(
@@ -262,13 +306,22 @@ def bin_pdfs_distred(
             dmdraws = 5.0 * np.log10(ddraws) + 10.0
 
             # Re-apply distance and parallax priors to realizations.
-            lnp_draws = lndistprior(ddraws, crd)
+            # Draws come from a Gaussian proposal in *scale* space (s = d^-2),
+            # while `lndistprior` is a density over distance, so the
+            # importance weight needs the change-of-variables Jacobian
+            # |dd/ds| = d^3 / 2 (constant factor irrelevant after
+            # normalization). Matches the ln-distance Jacobian handling in
+            # `analysis.individual.logpost_grid`.
+            lnp_draws = lndistprior(ddraws, crd) + 3.0 * np.log(ddraws)
             if parallax is not None and parallax_err is not None:
                 lnp_draws += logp_parallax(pdraws, parallax, parallax_err)
             lnp = logsumexp(lnp_draws, axis=1)
-            weights = np.exp(lnp_draws - lnp[:, None])
-            weights /= weights.sum(axis=1)[:, None]
-            weights = weights.flatten()
+            pwt = np.exp(lnp_draws - lnp[:, None])
+            pwt /= pwt.sum(axis=1)[:, None]
+            if weights is not None:
+                # Fold per-sample importance weights into the per-draw ones.
+                pwt *= weights[i][:, None]
+            pwt = pwt.flatten()
 
             # Grab draws.
             ydraws = adraws.flatten()
@@ -285,9 +338,13 @@ def bin_pdfs_distred(
 
             # Generate 2-D histogram.
             H, xedges, yedges = np.histogram2d(
-                xdraws, ydraws, bins=(xbins, ybins), weights=weights
+                xdraws, ydraws, bins=(xbins, ybins), weights=pwt
             )
-            binned_vals[i] = H / nsamps
+            # Each sample's Nr draw weights sum to 1, so the total weight is
+            # nsamps unweighted and sum(weights[i]) otherwise; dividing by it
+            # keeps the result invariant to the absolute scale of `weights`.
+            wtot = nsamps if weights is None else weights[i].sum()
+            binned_vals[i] = H / wtot
 
     # Apply smoothing.
     for i, (H, parallax, parallax_err) in enumerate(
@@ -319,6 +376,9 @@ def bin_pdfs_distred(
     # Compute CDFs.
     if cdf:
         for i, H in enumerate(binned_vals):
-            binned_vals[i] = H.cumsum(axis=0)
+            # H has axis 0 = distance, axis 1 = reddening; the documented CDF
+            # (used to evaluate MAP LOS reddening profiles) accumulates along
+            # the *reddening* axis within each distance column.
+            binned_vals[i] = H.cumsum(axis=1)
 
     return binned_vals, xedges, yedges

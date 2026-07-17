@@ -48,7 +48,9 @@ def dist_vs_red(
         `(dists, reds, dreds)` that were saved, or a collection of
         `(scales, avs, rvs, covs_sar)` that will be used to regenerate
         `(dists, reds)` in conjunction with any applied distance
-        and/or parallax priors.
+        and/or parallax priors. Arrays of shape `(Nobj, Nsamps)` are also
+        accepted; the plotted histogram is then the average of the
+        per-object 2-D PDFs.
 
     ebv : bool, optional
         If provided, will convert from Av to E(B-V) when plotting using
@@ -63,9 +65,10 @@ def dist_vs_red(
         The log-distsance prior function used. If not provided, the galactic
         model from Green et al. (2014) will be assumed.
 
-    coord : 2-tuple, optional
-        The galactic `(l, b)` coordinates for the object, which is passed to
-        `lndistprior`.
+    coord : 2-tuple or list of 2-tuples, optional
+        The galactic `(l, b)` coordinates passed to `lndistprior`. A single
+        `(l, b)` pair is shared across all objects; for multi-object input
+        a list with one pair per object is also accepted.
 
     avlim : 2-tuple, optional
         The Av limits used to truncate results. Default is `(0., 6.)`.
@@ -73,7 +76,7 @@ def dist_vs_red(
     rvlim : 2-tuple, optional
         The Rv limits used to truncate results. Default is `(1., 8.)`.
 
-    weights : `~numpy.ndarray` of shape `(Nsamps)`, optional
+    weights : `~numpy.ndarray` of shape `(Nsamps)` or `(Nobj, Nsamps)`, optional
         An optional set of importance weights used to reweight the samples.
 
     parallax : float, optional
@@ -165,6 +168,10 @@ def dist_vs_red(
         if coord is not None:
             coord = [coord]
 
+        # Convert weights to (Nobj, Nsamps) format
+        if weights is not None:
+            weights = np.atleast_2d(np.asarray(weights))
+
         # Convert parallax info to array format
         if parallax is not None:
             parallax = np.array([parallax])
@@ -173,6 +180,20 @@ def dist_vs_red(
     else:
         # Multi-object case
         single_object = False
+
+        # A single set of per-sample weights is shared across all objects;
+        # broadcast it to the (Nobj, Nsamps) shape bin_pdfs_distred expects.
+        if weights is not None:
+            weights = np.asarray(weights)
+            if weights.ndim == 1:
+                nobj, nsamps = data[0].shape
+                if weights.shape[0] != nsamps:
+                    raise ValueError(
+                        f"`weights` has shape {weights.shape}, which matches "
+                        f"neither (Nsamps,) = ({nsamps},) nor "
+                        f"(Nobj, Nsamps) = {(nobj, nsamps)}."
+                    )
+                weights = np.broadcast_to(weights, (nobj, nsamps))
 
     # Use bin_pdfs_distred to do all the heavy lifting for data preparation
     binned_vals, xedges, yedges = bin_pdfs_distred(
@@ -184,6 +205,7 @@ def dist_vs_red(
         coord=coord,
         avlim=avlim,
         rvlim=rvlim,
+        weights=weights,
         parallaxes=parallax,
         parallax_errors=parallax_err,
         Nr=Nr,
@@ -198,9 +220,9 @@ def dist_vs_red(
     if single_object:
         H = binned_vals[0]
     else:
-        # For multiple objects, we need to decide how to combine them
-        # Default behavior: use the first object
-        H = binned_vals[0]
+        # For multiple objects, stack (average) the per-object 2-D PDFs so the
+        # plot reflects the whole sample, as in dust-mapping sightline stacks.
+        H = binned_vals.mean(axis=0)
 
     # Set up axis labels
     if ebv:

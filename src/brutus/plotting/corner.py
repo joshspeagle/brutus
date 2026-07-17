@@ -236,14 +236,22 @@ def cornerplot(
         quantiles = []
     if truth_kwargs is None:
         truth_kwargs = dict()
+    else:
+        truth_kwargs = dict(truth_kwargs)
     if label_kwargs is None:
         label_kwargs = dict()
     if title_kwargs is None:
         title_kwargs = dict()
+    # Copy caller-supplied kwargs dicts: defaults are written into them below,
+    # which would otherwise leak state back into the caller and across calls.
     if hist_kwargs is None:
         hist_kwargs = dict()
+    else:
+        hist_kwargs = dict(hist_kwargs)
     if hist2d_kwargs is None:
         hist2d_kwargs = dict()
+    else:
+        hist2d_kwargs = dict(hist2d_kwargs)
     if weights is None:
         weights = np.ones_like(idxs, dtype="float")
     if rstate is None:
@@ -255,6 +263,8 @@ def cornerplot(
             )
     if parallax_kwargs is None:
         parallax_kwargs = dict()
+    else:
+        parallax_kwargs = dict(parallax_kwargs)
     if lndistprior is None:
         lndistprior = partial(gal_lnprior, R_solar=R_solar, Z_solar=Z_solar)
 
@@ -322,7 +332,12 @@ def cornerplot(
         ddraws = 1.0 / pdraws
 
         # Re-apply distance and parallax priors to realizations.
-        lnp_draws = lndistprior(ddraws, coord)
+        # Draws come from a Gaussian proposal in *scale* space (s = d^-2),
+        # while `lndistprior` is a density over distance, so the importance
+        # weight needs the change-of-variables Jacobian |dd/ds| = d^3 / 2
+        # (constant factor irrelevant after normalization). Matches the
+        # ln-distance Jacobian handling in `analysis.individual.logpost_grid`.
+        lnp_draws = lndistprior(ddraws, coord) + 3.0 * np.log(ddraws)
         if applied_parallax:
             lnp_draws += logp_parallax(pdraws, parallax, parallax_err)
 
@@ -539,12 +554,15 @@ def cornerplot(
             else:
                 fill_contours = True
                 plot_contours = True
-            hist2d_kwargs["fill_contours"] = hist2d_kwargs.get(
-                "fill_contours", fill_contours
-            )
-            hist2d_kwargs["plot_contours"] = hist2d_kwargs.get(
-                "plot_contours", plot_contours
-            )
+            # Resolve contour flags per panel (caller overrides win) without
+            # writing back into `hist2d_kwargs`: storing them there would
+            # freeze the first panel's smooth-based choice for all later
+            # panels with different int/float smoothing.
+            hist2d_extra = {
+                k: v
+                for k, v in hist2d_kwargs.items()
+                if k not in ("fill_contours", "plot_contours")
+            }
             hist2d(
                 y,
                 x,
@@ -553,7 +571,9 @@ def cornerplot(
                 weights=weights,
                 color=color,
                 smooth=[sy, sx],
-                **hist2d_kwargs,
+                fill_contours=hist2d_kwargs.get("fill_contours", fill_contours),
+                plot_contours=hist2d_kwargs.get("plot_contours", plot_contours),
+                **hist2d_extra,
             )
 
             # Add truth values
