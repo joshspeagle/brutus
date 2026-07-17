@@ -334,6 +334,7 @@ class GridGenerator:
         Peak memory during generation can be 3-4× larger.
 
         **Reddening Fits**: For each valid model, the code:
+
         1. Computes SEDs across (av_grid × rv_grid) combinations
         2. Fits linear dependence on A_V at each R_V value
         3. Fits linear dependence of A_V slope on R_V

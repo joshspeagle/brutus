@@ -253,7 +253,8 @@ def logp_extinction(
             f"`dustmap` has no query() method (got "
             f"{type(dustmap).__name__!r}). Pass a dust map object such as "
             f"brutus.dust.Bayestar; file paths must be loaded first "
-            f"(only `str` paths are auto-converted inside BruteForce.fit)."
+            f"(`str` and `os.PathLike` paths are auto-converted inside "
+            f"BruteForce.fit)."
         )
 
     # Query the dust map

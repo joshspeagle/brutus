@@ -230,7 +230,7 @@ Code Examples
 
          # Fit photometry
          fitter = BruteForce(grid)
-         results = fitter.fit(
+         out_file = fitter.fit(  # returns the path to save_file
              data=flux,              # (N, Nfilt) linear flux densities
              data_err=flux_err,      # (N, Nfilt) flux errors
              data_mask=flux_mask,    # (N, Nfilt) boolean mask

@@ -35,5 +35,5 @@ repos:
         # W503: line break before binary operator (conflicts with black)
         # C901: complexity checks disabled for scientific algorithms
         # E501: line length disabled (LaTeX equations, URLs in docstrings)
-        exclude: ^(tests/|run_coverage\.py)
-        # Tests and coverage scripts have relaxed linting rules
+        exclude: ^tests/
+        # Tests have relaxed linting rules

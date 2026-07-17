@@ -18,7 +18,10 @@ Output Structure
        distances = f['samps_dist'][:]    # Distance in kpc
        av_values = f['samps_red'][:]     # A_V extinction (mag)
        rv_values = f['samps_dred'][:]    # R_V values
-       log_posts = f['samps_logp'][:]    # Log-posterior probabilities
+       log_posts = f['samps_logp'][:]    # Log-posterior values (log-weights)
+                                         # of the draws; the draws are already
+                                         # resampled, so treat them as
+                                         # equally weighted
 
        # Model indices into the grid
        model_idx = f['model_idx'][:]     # Shape (Nstars, Ndraws)
@@ -191,8 +194,10 @@ To check if results are prior-dominated, compare fits with and without priors:
    # With Galactic prior
    fitter.fit(..., save_file='with_prior.h5', data_coords=coords)
 
-   # Without Galactic prior
-   fitter.fit(..., save_file='no_prior.h5', lngalprior=lambda *args, **kwargs: 0.0)
+   # Without Galactic prior. A custom prior receives an array of distances
+   # (kpc) and must return an array of the same shape.
+   fitter.fit(..., save_file='no_prior.h5',
+              lngalprior=lambda dist, coord, **kw: np.zeros_like(dist))
 
 Large differences (>30%) indicate the prior strongly influences results, which is expected for faint stars with poor photometry.
 

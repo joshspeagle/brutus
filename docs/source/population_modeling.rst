@@ -367,6 +367,13 @@ Timing Benchmarks
 
 The following benchmarks were measured on a typical workstation (2024) using 3 Gaia bands. All times are per evaluation of the full log-likelihood.
 
+.. note::
+   The timing and convergence tables in this section were measured before
+   version 1.2.0. That release fixed binary modeling (previously every SMF
+   slice silently evaluated to the same single-star isochrone) and changed
+   the post-main-sequence storage and weighting, so treat these numbers as
+   indicative rather than exact for current code.
+
 **Pipeline stage breakdown** (100 stars, default grid):
 
 .. list-table::
