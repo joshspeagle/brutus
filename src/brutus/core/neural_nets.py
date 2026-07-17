@@ -59,8 +59,7 @@ __all__ = ["FastNN", "FastNNPredictor"]
 
 class FastNN:
     """
-    Object that wraps the underlying neural networks used to interpolate.
-
+    Object that wraps the underlying neural networks used to interpolate
     between grid points on the bolometric correction tables.
 
     This class provides the core neural network functionality for predicting
@@ -105,6 +104,7 @@ class FastNN:
     before evaluation.
 
     Expected input parameters (in order):
+
     - Teff : Effective temperature in Kelvin (linear, NOT log10;
       `FastNNPredictor.sed` converts its `logt` argument via `10**logt`
       before calling the network)
