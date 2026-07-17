@@ -180,6 +180,20 @@ def dist_vs_red(
         # Multi-object case
         single_object = False
 
+        # A single set of per-sample weights is shared across all objects;
+        # broadcast it to the (Nobj, Nsamps) shape bin_pdfs_distred expects.
+        if weights is not None:
+            weights = np.asarray(weights)
+            if weights.ndim == 1:
+                nobj, nsamps = data[0].shape
+                if weights.shape[0] != nsamps:
+                    raise ValueError(
+                        f"`weights` has shape {weights.shape}, which matches "
+                        f"neither (Nsamps,) = ({nsamps},) nor "
+                        f"(Nobj, Nsamps) = {(nobj, nsamps)}."
+                    )
+                weights = np.broadcast_to(weights, (nobj, nsamps))
+
     # Use bin_pdfs_distred to do all the heavy lifting for data preparation
     binned_vals, xedges, yedges = bin_pdfs_distred(
         data,

@@ -28,6 +28,9 @@ from brutus.plotting.distance import dist_vs_red
 from brutus.plotting.offsets import photometric_offsets, photometric_offsets_2d
 from brutus.utils.photometry import inv_magnitude
 
+# np.trapezoid is NumPy 2.0+; fall back to np.trapz on NumPy 1.x.
+_trapezoid = getattr(np, "trapezoid", None) or np.trapz
+
 
 class TestScaleToDistanceJacobian:
     """The SAR regeneration paths draw from a Gaussian proposal in scale
@@ -54,11 +57,11 @@ class TestScaleToDistanceJacobian:
         like = np.exp(-0.5 * ((d**-2 - cls.S0) / cls.SIG_S) ** 2)
         prior = np.exp(-0.5 * ((d - cls.D_MU) / cls.D_SIG) ** 2)
         p = like * prior
-        mean_correct = np.trapezoid(d * p, d) / np.trapezoid(p, d)
+        mean_correct = _trapezoid(d * p, d) / _trapezoid(p, d)
         # Old code: draws land in d with density ~ like * d^-3 (from the
         # scale-space proposal) but are reweighted by the prior alone.
         p_biased = like * prior * d**-3.0
-        mean_biased = np.trapezoid(d * p_biased, d) / np.trapezoid(p_biased, d)
+        mean_biased = _trapezoid(d * p_biased, d) / _trapezoid(p_biased, d)
         return mean_correct, mean_biased
 
     def test_bin_pdfs_distred_sar_matches_analytic_distance_posterior(self):
@@ -296,6 +299,39 @@ class TestDistVsRedFixes:
 
         assert not np.allclose(H, binned[0])
         np.testing.assert_allclose(H, binned.mean(axis=0), rtol=1e-5, atol=1e-8)
+
+    def test_multi_object_accepts_shared_1d_weights(self):
+        """A 1-D `(Nsamps,)` weights array is documented as shared across all
+        objects; previously the multi-object path forwarded it unbroadcast to
+        `bin_pdfs_distred`, which raised a shape ValueError."""
+        rng = np.random.RandomState(7)
+        nsamps = 200
+        dists = np.vstack(
+            [rng.uniform(0.6, 1.0, nsamps), rng.uniform(3.0, 4.0, nsamps)]
+        )
+        reds = rng.uniform(0.1, 1.9, (2, nsamps))
+        dreds = np.full((2, nsamps), 3.3)
+        data = (dists, reds, dreds)
+        kwargs = dict(
+            dist_type="distance",
+            span=((0.0, 2.0), (0.4, 4.5)),
+            bins=(20, 10),
+            smooth=0.015,
+        )
+        w = rng.uniform(0.5, 1.5, nsamps)
+
+        plt.figure()
+        H_shared, _, _, _ = dist_vs_red(data, weights=w, **kwargs)
+        plt.close()
+        plt.figure()
+        H_tiled, _, _, _ = dist_vs_red(data, weights=np.tile(w, (2, 1)), **kwargs)
+        plt.close()
+
+        np.testing.assert_allclose(H_shared, H_tiled, rtol=1e-12, atol=0.0)
+
+        # A 1-D weights array of the wrong length must fail loudly.
+        with pytest.raises(ValueError, match="weights"):
+            dist_vs_red(data, weights=w[:-1], **kwargs)
 
 
 def _offsets_dataset(nobj=30, nfilt=6, nsamps=8, seed=3):
