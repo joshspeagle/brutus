@@ -248,16 +248,24 @@ class Bayestar(DustMap):
         names = set(self._pixel_info.dtype.names or ())
 
         if required <= names:
-            # DM -> distance (kpc): d = 10**(DM/5 - 2). Non-finite DM
-            # bounds (unconstrained pixels) map to 0/inf and thus mask
-            # the entire profile, which is the intended semantics.
+            # DM -> distance (kpc): d = 10**(DM/5 - 2). A DM bound of -inf
+            # (min) or +inf (max) is a legitimate limiting value meaning "no
+            # cut on that side" and passes through 10** naturally (0 / inf).
+            # A NaN bound means the pixel has NO determined reliable range;
+            # it must mask the entire profile. NaN cannot be left in place:
+            # comparisons against NaN are always False, which would UNmask
+            # the pixel completely — the opposite of the conservative
+            # intent — so NaN mins become +inf and NaN maxes become -inf
+            # (every distance bin then fails the range test).
             with np.errstate(over="ignore"):
-                self._d_reliable_min = 10.0 ** (
+                d_min = 10.0 ** (
                     self._pixel_info["DM_reliable_min"].astype(np.float64) / 5.0 - 2.0
                 )
-                self._d_reliable_max = 10.0 ** (
+                d_max = 10.0 ** (
                     self._pixel_info["DM_reliable_max"].astype(np.float64) / 5.0 - 2.0
                 )
+            self._d_reliable_min = np.where(np.isnan(d_min), np.inf, d_min)
+            self._d_reliable_max = np.where(np.isnan(d_max), -np.inf, d_max)
             self._converged = self._pixel_info["converged"].astype(bool)
         else:
             self._d_reliable_min = None
