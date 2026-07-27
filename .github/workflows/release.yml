@@ -1,10 +1,18 @@
 name: Publish to PyPI
 
-# Triggered only by pushing a version tag (e.g. `git tag v1.1.0 && git push --tags`).
-# Publishing uses PyPI Trusted Publishing (OIDC) -- no API token is stored in the
-# repo. Before the first run, configure a trusted publisher on PyPI for project
-# "astro-brutus": owner joshspeagle, repo brutus, workflow "release.yml",
-# environment "pypi". See https://docs.pypi.org/trusted-publishers/.
+# Triggered only by pushing a version tag (e.g. `git tag v1.2.1 && git push --tags`).
+#
+# Publishing uses Trusted Publishing (OIDC) -- no API token is stored in the repo.
+# Before this can work, configure a trusted publisher on BOTH indexes for project
+# "astro-brutus": owner joshspeagle, repo brutus, workflow "release.yml", with
+# environment "testpypi" on TestPyPI and "pypi" on PyPI.
+#   PyPI:     https://pypi.org/manage/project/astro-brutus/settings/publishing/
+#   TestPyPI: https://test.pypi.org/manage/project/astro-brutus/settings/publishing/
+# See https://docs.pypi.org/trusted-publishers/.
+#
+# The flow is: build -> publish to TestPyPI -> install from TestPyPI and import it
+# -> publish to PyPI. A release that cannot be installed from TestPyPI never
+# reaches PyPI. `skip-existing` keeps re-runs of an already-published tag green.
 
 on:
   push:
@@ -27,7 +35,32 @@ jobs:
         run: |
           python -m pip install --upgrade pip build twine
           python -m build
-          twine check dist/*
+          twine check --strict dist/*
+
+      # `twine check` does NOT validate classifiers against the trove list, but
+      # PyPI rejects unknown ones at upload time with a 400. An invalid
+      # "Operating System :: Microsoft :: Windows :: Windows Subsystem for Linux"
+      # classifier silently broke the 1.1.0 and 1.2.0 releases this way.
+      - name: Validate trove classifiers
+        run: |
+          python -m pip install trove-classifiers
+          python - <<'PY'
+          import glob, sys, zipfile
+          from email.parser import BytesParser
+          from trove_classifiers import classifiers as VALID
+
+          whl = glob.glob("dist/*.whl")[0]
+          z = zipfile.ZipFile(whl)
+          meta_name = [n for n in z.namelist() if n.endswith(".dist-info/METADATA")][0]
+          meta = BytesParser().parsebytes(z.read(meta_name))
+          found = meta.get_all("Classifier") or []
+          bad = [c for c in found if c not in VALID]
+          for c in bad:
+              print(f"::error::invalid trove classifier: {c}")
+          if bad:
+              sys.exit(1)
+          print(f"all {len(found)} classifiers valid")
+          PY
 
       - name: Verify the tag matches the package version
         run: |
@@ -45,15 +78,79 @@ jobs:
           name: dist
           path: dist/
 
-  publish:
-    name: Publish to PyPI
+  publish-testpypi:
+    name: Publish to TestPyPI
     needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/astro-brutus/
+    permissions:
+      id-token: write # required for Trusted Publishing (OIDC)
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  verify-testpypi:
+    name: Install from TestPyPI
+    needs: publish-testpypi
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Dependencies come from real PyPI; only astro-brutus itself is pulled from
+      # TestPyPI. The retry loop absorbs TestPyPI index propagation lag.
+      - name: Install the freshly published release
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          for attempt in 1 2 3 4 5; do
+            if pip install \
+                --index-url https://test.pypi.org/simple/ \
+                --extra-index-url https://pypi.org/simple/ \
+                "astro-brutus==${VERSION}"; then
+              echo "installed on attempt ${attempt}"
+              exit 0
+            fi
+            echo "attempt ${attempt} failed; waiting for TestPyPI to propagate"
+            sleep 15
+          done
+          echo "::error::could not install astro-brutus==${VERSION} from TestPyPI"
+          exit 1
+
+      - name: Import the package
+        run: |
+          python -c "
+          import brutus
+          from brutus.core import StarGrid, Isochrone, StellarPop, EEPTracks
+          from brutus.analysis import BruteForce
+          from brutus.data import load_models
+          from brutus.dust import Bayestar
+          from brutus.plotting import cornerplot, summary_plot
+          from brutus.utils import inv_magnitude
+          print('imported brutus', brutus.__version__)
+          "
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: verify-testpypi
     runs-on: ubuntu-latest
     environment:
       name: pypi
       url: https://pypi.org/project/astro-brutus/
     permissions:
-      id-token: write # required for PyPI Trusted Publishing (OIDC)
+      id-token: write # required for Trusted Publishing (OIDC)
     steps:
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -63,3 +160,5 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
