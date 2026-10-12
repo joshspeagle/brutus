@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed — statistical correctness *(output-changing)*
+
+- **Dust-map A(V) prior scatter restored**: `logp_extinction` again adds a
+  0.2 mag systematic scatter in quadrature to the map spread (new `scatter`
+  argument, default `0.2`, as in brutus <= 0.8.3; the 1.x refactor had
+  dropped it). Bayestar19 spreads are ~0.02 mag (median), so without it the
+  prior pinned A(V) — and, through the A(V)-distance profile, the distance —
+  far more tightly than the map supports, producing overconfident and
+  occasionally badly wrong distances. Map bins with zero spread now also
+  receive a proper prior instead of falling back to uniform.
+- **Dust-map prior is proper in masked bins**: where the map is
+  uninformative (reliability-masked distance bins, no coverage), the prior
+  is now the normalized uniform density over `avlim`,
+  `-ln(avlim[1] - avlim[0])`, instead of `ln p = 0`. The improper value
+  acted as a density of 1 per mag and up-weighted reliability-masked
+  distances relative to reliable ones by an arbitrary, unit-dependent factor.
+- **`BruteForce` passes `avlim` to the default dust prior**, so its
+  truncation and uniform normalization match the fitted A(V) range (custom
+  `lndustprior` functions keep the 4-argument signature).
+
 ## [1.2.0] - 2026-07-17
 
 Systematic audit of every module outside the `BruteForce` hot path (covered in

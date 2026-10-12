@@ -283,6 +283,34 @@ class TestDustPriorGating:
         assert len(out[0]) > 0
         assert len(calls) == 1
 
+    def test_default_dust_prior_receives_fit_avlim(
+        self, fitter, observation, monkeypatch
+    ):
+        # The built-in prior normalizes over avlim (truncated Gaussian, and
+        # the uniform density in masked bins), so it must see the fit's
+        # avlim rather than its own (0, 20) default.
+        import brutus.analysis.individual as individual
+
+        seen = []
+
+        def spy(avs, dustmap, coord, distance=None, **kwargs):
+            seen.append(kwargs)
+            return np.zeros_like(avs)
+
+        monkeypatch.setattr(individual, "logp_extinction", spy)
+        flux, flux_err, mask = observation
+        like = fitter.loglike_grid(flux, flux_err, mask.copy(), return_vals=True)
+        fitter.logpost_grid(
+            like,
+            coord=(120.0, 45.0),
+            dustfile=object(),
+            avlim=(0.0, 6.0),
+            Nmc_prior=5,
+            wt_thresh=0.1,
+            rstate=np.random.RandomState(0),
+        )
+        assert seen == [{"avlim": (0.0, 6.0)}]
+
     def test_dustfile_without_coord_raises(self, fitter, observation):
         flux, flux_err, mask = observation
         like = fitter.loglike_grid(flux, flux_err, mask.copy(), return_vals=True)

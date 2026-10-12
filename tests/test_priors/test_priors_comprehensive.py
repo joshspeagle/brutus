@@ -404,8 +404,8 @@ class TestExtinctionPriors:
 
         logp = logp_extinction(avs, dustmap, coord)
 
-        # Should be uniform
-        assert np.allclose(logp, 0.0)
+        # Should be the normalized uniform over the default avlim (0, 20)
+        assert np.allclose(logp, -np.log(20.0))
 
     def test_logp_extinction_with_components(self):
         """Test extinction prior returning components."""
@@ -420,6 +420,12 @@ class TestExtinctionPriors:
         logp, (mean, err) = logp_extinction(avs, dustmap, coord, return_components=True)
 
         assert mean == av_mean
+        # Default 0.2 mag systematic scatter is added in quadrature
+        assert np.isclose(err, np.sqrt(av_err**2 + 0.2**2))
+
+        logp, (mean, err) = logp_extinction(
+            avs, dustmap, coord, return_components=True, scatter=0.0
+        )
         assert err == av_err
 
     def test_logp_extinction_dustmap_error(self):
@@ -434,7 +440,7 @@ class TestExtinctionPriors:
         # Should return uniform prior on error, but warn about it
         with pytest.warns(RuntimeWarning, match="query failed"):
             logp = logp_extinction(avs, dustmap, coord)
-        assert np.allclose(logp, 0.0)
+        assert np.allclose(logp, -np.log(20.0))
 
     # --- Tests for 3D dust maps (Bayestar-like 3-tuple) ---
 
@@ -473,7 +479,7 @@ class TestExtinctionPriors:
 
         # No distance provided — should return uniform prior
         logp = logp_extinction(avs, dustmap, coord)
-        assert np.allclose(logp, 0.0)
+        assert np.allclose(logp, -np.log(20.0))
 
     def test_logp_extinction_3d_dustmap_array_distances(self):
         """Test 3D dust map with array of distances (BruteForce MC case)."""
@@ -494,8 +500,11 @@ class TestExtinctionPriors:
         dustmap = Mock()
         dustmap.query.return_value = (map_distances, av_profile, std_profile)
 
-        # avlim=None: plain (untruncated) Gaussian for the manual check below
-        logp = logp_extinction(avs, dustmap, coord, distance=distances, avlim=None)
+        # avlim=None, scatter=0: plain (untruncated) Gaussian with the raw
+        # map spread for the manual check below
+        logp = logp_extinction(
+            avs, dustmap, coord, distance=distances, avlim=None, scatter=0.0
+        )
 
         assert logp.shape == avs.shape
         assert np.all(np.isfinite(logp))
@@ -526,7 +535,7 @@ class TestExtinctionPriors:
         dustmap.query.return_value = (map_distances, av_profile, std_profile)
 
         logp = logp_extinction(avs, dustmap, coord, distance=1.0)
-        assert np.allclose(logp, 0.0)
+        assert np.allclose(logp, -np.log(20.0))
 
     def test_logp_extinction_3d_components(self):
         """Test 3D dust map with return_components."""
@@ -545,7 +554,7 @@ class TestExtinctionPriors:
         )
 
         assert np.isclose(mean, 0.3)
-        assert np.isclose(err, 0.1)
+        assert np.isclose(err, np.sqrt(0.1**2 + 0.2**2))
 
     def test_logp_extinction_string_dustfile(self):
         """Test that passing a string (file path) raises TypeError.

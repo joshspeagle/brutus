@@ -10,7 +10,8 @@ per point instead of two full `np.interp` passes plus ~8 full-size
 temporaries. The numpy branch remains the fallback / NUMBA_DISABLE_JIT
 path; both must agree to floating-point roundoff on all edge cases
 (boundary clamping, NaN profile segments, zero/negative spreads,
-truncation on/off).
+truncation on/off, systematic scatter, and the normalized uniform
+fallback in masked bins).
 """
 
 import numpy as np
@@ -26,10 +27,13 @@ class Fake3DMap:
         return (self.xp, self.mu, self.sig)
 
 
-def _numpy_reference(avs, distance, xp, mu_p, sig_p, avlim):
+def _numpy_reference(avs, distance, xp, mu_p, sig_p, avlim, scatter=0.2):
     """Reference: the numpy branch of logp_extinction, standalone."""
     from scipy.special import erf
 
+    sig_p = np.asarray(sig_p, dtype=float)
+    with np.errstate(invalid="ignore"):
+        sig_p = np.where(sig_p >= 0, np.sqrt(sig_p**2 + scatter**2), np.nan)
     av_mean = np.interp(distance, xp, mu_p)
     av_err = np.interp(distance, xp, sig_p)
     valid = np.isfinite(av_mean) & np.isfinite(av_err) & (av_err > 0)
@@ -45,7 +49,8 @@ def _numpy_reference(avs, distance, xp, mu_p, sig_p, avlim):
             - erf((lo - av_mean) / (av_err_safe * s2))
         )
         lnprior = lnprior - np.log(np.maximum(z, 1e-300))
-    return np.where(valid, lnprior, 0.0)
+    fallback = -np.log(avlim[1] - avlim[0]) if avlim is not None else 0.0
+    return np.where(valid, lnprior, fallback)
 
 
 class TestExtinctionFusedEquivalence:
@@ -55,7 +60,7 @@ class TestExtinctionFusedEquivalence:
         self.mu = 0.005 + 0.075 * frac
         self.sig = 0.01 + 0.02 * frac
 
-    def _compare(self, mu, sig, avlim=(0.0, 20.0), seed=0, N=5000):
+    def _compare(self, mu, sig, avlim=(0.0, 20.0), seed=0, N=5000, scatter=0.2):
         rng = np.random.default_rng(seed)
         avs = rng.uniform(0.0, 0.5, N)
         # Distances extending beyond both profile ends (boundary clamping)
@@ -64,14 +69,22 @@ class TestExtinctionFusedEquivalence:
         dist[: self.xp.size] = self.xp
 
         m = Fake3DMap(self.xp, mu, sig)
-        fused = logp_extinction(avs, m, None, distance=dist, avlim=avlim)
-        expected = _numpy_reference(avs, dist, self.xp, mu, sig, avlim)
+        fused = logp_extinction(
+            avs, m, None, distance=dist, avlim=avlim, scatter=scatter
+        )
+        expected = _numpy_reference(avs, dist, self.xp, mu, sig, avlim, scatter)
         assert fused.shape == avs.shape
         assert np.allclose(fused, expected, rtol=1e-12, atol=1e-13)
         # Also confirm the in-function numpy branch agrees
         # (return_components forces it)
         numpy_lp, _ = logp_extinction(
-            avs, m, None, distance=dist, avlim=avlim, return_components=True
+            avs,
+            m,
+            None,
+            distance=dist,
+            avlim=avlim,
+            scatter=scatter,
+            return_components=True,
         )
         assert np.allclose(fused, numpy_lp, rtol=1e-12, atol=1e-13)
 
@@ -93,6 +106,16 @@ class TestExtinctionFusedEquivalence:
         sig[10:20] = 0.0
         sig[70:75] = -0.5
         self._compare(self.mu, sig, seed=2)
+        # Without scatter, zero spreads are invalid too
+        self._compare(self.mu, sig, seed=2, scatter=0.0)
+
+    def test_raw_spreads_without_scatter(self):
+        self._compare(self.mu, self.sig, scatter=0.0)
+
+    def test_nan_segments_without_scatter(self):
+        mu = self.mu.copy()
+        mu[40:60] = np.nan
+        self._compare(mu, self.sig, seed=4, scatter=0.0)
 
     def test_small_arrays_use_numpy_branch(self):
         # Below the dispatch threshold the numpy branch runs; results must
@@ -111,7 +134,9 @@ class TestExtinctionFusedEquivalence:
         avs = np.array([0.1, 0.1])
         dist = np.array([1e-6, 100.0])
         out = _extinction_prior_3d_fused(
-            avs, dist, self.xp, self.mu, self.sig, 0.0, 20.0, True
+            avs, dist, self.xp, self.mu, self.sig, 0.0, 20.0, True, -np.log(20.0)
         )
-        expected = _numpy_reference(avs, dist, self.xp, self.mu, self.sig, (0.0, 20.0))
+        expected = _numpy_reference(
+            avs, dist, self.xp, self.mu, self.sig, (0.0, 20.0), scatter=0.0
+        )
         assert np.allclose(out, expected, rtol=1e-12, atol=1e-13)

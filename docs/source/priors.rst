@@ -97,9 +97,9 @@ The combined prior weights each component by its stellar density at the 3-D posi
 
 .. math::
 
-   \pi(A_V\,|\,d,\ell,b) \sim \mathcal{N}(\mu_{A_V}, \sigma_{A_V}^2)
+   \pi(A_V\,|\,d,\ell,b) \sim \mathcal{N}\left(\mu_{A_V},\, \sigma_{A_V}^2 + \sigma_{\rm sys}^2\right)
 
-where the mean :math:`\mu_{A_V}` and uncertainty :math:`\sigma_{A_V}` come from the dust map at that sightline and distance. The Gaussian is truncated and renormalized over the fitted A_V range (``avlim``), so distances where the map profile sits near an A_V boundary are not artificially disfavored.
+where the mean :math:`\mu_{A_V}` and uncertainty :math:`\sigma_{A_V}` come from the dust map at that sightline and distance, and :math:`\sigma_{\rm sys} = 0.2` mag (the ``scatter`` argument of :func:`brutus.priors.logp_extinction`) is a systematic scatter added in quadrature. Bayestar19 spreads are typically only ~0.02 mag and do not capture sub-pixel structure or map systematics; without the extra scatter the prior would pin A_V (and, through the A_V-distance profile, the distance) far more tightly than the map supports. The Gaussian is truncated and renormalized over the fitted A_V range (``avlim``), so distances where the map profile sits near an A_V boundary are not artificially disfavored.
 
 .. note::
 
@@ -112,6 +112,10 @@ where the mean :math:`\mu_{A_V}` and uncertainty :math:`\sigma_{A_V}` come from 
    sightline's reliable range, and sightlines whose fits did not converge,
    also degrade to a uniform prior. Pass
    ``Bayestar(..., apply_reliability_mask=False)`` to disable this masking.
+   The uniform prior is normalized over ``avlim``
+   (:math:`1/(A_{V,\max} - A_{V,\min})`), like the Gaussian, so masked
+   distances compete on equal footing with reliable ones rather than being
+   up-weighted by an arbitrary, unit-dependent factor.
 
 **Implementation**: Enabled via the ``dustfile`` parameter in ``fit()``, which accepts a path to a Bayestar HDF5 file (``str`` or ``pathlib.Path``) or a pre-loaded :class:`brutus.dust.Bayestar` object; the prior itself is evaluated by :func:`brutus.priors.logp_extinction`
 
