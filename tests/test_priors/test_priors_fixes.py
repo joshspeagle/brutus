@@ -416,7 +416,7 @@ class TestExtinctionDustmapValidation:
         dustmap.query.side_effect = TypeError("Query failed")
         with pytest.warns(RuntimeWarning, match="query failed"):
             logp = logp_extinction(np.array([0.1, 0.2]), dustmap, None)
-        assert np.allclose(logp, 0.0)
+        assert np.allclose(logp, -np.log(20.0))
 
 
 class Fake3DMap:
@@ -452,7 +452,9 @@ class TestExtinctionTruncatedNormalization:
     def test_avlim_none_gives_plain_gaussian(self):
         avs = np.array([0.1, 0.2])
         dist = np.array([1.0, 1.0])
-        lp = logp_extinction(avs, self.map, None, distance=dist, avlim=None)
+        lp = logp_extinction(
+            avs, self.map, None, distance=dist, avlim=None, scatter=0.0
+        )
         mu = np.interp(1.0, self.map.xp, self.map.mu)
         sig = np.interp(1.0, self.map.xp, self.map.sig)
         expected = -0.5 * ((avs - mu) ** 2 / sig**2 + np.log(2 * np.pi * sig**2))
@@ -475,3 +477,56 @@ class TestExtinctionTruncatedNormalization:
         lp = logp_extinction(av_grid, dustmap, None)
         integral = _trapezoid(np.exp(lp), av_grid)
         assert np.isclose(integral, 1.0, rtol=1e-3)
+
+
+class TestExtinctionScatter:
+    """The 0.2 mag systematic scatter (brutus <= 0.8.3) must be applied."""
+
+    def setup_method(self):
+        xp = np.linspace(0.05, 5.0, 60)
+        self.mu = 0.005 + 0.075 * (xp / xp[-1])
+        self.sig = 0.01 + 0.02 * (xp / xp[-1])
+        self.map = Fake3DMap(xp, self.mu, self.sig)
+
+    def test_default_scatter_added_in_quadrature(self):
+        # Regression: the refactor dropped the scatter, leaving the raw
+        # ~0.01-0.03 mag map spreads as the prior width
+        _, (mean, err) = logp_extinction(
+            np.array([0.1]), self.map, None, distance=1.0, return_components=True
+        )
+        raw = np.interp(1.0, self.map.xp, self.sig)
+        assert np.isclose(err, np.sqrt(raw**2 + 0.2**2))
+
+    @pytest.mark.parametrize("scatter", [0.0, 0.05, 0.5])
+    def test_scatter_matches_plain_gaussian(self, scatter):
+        avs = np.array([0.0, 0.1, 0.4])
+        lp = logp_extinction(
+            avs, self.map, None, distance=np.ones(3), avlim=None, scatter=scatter
+        )
+        mu = np.interp(1.0, self.map.xp, self.mu)
+        sig = np.hypot(np.interp(1.0, self.map.xp, self.sig), scatter)
+        expected = -0.5 * ((avs - mu) ** 2 / sig**2 + np.log(2 * np.pi * sig**2))
+        assert np.allclose(lp, expected)
+
+    def test_zero_spread_bins_become_informative(self):
+        # Bayestar has bins with av_std == 0 exactly; with scatter they get
+        # a proper N(mu, 0.2) prior, without it they stay uninformative
+        sig = self.sig.copy()
+        sig[:] = 0.0
+        m = Fake3DMap(self.map.xp, self.mu, sig)
+        avs = np.array([0.05, 1.0])
+        lp = logp_extinction(avs, m, None, distance=np.ones(2))
+        assert lp[0] > lp[1]
+        lp0 = logp_extinction(avs, m, None, distance=np.ones(2), scatter=0.0)
+        np.testing.assert_allclose(lp0, -np.log(20.0))
+
+    def test_negative_spread_stays_invalid(self):
+        sig = np.full_like(self.sig, -0.5)
+        m = Fake3DMap(self.map.xp, self.mu, sig)
+        lp = logp_extinction(np.array([0.1]), m, None, distance=1.0)
+        np.testing.assert_allclose(lp, -np.log(20.0))
+
+    @pytest.mark.parametrize("bad", [-0.1, np.nan, np.inf])
+    def test_invalid_scatter_raises(self, bad):
+        with pytest.raises(ValueError, match="scatter"):
+            logp_extinction(np.array([0.1]), self.map, None, distance=1.0, scatter=bad)

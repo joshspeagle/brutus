@@ -89,7 +89,7 @@ Understanding brutus's internal conventions is essential for correct usage:
 - **Model magnitudes**: Defined at a reference distance of **1 kpc**. Apparent magnitude at distance `d` (kpc) is `m_apparent = m_model + 5 * log10(d_kpc)`.
 - **Scale factor**: `scale = (d_ref / d)^2 = 1 / d_kpc^2`. Used internally to shift model flux to the observed distance.
 - **Parallax**: Expected in **milliarcseconds** (mas) throughout the fitting pipeline. Survey data in arcseconds must be multiplied by 1000.
-- **Extinction**: A(V) in magnitudes. The default R(V) prior is Gaussian with mean 3.32 and std 0.18.
+- **Extinction**: A(V) in magnitudes. The default R(V) prior is Gaussian with mean 3.32 and std 0.18. The dust-map A(V) prior adds a 0.2 mag systematic scatter in quadrature to the map spread (`logp_extinction(scatter=0.2)`).
 - **Reddening vectors**: In `_get_sed_mle`, `drvecs = (1/A_V) * ∂f/∂R_V` (the A(V) factor is divided out). The Fisher information computation multiplies by A(V) to recover the true derivative `∂f/∂R_V` for correct R(V) uncertainty estimation.
 - **Photometric offsets**: Multiplicative flux corrections loaded via `load_offsets()`. Applied as `flux *= offset, err *= offset` in `_setup()`. The offset uncertainties (~0.02 mag optical, ~0.03 mag NIR per Speagle et al. 2025 Table 5) are NOT automatically added to measurement errors. Users should add systematic errors in quadrature before fitting:
   ```python
@@ -223,7 +223,8 @@ For posterior predictive validation, compare the **posterior predictive width** 
   Explicitly requesting `afe` always honors it.
 - **Bayestar reliability masking is on by default**: queries return NaN
   outside each sightline's `DM_reliable_min/max` range and in non-converged
-  pixels, degrading the dust prior to uniform there. NaN bounds mean "no
+  pixels, degrading the dust prior to the normalized uniform over `avlim`
+  (`-ln(avlim width)`, never an improper `ln p = 0`) there. NaN bounds mean "no
   reliable range" and mask the whole sightline. Pass
   `Bayestar(apply_reliability_mask=False)` for raw map values.
 - **EEPTracks caches are versioned** (`*_cachev2.pkl`); unversioned `.pkl`

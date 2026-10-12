@@ -1741,7 +1741,12 @@ class BruteForce:
             # the extinction profile to each star's distance
             av_flat = a_mc.ravel()  # Shape: (Nmc * Nsel,)
             dist_flat = dist_mc.ravel()  # Shape: (Nmc * Nsel,)
-            lnp_dust_flat = lndustprior(av_flat, dustfile, coord, distance=dist_flat)
+            # The built-in prior normalizes over the fitted A(V) support;
+            # custom priors keep the documented 4-argument signature.
+            dust_kw = {"avlim": avlim} if lndustprior is logp_extinction else {}
+            lnp_dust_flat = lndustprior(
+                av_flat, dustfile, coord, distance=dist_flat, **dust_kw
+            )
             lnp_dust_reshaped = lnp_dust_flat.reshape(Nmc, Nsel)  # Shape: (Nmc, Nsel)
             lnp_mc += lnp_dust_reshaped
 

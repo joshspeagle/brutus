@@ -66,17 +66,51 @@ def _log_truncnorm_z(av_mean, av_err, av_lo, av_hi):
     return np.log(np.maximum(z, 1e-300))
 
 
+def _add_scatter(std, scatter):
+    """Add ``scatter`` in quadrature to non-negative spreads.
+
+    Negative spreads are invalid map values and are returned as NaN so they
+    keep falling back to the uniform prior rather than being "repaired" by
+    the squaring.
+    """
+    std = np.asarray(std, dtype=float)
+    with np.errstate(invalid="ignore"):
+        out = np.where(std >= 0, np.sqrt(std**2 + scatter**2), np.nan)
+    return float(out) if out.ndim == 0 else out
+
+
+def _lnp_uniform(av_lo, av_hi, truncate):
+    """Log-density of the uniform A(V) prior used where the map is uninformative.
+
+    This is the *normalized* uniform density over the support ``avlim``,
+    so that distances where the map is masked or missing compete on equal
+    footing with distances that receive the normalized Gaussian. An
+    untruncated prior has no proper uniform, so 0 is returned (only valid
+    when the whole sightline is uninformative).
+    """
+    return -log(av_hi - av_lo) if truncate else 0.0
+
+
 @jit(nopython=True, parallel=True, cache=True)
 def _extinction_prior_3d_fused(
-    avs, distance, map_distances, av_profile, std_profile, av_lo, av_hi, truncate
+    avs,
+    distance,
+    map_distances,
+    av_profile,
+    std_profile,
+    av_lo,
+    av_hi,
+    truncate,
+    lnp_uniform,
 ):
     """Fused 3D dust prior: one binary search + Gaussian log-pdf per point.
 
     Interpolates the map's mean/std extinction profiles at ``distance[i]``
     (np.interp semantics: clamped at the profile boundaries) and returns
     the truncated-normal log-prior for ``avs[i]``. Points where the
-    interpolated profile is non-finite or has non-positive spread get 0
-    (uniform prior), matching the numpy fallback path.
+    interpolated profile is non-finite or has non-positive spread get
+    ``lnp_uniform`` (the uniform prior over the A(V) support), matching the
+    numpy fallback path.
     """
     N = avs.shape[0]
     n = map_distances.shape[0]
@@ -131,7 +165,7 @@ def _extinction_prior_3d_fused(
                 lnp -= log(z)
             out[i] = lnp
         else:
-            out[i] = 0.0
+            out[i] = lnp_uniform
 
     return out
 
@@ -143,6 +177,7 @@ def logp_extinction(
     distance=None,
     return_components=False,
     avlim=(0.0, 20.0),
+    scatter=0.2,
 ):
     r"""
     Log-prior for dust extinction using 3D dust maps.
@@ -179,12 +214,22 @@ def logp_extinction(
         used to clip A(V) samples in the fitting pipeline. Default is
         ``(0.0, 20.0)`` (the ``BruteForce.fit`` default). Pass ``None``
         for an untruncated Gaussian normalized over the full real line.
+    scatter : float, optional
+        Systematic scatter (in magnitudes) added in quadrature to the map's
+        A(V) spread, ``sigma = sqrt(sigma_map**2 + scatter**2)``. Bayestar's
+        per-bin spreads are typically only ~0.01-0.05 mag and do not include
+        sub-pixel structure or map systematics; without this floor the prior
+        pins A(V) (and, through the A(V)-distance profile, the distance)
+        far more tightly than the map supports. Default is ``0.2``, matching
+        brutus <= 0.8.3. Set to ``0`` to use the raw map spreads.
 
     Returns
     -------
     logp : ndarray
         Log-prior probability density for the input extinction values.
-        Returns 0 (uniform prior) when no dust map coverage is available.
+        Where the map is uninformative (no coverage, or distance bins masked
+        as unreliable), returns the normalized uniform density over
+        ``avlim``, ``-ln(avlim[1] - avlim[0])`` (0 if ``avlim`` is None).
     components : tuple, optional
         If ``return_components=True``, returns ``(av_mean, av_err)``
         containing the dust map mean and standard deviation used.
@@ -216,9 +261,16 @@ def logp_extinction(
     map's distance-resolved profiles. Distances outside the map range
     use the boundary values.
 
-    For regions without dust map coverage (NaN values), a uniform
-    (uninformative) prior is returned. If the dust map ``query`` call
-    itself fails, a uniform prior is returned with a RuntimeWarning.
+    The spread :math:`\\sigma_{A_V}` is the map spread with ``scatter``
+    added in quadrature.
+
+    For regions without dust map coverage (NaN values, including distance
+    bins masked by ``Bayestar``'s reliability mask), a uniform
+    (uninformative) prior over ``avlim`` is returned. It is normalized like
+    the Gaussian: an unnormalized ``ln p = 0`` would act as a density of
+    1 per mag and up-weight masked distances relative to reliable ones by a
+    unit-dependent factor. If the dust map ``query`` call itself fails, the
+    uniform prior is returned with a RuntimeWarning.
 
     Examples
     --------
@@ -246,6 +298,12 @@ def logp_extinction(
                 f"avlim must be finite with avlim[0] < avlim[1]; got {avlim}"
             )
 
+    lnp_unif = _lnp_uniform(av_lo, av_hi, truncate)
+
+    scatter = float(scatter)
+    if not (np.isfinite(scatter) and scatter >= 0):
+        raise ValueError(f"scatter must be finite and non-negative; got {scatter}")
+
     # A dust map must expose query(); silently returning a uniform prior for
     # e.g. a pathlib.Path would disable the dust prior for the whole fit.
     if not hasattr(dustmap, "query"):
@@ -268,7 +326,7 @@ def logp_extinction(
             RuntimeWarning,
             stacklevel=2,
         )
-        lnprior = np.zeros_like(avs, dtype=float)
+        lnprior = np.full_like(avs, lnp_unif, dtype=float)
         if return_components:
             return lnprior, (np.nan, np.nan)
         return lnprior
@@ -281,9 +339,14 @@ def logp_extinction(
         av_profile = np.squeeze(av_profile)
         std_profile = np.squeeze(std_profile)
 
+        # Systematic scatter in quadrature, applied to the profile so the
+        # fused and numpy paths agree. NaN (masked) and negative (invalid)
+        # spreads stay invalid; zero spreads become proper Gaussians.
+        std_profile = _add_scatter(std_profile, scatter)
+
         if distance is None:
             # Cannot evaluate distance-dependent prior without distance
-            lnprior = np.zeros_like(avs, dtype=float)
+            lnprior = np.full_like(avs, lnp_unif, dtype=float)
             av_mean = np.nan
             av_err = np.nan
         else:
@@ -307,7 +370,15 @@ def logp_extinction(
             ):
                 try:
                     return _extinction_prior_3d_fused(
-                        avs, distance, map_d, av_p, std_p, av_lo, av_hi, truncate
+                        avs,
+                        distance,
+                        map_d,
+                        av_p,
+                        std_p,
+                        av_lo,
+                        av_hi,
+                        truncate,
+                        lnp_unif,
                     )
                 except Exception as e:
                     warnings.warn(
@@ -324,7 +395,7 @@ def logp_extinction(
             # Compute Gaussian prior where valid
             valid = np.isfinite(av_mean) & np.isfinite(av_err) & (av_err > 0)
 
-            lnprior = np.zeros_like(avs, dtype=float)
+            lnprior = np.full_like(avs, lnp_unif, dtype=float)
             if np.any(valid):
                 # Use safe denominator to avoid division by zero
                 av_err_safe = np.where(valid, av_err, 1.0)
@@ -334,11 +405,12 @@ def logp_extinction(
                 if truncate:
                     # Normalize over the physical support [av_lo, av_hi]
                     lnprior -= _log_truncnorm_z(av_mean, av_err_safe, av_lo, av_hi)
-                lnprior = np.where(valid, lnprior, 0.0)
+                lnprior = np.where(valid, lnprior, lnp_unif)
 
     # Handle simple dust maps returning (av_mean, av_std)
     elif isinstance(result, tuple) and len(result) == 2:
         av_mean, av_err = result
+        av_err = _add_scatter(av_err, scatter)
 
         if np.isfinite(av_mean) and np.isfinite(av_err) and av_err > 0:
             chi2 = (avs - av_mean) ** 2 / av_err**2
@@ -347,12 +419,12 @@ def logp_extinction(
             if truncate:
                 lnprior -= _log_truncnorm_z(av_mean, av_err, av_lo, av_hi)
         else:
-            lnprior = np.zeros_like(avs, dtype=float)
+            lnprior = np.full_like(avs, lnp_unif, dtype=float)
             av_mean, av_err = np.nan, np.nan
 
     else:
         # Unrecognized return format
-        lnprior = np.zeros_like(avs, dtype=float)
+        lnprior = np.full_like(avs, lnp_unif, dtype=float)
         av_mean = np.nan
         av_err = np.nan
 

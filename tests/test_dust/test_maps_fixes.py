@@ -31,6 +31,9 @@ from conftest import find_brutus_data_file
 from brutus.dust import Bayestar
 from brutus.dust.extinction import lb2pix
 
+# np.trapezoid is the NumPy 2.0 name for np.trapz; CI also tests NumPy 1.x
+_trapezoid = getattr(np, "trapezoid", None) or np.trapz
+
 BAYESTAR_FILE = find_brutus_data_file("bayestar2019_v1.h5")
 
 PIXEL_DTYPE_FULL = np.dtype(
@@ -311,16 +314,47 @@ class TestReliabilityMask:
         assert np.all(np.isfinite(av_mean))
 
     def test_masked_profile_gives_uniform_extinction_prior(self, synthetic_map):
-        # NaN-masked bins must degrade to a uniform prior (logp = 0)
+        # NaN-masked bins must degrade to the *normalized* uniform prior over
+        # avlim (-ln 20 for the default (0, 20)), not an improper ln p = 0
         from brutus.priors import logp_extinction
 
         avs = np.array([0.5])
         # Distance beyond the reliable range (> 2.51 kpc)
         logp_out = logp_extinction(avs, synthetic_map, [120.0, 30.0], distance=4.5)
-        np.testing.assert_array_equal(logp_out, 0.0)
+        np.testing.assert_allclose(logp_out, -np.log(20.0))
+        logp_out = logp_extinction(
+            avs, synthetic_map, [120.0, 30.0], distance=4.5, avlim=(0.0, 6.0)
+        )
+        np.testing.assert_allclose(logp_out, -np.log(6.0))
         # Distance within the reliable range: informative Gaussian prior
         logp_in = logp_extinction(avs, synthetic_map, [120.0, 30.0], distance=1.0)
-        assert logp_in[0] != 0.0
+        assert not np.isclose(logp_in[0], -np.log(20.0))
+
+    @pytest.mark.parametrize("numpy_branch", [False, True])
+    def test_prior_proper_in_masked_and_reliable_bins(
+        self, synthetic_map, numpy_branch
+    ):
+        # Regression: masked bins used ln p = 0 (a density of 1 per mag),
+        # up-weighting unreliable distances relative to reliable ones by an
+        # arbitrary unit-dependent factor. The prior must integrate to one
+        # over avlim at every distance, masked or not.
+        from brutus.priors import logp_extinction
+
+        av_grid = np.linspace(0.0, 20.0, 200_001)
+        for d in (1.0, 4.5):  # reliable, masked
+            dist = np.full(av_grid.size, d)
+            # return_components forces the numpy branch; otherwise the
+            # large elementwise input takes the fused numba kernel
+            lp = logp_extinction(
+                av_grid,
+                synthetic_map,
+                [120.0, 30.0],
+                distance=dist,
+                return_components=numpy_branch,
+            )
+            if numpy_branch:
+                lp = lp[0]
+            assert np.isclose(_trapezoid(np.exp(lp), av_grid), 1.0, rtol=1e-3)
 
 
 class TestSortEquivalence:
@@ -477,9 +511,10 @@ class TestRealFile:
         from brutus.priors import logp_extinction
 
         # Sightline reliable only to ~5.6 kpc: at 20 kpc the masked map
-        # must yield a uniform prior instead of a tight far-field Gaussian
+        # must yield the normalized uniform prior instead of a tight
+        # far-field Gaussian
         logp = logp_extinction(np.array([1.0]), real_map, [90.0, 1.0], distance=20.0)
-        np.testing.assert_array_equal(logp, 0.0)
+        np.testing.assert_allclose(logp, -np.log(20.0))
 
 
 if __name__ == "__main__":
