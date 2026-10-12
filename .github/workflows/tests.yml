@@ -7,7 +7,45 @@ on:
     branches: [ master, main ]
 
 jobs:
+  data:
+    # Download the test data once per OS (instead of once per matrix leg) and
+    # save it to the Actions cache for the test jobs. Harvard Dataverse
+    # intermittently returns 403 to bursts of concurrent CI downloads, so the
+    # fetch script retries with backoff.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Cache test data files
+      uses: actions/cache@v4
+      id: cache-data
+      with:
+        path: |
+          ~/.cache/astro-brutus/
+          ~/Library/Caches/astro-brutus/
+        key: brutus-data-v3-${{ runner.os }}-${{ hashFiles('src/brutus/data/download.py') }}
+        restore-keys: |
+          brutus-data-v3-${{ runner.os }}-
+
+    - name: Set up Python
+      if: steps.cache-data.outputs.cache-hit != 'true'
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.12"
+
+    - name: Download test data files
+      if: steps.cache-data.outputs.cache-hit != 'true'
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .
+        python .github/scripts/fetch_test_data.py
+
   test:
+    needs: data
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -43,154 +81,21 @@ jobs:
         fi
         pip install -e ".[test]"
 
-    - name: Cache test data files
-      uses: actions/cache@v4
-      id: cache-data
+    - name: Restore test data files
+      # Populated by the `data` job; test jobs never download from Dataverse
+      # themselves (concurrent downloads from every matrix leg get 403s).
+      uses: actions/cache/restore@v4
       with:
         path: |
           ~/.cache/astro-brutus/
           ~/Library/Caches/astro-brutus/
         key: brutus-data-v3-${{ runner.os }}-${{ hashFiles('src/brutus/data/download.py') }}
-        restore-keys: |
-          brutus-data-v3-${{ runner.os }}-
-          brutus-data-v3-
+        fail-on-cache-miss: true
 
-    - name: Check cache status
-      run: |
-        echo "Cache hit: ${{ steps.cache-data.outputs.cache-hit }}"
-        echo "Cache key: ${{ steps.cache-data.outputs.cache-primary-key }}"
-        echo "Restored key: ${{ steps.cache-data.outputs.cache-matched-key }}"
-
-    - name: Download/Verify test data files
-      # IMPORTANT: Always run verification, even if cache hit
-      # This ensures files actually exist and weren't corrupted/partially cached
-      # The fetch_* functions are smart - they only download if files are missing
-      run: |
-        # Download essential data files for testing (or verify they exist)
-        # GitHub Actions cache limit: 10 GB per repo
-        # MIST grids: ~2-4 GB, Isochrones: ~100 MB, Tracks: ~200 MB
-        python -c "
-        import sys
-        import traceback
-
-        try:
-            from brutus.data import (
-                fetch_grids, fetch_isos, fetch_tracks, fetch_nns,
-                fetch_dustmaps, fetch_offsets
-            )
-            import os
-            import pooch
-
-            print('=' * 60)
-            print('Verifying/Downloading MIST data files for testing...')
-            print('=' * 60)
-
-            # Show cache directory and what's already cached
-            cache_dir = pooch.os_cache('astro-brutus')
-            print(f'Cache directory: {cache_dir}')
-            print(f'Cache exists: {os.path.exists(cache_dir)}')
-
-            if os.path.exists(cache_dir):
-                files = os.listdir(cache_dir)
-                print(f'\\nExisting files in cache: {len(files)} files')
-                total_cache_size = 0
-                for f in sorted(files):
-                    fpath = os.path.join(cache_dir, f)
-                    size = os.path.getsize(fpath) / (1024*1024)
-                    total_cache_size += size
-                    # Show all files with sizes
-                    print(f'  - {f}: {size:.1f} MB')
-                print(f'Total cache size: {total_cache_size/1024:.2f} GB')
-            else:
-                print('Cache directory does not exist - will download all files')
-
-            # Create data directory for symlinks
-            data_dir = 'data/DATAFILES'
-            os.makedirs(data_dir, exist_ok=True)
-            print(f'Created/verified directory: {data_dir}')
-
-            print('\n1. Verifying/Downloading MIST grids (~780 MB)...')
-            path = fetch_grids(grid='mist_v9', target_dir=data_dir)
-            print(f'   ✓ MIST grids available at: {path}')
-            # Verify the file/symlink exists
-            if os.path.exists(path):
-                if os.path.islink(path):
-                    target = os.readlink(path)
-                    print(f'   → Symlink points to: {target}')
-                    print(f'   → Target exists: {os.path.exists(target)}')
-                else:
-                    size_gb = os.path.getsize(path) / (1024*1024*1024)
-                    print(f'   → Direct file, size: {size_gb:.2f} GB')
-            else:
-                print(f'   ⚠ WARNING: File not found at {path}!')
-
-            print('\n2. Verifying/Downloading isochrones (~100 MB)...')
-            path = fetch_isos(target_dir=data_dir)
-            print(f'   ✓ Isochrones available at: {path}')
-
-            print('\n3. Verifying/Downloading EEP tracks (~200 MB)...')
-            path = fetch_tracks(target_dir=data_dir)
-            print(f'   ✓ EEP tracks available at: {path}')
-
-            print('\n4. Verifying/Downloading neural network (~1 MB)...')
-            path = fetch_nns(target_dir=data_dir)
-            print(f'   ✓ Neural network available at: {path}')
-
-            print('\n5. Verifying/Downloading dust maps (~100 MB)...')
-            try:
-                path = fetch_dustmaps(target_dir=data_dir)
-                print(f'   ✓ Dust maps available at: {path}')
-            except Exception as e:
-                print(f'   ⚠ Dust maps download failed (optional): {e}')
-
-            print('\n6. Verifying/Downloading photometric offsets...')
-            try:
-                path = fetch_offsets(grid='mist_v9', target_dir=data_dir)
-                print(f'   ✓ Offsets available (v9) at: {path}')
-            except Exception as e:
-                print(f'   ⚠ Offsets download failed (optional): {e}')
-
-            print('\n' + '=' * 60)
-            print('All data files verified/downloaded successfully!')
-
-            # Final cache status
-            print('\nFinal cache status:')
-            if os.path.exists(cache_dir):
-                files = os.listdir(cache_dir)
-                total_size = sum(os.path.getsize(os.path.join(cache_dir, f))
-                                for f in files) / (1024*1024*1024)
-                print(f'Total files in cache: {len(files)}')
-                print(f'Total cache size: {total_size:.2f} GB')
-
-            # Show what's actually in data/DATAFILES
-            print('\nFiles in data/DATAFILES:')
-            if os.path.exists(data_dir):
-                data_files = os.listdir(data_dir)
-                print(f'Total files: {len(data_files)}')
-                for f in sorted(data_files):
-                    fpath = os.path.join(data_dir, f)
-                    if os.path.islink(fpath):
-                        target = os.readlink(fpath)
-                        exists = 'OK' if os.path.exists(fpath) else 'BROKEN'
-                        print(f'  - {f} -> {os.path.basename(target)} [{exists}]')
-                    else:
-                        size_mb = os.path.getsize(fpath) / (1024*1024)
-                        print(f'  - {f} ({size_mb:.1f} MB)')
-            else:
-                print(f'WARNING: {data_dir} does not exist!')
-
-            print('=' * 60)
-
-        except Exception as e:
-            print('\n' + '!' * 60)
-            print('ERROR: Could not download data files')
-            print('!' * 60)
-            print(f'Error: {e}')
-            traceback.print_exc()
-            print('\nData files are required for tests.')
-            print('!' * 60)
-            sys.exit(1)  # Fail the workflow if data download fails
-        "
+    - name: Verify test data files
+      # Hash-checks the restored files and symlinks them into data/DATAFILES;
+      # with the cache restored this makes no network requests.
+      run: python .github/scripts/fetch_test_data.py --no-retry
 
     - name: Lint with flake8
       run: |
