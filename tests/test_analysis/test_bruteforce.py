@@ -2125,3 +2125,8 @@ class TestSubsetResults:
             rstate=np.random.RandomState(0),
         )[0]
         assert np.all(sel < len(idx))
+
+
+def test_get_sed_grid_rejects_wrong_length_av(fitter):
+    with pytest.raises(ValueError, match="av"):
+        fitter.get_sed_grid(av=np.zeros(2))

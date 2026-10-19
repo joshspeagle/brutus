@@ -85,6 +85,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has a different length from the likelihood results. After
   `loglike_grid(indices=...)`, the default `dlabels` gave the Galactic prior
   the labels of the wrong models.
+- `BruteForce.get_sed_grid` raises `ValueError` for an `av` or `rv` array
+  whose length is not the number of models. With JIT on, it read past the
+  end of the array and returned garbage SEDs.
 
 ### Documentation
 

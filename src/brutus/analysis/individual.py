@@ -79,7 +79,7 @@ from scipy.special import logsumexp
 
 # Import StarGrid and SED utilities
 from ..core import StarGrid
-from ..core.sed_utils import _get_seds, _model_array
+from ..core.sed_utils import _get_seds, _model_array, get_seds
 from ..priors.astrometric import logp_parallax, logp_parallax_scale
 from ..priors.extinction import logp_extinction
 from ..priors.galactic import logp_galactic_structure
@@ -965,9 +965,14 @@ class BruteForce:
         drvecs : numpy.ndarray of shape (Nmodels, Nbands)
             Differential reddening vectors with respect to Rv.
 
+        Raises
+        ------
+        ValueError
+            If ``av`` or ``rv`` is an array whose shape is not ``(Nmodels,)``.
+
         See Also
         --------
-        brutus.core.sed_utils._get_seds : Underlying SED computation
+        brutus.core.sed_utils.get_seds : Underlying SED computation
         StarGrid.get_seds : Single star SED generation
 
         Notes
@@ -984,29 +989,15 @@ class BruteForce:
 
         where :math:`r_0` and :math:`dr` are the reddening vector components.
         """
-        if indices is not None:
-            mag_coeffs = self.models[indices]
-        else:
-            mag_coeffs = self.models
-
-        # Ensure av and rv are arrays
-        n_models = len(mag_coeffs)
-
-        if av is None:
-            av = np.zeros(n_models)
-        elif np.isscalar(av):
-            av = np.full(n_models, av)
-        else:
-            av = np.asarray(av)
-
-        if rv is None:
-            rv = np.full(n_models, 3.3)
-        elif np.isscalar(rv):
-            rv = np.full(n_models, rv)
-        else:
-            rv = np.asarray(rv)
-
-        return _get_seds(mag_coeffs, av, rv, return_flux=return_flux)
+        mag_coeffs = self.models if indices is None else self.models[indices]
+        return get_seds(
+            mag_coeffs,
+            av=av,
+            rv=rv,
+            return_flux=return_flux,
+            return_rvec=True,
+            return_drvec=True,
+        )
 
     def _setup(
         self,
