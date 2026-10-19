@@ -332,3 +332,34 @@ class TestSedBatchSingleFilter:
         assert seds.shape == (2, 1)
         assert np.isfinite(seds[0, 0])
         assert np.isnan(seds[1, 0])
+
+
+def test_sed_batch_matches_loop_over_sed(nn_file):
+    predictor = FastNNPredictor(filters=None, nnfile=nn_file, verbose=False)
+    logt = np.array([3.76, 3.70, 3.85, 3.60, 5.50, 3.76])  # star 4 out of bounds
+    logg = np.array([4.44, 4.60, 4.20, 2.50, 4.40, 9.00])  # star 5 out of bounds
+    feh = np.array([0.0, -0.5, 0.2, -1.0, 0.0, 0.0])
+    logl = np.array([0.0, -0.3, 0.5, 1.8, 0.0, 0.0])
+    afe = np.zeros(6)
+    filt_idxs = [0, 3, 5, 20]
+    batch = predictor.sed_batch(
+        logt, logg, feh, logl, afe, 0.4, 3.1, 2500.0, filt_idxs=filt_idxs
+    )
+    loop = np.array(
+        [
+            predictor.sed(
+                logt=t,
+                logg=g,
+                feh_surf=f,
+                logl=lum,
+                afe=a,
+                av=0.4,
+                rv=3.1,
+                dist=2500.0,
+                filt_idxs=filt_idxs,
+            )
+            for t, g, f, lum, a in zip(logt, logg, feh, logl, afe)
+        ]
+    )
+    assert np.isfinite(batch[:4]).all() and np.isnan(batch[4:]).all()
+    npt.assert_allclose(batch, loop, rtol=1e-12, equal_nan=True)
