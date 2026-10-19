@@ -86,8 +86,8 @@ def cornerplot(
         `'agewt'` will always be ignored.
 
     lndistprior : func, optional
-        The log-distsance prior function used. If not provided, the galactic
-        model from Green et al. (2014) will be assumed.
+        The log-distance prior function used. If not provided,
+        `~brutus.priors.logp_galactic_structure` is assumed.
 
     coord : 2-tuple, optional
         The galactic `(l, b)` coordinates for the object, which is passed to

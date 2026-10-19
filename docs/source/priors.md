@@ -1,273 +1,158 @@
-# Prior Distributions
+# Priors
 
-This page describes the **prior probability distributions** used in `brutus`. Priors encode astrophysical knowledge about the Galaxy and help break parameter degeneracies inherent in photometric fitting.
+Photometry alone often allows several solutions: a nearer, cooler star or a farther, hotter star behind more dust ({doc}`scientific_background`). The priors decide between them when the data cannot. This page gives each prior's equation, its defaults and the argument of {meth}`~brutus.analysis.BruteForce.fit` that changes it.
 
-For detailed mathematical derivations, see [Speagle et al. (2025)](https://arxiv.org/abs/2503.02227) §2.4 and Appendix A.
+| Prior | Depends on | Default | Changed by |
+|---|---|---|---|
+| [Model prior](#model-prior) | grid model | Kroupa IMF × age weight × grid volume | `lnprior`, `apply_agewt`, `apply_grad` |
+| [Galactic structure](#galactic-structure) | distance, sightline, [Fe/H], age | thin disk + thick disk + halo | `lngalprior`, `data_coords` |
+| [Dust map](#dust-map) | $A_V$, distance, sightline | none | `dustfile`, `lndustprior` |
+| [Extinction curve](#extinction-curve) | $R_V$, $A_V$ | $R_V \sim \mathcal{N}(3.32, 0.18^2)$, flat $A_V$ | `rv_gauss`, `rvlim`, `av_gauss`, `avlim` |
 
-## Why Priors Matter
+A parallax is a likelihood, not a prior; {doc}`scientific_background` describes how it enters.
 
-Photometry alone cannot uniquely determine stellar properties. A nearby cool M dwarf and a distant reddened K giant can produce similar colors and magnitudes. **Priors help resolve this ambiguity** by incorporating knowledge about Galactic structure, stellar mass distributions, and dust {term}`extinction`.
+The priors matter most for faint stars without a parallax. For a bright star with a precise parallax, the likelihood dominates.
 
-Prior impact depends on data quality:
+## Model prior
 
-- **Well-measured stars** (bright, accurate parallax): Likelihood dominates; results are insensitive to priors
-- **Poorly-measured stars** (faint, no parallax): Priors strongly influence results
+The model prior is one number per grid model:
 
-Always check prior sensitivity for your science case (see [Testing Prior Sensitivity](#testing-prior-sensitivity) below).
+$$
+\ln \pi_{\rm model} = \ln \pi_{\rm IMF}(M_{\rm init}) + \ln \frac{dt}{d\,{\rm EEP}} + \sum_k \ln \Delta x_k .
+$$
 
-```{note}
-**Parallax is not required but helps significantly.** When parallax
-measurements are available, they break the distance-extinction degeneracy that
-is inherent in photometric fitting, leading to much tighter posteriors. Without
-parallax, brutus relies on photometry and Galactic priors alone, which still
-produces useful results but with broader uncertainties, especially for faint
-stars.
+**Initial mass function.** {func}`~brutus.priors.logp_imf` is the {cite:t}`kroupa2001` broken power law, normalized from 0.08 to 100 M☉:
+
+$$
+\pi_{\rm IMF}(M) \propto \begin{cases} M^{-1.3} & 0.08 \le M/M_\odot \le 0.5 \\ M^{-2.3} & 0.5 < M/M_\odot \le 100 \end{cases}
+$$
+
+At 0.5 M☉ the density is $2^{2.3} \approx 4.9$ times that at 1 M☉. A grid with an `Mr` label and no `mini` label uses the Pan-STARRS r-band luminosity function instead ({func}`~brutus.priors.logp_ps1_luminosity_function`).
+
+**Age weight.** The `agewt` column of the grid is $dt/d\,{\rm EEP}$, the time a star spends per unit of EEP. Together with the grid volume below, it makes the prior uniform in age. Main-sequence models therefore weigh more than models of short phases such as the subgiant branch. `apply_agewt=False` removes it.
+
+**Grid volume.** $\Delta x_k$ is the local spacing of grid parameter $k$ (`np.gradient` of its unique values). It makes the sum over models approximate an integral over the parameters, so a region sampled twice as densely does not count twice. The default grid steps EEP by 6 to EEP 454 and by 2 after it. `apply_grad=False` removes it.
+
+`lnprior` replaces the IMF term with an array of your own, one value per model. The age weight and grid volume are still added unless you turn them off.
+
+## Galactic structure
+
+{func}`~brutus.priors.logp_galactic_structure` is a three-component model of the Milky Way with the structure of {cite:t}`blandhawthorn2016`. Each component $c$ has a number density $n_c$, normalized to 1 at the Sun and weighted by its local fraction $f_c$. The distance prior along the sightline $(\ell, b)$ is
+
+$$
+\pi_{\rm gal}(d \mid \ell, b) \propto d^2 \sum_c f_c\, n_c\big(R(d), Z(d)\big),
+$$
+
+where $d^2$ is the volume of a shell and $(R, Z)$ are the Galactocentric radius and height. The Sun is at $R_\odot = 8.2$ kpc and $Z_\odot = 0.025$ kpc (`R_solar`, `Z_solar` in `fit()`, which apply to the default prior only).
+
+The disks are exponential, with the radius smoothed near the Galactic centre, $R_{\rm eff} = \sqrt{R^2 + R_s^2}$:
+
+$$
+\ln n_{\rm disk} = -\frac{R_{\rm eff} - R_{{\rm eff},\odot}}{h_R} - \frac{|Z| - |Z_\odot|}{h_Z}.
+$$
+
+The halo is a power law, flattened near the centre and rounder far from it:
+
+$$
+n_{\rm halo} = \left( \frac{R_{\rm eff}}{R_{{\rm eff},\odot}} \right)^{-\eta},
+\qquad
+R_{\rm eff} = \sqrt{R^2 + (Z/q)^2 + R_s^2},
+\qquad
+q(r) = q_\infty - (q_\infty - q_0)\, e^{1 - r'/r_q},
+$$
+
+with $r' = \sqrt{R^2 + Z^2 + r_q^2}$.
+
+| Component | Shape | Local fraction $f_c$ | [Fe/H] | Mean age | Age spread |
+|---|---|---|---|---|---|
+| Thin disk | $h_R = 2.6$ kpc, $h_Z = 0.3$ kpc | 1 | $-0.2 \pm 0.3$ | 4.9 Gyr | 4.0 Gyr |
+| Thick disk | $h_R = 2.0$ kpc, $h_Z = 0.9$ kpc | 0.04 | $-0.7 \pm 0.4$ | 8.3 Gyr | 2.8 Gyr |
+| Halo | $\eta = 4.2$, $q_0 = 0.2$, $q_\infty = 0.8$, $r_q = 6$ kpc | 0.005 | $-1.6 \pm 0.5$ | 12.4 Gyr | 1.0 Gyr |
+
+All components use $R_s = 2$ kpc.
+
+```{raw} html
+:file: figures/galactic-prior.svg
+:class: figure-svg
 ```
 
-## The Galactic Model
+:::{div} figure-caption
+The density and volume terms of the default Galactic prior, per unit $\ln d$, the variable that brutus samples. The metallicity and age terms are left out, so a given grid model's prior can differ. Left: each sightline scaled to a peak of 1. Right: the b = 30° total and its components, scaled by the total's peak. The growing volume pushes the peak out to 10 to 20 kpc; the likelihood usually confines the distance far more than this.
+:::
 
-`brutus` uses a 3-D Galactic model with factorized {term}`priors <prior>`:
+**Metallicity.** When the labels include `feh`, each component has a Gaussian [Fe/H] distribution (the table). The components are weighted by their density at the star's position. A metal-poor star near the Sun is therefore more likely to belong to the halo.
 
-$$
-\pi(\theta, \phi) \propto \pi(M_{\rm init}) \times \pi({\rm EEP}) \times \pi(d\,|\,\ell,b) \times \pi([{\rm Fe/H}]\,|\,d,\ell,b) \times \pi(t_{\rm age}\,|\,[{\rm Fe/H}],d,\ell,b) \times \pi(A_V\,|\,d,\ell,b) \times \pi(R_V)
-$$
-
-Note that the age prior conditions on the star's metallicity as well as its position: each Galactic component's age distribution is weighted by that component's metallicity-updated membership probability, so (for example) a nearby metal-poor star is correctly weighted toward old, halo-like ages.
-
-## Prior Components
-
-### Initial Mass Function
-
-The Kroupa (2001) {term}`IMF` describes stellar masses at formation as a two-part power law:
+**Age.** When the labels include `loga`, each component has a normal distribution in age, truncated to 0 to 13.8 Gyr ({func}`~brutus.priors.logp_age_from_feh`). Its mean follows from the component's mean [Fe/H], $\overline{\rm [Fe/H]}$:
 
 $$
-\pi(M) \propto \begin{cases} M^{-1.3} & 0.08 < M/M_\odot < 0.5 \\ M^{-2.3} & 0.5 < M/M_\odot < 100 \end{cases}
+\bar t = \frac{13.8\ {\rm Gyr}}{1 + \exp\!\left[ \left( \overline{\rm [Fe/H]} + 0.5 \right) / 0.5 \right]},
+\qquad
+\sigma_t = \frac{13.8\ {\rm Gyr} - \bar t}{2}, \text{ limited to 1 to 4 Gyr}.
 $$
 
-Low-mass stars strongly dominate; a randomly drawn star is ~5× more likely to be 0.5 M☉ than 1.0 M☉.
+The component weights for the age term include the star's [Fe/H], so the metallicity and the position together set which age distribution applies.
 
-**Implementation**: {func}`brutus.priors.logp_imf`
+The default prior needs the star's coordinates: pass `data_coords`, an array of shape `(Nstars, 2)` with $(\ell, b)$ in degrees. `fit()` raises `ValueError` without them.
 
-### Evolutionary State (EEP)
+## Dust map
 
-The {term}`EEP` prior is uniform, which accounts for varying evolutionary timescales. Stars spend most of their lives on the main sequence (EEP 202 to 454), so the uniform EEP prior naturally weights toward main sequence stars when combined with the age prior.
-
-### 3-D Stellar Density
-
-The spatial distribution combines three Galactic components, each with characteristic structure and stellar populations:
-
-```{eval-rst}
-.. list-table::
-   :widths: 20 40 20 20
-   :header-rows: 1
-
-   * - Component
-     - Spatial Profile
-     - Mean [Fe/H]
-     - Mean Age
-   * - Thin disk
-     - Exponential (h_R = 2.6 kpc, h_Z = 300 pc)
-     - -0.2 dex
-     - ~5 Gyr
-   * - Thick disk
-     - Exponential (h_R = 2.0 kpc, h_Z = 900 pc)
-     - -0.7 dex
-     - ~8 Gyr
-   * - Halo
-     - Flattened power-law (η = 4.2)
-     - -1.6 dex
-     - ~12 Gyr
-```
-
-The **halo** follows a flattened (oblate) power-law profile with radius-dependent oblateness: highly flattened near the Galactic center (q = 0.2) and more spherical at large radii (q = 0.8), transitioning over a scale of ~6 kpc.
-
-The combined prior weights each component by its stellar density at the 3-D position $(d, \ell, b)$. Near the Sun, the thin disk dominates; at high Galactic latitudes or large distances, the thick disk and halo contribute more.
-
-**Implementation**: {func}`brutus.priors.logp_galactic_structure`, {func}`brutus.priors.logp_feh`, {func}`brutus.priors.logp_age_from_feh`, {func}`brutus.priors.logn_disk`, {func}`brutus.priors.logn_halo`
-
-### 3-D Dust Extinction
-
-`brutus` can use 3-D dust maps to provide distance-dependent {term}`extinction` priors. The default dust map file distributed with `brutus` is derived from **Bayestar19** (Green et al. 2019). For a given sky position $(\ell, b)$ and distance $d$:
+With `dustfile`, the prior on $A_V$ comes from a 3D dust map. `fetch_dustmaps()` downloads the {term}`Bayestar` map {cite:p}`green2019`. `dustfile` takes its path or a loaded {class}`~brutus.dust.Bayestar`. At distance $d$ on the sightline, the map gives a mean $\mu_{A_V}(d)$ and a spread $\sigma_{A_V}(d)$, and {func}`~brutus.priors.logp_extinction` evaluates
 
 $$
-\pi(A_V\,|\,d,\ell,b) \sim \mathcal{N}\left(\mu_{A_V},\, \sigma_{A_V}^2 + \sigma_{\rm sys}^2\right)
+\pi_{\rm dust}(A_V \mid d, \ell, b) = \mathcal{N}\!\left( A_V \;\middle|\; \mu_{A_V}(d),\; \sigma_{A_V}^2(d) + 0.2^2 \right),
 $$
 
-where the mean $\mu_{A_V}$ and uncertainty $\sigma_{A_V}$ come from the dust map at that sightline and distance, and $\sigma_{\rm sys} = 0.2$ mag (the `scatter` argument of {func}`brutus.priors.logp_extinction`) is a systematic scatter added in quadrature. Bayestar19 spreads are typically only ~0.02 mag and do not capture sub-pixel structure or map systematics; without the extra scatter the prior would pin A_V (and, through the A_V-distance profile, the distance) far more tightly than the map supports. The Gaussian is truncated and renormalized over the fitted A_V range (`avlim`), so distances where the map profile sits near an A_V boundary are not artificially disfavored.
+truncated and normalized over `avlim`. The added 0.2 mag (`scatter`) covers structure smaller than a map pixel and the map's systematic errors; the map's own spreads are often a few hundredths of a magnitude.
 
-```{note}
-The Bayestar 3D dust map is based on Pan-STARRS 1 photometry and is only
-available north of declination -30 degrees (the Pan-STARRS 1 footprint). For
-sightlines south of this limit, the prior falls back to being uniform
-(uninformative). In addition, `Bayestar` queries by default honor the
-map's per-pixel reliability metadata (`converged`,
-`DM_reliable_min`/`DM_reliable_max`): distance bins outside a
-sightline's reliable range, and sightlines whose fits did not converge,
-also degrade to a uniform prior. Pass
-`Bayestar(..., apply_reliability_mask=False)` to disable this masking.
-The uniform prior is normalized over `avlim`
-($1/(A_{V,\max} - A_{V,\min})$), like the Gaussian, so masked
-distances compete on equal footing with reliable ones rather than being
-up-weighted by an arbitrary, unit-dependent factor.
-```
+Where the map has no reliable value, the prior is uniform over `avlim`, normalized like the Gaussian. This applies outside the Pan-STARRS footprint (declination below −30°), outside each sightline's reliable distance range, and in pixels whose fit did not converge. `Bayestar(apply_reliability_mask=False)` uses the raw map values instead.
 
-**Implementation**: Enabled via the `dustfile` parameter in `fit()`, which accepts a path to a Bayestar HDF5 file (`str` or `pathlib.Path`) or a pre-loaded {class}`brutus.dust.Bayestar` object; the prior itself is evaluated by {func}`brutus.priors.logp_extinction`
+## Extinction curve
 
-### R_V Variation
+The per-model fit has Gaussian priors on $R_V$ and $A_V$:
 
-The extinction curve shape {term}`R_V` $\equiv A_V / E(B-V)$ has a truncated Gaussian prior:
+| Argument | Default | Meaning |
+|---|---|---|
+| `rv_gauss` | `(3.32, 0.18)` | mean and standard deviation of $R_V$ {cite:p}`schlafly2016` |
+| `rvlim` | `(1.0, 8.0)` | allowed range of $R_V$ |
+| `av_gauss` | `None` | mean and standard deviation of $A_V$; `None` is flat |
+| `avlim` | `(0.0, 20.0)` | allowed range of $A_V$ |
 
-$$
-\pi(R_V) \sim \mathcal{N}(3.32, 0.18^2) \quad {\rm for} \quad 1.0 < R_V < 8.0
-$$
+These priors act in the Gauss-Newton fit of each model, so they also shape the Gaussian that the Monte Carlo step draws from. `av_gauss` adds to the dust-map prior: an informative `av_gauss` together with `dustfile` counts the $A_V$ information twice.
 
-The default mean (3.32) and standard deviation (0.18) are based on Schlafly et al. (2016), who measured R_V variations toward tens of thousands of APOGEE stars across the Milky Way.
+## Changing the priors
 
-**Implementation**: Controlled via `rv_gauss` and `rvlim` parameters in `fit()`
+`lngalprior` replaces the Galactic prior. It applies only when `data_coords` is given; without coordinates, `fit()` uses no Galactic prior. `fit()` calls it as `lngalprior(dist, coord, labels=labels)`, where `dist` is an array of distances in kpc, `coord` is the star's $(\ell, b)$, and `labels` holds the grid labels of each point (`None` if `apply_dlabels=False`). It returns the log-prior with the shape of `dist`.
 
-## Customizing Priors
-
-### Disabling Priors
-
-For diagnostic purposes, priors can be disabled or made uninformative:
-
-**Galactic structure prior:**
+A prior flat in distance, for example to see what the data alone say:
 
 ```python
 import numpy as np
 
-from brutus.analysis import BruteForce
-
-fitter = BruteForce(grid)
-
-# Fit without Galactic structure prior. The function receives an array
-# of distances (kpc) and must return an array of the same shape.
 fitter.fit(
-    data, data_err, data_mask, labels, save_file='results.h5',
-    lngalprior=lambda dist, *args, **kwargs: np.zeros_like(dist),  # Uniform
+    data=flux, data_err=flux_err, data_mask=mask, data_labels=ids,
+    save_file="flat.h5",
+    data_coords=coords,
+    lngalprior=lambda dist, coord, labels=None: np.zeros_like(dist),
 )
 ```
 
-**Extinction priors:**
+A prior with a thinner thick disk:
 
 ```python
-# Fit with uninformative (wide) priors on A_V and R_V
-fitter.fit(
-    data, data_err, data_mask, labels, save_file='results.h5',
-    avlim=(0.0, 20.0),            # Full A_V range (the default)
-    av_gauss=(0.0, 1e6),          # Effectively uniform A_V prior (the default)
-    rvlim=(1.0, 8.0),             # Full R_V range (the default)
-    rv_gauss=(3.32, 1e6),         # Effectively uniform R_V prior
-)
-```
-
-Note that `av_gauss` is applied *in addition* to any dust-map prior from
-`dustfile` (they are not exclusive), so passing an informative `av_gauss`
-together with `dustfile` counts the A(V) constraint twice.
-
-```{warning}
-Disabling priors can lead to highly degenerate parameter estimates. Only disable when you understand the implications.
-```
-
-### Custom Prior Functions
-
-Pass custom Galactic structure prior functions via `lngalprior`:
-
-```python
-import numpy as np
+from functools import partial
 
 from brutus.priors import logp_galactic_structure
 
-def custom_galactic_prior(dist, coord, labels=None):
-    """Custom prior: uniform within 100 pc, default otherwise.
-
-    ``dist`` is an array of distances in kpc and ``coord`` is a single
-    ``(l, b)`` tuple in degrees, matching how ``fit()`` calls
-    ``lngalprior``.
-    """
-    # Evaluate distances inside 100 pc at the boundary value so the
-    # prior is flat there and continuous at 0.1 kpc
-    return logp_galactic_structure(np.maximum(dist, 0.1), coord,
-                                   labels=labels)
-
 fitter.fit(
-    data, data_err, data_mask, labels, save_file='results.h5',
+    data=flux, data_err=flux_err, data_mask=mask, data_labels=ids,
+    save_file="thin.h5",
     data_coords=coords,
-    lngalprior=custom_galactic_prior,
+    lngalprior=partial(logp_galactic_structure, Z_thick=0.7),
 )
 ```
 
-### When to Customize
+`lndustprior` replaces the dust prior. It applies only when `dustfile` is given. `fit()` calls it as `lndustprior(av, dustmap, coord, distance=dist)`.
 
-Consider customizing priors for:
+To check how much a result depends on the priors, fit the same stars twice, with the default and the flat prior, and compare the posterior distances. Stars whose distances change by more than their uncertainty are prior-dominated.
 
-- **Extragalactic objects**: LMC/SMC stars need different Galactic priors
-- **Special regions**: Galactic bulge, Local Bubble, or spiral arms
-- **Known populations**: If you have independent age/metallicity constraints
-
-For cluster modeling with fixed age/metallicity/distance, see {doc}`population_modeling`.
-
-## Testing Prior Sensitivity
-
-Compare results with and without priors to assess prior influence:
-
-```python
-import h5py
-import numpy as np
-
-# Fit with and without Galactic prior
-fitter.fit(data, data_err, data_mask, labels, save_file='with.h5',
-           data_coords=coords)
-fitter.fit(data, data_err, data_mask, labels, save_file='without.h5',
-           lngalprior=lambda dist, *args, **kwargs: np.zeros_like(dist))
-
-# Compare
-with h5py.File('with.h5', 'r') as f:
-    d1 = np.median(f['samps_dist'][0])
-with h5py.File('without.h5', 'r') as f:
-    d2 = np.median(f['samps_dist'][0])
-
-change = abs(d1 - d2) / d1
-print(f"Fractional change: {change:.1%}")
-```
-
-## Available Prior Functions
-
-```{eval-rst}
-.. currentmodule:: brutus.priors
-```
-
-**Stellar Priors**:
-
-- {func}`logp_imf` - Initial mass function (Kroupa two-part power law)
-- {func}`logp_ps1_luminosity_function` - Pan-STARRS r-band luminosity function
-
-**Galactic Priors**:
-
-- {func}`logp_galactic_structure` - Combined 3-D stellar density (thin disk + thick disk + halo)
-- {func}`logn_disk` - Exponential disk number density
-- {func}`logn_halo` - Flattened power-law halo number density
-- {func}`logp_feh` - Metallicity distribution by Galactic component
-- {func}`logp_age_from_feh` - Age distribution conditioned on metallicity
-
-**Astrometric Priors**:
-
-- {func}`logp_parallax` - Parallax prior with distance-to-parallax conversion
-- {func}`logp_parallax_scale` - Parallax constraint on flux density scale factors
-- {func}`convert_parallax_to_scale` - Convert parallax to flux density scale factor
-
-**Extinction Priors**:
-
-- {func}`logp_extinction` - 3-D dust extinction from Bayestar maps
-
-## References
-
-Speagle et al. (2025), "Deriving Stellar Properties, Distances, and Reddenings using Photometry and Astrometry with BRUTUS", [arXiv:2503.02227](https://arxiv.org/abs/2503.02227) (§2.4, Appendix A)
-
-Kroupa (2001), "On the variation of the initial mass function", [MNRAS, 322, 231](https://ui.adsabs.harvard.edu/abs/2001MNRAS.322..231K)
-
-Green et al. (2019), "A 3D Dust Map Based on Gaia, Pan-STARRS 1, and 2MASS", [ApJ, 887, 93](https://ui.adsabs.harvard.edu/abs/2019ApJ...887...93G)
-
-Jurić et al. (2008), "The Milky Way Tomography with SDSS. I. Stellar Number Density Distribution", [ApJ, 673, 864](https://ui.adsabs.harvard.edu/abs/2008ApJ...673..864J)
-
-Schlafly et al. (2016), "The Optical-Infrared Extinction Curve and its Variation in the Milky Way", [ApJ, 821, 78](https://ui.adsabs.harvard.edu/abs/2016ApJ...821...78S)
+For star clusters, where the age, metallicity and distance are shared, see {doc}`population_modeling`.

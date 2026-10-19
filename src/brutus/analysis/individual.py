@@ -1904,8 +1904,10 @@ class BruteForce:
             Whether to apply grid spacing corrections. Default is True.
 
         lngalprior : callable, optional
-            Galactic structure prior function. If not provided, uses the
-            default Galactic model from Green et al. (2014).
+            Galactic structure prior function with signature
+            ``f(dists, coord, labels=None)``. If not provided, uses
+            `~brutus.priors.logp_galactic_structure`. Applied only when
+            ``data_coords`` is given.
 
         lndustprior : callable, optional
             Dust prior function with signature

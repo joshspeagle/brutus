@@ -1,4 +1,4 @@
-"""Draw the method schematics in docs/source/figures/.
+"""Draw the method schematics and prior curves in docs/source/figures/.
 
 Run by hand, not by the docs build: ``python make_figures.py``. The SVGs draw in
 ``currentColor`` and the brutus CSS variables, so they follow the light and
@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 
 import numpy as np
+
+from brutus.priors import logp_galactic_structure
 
 
 def c(var):
@@ -51,9 +53,9 @@ def path(pts, stroke="currentColor", width=2, fill="none", dash=None, extra=""):
     )
 
 
-def axes(x0, y0, x1, y1, xlabel, ylabel):
+def axes(x0, y0, x1, y1, xlabel, ylabel, xlabel_gap=22):
     out = path([(x0, y0), (x0, y1), (x1, y1)], width=1.5)
-    out += text((x0 + x1) / 2, y1 + 22, xlabel, size=12)
+    out += text((x0 + x1) / 2, y1 + xlabel_gap, xlabel, size=12)
     out += (
         f'<text transform="translate({x0 - 14:.1f} {(y0 + y1) / 2:.1f}) rotate(-90)" '
         f'text-anchor="middle" font-size="12" fill="currentColor">{ylabel}</text>'
@@ -359,12 +361,91 @@ def degeneracy():
     )
 
 
+def galactic_prior():
+    W, H = 820, 330
+    panels = [(70, 30, 370, 260), (470, 30, 770, 260)]
+    lo, hi = -2, 2
+    dist = np.logspace(lo, hi, 400)  # kpc
+
+    def X(x0, x1, d):
+        return x0 + (np.log10(d) - lo) / (hi - lo) * (x1 - x0)
+
+    def Y(y0, y1, p):
+        return y1 - p / 1.1 * (y1 - y0)
+
+    def prior(b):
+        # Per unit ln d, as the Monte Carlo draws see it: pi(d) * d.
+        logp, comp = logp_galactic_structure(dist, (90.0, b), return_components=True)
+        logd = np.log(dist)
+        peak = (logp + logd).max()
+        return np.exp(logp + logd - peak), [
+            np.exp(lc + logd - peak) for lc in comp["number_density"]
+        ]
+
+    out = ""
+    for x0, y0, x1, y1 in panels:
+        out += axes(x0, y0, x1, y1, "distance (kpc)", "prior per unit ln d", 40)
+        for e in range(lo, hi + 1):
+            x = X(x0, x1, 10.0**e)
+            out += path([(x, y1), (x, y1 + 5)], width=1.5)
+            out += text(x, y1 + 18, f"{10.0**e:g}", size=11)
+
+    def curve(panel, p, col, width=2.5, dash=None):
+        x0, y0, x1, y1 = panel
+        return path(
+            [(X(x0, x1, d), Y(y0, y1, v)) for d, v in zip(dist, p)],
+            stroke=col,
+            width=width,
+            dash=dash,
+        )
+
+    def legend(panel, items):
+        x0, y0 = panel[0] + 16, panel[1] + 14
+        out = ""
+        for i, (name, col, width, dash) in enumerate(items):
+            y = y0 + 20 * i
+            out += path([(x0, y), (x0 + 24, y)], stroke=col, width=width, dash=dash)
+            out += text(x0 + 32, y + 4, name, anchor="start", size=11)
+        return out
+
+    sightlines = {0: c("red"), 30: c("copper"), 90: c("amber")}
+    priors = {b: prior(b) for b in sightlines}
+    total, parts = priors[30]
+    drawn = [
+        [(f"b = {b}°", priors[b][0], col, 2.5, None) for b, col in sightlines.items()],
+        # The b = 30° total keeps its left-panel colour; components are dashed.
+        [
+            (name, part, "currentColor", 1.5, dash)
+            for name, part, dash in zip(
+                ("thin disk", "thick disk", "halo"), parts, ("2 3", "7 4", None)
+            )
+        ]
+        + [("total", total, c("copper"), 2.5, None)],
+    ]
+    titles = ("total, at ℓ = 90°", "components, at ℓ = 90°, b = 30°")
+    for panel, items, title in zip(panels, drawn, titles):
+        for _, p, col, width, dash in items:
+            out += curve(panel, p, col, width, dash)
+        out += legend(panel, [(n, col, w, d) for n, _, col, w, d in items])
+        out += text(sum(panel[::2]) / 2, 20, title, size=12)
+    return svg(
+        "galactic-prior",
+        W,
+        H,
+        out,
+        "The Galactic structure prior along three sightlines",
+        "The default Galactic prior per unit log distance, from 10 pc to 100 kpc. "
+        "Per unit log distance, the volume makes every sightline peak at 10 to 20 kpc; at higher latitude the halo dominates beyond a few kpc.",
+    )
+
+
 if __name__ == "__main__":
     OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).parent
     for name, fn in (
         ("forward-model", forward_model),
         ("pipeline", pipeline),
         ("degeneracy", degeneracy),
+        ("galactic-prior", galactic_prior),
     ):
         (OUT / f"{name}.svg").write_text(fn())
         print(name)

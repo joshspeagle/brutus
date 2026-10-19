@@ -62,8 +62,8 @@ def dist_vs_red(
         Default is `'distance_modulus`.
 
     lndistprior : func, optional
-        The log-distsance prior function used. If not provided, the galactic
-        model from Green et al. (2014) will be assumed.
+        The log-distance prior function used. If not provided,
+        `~brutus.priors.logp_galactic_structure` is assumed.
 
     coord : 2-tuple or list of 2-tuples, optional
         The galactic `(l, b)` coordinates passed to `lndistprior`. A single
