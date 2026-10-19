@@ -4,7 +4,7 @@ This page fits stars from their photometry and parallaxes, then reads the distan
 
 ## 1. Load the models
 
-Choose the filters of your photometry, in the order of your data columns. {mod}`brutus.data.filters` has lists for common surveys; {ref}`available-filters` lists all 49.
+Choose the filters of your photometry, in the order of your data columns. `brutus.data.filters` has lists for common surveys; {ref}`available-filters` lists all 49.
 
 ```python
 from brutus.core import StarGrid
