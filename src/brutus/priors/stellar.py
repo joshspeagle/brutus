@@ -33,8 +33,9 @@ stellar parameters:
 - **Luminosity function priors** weight absolute magnitudes according to
   observed stellar populations, useful when fitting distance and extinction
 
-The priors are normalized and return log-probabilities suitable for direct
-use in MCMC or nested sampling codes.
+The IMF prior is normalized; the luminosity function prior is not. Both
+return log-probabilities suitable for direct use in MCMC or nested sampling
+codes.
 
 Examples
 --------
@@ -249,8 +250,10 @@ def logp_ps1_luminosity_function(Mr):
     Returns
     -------
     logp : array_like
-        Log-prior probability density for the given absolute magnitudes.
-        Interpolates from empirical Pan-STARRS 1 luminosity function.
+        Unnormalized log-prior for the given absolute magnitudes:
+        ``exp(logp)`` integrates to about 0.086. It interpolates the
+        luminosity function tabulated for Mr in [-1, 20] and extrapolates
+        linearly outside that range.
 
     See Also
     --------

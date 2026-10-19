@@ -613,12 +613,13 @@ def logp_age_from_feh(
 
     where c is the central metallicity and s is the scale length.
 
-    The age dispersion decreases for younger (more metal-rich) stars:
+    The age dispersion increases for younger (more metal-rich) stars:
 
     .. math::
         \\sigma_t = \\min\\left(\\max\\left(\\frac{t_{\\max} - \\langle t \\rangle}{n\\sigma}, \\sigma_{\\min}\\right), \\sigma_{\\max}\\right)
 
-    Ages are drawn from a truncated normal distribution bounded by [min_age, max_age].
+    The age density is a truncated normal distribution bounded by
+    [min_age, max_age].
 
     References
     ----------
@@ -632,7 +633,7 @@ def logp_age_from_feh(
         1.0 + np.exp((feh_mean - feh_age_ctr) / feh_age_scale)
     ) + min_age
 
-    # Age dispersion (younger stars have smaller dispersion)
+    # Age dispersion (younger stars have larger dispersion)
     age_sigma_pred = (max_age - age_mean_pred) / nsigma_from_max_age
     age_sigma_pred = np.clip(age_sigma_pred, min_sigma, max_sigma)
 
