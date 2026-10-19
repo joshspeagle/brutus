@@ -519,13 +519,13 @@ def photometric_offsets_2d(
         for xidx in range(len(xbins) - 1):
             for yidx in range(len(ybins) - 1):
                 bsel = np.where((xloc == xidx) & (yloc == yidx) & s)[0]
-                if len(bsel) >= plot_thresh:
-                    # If we have enough objects, compute weighted median.
-                    off, w = dm[bsel, :, i], wt[bsel] * weights[bsel]
+                off, w = dm[bsel, :, i], wt[bsel] * weights[bsel]
+                if len(bsel) >= plot_thresh and w.sum() > 0:
+                    # If we have enough weighted objects, compute the median.
                     off_med = quantile(off.flatten(), [0.5], w.flatten())[0]
                     offset2d[xidx, yidx] = off_med
                 else:
-                    # If we don't have enough objects, mask bin.
+                    # Otherwise mask the bin.
                     offset2d[xidx, yidx] = np.nan
         # Plot offsets over 2-D histogram.
         if xspan is not None:

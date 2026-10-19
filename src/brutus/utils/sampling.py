@@ -88,7 +88,8 @@ def quantile(x, q, weights=None):
 
     weights : `~numpy.ndarray` with shape `(nsamps,)`, optional
         The associated weight from each sample. If None, all samples
-        are weighted equally.
+        are weighted equally. Samples with zero weight are dropped before
+        the CDF is built, so they never move a quantile.
 
     Returns
     -------
@@ -98,7 +99,8 @@ def quantile(x, q, weights=None):
     Raises
     ------
     ValueError
-        If quantiles are outside [0, 1] or if dimensions don't match.
+        If quantiles are outside [0, 1], if dimensions don't match, or if
+        a weight is negative or not finite, or the weights sum to 0.
 
     Examples
     --------
@@ -126,9 +128,15 @@ def quantile(x, q, weights=None):
     if weights is None:
         weights = np.ones(len(x))
     else:
-        weights = np.atleast_1d(weights)
+        weights = np.atleast_1d(np.asarray(weights, dtype=float))
         if len(x) != len(weights):
             raise ValueError("Dimension mismatch: len(weights) != len(x).")
+        if not np.all(np.isfinite(weights) & (weights >= 0)) or weights.sum() <= 0:
+            raise ValueError(
+                "weights must be finite and non-negative, with a positive sum"
+            )
+        keep = weights > 0
+        x, weights = x[keep], weights[keep]
 
     idx = np.argsort(x)  # sort samples
     sw = weights[idx]  # sort weights

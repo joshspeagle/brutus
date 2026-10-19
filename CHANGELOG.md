@@ -52,6 +52,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `model_idx = -99`, `obj_Nbands = 0` and NaN values, and `fit` warns once
   with the number of such objects. The output file now closes on every exit
   path.
+- **`quantile` drops samples with zero weight** before it builds the CDF.
+  A zero-weight sample still got a CDF node, so `quantile([0, 1, 100],
+  [0.5, 0.9], weights=[1, 1, 0])` gave `[0.5, 60.4]` instead of
+  `[0.5, 1.0]`. Negative or non-finite weights, or weights that sum to 0,
+  raise `ValueError`.
 
 ### Changed
 

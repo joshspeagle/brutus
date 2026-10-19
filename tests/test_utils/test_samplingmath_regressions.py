@@ -281,6 +281,28 @@ class TestQuantileConsistency:
         with pytest.raises(ValueError, match="Dimension mismatch"):
             quantile(x, 0.5, weights=np.ones(2))
 
+    def test_zero_weight_samples_do_not_move_quantiles(self):
+        from brutus.utils.sampling import quantile
+
+        q = [0.02, 0.5, 0.9, 0.98]
+        np.testing.assert_array_equal(
+            quantile([0.0, 1.0, 100.0], q, weights=[1, 1, 0]),
+            quantile([0.0, 1.0], q),
+        )
+        np.testing.assert_array_equal(
+            quantile([-100.0, 0.0, 1.0], q, weights=[0, 1, 1]),
+            quantile([0.0, 1.0], q),
+        )
+
+    @pytest.mark.parametrize(
+        "weights", [[0.0, 0.0], [1.0, -1.0], [1.0, np.nan], [1.0, np.inf]]
+    )
+    def test_invalid_weights_raise(self, weights):
+        from brutus.utils.sampling import quantile
+
+        with pytest.raises(ValueError, match="weights"):
+            quantile([0.0, 1.0], 0.5, weights=weights)
+
 
 # ---------------------------------------------------------------------------
 # 5. draw_sar batched rewrite

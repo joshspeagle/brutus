@@ -295,6 +295,14 @@ class TestPhotometricOffsets2D:
         for arr in _run_2d(d, x, y, plot_thresh=d["nobj"] + 1):
             assert np.all(np.isnan(arr))
 
+    def test_bins_with_zero_total_weight_are_masked(self):
+        d = _offsets_dataset()
+        x, y = self._xy(d)
+        weights = (x > 0).astype(float)
+        for arr in _run_2d(d, x, y, weights=weights, plot_thresh=1.0):
+            assert np.all(np.isnan(arr[:, 0]))
+            assert np.any(np.isfinite(arr))
+
     def test_two_element_bins_set_the_map_shape(self):
         d = _offsets_dataset()
         x, y = self._xy(d)
