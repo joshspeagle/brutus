@@ -3,7 +3,7 @@
 Full profiling run over the Nsel cohort (tiny .. 50000-cap), current code.
 
 Reports, per cohort object:
-  - Nsel (selected models), and per-stage wall time (min-of-N, to suppress the
+  - Nsel (selected models), and per-stage wall time (median of repeats, to suppress the
     shared-host noise) for loglike_grid / logpost_grid / full _fit.
 Then an aggregated cProfile over the whole cohort attributing time to the
 individual kernels, so we can see exactly where the remaining time goes.
@@ -43,14 +43,14 @@ def stage_timings(repeats=3):
         i = int(i)
         mk = s["mask"][i]
         par, pe, co = s["parallax"][i], s["parallax_err"][i], tuple(s["coords"][i])
-        ll = lp = ft = np.inf
+        ll, lp, ft = [], [], []
         nsel = 0
         for _ in range(repeats):
             t = time.perf_counter()
             lr = bf.loglike_grid(
                 ph[i], er[i], mk, return_vals=True, parallax=par, parallax_err=pe
             )
-            ll = min(ll, time.perf_counter() - t)
+            ll.append(time.perf_counter() - t)
             t = time.perf_counter()
             r = bf.logpost_grid(
                 lr,
@@ -61,7 +61,7 @@ def stage_timings(repeats=3):
                 wt_thresh=1e-3,
                 rstate=np.random.RandomState(i),
             )
-            lp = min(lp, time.perf_counter() - t)
+            lp.append(time.perf_counter() - t)
             nsel = len(r[0])
             t = time.perf_counter()
             bf._fit(
@@ -76,9 +76,9 @@ def stage_timings(repeats=3):
                 wt_thresh=1e-3,
                 rstate=np.random.RandomState(i),
             )
-            ft = min(ft, time.perf_counter() - t)
-        rows.append((i, nsel, ll * 1e3, lp * 1e3, ft * 1e3))
-    print("=== per-object stage timing over cohort (min of %d) ===" % repeats)
+            ft.append(time.perf_counter() - t)
+        rows.append((i, nsel, *(1e3 * np.median(t) for t in (ll, lp, ft))))
+    print("=== per-object stage timing over cohort (median of %d) ===" % repeats)
     print(
         f"{'obj':>4s} {'Nsel':>7s} {'loglike_ms':>11s} {'logpost_ms':>11s} "
         f"{'fit_ms':>9s}"
@@ -145,5 +145,6 @@ def aggregate_profile():
 
 
 if __name__ == "__main__":
+    H.print_setup()
     stage_timings()
     aggregate_profile()

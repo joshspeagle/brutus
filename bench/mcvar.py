@@ -107,4 +107,5 @@ def measure(M=40, Nmc=50, nobj=6):
 
 
 if __name__ == "__main__":
+    H.print_setup()
     measure()

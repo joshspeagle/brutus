@@ -110,4 +110,5 @@ def main(nobj=6, Nmc=50, Ngold=4000, ngoldseeds=6, ntrial=12, objs=None):
 
 
 if __name__ == "__main__":
+    H.print_setup()
     main()

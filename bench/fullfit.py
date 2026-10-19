@@ -58,32 +58,26 @@ def run(tag):
 
 
 def cmp(a, b):
-    fa = h5py.File(os.path.join(H.OUTDIR, f"fit_{a}.h5"), "r")
-    fb = h5py.File(os.path.join(H.OUTDIR, f"fit_{b}.h5"), "r")
-    keys = [k for k in fa.keys()]
     worst = 0.0
     print(f"=== fit() HDF5 compare {a} vs {b} ({NOBJ} objects) ===")
-    for k in keys:
-        x, y = fa[k][:], fb[k][:]
-        xf = np.asarray(x, float)
-        yf = np.asarray(y, float)
-        fin = np.isfinite(xf) & np.isfinite(yf)
-        if fin.any():
-            d = np.abs(xf[fin] - yf[fin])
-            rel = d / np.maximum(np.abs(xf[fin]), 1e-300)
-            bit = "Y" if np.array_equal(xf[fin], yf[fin]) else "N"
-            worst = max(worst, rel.max())
-            print(
-                f"  {k:14s} max|abs|={d.max():.3e} max|rel|={rel.max():.3e} bitwise={bit}"
-            )
-        else:
-            print(f"  {k:14s} (no finite overlap)")
+    pa, pb = (os.path.join(H.OUTDIR, f"fit_{t}.h5") for t in (a, b))
+    with h5py.File(pa, "r") as fa, h5py.File(pb, "r") as fb:
+        for k in sorted(set(fa) | set(fb)):
+            if k not in fa or k not in fb:
+                print(f"  {k}: missing in {b if k in fa else a}")
+                worst = np.inf
+                continue
+            line, w = H._stats(fa[k][:], fb[k][:], k)
+            print(line)
+            worst = max(worst, w)
     print(f"=== WORST relative error over all fit() datasets: {worst:.3e} ===")
     return worst
 
 
 if __name__ == "__main__":
     if sys.argv[1] == "run":
+        H.print_setup()
         run(sys.argv[2])
     elif sys.argv[1] == "cmp":
-        cmp(sys.argv[2], sys.argv[3])
+        # Exit 1 on a shape or NaN mismatch, so that fullfit_ab.sh fails.
+        sys.exit(not np.isfinite(cmp(sys.argv[2], sys.argv[3])))

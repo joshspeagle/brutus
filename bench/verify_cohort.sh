@@ -25,11 +25,7 @@ import bench.harness as H
 b=np.load(os.path.join(H.OUTDIR,'capture_coh_base.npz')); c=np.load(os.path.join(H.OUTDIR,'capture_coh_cand.npz'))
 import bench.disteq as d
 for k in range(len(d.COHORT)):
-    w=0.0
-    for key in ['chi2','scale','icov']:
-        a=b[f'o{k}_{key}']; e=c[f'o{k}_{key}']
-        fin=np.isfinite(a)&np.isfinite(e)
-        if fin.any(): w=max(w, (np.abs(a[fin]-e[fin])/np.maximum(np.abs(a[fin]),1e-300)).max())
+    w=max(H._stats(b[f'o{k}_{key}'], c[f'o{k}_{key}'], key)[1] for key in ['chi2','scale','icov'])
     print(f'  cohort obj {d.COHORT[k]:>3d}: det-loglike worst rel = {w:.2e}')
 "
 echo ""

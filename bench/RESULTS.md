@@ -8,6 +8,12 @@ the **real** Orion field data (207 stars w/ Gaia parallaxes), the realistic
 Orion-tutorial filter set (Pan-STARRS *grizy* + 2MASS *JHKs*, 8 bands), and the
 real photometric offsets. Host: 4 physical cores.
 
+The figures in this record were recorded on 2026-06-27, before `CLAUDE.md`
+required each benchmark to record its setup. They have no record of the
+commit, thread settings or library versions, and the timings are minima over
+repeats, not medians. `harness.py bench` now prints the setup and reports
+medians.
+
 ## Headline (min-of-N estimator, real data)
 
 | Stage          | Baseline | Optimized | Speedup |
@@ -182,7 +188,7 @@ Requires the real grid + data locally (`fetch_grids()`, `fetch_offsets('mist_v9'
 the Orion field ships in `tutorials/`). Verification tooling:
 
 ```bash
-python bench/harness.py bench            # min-of-N per-object stage timings
+python bench/harness.py bench            # median per-object stage timings
 python bench/harness.py capture <tag>    # freeze deterministic loglike + draws
 python bench/harness.py compare a b      # regression compare two captures
 python bench/disteq.py   run <tag>       # multi-seed posterior summaries (cohort)

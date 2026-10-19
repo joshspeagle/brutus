@@ -175,6 +175,7 @@ def cmp(base, cand):
 
 
 if __name__ == "__main__":
+    H.print_setup()
     if sys.argv[1] == "run":
         run(
             sys.argv[2],

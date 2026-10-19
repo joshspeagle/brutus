@@ -21,6 +21,7 @@ Usage:
 """
 
 import argparse
+import os
 import sys
 import time
 
@@ -35,6 +36,9 @@ from brutus.analysis.populations import (
     marginalize_isochrone_grid,
 )
 from brutus.core import Isochrone, StellarPop
+
+sys.path.insert(0, os.path.dirname(__file__))
+import harness as H  # noqa: E402
 
 FILTERS = ["Gaia_G_MAW", "Gaia_BP_MAWf", "Gaia_RP_MAW"]
 THETA = dict(feh=0.0, loga=9.0, av=0.2, rv=3.3, dist=1000.0)
@@ -200,6 +204,7 @@ def main():
     )
     args = ap.parse_args()
 
+    H.print_setup()
     print(f"filters={FILTERS}  theta={THETA}  seed={SEED}")
     iso = Isochrone(verbose=False)
     pop = StellarPop(iso, filters=FILTERS, verbose=False)
