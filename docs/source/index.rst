@@ -9,10 +9,17 @@ brutus
 
 **"Brute-force" Bayesian inference for stellar photometry**
 
-.. image:: _static/brutus_logo.png
+.. image:: _static/brutus-logo-light.svg
    :alt: brutus logo
    :align: center
-   :width: 300px
+   :width: 420px
+   :class: only-light
+
+.. image:: _static/brutus-logo-dark.svg
+   :alt: brutus logo
+   :align: center
+   :width: 420px
+   :class: only-dark
 
 .. raw:: html
 
