@@ -96,8 +96,9 @@ def quantile(x, q, weights=None):
 
     Returns
     -------
-    quantiles : `~numpy.ndarray` with shape `(nquantiles,)` or float
-        The (weighted) sample quantiles computed at `q`.
+    quantiles : `~numpy.ndarray` with shape `(nquantiles,)`
+        The (weighted) sample quantiles computed at `q`. A scalar `q` gives
+        shape `(1,)`.
 
     Raises
     ------
@@ -225,10 +226,7 @@ def draw_sar(
     All `Nsamps` distributions are drawn in a single batched
     `sample_multivariate_normal` call per rejection pass (rather than one
     `numpy.random.multivariate_normal` call per distribution), which avoids
-    per-call dispatch and per-matrix SVD overhead. The accepted draws follow
-    the same truncated Gaussian distribution as before, but the underlying
-    RNG stream differs, so individual draws are not reproducible against
-    older versions even with a fixed seed.
+    per-call dispatch and per-matrix SVD overhead.
 
     Examples
     --------
