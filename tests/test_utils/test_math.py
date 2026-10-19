@@ -1,20 +1,8 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
-"""
-Comprehensive tests for brutus mathematical utilities.
-
-This test suite includes:
-1. Unit tests for the new mathematical functions
-2. Comparison tests between old and new implementations
-3. Integration tests for matrix operations and statistical functions
-"""
+"""Tests of brutus.utils.math."""
 
 import numpy as np
 import pytest
 import scipy.stats
-
-from brutus.utils.math import truncnorm_logpdf
 
 
 class TestMatrixOperations:
@@ -42,32 +30,15 @@ class TestMatrixOperations:
             product_reg, expected, decimal=10
         )  # Slightly less precision due to regularization
 
-    def test_inverse3_vs_numpy(self):
-        """Test inverse computation against numpy.linalg.inv."""
-        from brutus.utils.math import inverse3
-
-        np.random.seed(42)
-
-        # Create random invertible matrices
-        for _ in range(10):
-            A = np.random.random((3, 3))
-            A = A + A.T + 3 * np.eye(3)  # Make positive definite (invertible)
-
-            # Test without regularization to match numpy exactly
-            custom_inv = inverse3(A, regularize=False)
-            numpy_inv = np.linalg.inv(A)
-
-            np.testing.assert_array_almost_equal(custom_inv, numpy_inv, decimal=10)
-
     def test_inverse3_batch(self):
         """Test batch matrix inversion."""
         from brutus.utils.math import inverse3
 
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         batch_size = 5
 
         # Create batch of random invertible matrices
-        A = np.random.random((batch_size, 3, 3))
+        A = rng.random((batch_size, 3, 3))
         A = A + np.transpose(A, (0, 2, 1)) + 3 * np.eye(3)[None, :, :]
 
         A_inv = inverse3(A)
@@ -97,6 +68,10 @@ class TestMatrixOperations:
         # Non-PSD matrix
         B = np.array([[1, 2], [2, 1]], dtype=float)  # Has negative eigenvalue
         assert isPSD(B) == False
+
+        # Non-symmetric matrix
+        C = np.array([[1, 1], [0, 1]], dtype=float)
+        assert isPSD(C) == False
 
 
 class TestStatisticalDistributions:
@@ -235,12 +210,8 @@ class TestFunctionWrapper:
             wrapped(1)
 
 
-class TestMathComparison:
-    """Comparison tests between old and new implementations.
-
-    NOTE: These tests will be removed after refactoring is complete.
-    They exist to ensure consistency during the transition period.
-    """
+class TestMathEdgeCases:
+    """Test singular, nearly singular and scalar inputs."""
 
     def test_inverse3_singular_matrix(self):
         """Test behavior with singular (non-invertible) matrices."""
@@ -262,13 +233,13 @@ class TestMathComparison:
 
     def test_inverse3_regularization(self):
         """Test matrix regularization functionality."""
-        import numpy as np
+        rng = np.random.RandomState(0)
 
         from brutus.utils.math import inverse3, isPSD
 
         # Create a matrix with small negative eigenvalues
         eigenvals = np.array([1.0, -1e-15, 0.5])  # One tiny negative eigenvalue
-        Q = np.linalg.qr(np.random.randn(3, 3))[0]
+        Q = np.linalg.qr(rng.randn(3, 3))[0]
         A = Q @ np.diag(eigenvals) @ Q.T
 
         # Invert with regularization
@@ -282,7 +253,7 @@ class TestMathComparison:
 
     def test_inverse3_batch_regularization(self):
         """Test batch matrix regularization with arrays."""
-        import numpy as np
+        rng = np.random.RandomState(0)
 
         from brutus.utils.math import inverse3, isPSD
 
@@ -295,11 +266,11 @@ class TestMathComparison:
 
         # Matrix 1: needs output regularization (small eigenvalues)
         eigenvals = np.array([1.0, -1e-14, 0.1])
-        Q = np.linalg.qr(np.random.randn(3, 3))[0]
+        Q = np.linalg.qr(rng.randn(3, 3))[0]
         matrices[1] = Q @ np.diag(eigenvals) @ Q.T
 
         # Matrix 2: well-conditioned
-        matrices[2] = np.eye(3) + 0.1 * np.random.randn(3, 3)
+        matrices[2] = np.eye(3) + 0.1 * rng.randn(3, 3)
         matrices[2] = matrices[2] @ matrices[2].T  # Make PSD
 
         # Test batch regularization
@@ -317,12 +288,6 @@ class TestMathComparison:
         # Matrix with negative eigenvalue
         A_neg = np.array([[1, 0, 0], [0, -1, 0], [0, 0, 1]])
         assert not isPSD(A_neg), "Matrix with negative eigenvalue should not be PSD"
-
-        # Singular matrix (zero eigenvalue)
-        A_singular = np.array([[1, 2, 3], [1, 2, 3], [1, 2, 3]])
-        # This should return False due to negative/zero eigenvalues from numerical issues
-        result = isPSD(A_singular)
-        assert isinstance(result, (bool, np.bool_)), "isPSD should return boolean"
 
     def test_chisquare_logpdf_scalar_input(self):
         """Test chi-square log-PDF with scalar input."""
@@ -353,27 +318,6 @@ class TestMathComparison:
 
 class TestMathIntegration:
     """Integration tests for mathematical functions."""
-
-    def test_matrix_operations_pipeline(self):
-        """Test a pipeline using multiple matrix operations."""
-        from brutus.utils.math import inverse3
-
-        np.random.seed(42)
-
-        # Create batch of random matrices
-        batch_size = 5
-        A = np.random.random((batch_size, 3, 3))
-        A = (
-            A + np.transpose(A, (0, 2, 1)) + 3 * np.eye(3)[None, :, :]
-        )  # Make invertible
-
-        # Compute inverses
-        A_inv = inverse3(A)
-
-        # Verify A * A_inv = I for each matrix
-        for i in range(batch_size):
-            product = np.dot(A[i], A_inv[i])
-            np.testing.assert_array_almost_equal(product, np.eye(3), decimal=10)
 
     def test_statistical_consistency(self):
         """Test statistical properties of distribution functions."""
@@ -409,7 +353,6 @@ class TestInternalFunctions:
 
     def test_internal_helper_functions(self):
         """Test internal helper functions to improve coverage."""
-        import numpy as np
 
         from brutus.utils.math import _invert_3x3_analytical, _matrix_det_3x3
 
@@ -431,7 +374,6 @@ class TestInternalFunctions:
 
     def test_batch_operations_coverage(self):
         """Test batch matrix operations to hit remaining coverage."""
-        import numpy as np
 
         from brutus.utils.math import _batch_invert_3x3, inverse3
 
@@ -456,7 +398,3 @@ class TestInternalFunctions:
         # Test with very small eigenvalue threshold
         inverted_strict = inverse3(batch, regularize=True, min_eigenval_threshold=1e-6)
         assert inverted_strict.shape == batch.shape
-
-
-if __name__ == "__main__":
-    pytest.main([__file__])

@@ -7,20 +7,16 @@ Comprehensive integration tests for StarGrid and BruteForce classes.
 Tests the complete workflow from grid creation to stellar parameter estimation.
 """
 
-import os
-import tempfile
 import warnings
 
 import numpy as np
 import pytest
-from conftest import find_brutus_data_file
+from conftest import split_labels
 
 from brutus.analysis.individual import BruteForce
 
 # Import the classes to test
 from brutus.core.individual import StarGrid
-from brutus.data import load_models
-from brutus.data.filters import ps
 
 # ============================================================================
 # Module-level fixtures
@@ -28,91 +24,15 @@ from brutus.data.filters import ps
 
 
 @pytest.fixture(scope="module")
-def mist_grid():
-    """Load MIST v9 grid once for all integration tests."""
-    import os
-
-    # Try different paths for the MIST grid file
-    grid_paths = [
-        find_brutus_data_file("grid_mist_v9.h5"),
-        "./data/DATAFILES/grid_mist_v9.h5",
-        "data/DATAFILES/grid_mist_v9.h5",
-    ]
-
-    for path in grid_paths:
-        if path and os.path.exists(path):
-            try:
-                models, combined_labels, label_mask = load_models(path)
-
-                # Separate grid parameters from predictions using label_mask
-                grid_names = [
-                    name
-                    for name, is_grid in zip(combined_labels.dtype.names, label_mask[0])
-                    if is_grid
-                ]
-                pred_names = [
-                    name
-                    for name, is_grid in zip(combined_labels.dtype.names, label_mask[0])
-                    if not is_grid
-                ]
-
-                # Extract grid parameters
-                if grid_names:
-                    labels = combined_labels[grid_names]
-                else:
-                    # Fallback to standard grid parameters
-                    grid_names = ["mini", "eep", "feh"]
-                    labels = combined_labels[grid_names]
-
-                # Extract predictions if available
-                if pred_names:
-                    params = combined_labels[pred_names]
-                else:
-                    params = None
-
-                # Use only first 5 Pan-STARRS filters for testing (g, r, i, z, y)
-                ps_filters = ps[
-                    :5
-                ]  # Get first 5 PS filters: PS_g, PS_r, PS_i, PS_z, PS_y
-
-                # Load the grid with only PS filters
-                models_ps, combined_labels_ps, label_mask_ps = load_models(
-                    path, filters=ps_filters
-                )
-
-                # Create a subset for faster testing (every 100th model to get ~6000 models)
-                subset_indices = slice(0, None, 100)
-                models_subset = models_ps[subset_indices]
-                labels_subset = combined_labels_ps[subset_indices]
-
-                # Re-extract labels and params for PS-filtered data
-                if grid_names:
-                    labels_final = labels_subset[grid_names]
-                else:
-                    grid_names = ["mini", "eep", "feh"]
-                    labels_final = labels_subset[grid_names]
-
-                if pred_names:
-                    params_final = labels_subset[pred_names]
-                else:
-                    params_final = None
-
-                return StarGrid(models_subset, labels_final, params_final)
-            except Exception as e:
-                continue
-
-    # Skip (rather than error) when the grid is absent so the suite runs
-    # offline; CI pre-downloads the data and exercises these tests.
-    pytest.skip(
-        "MIST grid data not available; run fetch_grids() or set BRUTUS_DATA_DIR "
-        "to enable this data-dependent test"
-    )
+def mist_grid(mist_ps_grid):
+    """Every 100th model of the MIST v9 grid, with the five PS1 filters."""
+    models, labels, label_mask = mist_ps_grid
+    return StarGrid(models[::100], *split_labels(labels[::100], label_mask))
 
 
 @pytest.fixture
 def multi_star_observations():
     """Create multiple synthetic stellar observations."""
-    np.random.seed(42)
 
     # Define different stellar types
     star_params = [
@@ -161,7 +81,14 @@ class TestStarGridBruteForceIntegration:
         mask = np.ones(5, dtype=bool)
 
         # Fit through BruteForce
-        results = fitter._fit(flux, flux_err, mask, Nmc_prior=20, wt_thresh=0.05)
+        results = fitter._fit(
+            flux,
+            flux_err,
+            mask,
+            Nmc_prior=20,
+            wt_thresh=0.05,
+            rstate=np.random.RandomState(84),
+        )
 
         # _fit returns 14 values with return_distreds=True (default)
         (
@@ -252,6 +179,7 @@ class TestStarGridBruteForceIntegration:
 
     def test_multi_object_fitting(self, mist_grid, multi_star_observations):
         """Test fitting multiple objects."""
+        rng = np.random.RandomState(0)
         grid = mist_grid
         fitter = BruteForce(grid, verbose=False)
 
@@ -260,12 +188,19 @@ class TestStarGridBruteForceIntegration:
         for params in multi_star_observations:
             # Generate synthetic SED
             sed, _, _ = grid.get_seds(**params, return_flux=True)
-            flux = sed * (1 + np.random.normal(0, 0.05, len(sed)))
+            flux = sed * (1 + rng.normal(0, 0.05, len(sed)))
             flux_err = sed * 0.05
             mask = np.ones(len(sed), dtype=bool)
 
             # Fit
-            result = fitter._fit(flux, flux_err, mask, Nmc_prior=10, wt_thresh=0.1)
+            result = fitter._fit(
+                flux,
+                flux_err,
+                mask,
+                Nmc_prior=10,
+                wt_thresh=0.1,
+                rstate=np.random.RandomState(189),
+            )
             results.append(result)
 
         # All fits should succeed
@@ -281,14 +216,13 @@ class TestStarGridBruteForceIntegration:
 
     def test_prior_effects_on_posteriors(self, mist_grid):
         """Test that priors affect posterior distributions."""
+        rng = np.random.RandomState(0)
         grid = mist_grid
         fitter = BruteForce(grid, verbose=False)
 
         # Create ambiguous data (high noise)
         true_model = grid.models[15, :, 0]
-        flux = 10 ** (-0.4 * true_model) * (
-            1 + np.random.normal(0, 0.3, len(true_model))
-        )
+        flux = 10 ** (-0.4 * true_model) * (1 + rng.normal(0, 0.3, len(true_model)))
         flux_err = 10 ** (-0.4 * true_model) * 0.3
         mask = np.ones(len(true_model), dtype=bool)
 
@@ -449,6 +383,7 @@ class TestRealWorldScenarios:
 
     def test_typical_photometric_survey(self, mist_grid):
         """Test scenario like typical photometric survey."""
+        rng = np.random.RandomState(0)
         grid = mist_grid
         fitter = BruteForce(grid, verbose=False)
 
@@ -458,7 +393,7 @@ class TestRealWorldScenarios:
         flux = 10 ** (-0.4 * true_model)
 
         # Add realistic noise
-        flux = flux * (1 + np.random.normal(0, 0.02, 5))
+        flux = flux * (1 + rng.normal(0, 0.02, 5))
         flux_err = flux * 0.02
         mask = np.ones(5, dtype=bool)
 
@@ -472,6 +407,7 @@ class TestRealWorldScenarios:
             coord=(180.0, 30.0),  # Some Galactic coordinates
             Nmc_prior=50,
             wt_thresh=0.01,
+            rstate=np.random.RandomState(387),
         )
 
         # _fit returns 14 values with return_distreds=True (default)
@@ -502,6 +438,7 @@ class TestRealWorldScenarios:
 
     def test_reddened_star_scenario(self, mist_grid):
         """Test scenario with significant reddening."""
+        rng = np.random.RandomState(0)
         grid = mist_grid
         fitter = BruteForce(grid, verbose=False)
 
@@ -511,7 +448,7 @@ class TestRealWorldScenarios:
             **true_params, av=2.0, rv=3.1, dist=200.0, return_flux=True
         )
 
-        flux = true_sed * (1 + np.random.normal(0, 0.04, len(true_sed)))
+        flux = true_sed * (1 + rng.normal(0, 0.04, len(true_sed)))
         flux_err = true_sed * 0.04
         mask = np.ones(len(true_sed), dtype=bool)
 
@@ -524,6 +461,7 @@ class TestRealWorldScenarios:
             rvlim=(2.5, 4.5),
             Nmc_prior=30,
             wt_thresh=0.02,
+            rstate=np.random.RandomState(441),
         )
 
         # _fit returns 14 values with return_distreds=True (default)

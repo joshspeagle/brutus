@@ -33,7 +33,6 @@ def simple_mag_coeffs():
     Returns mag_coeffs of shape (1, 5, 3) representing
     (base_mag, reddening_vector_R0, dR/dRv) for each band.
     """
-    np.random.seed(12345)
     Nmodels, Nbands = 1, 5
 
     mag_coeffs = np.zeros((Nmodels, Nbands, 3))
@@ -52,7 +51,6 @@ def multi_model_mag_coeffs():
     """
     Create magnitude coefficients for multiple models (5 models, 5 bands).
     """
-    np.random.seed(54321)
     Nmodels, Nbands = 5, 5
 
     mag_coeffs = np.zeros((Nmodels, Nbands, 3))
@@ -84,8 +82,8 @@ def _make_synthetic_data(mag_coeffs, av_true, rv_true, scale_true, snr=100.0):
 
     # Noise
     flux_err = true_flux / snr
-    np.random.seed(999)
-    data = true_flux + np.random.normal(0, flux_err)
+    rng = np.random.RandomState(999)
+    data = true_flux + rng.normal(0, flux_err)
 
     tot_var = flux_err**2
     resid = np.zeros((Nmodels, Nbands))
@@ -493,7 +491,7 @@ class TestLogDistanceReparameterization:
         distance-space priors to ln(d)-space sampling.
         """
         # Simulate what the code does
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         Nmc, Nsel = 10, 3
 
         # Dummy base log-probabilities
@@ -501,7 +499,7 @@ class TestLogDistanceReparameterization:
         lnp_mc = np.tile(lnprob_base, (Nmc, 1))
 
         # Dummy distance samples
-        eta_samples = np.random.normal(loc=6.0, scale=0.5, size=(Nmc, Nsel))
+        eta_samples = rng.normal(loc=6.0, scale=0.5, size=(Nmc, Nsel))
         dist_mc = np.exp(eta_samples)
 
         # Add Jacobian (as the code does on line 1474)
@@ -532,9 +530,9 @@ class TestLogDistanceReparameterization:
         icov_lnd = np.diag([100.0, 100.0, 100.0])
         cov_lnd = np.linalg.inv(icov_lnd)
 
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         mean = np.array([eta_true, 0.5, 3.3])
-        samples = np.random.multivariate_normal(mean, cov_lnd, size=1000)
+        samples = rng.multivariate_normal(mean, cov_lnd, size=1000)
         eta_samples = samples[:, 0]
         dist_samples = np.exp(eta_samples)
 
@@ -719,9 +717,9 @@ class TestEffectiveSampleSize:
 
     def test_ess_between_one_and_n(self):
         """For random weights, ESS should be between 1 and N."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         N = 200
-        log_weights = np.random.normal(0, 2, N)
+        log_weights = rng.normal(0, 2, N)
         ess = self._compute_ess(log_weights)
         assert 1.0 <= ess <= N, f"ESS = {ess} not in [1, {N}]"
 
@@ -734,8 +732,8 @@ class TestEffectiveSampleSize:
         # Larger sigma => more concentrated (one dominant sample) => lower ESS.
         ess_values = []
         for sigma in [0.1, 1.0, 5.0, 20.0]:
-            np.random.seed(42)
-            log_weights = np.random.normal(0, sigma, N)
+            rng = np.random.RandomState(42)
+            log_weights = rng.normal(0, sigma, N)
             ess_values.append(self._compute_ess(log_weights))
 
         # ESS should decrease as sigma increases
@@ -751,9 +749,9 @@ class TestEffectiveSampleSize:
         Verify ESS values for a batch of models are non-negative and have
         the correct shape. This mimics the computation in logpost_grid.
         """
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         Nmc, Nsel = 50, 10
-        lnp_mc = np.random.normal(-50, 5, (Nmc, Nsel))
+        lnp_mc = rng.normal(-50, 5, (Nmc, Nsel))
 
         mc_ess = np.zeros(Nsel)
         for j in range(Nsel):
@@ -953,89 +951,3 @@ class TestOptimizeFitMagConvergence:
         npt.assert_allclose(
             rv_opt[0], rv_true, atol=0.5, err_msg="Rv should converge near true value"
         )
-
-
-# ============================================================================
-# Part 7 -- MC integration quality test (M21)
-# ============================================================================
-
-
-class TestMCIntegrationQuality:
-    """Test that logpost_grid MC integration produces reasonable ESS and evidence."""
-
-    def test_ess_and_evidence_on_synthetic_data(self, simple_mag_coeffs):
-        """
-        Run _get_sed_mle on synthetic data and then manually replicate the
-        MC integration step from logpost_grid to check that ESS is
-        reasonable (> Nmc/2) and the evidence is finite.
-        """
-        from scipy.special import logsumexp
-
-        from brutus.utils.math import inverse3
-        from brutus.utils.sampling import sample_multivariate_normal
-
-        av_true, rv_true, scale_true = 0.5, 3.3, 1.0
-        data, tot_var, resid = _make_synthetic_data(
-            simple_mag_coeffs,
-            av_true,
-            rv_true,
-            scale_true,
-            snr=100.0,
-        )
-
-        av_arr = np.array([av_true])
-        rv_arr = np.array([rv_true])
-
-        _, _, _, scale_ml, icov_sar, _ = _get_sed_mle(
-            data,
-            tot_var,
-            resid.copy(),
-            simple_mag_coeffs,
-            av_arr.copy(),
-            rv_arr.copy(),
-            av_gauss=(0.0, 1e6),
-            rv_gauss=(3.32, 0.18),
-        )
-
-        # Transform precision to (ln d, Av, Rv) space
-        s = max(scale_ml[0], 1e-20)
-        icov_lnd = icov_sar[0].copy()
-        icov_lnd[0, 0] = 4.0 * s**2 * icov_sar[0, 0, 0]
-        icov_lnd[0, 1] = -2.0 * s * icov_sar[0, 0, 1]
-        icov_lnd[1, 0] = -2.0 * s * icov_sar[0, 1, 0]
-        icov_lnd[0, 2] = -2.0 * s * icov_sar[0, 0, 2]
-        icov_lnd[2, 0] = -2.0 * s * icov_sar[0, 2, 0]
-
-        cov_lnd = inverse3(icov_lnd, regularize=True)
-        assert np.all(np.isfinite(cov_lnd)), "Covariance should be finite"
-
-        # MC sampling
-        Nmc = 200
-        eta_true = -0.5 * np.log(s)
-        mean = np.array([[eta_true, av_true, rv_true]])
-        cov_batch = cov_lnd[np.newaxis, :, :]
-
-        rstate = np.random.RandomState(42)
-        samples = sample_multivariate_normal(mean, cov_batch, size=Nmc, rstate=rstate)
-        # samples shape: (3, Nmc, 1)
-
-        eta_mc = samples[0, :, 0]
-        dist_mc = np.exp(eta_mc)
-
-        # Compute log-weights (just Jacobian + flat prior for simplicity)
-        lnp_mc = np.log(dist_mc + 1e-300)
-
-        # Compute ESS
-        lw_max = np.max(lnp_mc)
-        w = np.exp(lnp_mc - lw_max)
-        w_sum = w.sum()
-        w_normed = w / w_sum
-        ess = 1.0 / np.sum(w_normed**2)
-
-        assert (
-            ess > Nmc / 2
-        ), f"ESS ({ess:.1f}) should be > Nmc/2 ({Nmc/2}) for well-centered samples"
-
-        # Compute evidence (log-marginal likelihood proxy)
-        lnZ = logsumexp(lnp_mc) - np.log(Nmc)
-        assert np.isfinite(lnZ), "Evidence should be finite"

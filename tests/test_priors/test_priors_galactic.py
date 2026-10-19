@@ -1,0 +1,513 @@
+"""Tests of brutus.priors.galactic."""
+
+import warnings
+
+import numpy as np
+import pytest
+from astropy.coordinates import SkyCoord
+from scipy.special import logsumexp
+
+from brutus.priors import (
+    logn_disk,
+    logn_halo,
+    logp_age_from_feh,
+    logp_feh,
+    logp_galactic_structure,
+)
+from brutus.utils import truncnorm_logpdf
+from brutus.utils.math import galactic_to_galactocentric_cyl
+
+
+class TestGalacticPriors:
+    """Test Galactic structure and stellar population priors."""
+
+    def test_logn_disk_basic(self):
+        """Test basic disk number density evaluation."""
+        distances = np.array([0.5, 1.0, 2.0, 5.0])  # kpc
+        zs = np.array([0.0, 0.1, 0.5, 1.0])  # kpc above plane
+
+        logn = logn_disk(distances, zs)
+
+        # Should be finite
+        assert np.all(np.isfinite(logn))
+
+        # Should decrease with height
+        logn_heights = logn_disk(np.array([1.0]), np.array([0.0, 0.2, 0.5, 1.0]))
+        assert np.all(np.diff(logn_heights) < 0)  # Decreasing
+
+    def test_logn_disk_custom_parameters(self):
+        """Test disk with custom scale parameters."""
+        distances = np.array([1.0, 2.0])
+        zs = np.array([0.1, 0.1])
+
+        logn_default = logn_disk(distances, zs)
+        logn_custom = logn_disk(distances, zs, R_scale=3.0, Z_scale=0.4)
+
+        # Should produce different results
+        assert not np.allclose(logn_default, logn_custom)
+
+    def test_logn_halo_basic(self):
+        """Test basic halo number density evaluation."""
+        distances = np.array([0.5, 1.0, 5.0, 20.0])  # kpc
+        zs = np.array([0.0, 1.0, 5.0, 10.0])  # kpc
+
+        logn = logn_halo(distances, zs)
+
+        # Should be finite
+        assert np.all(np.isfinite(logn))
+
+    def test_logn_halo_custom_parameters(self):
+        """Test halo with custom parameters."""
+        distances = np.array([5.0, 10.0])
+        zs = np.array([2.0, 2.0])
+
+        logn_default = logn_halo(distances, zs)
+        logn_custom = logn_halo(distances, zs, eta=2.8, q_inf=0.8)
+
+        # Should produce different results
+        assert not np.allclose(logn_default, logn_custom)
+
+    def test_logp_feh_basic(self):
+        """Test metallicity prior evaluation."""
+        fehs = np.array([-2.0, -1.0, 0.0, 0.5])
+
+        # Basic evaluation with default parameters
+        logp = logp_feh(fehs)
+        assert np.all(np.isfinite(logp))
+        assert len(logp) == len(fehs)
+
+    def test_logp_feh_custom_parameters(self):
+        """Test metallicity prior with custom parameters."""
+        fehs = np.array([-1.0, 0.0])
+
+        logp_default = logp_feh(fehs)
+        logp_custom = logp_feh(fehs, feh_mean=-0.1, feh_sigma=0.4)
+
+        # Should produce different results
+        assert not np.allclose(logp_default, logp_custom)
+
+    def test_logp_age_from_feh_basic(self):
+        """Test age-metallicity relation."""
+        ages = np.array([1.0, 5.0, 10.0, 13.0])  # Gyr
+        fehs = np.array([-0.5, -0.2, 0.0, -0.1])
+
+        logp = logp_age_from_feh(ages, fehs)
+
+        # Should be finite
+        assert np.all(np.isfinite(logp))
+
+    def test_logp_age_from_feh_custom_parameters(self):
+        """Test age-metallicity relation with custom parameters."""
+        ages = np.array([5.0, 8.0])
+
+        logp_default = logp_age_from_feh(ages)
+        logp_custom = logp_age_from_feh(ages, feh_mean=-0.1, max_age=12.0)
+
+        # Should produce different results
+        assert not np.allclose(logp_default, logp_custom)
+
+    def test_logp_galactic_structure_basic(self):
+        """Test combined Galactic structure prior."""
+        # Create mock coordinates
+        coord = SkyCoord(ra=180.0, dec=0.0, unit="deg")
+        distances = np.array([1.0, 2.0, 5.0])  # kpc
+
+        logp = logp_galactic_structure(distances, coord)
+
+        # Should be finite
+        assert np.all(np.isfinite(logp))
+        assert len(logp) == len(distances)
+
+    def test_logp_galactic_structure_with_components(self):
+        """Test Galactic structure prior returning components."""
+        coord = SkyCoord(ra=90.0, dec=45.0, unit="deg")
+        distances = np.array([0.5, 1.5, 3.0])
+
+        result = logp_galactic_structure(distances, coord, return_components=True)
+        logp_total, components = result
+
+        # Check components structure
+        assert "number_density" in components
+        assert isinstance(components["number_density"], list)
+        assert len(components["number_density"]) == 3  # thin, thick, halo components
+
+        # Each component should have right length
+        for comp in components.values():
+            assert len(comp) == len(distances)
+            assert np.all(np.isfinite(comp))
+
+
+class TestDiskSolarNormalization:
+    """logn_disk must be exactly 0 at the solar position (like logn_halo),
+    so the f_thick/f_halo mixture fractions are exact locally."""
+
+    def test_thin_disk_unity_at_solar(self):
+        # Old code: exp(logn) = 0.9117 (normalized at un-smoothed R_solar)
+        logn = logn_disk(np.array([8.2]), np.array([0.025]))
+        assert logn[0] == 0.0
+
+    def test_thick_disk_unity_at_solar(self):
+        # Old code: exp(logn) = 0.8867
+        logn = logn_disk(np.array([8.2]), np.array([0.025]), R_scale=2.0, Z_scale=0.9)
+        assert logn[0] == 0.0
+
+    def test_halo_unity_at_solar(self):
+        logn = logn_halo(np.array([8.2]), np.array([0.025]))
+        assert np.isclose(logn[0], 0.0)
+
+    def test_custom_solar_position(self):
+        logn = logn_disk(np.array([8.5]), np.array([0.05]), R_solar=8.5, Z_solar=0.05)
+        assert logn[0] == 0.0
+
+
+def _make_labels(feh, loga):
+    labels = np.empty(len(feh), dtype=[("feh", float), ("loga", float)])
+    labels["feh"] = feh
+    labels["loga"] = loga
+    return labels
+
+
+class TestFehLogaArrayPaths:
+    """Plain feh/loga arrays must produce the same prior as structured
+    labels on EVERY code path (fused kernel, small-N numpy, fallback)."""
+
+    COORD = (90.0, 30.0)
+
+    def test_small_n_arrays_match_labels(self):
+        # Old code: arrays were silently ignored for len(dists) <= 1000
+        N = 500
+        d = np.linspace(0.1, 5.0, N)
+        feh = np.full(N, -0.2)
+        loga = np.full(N, 9.5)
+
+        via_arrays = logp_galactic_structure(d, self.COORD, feh=feh, loga=loga)
+        via_labels = logp_galactic_structure(
+            d, self.COORD, labels=_make_labels(feh, loga)
+        )
+        spatial_only = logp_galactic_structure(d, self.COORD)
+
+        assert np.array_equal(via_arrays, via_labels)
+        assert not np.allclose(via_arrays, spatial_only)
+
+    def test_large_n_arrays_match_labels(self):
+        N = 2000
+        rng = np.random.default_rng(0)
+        d = np.linspace(0.1, 5.0, N)
+        feh = rng.normal(-0.5, 0.5, N)
+        loga = rng.uniform(8.5, 10.1, N)
+
+        via_arrays = logp_galactic_structure(d, self.COORD, feh=feh, loga=loga)
+        via_labels = logp_galactic_structure(
+            d, self.COORD, labels=_make_labels(feh, loga)
+        )
+        assert np.array_equal(via_arrays, via_labels)
+
+    def test_fused_kernel_failure_falls_back_with_priors(self, monkeypatch):
+        # Old code: the numpy fallback dropped the feh/loga terms entirely
+        import brutus.priors.galactic as gal
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("simulated kernel failure")
+
+        N = 2000
+        rng = np.random.default_rng(1)
+        d = np.linspace(0.1, 5.0, N)
+        feh = rng.normal(-0.5, 0.5, N)
+        loga = rng.uniform(8.5, 10.1, N)
+
+        expected = logp_galactic_structure(d, self.COORD, feh=feh, loga=loga)
+        spatial_only = logp_galactic_structure(d, self.COORD)
+
+        monkeypatch.setattr(gal, "_galactic_prior_fused", boom)
+        with pytest.warns(RuntimeWarning, match="falling back to numpy"):
+            fallback = gal.logp_galactic_structure(d, self.COORD, feh=feh, loga=loga)
+
+        assert np.allclose(fallback, expected, rtol=1e-10, atol=1e-12)
+        assert not np.allclose(fallback, spatial_only)
+
+    def test_float32_and_list_inputs_normalized(self):
+        N = 2000
+        d = np.linspace(0.1, 5.0, N)
+        feh64 = np.full(N, -0.3)
+        loga64 = np.full(N, 9.2)
+        ref = logp_galactic_structure(d, self.COORD, feh=feh64, loga=loga64)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # no fallback warnings allowed
+            via_f32 = logp_galactic_structure(
+                d, self.COORD, feh=feh64.astype(np.float32), loga=loga64
+            )
+            via_list = logp_galactic_structure(
+                d, self.COORD, feh=list(feh64), loga=loga64
+            )
+        # float32 rounding perturbs values; -0.3 is inexact in binary
+        assert np.allclose(via_f32, ref, rtol=1e-6)
+        assert np.array_equal(via_list, ref)
+
+    def test_shape_mismatch_raises(self):
+        d = np.linspace(0.1, 5.0, 100)
+        with pytest.raises(ValueError, match="feh"):
+            logp_galactic_structure(d, self.COORD, feh=np.zeros(50))
+        with pytest.raises(ValueError, match="loga"):
+            logp_galactic_structure(d, self.COORD, loga=np.zeros((100, 2)))
+
+    def test_array_coordinates_use_numpy_path(self):
+        # Per-point sky coordinates cannot use the fused kernel (scalar
+        # trig factors); must fall through to the numpy path silently.
+        N = 1500
+        rng = np.random.default_rng(2)
+        d = np.linspace(0.1, 5.0, N)
+        ell = rng.uniform(0.0, 360.0, N)
+        b = rng.uniform(-90.0, 90.0, N)
+        feh = rng.normal(-0.5, 0.5, N)
+        loga = rng.uniform(8.5, 10.1, N)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            logp = logp_galactic_structure(d, (ell, b), feh=feh, loga=loga)
+        assert logp.shape == (N,)
+        assert np.all(np.isfinite(logp))
+
+
+class TestMixedArrayAndLabels:
+    """A plain feh/loga array must override only its own field: any field
+    not given as an array is sourced from a structured `labels`, so mixing
+    the two call styles cannot silently drop a prior term."""
+
+    COORD = (90.0, 30.0)
+
+    @pytest.mark.parametrize("N", [500, 2000])  # small-N and fused paths
+    def test_feh_array_plus_labels_with_loga_keeps_age_prior(self, N):
+        rng = np.random.default_rng(1)
+        d = np.linspace(0.1, 5.0, N)
+        feh = rng.normal(-0.5, 0.3, N)
+        loga = rng.uniform(8.5, 10.1, N)
+
+        mixed = logp_galactic_structure(
+            d, self.COORD, feh=feh, labels=_make_labels(feh, loga)
+        )
+        both_arrays = logp_galactic_structure(d, self.COORD, feh=feh, loga=loga)
+        feh_only = logp_galactic_structure(d, self.COORD, feh=feh)
+
+        # the age prior from labels must be applied...
+        assert np.array_equal(mixed, both_arrays)
+        # ...and it must actually change the result
+        assert not np.allclose(mixed, feh_only)
+
+    def test_loga_array_plus_labels_with_feh_keeps_feh_prior(self):
+        N = 800
+        rng = np.random.default_rng(2)
+        d = np.linspace(0.1, 5.0, N)
+        feh = rng.normal(-0.5, 0.3, N)
+        loga = rng.uniform(8.5, 10.1, N)
+
+        mixed = logp_galactic_structure(
+            d, self.COORD, loga=loga, labels=_make_labels(feh, loga)
+        )
+        both_arrays = logp_galactic_structure(d, self.COORD, feh=feh, loga=loga)
+        assert np.array_equal(mixed, both_arrays)
+
+
+class TestJointFehAgePrior:
+    """The (feh, age) prior must be the mixture sum_c w_c p(feh|c) p(age|c),
+    not the product of marginal mixtures."""
+
+    COORD = (90.0, 30.0)
+
+    # Default component parameters of logp_galactic_structure
+    COMPONENTS = [
+        # (feh_mean, feh_sigma, ln_f)
+        (-0.2, 0.3, 0.0),
+        (-0.7, 0.4, np.log(0.04)),
+        (-1.6, 0.5, np.log(0.005)),
+    ]
+
+    def _expected_joint(self, dists, feh, loga):
+        """Independent reference: logsumexp_c[lnp_c + ln p(feh|c) + ln p(age|c)]."""
+        ell, b = self.COORD
+        R, Z = galactic_to_galactocentric_cyl(dists, ell, b)
+        vol = 2.0 * np.log(dists + 1e-300)
+        age = 10.0**loga / 1e9
+
+        disk_scales = [(2.6, 0.3), (2.0, 0.9)]
+        terms = []
+        for idx, (fm, fsig, ln_f) in enumerate(self.COMPONENTS):
+            if idx < 2:
+                R_scale, Z_scale = disk_scales[idx]
+                lnp_c = logn_disk(R, Z, R_scale=R_scale, Z_scale=Z_scale)
+            else:
+                lnp_c = logn_halo(R, Z)
+            lnp_c = lnp_c + vol + ln_f
+
+            lp_feh = logp_feh(feh, feh_mean=fm, feh_sigma=fsig)
+
+            age_mean = 13.8 / (1.0 + np.exp((fm + 0.5) / 0.5))
+            age_sigma = np.clip((13.8 - age_mean) / 2.0, 1.0, 4.0)
+            lp_age = truncnorm_logpdf(
+                age,
+                (0.0 - age_mean) / age_sigma,
+                (13.8 - age_mean) / age_sigma,
+                loc=age_mean,
+                scale=age_sigma,
+            )
+            terms.append(lnp_c + lp_feh + lp_age)
+
+        return logsumexp(np.vstack(terms), axis=0)
+
+    def test_numpy_path_matches_mixture(self):
+        rng = np.random.default_rng(3)
+        N = 200
+        d = rng.uniform(0.05, 10.0, N)
+        feh = rng.normal(-0.8, 0.7, N)
+        loga = rng.uniform(8.0, 10.1, N)
+
+        logp = logp_galactic_structure(d, self.COORD, labels=_make_labels(feh, loga))
+        expected = self._expected_joint(d, feh, loga)
+        assert np.allclose(logp, expected, rtol=1e-10, atol=1e-12)
+
+    def test_fused_path_matches_mixture(self):
+        rng = np.random.default_rng(4)
+        N = 2000
+        d = rng.uniform(0.05, 10.0, N)
+        feh = rng.normal(-0.8, 0.7, N)
+        loga = rng.uniform(8.0, 10.1, N)
+
+        logp = logp_galactic_structure(d, self.COORD, feh=feh, loga=loga)
+        expected = self._expected_joint(d, feh, loga)
+        assert np.allclose(logp, expected, rtol=1e-10, atol=1e-12)
+
+    def test_metal_poor_nearby_star_favors_old_age(self):
+        # Old code: age weights ignored feh, so a nearby feh=-1.6 star was
+        # weighted by the (thin-disk-dominated) position-only weights and
+        # 12 Gyr was DISFAVORED vs 3 Gyr by ~e^-1.2.
+        d = np.array([0.3, 0.3])
+        labels = _make_labels(
+            np.array([-1.6, -1.6]),
+            np.array([np.log10(12e9), np.log10(3e9)]),
+        )
+        logp = logp_galactic_structure(d, self.COORD, labels=labels)
+        assert logp[0] > logp[1]
+
+
+class TestGalacticCoverage:
+    """Tests to improve galactic.py code coverage."""
+
+    def test_galactic_structure_tuple_coordinates(self):
+        """Test galactic structure with tuple coordinates (not SkyCoord)."""
+        distances = np.array([1.0, 2.0])
+        coord_tuple = (180.0, 0.0)  # (l, b) in degrees
+
+        logp = logp_galactic_structure(distances, coord_tuple)
+
+        assert np.all(np.isfinite(logp))
+        assert len(logp) == len(distances)
+
+    def test_galactic_structure_with_labels_feh(self):
+        """Test galactic structure with metallicity labels."""
+        distances = np.array([1.0, 2.0])
+        coord = SkyCoord(ra=180.0, dec=0.0, unit="deg")
+
+        # Create structured array with metallicity data
+        labels = np.array([(0.0,), (-0.5,)], dtype=[("feh", "f4")])
+
+        logp = logp_galactic_structure(distances, coord, labels=labels)
+
+        assert np.all(np.isfinite(logp))
+        assert len(logp) == len(distances)
+
+    def test_galactic_structure_with_labels_age(self):
+        """Test galactic structure with age labels."""
+        distances = np.array([1.0, 2.0])
+        coord = SkyCoord(ra=180.0, dec=0.0, unit="deg")
+
+        # Create structured array with log(age) data
+        labels = np.array(
+            [(9.0,), (9.5,)], dtype=[("loga", "f4")]
+        )  # log10(age in years)
+
+        logp = logp_galactic_structure(distances, coord, labels=labels)
+
+        assert np.all(np.isfinite(logp))
+        assert len(logp) == len(distances)
+
+    def test_galactic_structure_with_labels_both(self):
+        """Test galactic structure with both metallicity and age labels."""
+        distances = np.array([1.0, 2.0])
+        coord = SkyCoord(ra=180.0, dec=0.0, unit="deg")
+
+        # Create structured array with both feh and loga
+        labels = np.array(
+            [(0.0, 9.0), (-0.5, 9.5)], dtype=[("feh", "f4"), ("loga", "f4")]
+        )
+
+        logp = logp_galactic_structure(distances, coord, labels=labels)
+
+        assert np.all(np.isfinite(logp))
+        assert len(logp) == len(distances)
+
+    def test_galactic_structure_with_invalid_labels(self):
+        """Test galactic structure with invalid/missing label fields."""
+        distances = np.array([1.0, 2.0])
+        coord = SkyCoord(ra=180.0, dec=0.0, unit="deg")
+
+        # Create structured array with different field name
+        labels = np.array([(0.0,), (-0.5,)], dtype=[("metallicity", "f4")])
+
+        # Should handle missing fields gracefully
+        logp = logp_galactic_structure(distances, coord, labels=labels)
+
+        assert np.all(np.isfinite(logp))
+        assert len(logp) == len(distances)
+
+    def test_galactic_structure_components_with_labels(self):
+        """Test galactic structure returning components with labels."""
+        distances = np.array([1.0])
+        coord = SkyCoord(ra=0.0, dec=0.0, unit="deg")
+
+        # Create labels with both metallicity and age
+        labels = np.array([(0.0, 9.0)], dtype=[("feh", "f4"), ("loga", "f4")])
+
+        logp, components = logp_galactic_structure(
+            distances, coord, labels=labels, return_components=True
+        )
+
+        # Should have all component types
+        assert "number_density" in components
+        assert "feh" in components
+        assert "age" in components
+
+        # Each component should have three subcomponents (thin, thick, halo)
+        assert len(components["number_density"]) == 3
+        assert len(components["feh"]) == 3
+        assert len(components["age"]) == 3
+
+    def test_logp_age_from_feh_parameter_matching(self):
+        """Test age-metallicity function with correct parameter names."""
+        ages = np.array([5.0, 8.0])
+
+        # Check actual function signature parameters
+        logp_default = logp_age_from_feh(ages)
+        logp_custom = logp_age_from_feh(ages, feh_mean=-0.1, max_age=12.0, min_age=0.5)
+
+        # Should produce different results
+        assert not np.allclose(logp_default, logp_custom)
+        assert np.all(np.isfinite(logp_default))
+        assert np.all(np.isfinite(logp_custom))
+
+
+class TestLegacyImportFallback:
+    """Test legacy import fallback (difficult to test without modifying imports)."""
+
+    def test_scipy_import_works(self):
+        """Test that scipy.special.logsumexp is available."""
+        # This implicitly tests that the import succeeded
+        from brutus.priors.galactic import logp_galactic_structure
+
+        distances = np.array([1.0, 2.0, 3.0])
+        coord = SkyCoord(ra=0.0, dec=0.0, unit="deg")
+
+        logp = logp_galactic_structure(distances, coord)
+
+        # The fact that this works means logsumexp was imported correctly
+        assert np.all(np.isfinite(logp))
+        assert len(logp) == 3

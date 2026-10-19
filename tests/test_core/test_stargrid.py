@@ -11,11 +11,9 @@ import warnings
 
 import numpy as np
 import pytest
-from conftest import find_brutus_data_file
+from conftest import split_labels
 
-# Import the class to test
 from brutus.core.individual import StarGrid
-from brutus.data import load_models
 
 # ============================================================================
 # Module-level fixtures
@@ -23,73 +21,26 @@ from brutus.data import load_models
 
 
 @pytest.fixture(scope="module")
-def mist_grid():
-    """Load MIST v9 grid once for all tests in this module."""
-    import os
-
-    # Try different paths for the MIST grid file
-    grid_paths = [
-        find_brutus_data_file("grid_mist_v9.h5"),
-        "./data/DATAFILES/grid_mist_v9.h5",
-        "data/DATAFILES/grid_mist_v9.h5",
-    ]
-
-    for path in grid_paths:
-        if path and os.path.exists(path):
-            try:
-                models, combined_labels, label_mask = load_models(path)
-
-                # Separate grid parameters from predictions using label_mask
-                grid_names = [
-                    name
-                    for name, is_grid in zip(combined_labels.dtype.names, label_mask[0])
-                    if is_grid
-                ]
-                pred_names = [
-                    name
-                    for name, is_grid in zip(combined_labels.dtype.names, label_mask[0])
-                    if not is_grid
-                ]
-
-                # Extract grid parameters
-                if grid_names:
-                    labels = combined_labels[grid_names]
-                else:
-                    # Fallback to standard grid parameters
-                    grid_names = ["mini", "eep", "feh"]
-                    labels = combined_labels[grid_names]
-
-                # Extract predictions if available
-                if pred_names:
-                    params = combined_labels[pred_names]
-                else:
-                    params = None
-
-                return StarGrid(models, labels, params)
-            except Exception as e:
-                continue
-
-    # If the real grid is unavailable, skip dependent tests (CI pre-downloads).
-    pytest.skip(
-        "MIST grid data not available; run fetch_grids() or set BRUTUS_DATA_DIR "
-        "to enable this data-dependent test"
-    )
+def mist_grid(mist_ps_grid):
+    """The MIST v9 grid with the five PS1 filters."""
+    models, labels, label_mask = mist_ps_grid
+    return StarGrid(models, *split_labels(labels, label_mask))
 
 
 @pytest.fixture(scope="module")
 def mock_grid():
     """Create a small mock grid for basic testing."""
-    np.random.seed(42)
+    rng = np.random.RandomState(42)
 
     # Create minimal grid (2x2x2 = 8 models)
     nmodels = 8
     nfilters = 5
 
     # Create models
-    models = np.random.randn(nmodels, nfilters, 3)
-    models[:, :, 0] = np.random.uniform(10, 20, (nmodels, nfilters))
-    models[:, :, 1] = np.random.uniform(0.5, 2.0, (nmodels, nfilters))
-    models[:, :, 2] = np.random.uniform(0.05, 0.2, (nmodels, nfilters))
+    models = rng.randn(nmodels, nfilters, 3)
+    models[:, :, 0] = rng.uniform(10, 20, (nmodels, nfilters))
+    models[:, :, 1] = rng.uniform(0.5, 2.0, (nmodels, nfilters))
+    models[:, :, 2] = rng.uniform(0.05, 0.2, (nmodels, nfilters))
 
     # Create labels (grid parameters only)
     labels_dtype = [("mini", "f4"), ("eep", "f4"), ("feh", "f4")]
@@ -328,8 +279,9 @@ class TestStarGridEdgeCases:
 
     def test_single_filter(self):
         """Test with single filter grid."""
+        rng = np.random.RandomState(0)
         # Create grid with one filter
-        models = np.random.randn(8, 1, 3)
+        models = rng.randn(8, 1, 3)
         labels = np.zeros(8, dtype=[("mini", "f4"), ("eep", "f4"), ("feh", "f4")])
         for i in range(8):
             labels[i] = (
@@ -345,10 +297,11 @@ class TestStarGridEdgeCases:
 
     def test_models_as_dict(self):
         """Test StarGrid initialization with models as a dict."""
+        rng = np.random.RandomState(0)
         # Create mock model data as a dict
         nmodels = 5
         nfilters = 3
-        mag_coeffs = np.random.randn(nmodels, nfilters, 3)
+        mag_coeffs = rng.randn(nmodels, nfilters, 3)
         labels = np.zeros(nmodels, dtype=[("mini", "f4"), ("eep", "f4"), ("feh", "f4")])
         params = np.zeros(nmodels, dtype=[("mass", "f4"), ("Teff", "f4")])
 
@@ -368,10 +321,11 @@ class TestStarGridEdgeCases:
 
     def test_models_2d_reshape(self):
         """Test StarGrid with 2D models array that needs reshaping."""
+        rng = np.random.RandomState(0)
         nmodels = 5
         nfilters = 4
         # Create 2D array (Nmodels, Nfilters * 3)
-        models_2d = np.random.randn(nmodels, nfilters * 3)
+        models_2d = rng.randn(nmodels, nfilters * 3)
         labels = np.zeros(nmodels, dtype=[("mini", "f4"), ("eep", "f4"), ("feh", "f4")])
 
         for i in range(nmodels):
@@ -385,10 +339,11 @@ class TestStarGridEdgeCases:
 
     def test_models_wrong_coefficients(self):
         """Test StarGrid raises error with wrong number of coefficients."""
+        rng = np.random.RandomState(0)
         nmodels = 5
         nfilters = 3
         # Create models with 4 coefficients instead of 3
-        models_bad = np.random.randn(nmodels, nfilters, 4)
+        models_bad = rng.randn(nmodels, nfilters, 4)
         labels = np.zeros(nmodels, dtype=[("mini", "f4"), ("eep", "f4"), ("feh", "f4")])
 
         with pytest.raises(ValueError, match="Expected 3 coefficients"):

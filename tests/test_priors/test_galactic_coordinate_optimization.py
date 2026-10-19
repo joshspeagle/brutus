@@ -106,8 +106,9 @@ class TestGalacticStructureCoordinateOptimization:
 
     def test_large_distance_array(self):
         """Test with a large distance array (the performance-critical case)."""
+        rng = np.random.RandomState(0)
         # This mimics the Nmc x Nsel arrays used in fitting
-        dists = np.random.uniform(0.1, 50.0, 10000)
+        dists = rng.uniform(0.1, 50.0, 10000)
         coord = (270.0, -10.0)
 
         logp = logp_galactic_structure(dists, coord)

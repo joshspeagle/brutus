@@ -1,40 +1,346 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
+"""Tests of DustMap and Bayestar in brutus.dust.maps."""
 
-"""
-Regression and equivalence tests for audit fixes in brutus.dust.maps.
+from unittest.mock import MagicMock
 
-Covers:
-1. Reliability-metadata masking (converged, DM_reliable_min/max) in
-   Bayestar.query, default ON, with graceful degradation for files
-   lacking the fields.
-2. query() returning (n_dist,) profiles for a single [l, b] pair
-   (previously (1, n_dist), breaking the documented quickstart usage).
-3. query() returning a copy of the internal distance grid (previously
-   returned by reference, so caller mutation corrupted later queries).
-4. lexsort replacing structured-dtype argsort in
-   _prepare_index_structures (equivalence + micro-benchmark).
-5. Single finest-level lb2pix call + nested bit-shifts replacing
-   per-level lb2pix in _find_data_idx (equivalence + micro-benchmark).
-"""
-
-import os
-import time
-
+import astropy.coordinates as coord
 import astropy.units as u
 import h5py
 import numpy as np
 import pytest
 from astropy.coordinates import SkyCoord
-from conftest import find_brutus_data_file
 
-from brutus.dust import Bayestar
-from brutus.dust.extinction import lb2pix
+from brutus.dust import Bayestar, DustMap, lb2pix
+
+
+class TestDustMapBase:
+    """Test the abstract DustMap base class."""
+
+    def test_dustmap_instantiation(self):
+        """Test that DustMap can be instantiated."""
+        dust_map = DustMap()
+        assert isinstance(dust_map, DustMap)
+
+    def test_dustmap_call_alias(self):
+        """Test that __call__ method is an alias for query."""
+        dust_map = DustMap()
+
+        # Mock query method
+        dust_map.query = MagicMock(return_value="test_result")
+
+        # Test __call__ alias
+        result = dust_map("test_coords", test_arg="value")
+
+        dust_map.query.assert_called_once_with("test_coords", test_arg="value")
+        assert result == "test_result"
+
+    def test_dustmap_query_not_implemented(self):
+        """Test that query raises NotImplementedError."""
+        dust_map = DustMap()
+
+        with pytest.raises(
+            NotImplementedError, match="must be implemented by subclasses"
+        ):
+            dust_map.query("test_coords")
+
+    def test_dustmap_query_gal(self):
+        """Test Galactic coordinate query interface."""
+        dust_map = DustMap()
+
+        # Mock the query method
+        dust_map.query = MagicMock(return_value="test_result")
+
+        # Test without distance
+        result = dust_map.query_gal(ell=45.0, b=30.0)
+        assert result == "test_result"
+        dust_map.query.assert_called_once()
+
+        # Check that (l, b) array was passed directly (optimized path)
+        coords_arg = dust_map.query.call_args[0][0]
+        assert isinstance(coords_arg, np.ndarray)
+        np.testing.assert_allclose(coords_arg[0, 0], 45.0)
+        np.testing.assert_allclose(coords_arg[0, 1], 30.0)
+
+        # Test with distance (d is accepted but not used for HEALPix queries)
+        dust_map.query.reset_mock()
+        result = dust_map.query_gal(ell=45.0, b=30.0, d=1.5)
+        assert result == "test_result"
+        coords_arg = dust_map.query.call_args[0][0]
+        assert isinstance(coords_arg, np.ndarray)
+        np.testing.assert_allclose(coords_arg[0, 0], 45.0)
+        np.testing.assert_allclose(coords_arg[0, 1], 30.0)
+
+    def test_dustmap_query_equ(self):
+        """Test Equatorial coordinate query interface."""
+        dust_map = DustMap()
+        dust_map.query = MagicMock(return_value="test_result")
+
+        # Test with default frame
+        result = dust_map.query_equ(ra=180.0, dec=45.0)
+        assert result == "test_result"
+
+        # Test with different frame
+        result = dust_map.query_equ(ra=180.0, dec=45.0, frame="fk5")
+        assert result == "test_result"
+
+        # Test invalid frame
+        with pytest.raises(ValueError, match="not supported"):
+            dust_map.query_equ(ra=180.0, dec=45.0, frame="invalid")
+
+    def test_dustmap_coordinate_units(self):
+        """Test handling of astropy units in coordinate queries."""
+        dust_map = DustMap()
+        dust_map.query = MagicMock(return_value="test_result")
+
+        # Test with astropy Quantities
+        result = dust_map.query_gal(ell=45.0 * u.deg, b=30.0 * u.deg, d=1.5 * u.kpc)
+        assert result == "test_result"
+
+
+class TestBayestarMapReal:
+    """Test the Bayestar dust map implementation with real data."""
+
+    def test_bayestar_initialization(self, bayestar_map):
+        """Test Bayestar initialization with real data."""
+        # Check that data was loaded
+        assert hasattr(bayestar_map, "_distances")
+        assert hasattr(bayestar_map, "_av_mean")
+        assert hasattr(bayestar_map, "_av_std")
+        assert hasattr(bayestar_map, "_pixel_info")
+
+        # Check data shapes are reasonable
+        n_pixels = len(bayestar_map._pixel_info)
+        n_distances = len(bayestar_map._distances)
+
+        assert n_pixels > 0
+        assert n_distances > 0
+        assert bayestar_map._av_mean.shape == (n_pixels, n_distances)
+        assert bayestar_map._av_std.shape == (n_pixels, n_distances)
+
+        # Check that distances are increasing
+        assert np.all(np.diff(bayestar_map._distances) > 0)
+
+    def test_bayestar_file_error_handling(self):
+        """Test Bayestar error handling for missing files."""
+        with pytest.raises((FileNotFoundError, OSError)):
+            Bayestar(dustfile="nonexistent_file.h5")
+
+    def test_bayestar_query_size_real(self, bayestar_map):
+        """Test query size estimation with real data."""
+        # Mock coordinates with known shape
+        coords = MagicMock()
+        coords.shape = (5,)  # 5 coordinates
+
+        size = bayestar_map.get_query_size(coords)
+        expected_size = 5 * len(bayestar_map._distances)
+        assert size == expected_size
+
+    def test_bayestar_find_data_idx_real(self, bayestar_map):
+        """Test internal _find_data_idx method with real data."""
+        # Test with coordinates within Bayestar coverage (dec > -30)
+        # Use coordinates that should be covered
+        l = np.array([0.0, 90.0, 180.0])
+        b = np.array([0.0, 30.0, 60.0])
+
+        pix_idx = bayestar_map._find_data_idx(l, b)
+
+        assert isinstance(pix_idx, np.ndarray)
+        assert pix_idx.shape == (3,)
+
+        # Some pixels should be found (not all -1) for these coordinates
+        n_found = np.sum(pix_idx >= 0)
+        assert n_found >= 0  # At least some should be found
+
+    def test_bayestar_query_skycoord_real(self, bayestar_map):
+        """Test Bayestar query with SkyCoord objects (real data)."""
+        # Create coordinates within Bayestar coverage
+        coords = coord.SkyCoord(
+            l=[0.0, 90.0] * u.deg, b=[0.0, 30.0] * u.deg, frame="galactic"
+        )
+
+        distances, av_mean, av_std = bayestar_map.query(coords)
+
+        # Check return types and shapes
+        assert isinstance(distances, np.ndarray)
+        assert isinstance(av_mean, np.ndarray)
+        assert isinstance(av_std, np.ndarray)
+
+        # Check shapes
+        n_distances = len(distances)
+        assert av_mean.shape == (2, n_distances)  # 2 coords × n_distances
+        assert av_std.shape == (2, n_distances)
+
+        # Check for reasonable extinction values
+        valid_mask = ~np.isnan(av_mean)
+        if np.any(valid_mask):
+            valid_av = av_mean[valid_mask]
+            assert np.all(valid_av >= 0)  # Extinction should be non-negative
+            assert np.all(valid_av < 10)  # Should be reasonable values
+
+    def test_bayestar_query_array_real(self, bayestar_map):
+        """Test Bayestar query with coordinate arrays (real data)."""
+        # Test with 2D array format that triggers the except clause
+        coords = np.array([[0.0, 0.0], [90.0, 30.0], [180.0, 60.0]])
+
+        distances, av_mean, av_std = bayestar_map.query(coords)
+
+        # Check return types and shapes
+        assert isinstance(distances, np.ndarray)
+        assert isinstance(av_mean, np.ndarray)
+        assert isinstance(av_std, np.ndarray)
+
+        # Check shapes
+        n_distances = len(distances)
+        assert av_mean.shape == (3, n_distances)  # 3 coords × n_distances
+        assert av_std.shape == (3, n_distances)
+
+    def test_bayestar_query_single_coord_real(self, bayestar_map):
+        """Test Bayestar query with single coordinate (real data)."""
+        # Single coordinate within coverage
+        coords = coord.SkyCoord(l=0.0 * u.deg, b=0.0 * u.deg, frame="galactic")
+
+        distances, av_mean, av_std = bayestar_map.query(coords)
+
+        # Check return types
+        assert isinstance(distances, np.ndarray)
+        assert isinstance(av_mean, np.ndarray)
+        assert isinstance(av_std, np.ndarray)
+
+        # For single coordinate, should return 1D arrays
+        n_distances = len(distances)
+        assert av_mean.shape == (n_distances,)
+        assert av_std.shape == (n_distances,)
+
+    def test_bayestar_coordinate_methods_real(self, bayestar_map):
+        """Test coordinate query methods with real data."""
+        # Test Galactic coordinate query
+        distances, av_mean, av_std = bayestar_map.query_gal(ell=0.0, b=0.0)
+        assert isinstance(distances, np.ndarray)
+        assert len(distances) > 0
+
+        # Test Equatorial coordinate query
+        # Convert Galactic center to equatorial coordinates
+        distances2, av_mean2, av_std2 = bayestar_map.query_equ(ra=266.4, dec=-28.9)
+        assert isinstance(distances2, np.ndarray)
+
+        # Results should be similar (same sky position)
+        assert len(distances) == len(distances2)
+
+    def test_bayestar_coverage_limits_real(self, bayestar_map):
+        """Test Bayestar coverage limits with real data."""
+        # Test coordinates outside coverage (dec < -30)
+        # This should return NaN values
+        coords_south = coord.SkyCoord(ra=0.0 * u.deg, dec=-50.0 * u.deg, frame="icrs")
+
+        distances, av_mean, av_std = bayestar_map.query(coords_south)
+
+        # Should return data structure but values might be NaN
+        assert isinstance(distances, np.ndarray)
+        assert isinstance(av_mean, np.ndarray)
+        assert isinstance(av_std, np.ndarray)
+
+
+class TestBayestarFindDataIdxOutOfCoverage:
+    """Test that _find_data_idx returns NaN (via -1 index) for out-of-coverage coords."""
+
+    def test_out_of_coverage_returns_negative_idx(self, bayestar_map):
+        """
+        Query coordinates well outside the Bayestar map coverage and
+        verify _find_data_idx returns -1 (not data from the last pixel).
+
+        Bayestar covers declination > -30 deg approximately.
+        Coordinates at very negative declinations (in Galactic coords,
+        near the south celestial pole) should not be found.
+        """
+        # Use coordinates likely outside Bayestar coverage.
+        # The south celestial pole in Galactic coords is roughly l~303, b~-27.
+        # Pick coordinates at extreme southern galactic latitudes that are
+        # less likely to be covered.
+        # Also try coordinates that correspond to dec << -30.
+        # l=0, b=-89 is near the south galactic pole (dec ~ -27 deg, might
+        # still be covered). Use equatorial coords to be sure:
+        # dec = -80 => convert to galactic and query.
+        south_eq = coord.SkyCoord(ra=0.0 * u.deg, dec=-80.0 * u.deg, frame="icrs")
+        gal = south_eq.galactic
+        l_arr = np.array([gal.l.deg])
+        b_arr = np.array([gal.b.deg])
+
+        pix_idx = bayestar_map._find_data_idx(l_arr, b_arr)
+
+        # This coordinate should NOT be in the map (dec = -80),
+        # so pix_idx should be -1.
+        assert pix_idx[0] == -1, (
+            f"Coordinate at dec=-80 (l={l_arr[0]:.1f}, b={b_arr[0]:.1f}) "
+            f"should return pix_idx=-1 (not found), got {pix_idx[0]}"
+        )
+
+    def test_out_of_coverage_query_returns_nan(self, bayestar_map):
+        """
+        Full query for coordinates outside coverage should return NaN
+        extinction values, not data from arbitrary pixels.
+        """
+        # dec = -80 is far outside Bayestar coverage
+        coords_south = coord.SkyCoord(ra=0.0 * u.deg, dec=-80.0 * u.deg, frame="icrs")
+
+        distances, av_mean, av_std = bayestar_map.query(coords_south)
+
+        # The returned extinction should be all NaN for an uncovered pixel
+        assert np.all(np.isnan(av_mean)), (
+            "Out-of-coverage query should return NaN extinction values, "
+            f"got non-NaN values: {av_mean[~np.isnan(av_mean)]}"
+        )
+
+
+class TestDustEdgeCases:
+    """Edge case and error handling tests."""
+
+    def test_empty_coordinate_arrays(self):
+        """Test handling of empty coordinate arrays."""
+        l_empty = np.array([])
+        b_empty = np.array([])
+
+        pix_empty = lb2pix(nside=64, l=l_empty, b=b_empty)
+        assert isinstance(pix_empty, np.ndarray)
+        assert pix_empty.shape == (0,)
+
+    def test_broadcasting_coordinate_shapes(self):
+        """Test broadcasting behavior with different coordinate array shapes."""
+        l = np.array([0.0, 90.0])  # Shape (2,)
+        b = np.array([0.0])  # Shape (1,) - should broadcast to (2,)
+
+        # Should work via broadcasting
+        pix = lb2pix(nside=64, l=l, b=b)
+        assert pix.shape == (2,)  # Should broadcast to shape of l
+        assert np.all(pix >= 0)  # Should be valid coordinates
+
+        # Test truly incompatible shapes
+        l_2d = np.array([[0.0, 90.0], [180.0, 270.0]])  # Shape (2, 2)
+        b_1d = np.array([0.0, 30.0, 60.0])  # Shape (3,) - incompatible
+
+        with pytest.raises(ValueError, match="incompatible shapes"):
+            lb2pix(nside=64, l=l_2d, b=b_1d)
+
+    def test_invalid_nside_values(self):
+        """Test handling of invalid nside values."""
+        # HEALPix nside must be power of 2
+        with pytest.raises(ValueError):
+            lb2pix(nside=63, l=0.0, b=0.0)  # Not power of 2
+
+    def test_dustmap_coordinate_validation(self):
+        """Test coordinate validation in DustMap methods."""
+        dust_map = DustMap()
+        dust_map.query = MagicMock(return_value="test")
+
+        # Test extreme coordinate values
+        result = dust_map.query_gal(ell=720.0, b=0.0)  # Large longitude
+        assert result == "test"
+
+        result = dust_map.query_equ(ra=-90.0, dec=45.0)  # Negative RA
+        assert result == "test"
+
 
 # np.trapezoid is the NumPy 2.0 name for np.trapz; CI also tests NumPy 1.x
 _trapezoid = getattr(np, "trapezoid", None) or np.trapz
 
-BAYESTAR_FILE = find_brutus_data_file("bayestar2019_v1.h5")
 
 PIXEL_DTYPE_FULL = np.dtype(
     [
@@ -48,6 +354,7 @@ PIXEL_DTYPE_FULL = np.dtype(
         ("n_dwarfs", "<u4"),
     ]
 )
+
 
 PIXEL_DTYPE_MINIMAL = np.dtype([("nside", "<u4"), ("healpix_index", "<u8")])
 
@@ -357,43 +664,6 @@ class TestReliabilityMask:
             assert np.isclose(_trapezoid(np.exp(lp), av_grid), 1.0, rtol=1e-3)
 
 
-class TestSortEquivalence:
-    """lexsort must reproduce the old structured-dtype argsort exactly."""
-
-    @staticmethod
-    def _make_pixel_info(n, rng):
-        pix = np.zeros(n, dtype=PIXEL_DTYPE_FULL)
-        pix["nside"] = rng.choice([64, 128, 256, 512, 1024], size=n)
-        # Unique (nside, healpix_index) pairs, shuffled, as in a real map
-        pix["healpix_index"] = rng.permutation(n).astype(np.uint64)
-        return pix
-
-    def test_lexsort_matches_argsort_reference(self):
-        rng = np.random.default_rng(0)
-        pix = self._make_pixel_info(100_000, rng)
-        # Reference: the old implementation
-        ref = np.argsort(pix, order=["nside", "healpix_index"])
-        new = np.lexsort((pix["healpix_index"], pix["nside"]))
-        np.testing.assert_array_equal(ref, new)
-
-    def test_sort_microbenchmark(self):
-        rng = np.random.default_rng(1)
-        pix = self._make_pixel_info(500_000, rng)
-        t0 = time.perf_counter()
-        ref = np.argsort(pix, order=["nside", "healpix_index"])
-        t_ref = time.perf_counter() - t0
-        t0 = time.perf_counter()
-        new = np.lexsort((pix["healpix_index"], pix["nside"]))
-        t_new = time.perf_counter() - t0
-        np.testing.assert_array_equal(ref, new)
-        # Timing is diagnostic only: the index-equivalence assertion above
-        # is the test; a single wall-clock race can flake on shared runners.
-        print(
-            f"\nsort 500k rows: argsort(order=) {t_ref:.3f}s, "
-            f"lexsort {t_new:.3f}s ({t_ref / max(t_new, 1e-9):.0f}x)"
-        )
-
-
 def _find_data_idx_reference(bm, gal_l, b):
     """Old _find_data_idx: per-level lb2pix (reference implementation)."""
     l_arr = np.asarray(gal_l)
@@ -453,44 +723,18 @@ class TestFindDataIdxEquivalence:
             new = bm._find_data_idx(gal_l, gal_b)
             np.testing.assert_array_equal(ref, new)
 
-    def test_lb2pix_microbenchmark(self, multires_map_file):
-        bm = Bayestar(dustfile=multires_map_file)
-        rng = np.random.default_rng(3)
-        gal_l = rng.uniform(0.0, 360.0, 200_000)
-        gal_b = rng.uniform(-90.0, 90.0, 200_000)
 
-        t0 = time.perf_counter()
-        ref = _find_data_idx_reference(bm, gal_l, gal_b)
-        t_ref = time.perf_counter() - t0
-        t0 = time.perf_counter()
-        new = bm._find_data_idx(gal_l, gal_b)
-        t_new = time.perf_counter() - t0
-        np.testing.assert_array_equal(ref, new)
-        print(
-            f"\n_find_data_idx 200k coords: per-level lb2pix {t_ref:.3f}s, "
-            f"shift-based {t_new:.3f}s"
-        )
-
-
-@pytest.mark.skipif(
-    BAYESTAR_FILE is None or not os.path.exists(str(BAYESTAR_FILE)),
-    reason="Real Bayestar data file not available",
-)
 class TestRealFile:
     """End-to-end checks against the shipped bayestar2019_v1.h5."""
 
-    @pytest.fixture(scope="class")
-    def real_map(self):
-        return Bayestar(dustfile=BAYESTAR_FILE)
+    def test_reliability_fields_loaded(self, bayestar_map):
+        assert bayestar_map._converged is not None
+        assert bayestar_map._d_reliable_min.shape == (bayestar_map._n_pix,)
+        assert bayestar_map._d_reliable_max.shape == (bayestar_map._n_pix,)
 
-    def test_reliability_fields_loaded(self, real_map):
-        assert real_map._converged is not None
-        assert real_map._d_reliable_min.shape == (real_map._n_pix,)
-        assert real_map._d_reliable_max.shape == (real_map._n_pix,)
-
-    def test_mask_narrows_profile(self, real_map):
-        dists, av_masked, _ = real_map.query([120.0, 30.0])
-        _, av_raw, _ = real_map.query([120.0, 30.0], apply_reliability_mask=False)
+    def test_mask_narrows_profile(self, bayestar_map):
+        dists, av_masked, _ = bayestar_map.query([120.0, 30.0])
+        _, av_raw, _ = bayestar_map.query([120.0, 30.0], apply_reliability_mask=False)
         assert av_masked.shape == (len(dists),)
         assert np.all(np.isfinite(av_raw))
         # Masked profile has NaN outside the reliable range but agrees inside
@@ -498,24 +742,22 @@ class TestRealFile:
         assert 0 < finite.sum() < len(dists)
         np.testing.assert_array_equal(av_masked[finite], av_raw[finite])
 
-    def test_find_data_idx_matches_reference(self, real_map):
+    def test_find_data_idx_matches_reference(self, bayestar_map):
         rng = np.random.default_rng(4)
         gal_l = rng.uniform(0.0, 360.0, 20_000)
         gal_b = rng.uniform(-90.0, 90.0, 20_000)
         gal_b[::500] = -95.0
-        ref = _find_data_idx_reference(real_map, gal_l, gal_b)
-        new = real_map._find_data_idx(gal_l, gal_b)
+        ref = _find_data_idx_reference(bayestar_map, gal_l, gal_b)
+        new = bayestar_map._find_data_idx(gal_l, gal_b)
         np.testing.assert_array_equal(ref, new)
 
-    def test_halo_giant_uniform_prior_beyond_reliable_range(self, real_map):
+    def test_halo_giant_uniform_prior_beyond_reliable_range(self, bayestar_map):
         from brutus.priors import logp_extinction
 
         # Sightline reliable only to ~5.6 kpc: at 20 kpc the masked map
         # must yield the normalized uniform prior instead of a tight
         # far-field Gaussian
-        logp = logp_extinction(np.array([1.0]), real_map, [90.0, 1.0], distance=20.0)
+        logp = logp_extinction(
+            np.array([1.0]), bayestar_map, [90.0, 1.0], distance=20.0
+        )
         np.testing.assert_allclose(logp, -np.log(20.0))
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

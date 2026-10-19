@@ -23,31 +23,29 @@ class TestBinPdfsDistred:
     @pytest.fixture
     def direct_test_data(self):
         """Test data in direct format: (dists, reds, dreds)."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         n_objects = 3
         n_samples = 100
 
         # Generate realistic distance/reddening samples
-        dists = np.random.lognormal(np.log(2.0), 0.3, (n_objects, n_samples))  # ~2 kpc
-        reds = np.random.exponential(0.5, (n_objects, n_samples))  # Av ~ 0.5
-        dreds = np.random.normal(3.3, 0.3, (n_objects, n_samples))  # Rv ~ 3.3
+        dists = rng.lognormal(np.log(2.0), 0.3, (n_objects, n_samples))  # ~2 kpc
+        reds = rng.exponential(0.5, (n_objects, n_samples))  # Av ~ 0.5
+        dreds = rng.normal(3.3, 0.3, (n_objects, n_samples))  # Rv ~ 3.3
 
         return (dists, reds, dreds)
 
     @pytest.fixture
     def sar_test_data(self):
         """Test data in SAR format: (scales, avs, rvs, covs_sar)."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         n_objects = 3
         n_samples = 100
 
         # Generate realistic scale/Av/Rv samples
-        parallaxes = np.random.lognormal(
-            np.log(0.5), 0.3, (n_objects, n_samples)
-        )  # ~0.5 mas
+        parallaxes = rng.lognormal(np.log(0.5), 0.3, (n_objects, n_samples))  # ~0.5 mas
         scales = parallaxes**2
-        avs = np.random.exponential(0.5, (n_objects, n_samples))
-        rvs = np.random.normal(3.3, 0.3, (n_objects, n_samples))
+        avs = rng.exponential(0.5, (n_objects, n_samples))
+        rvs = rng.normal(3.3, 0.3, (n_objects, n_samples))
 
         # Create covariance matrices (simplified)
         covs_sar = np.zeros((n_objects, n_samples, 3, 3))
@@ -237,13 +235,13 @@ class TestBinPdfsDistred:
 
     def test_bin_pdfs_single_object(self):
         """Test with single object data."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         n_samples = 50
 
         # Single object data
-        dists = np.random.lognormal(np.log(1.0), 0.2, (1, n_samples))
-        reds = np.random.exponential(0.3, (1, n_samples))
-        dreds = np.random.normal(3.1, 0.2, (1, n_samples))
+        dists = rng.lognormal(np.log(1.0), 0.2, (1, n_samples))
+        reds = rng.exponential(0.3, (1, n_samples))
+        dreds = rng.normal(3.1, 0.2, (1, n_samples))
 
         data = (dists, reds, dreds)
 
@@ -337,12 +335,12 @@ class TestBinPdfsDistred:
     def test_integration_with_priors_module(self):
         """Test that the function properly uses the refactored priors."""
         # This tests that the imports work correctly and priors are applied
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
 
         # Create SAR format data
-        scales = np.random.exponential(0.25, (1, 50)).reshape(1, 50)
-        avs = np.random.exponential(0.5, (1, 50))
-        rvs = np.random.normal(3.3, 0.3, (1, 50))
+        scales = rng.exponential(0.25, (1, 50)).reshape(1, 50)
+        avs = rng.exponential(0.5, (1, 50))
+        rvs = rng.normal(3.3, 0.3, (1, 50))
         covs = np.zeros((1, 50, 3, 3))
         for i in range(50):
             covs[0, i] = np.eye(3) * 0.1

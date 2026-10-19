@@ -33,78 +33,59 @@ For data management::
 
     from brutus import fetch_grids, load_models
     fetch_grids(target_dir='./data/')
-    models = load_models('./data/grid_mist_v9.h5')
+    models, labels, label_mask = load_models('./data/grid_mist_v9.h5')
 """
 
-from __future__ import division, print_function
+from importlib import metadata as _metadata
 
-# Version management
-__version__ = "1.2.0"
-
-# Core functionality imports
 try:
-    # Import submodules to make them accessible as brutus.plotting, etc.
-    from . import analysis, core, data, dust, plotting, priors, utils  # noqa: F401
+    __version__ = _metadata.version("astro-brutus")
+except _metadata.PackageNotFoundError:  # a source tree that is not installed
+    __version__ = "unknown"
 
-    # Core stellar evolution models (refactored)
-    # Analysis and fitting
-    from .analysis import BruteForce  # noqa: F401
-    from .core import (  # noqa: F401
-        EEPTracks,
-        Isochrone,
-        StarEvolTrack,
-        StarGrid,
-        StellarPop,
-    )
+from . import analysis, core, data, dust, plotting, priors, utils
+from .analysis import BruteForce
+from .core import EEPTracks, Isochrone, StarEvolTrack, StarGrid, StellarPop
+from .data import (
+    fetch_dustmaps,
+    fetch_grids,
+    fetch_isos,
+    fetch_nns,
+    fetch_offsets,
+    fetch_tracks,
+    load_models,
+    load_offsets,
+)
+from .utils import inv_magnitude, magnitude
 
-    # Data management (refactored)
-    from .data import fetch_dustmaps, fetch_grids, fetch_isos, load_models  # noqa: F401
-
-    # Essential utilities (refactored)
-    from .utils import inv_magnitude, magnitude  # noqa: F401
-
-    # Dust mapping (not yet refactored)
-    # from .dust import Bayestar
-    # Make key classes and submodules easily accessible
-    __all__ = [
-        # Version
-        "__version__",
-        # Submodules
-        "core",
-        "analysis",
-        "data",
-        "utils",
-        "priors",
-        "plotting",
-        "dust",
-        # Core classes
-        "Isochrone",
-        "EEPTracks",
-        "StarGrid",
-        "StarEvolTrack",
-        "StellarPop",
-        # Analysis classes
-        "BruteForce",
-        # Data utilities (refactored)
-        "fetch_grids",
-        "fetch_isos",
-        "fetch_dustmaps",
-        "load_models",
-        # Photometry utilities (refactored)
-        "magnitude",
-        "inv_magnitude",
-    ]
-
-except ImportError as e:
-    # During the transition period, some imports might fail
-    # Provide graceful fallback
-    import warnings
-
-    warnings.warn(
-        f"Some brutus modules are not yet available during reorganization: {e}. "
-        "Please use the original module imports temporarily.",
-        ImportWarning,
-    )
-
-    # Minimal fallback
-    __all__ = ["__version__"]
+__all__ = [
+    "__version__",
+    # Submodules
+    "core",
+    "analysis",
+    "data",
+    "utils",
+    "priors",
+    "plotting",
+    "dust",
+    # Core classes
+    "Isochrone",
+    "EEPTracks",
+    "StarGrid",
+    "StarEvolTrack",
+    "StellarPop",
+    # Analysis classes
+    "BruteForce",
+    # Data utilities
+    "fetch_dustmaps",
+    "fetch_grids",
+    "fetch_isos",
+    "fetch_nns",
+    "fetch_offsets",
+    "fetch_tracks",
+    "load_models",
+    "load_offsets",
+    # Photometry utilities
+    "magnitude",
+    "inv_magnitude",
+]

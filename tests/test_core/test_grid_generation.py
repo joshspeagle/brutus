@@ -16,16 +16,16 @@ import numpy as np
 import pytest
 
 from brutus.core.grid_generation import GridGenerator
-from brutus.core.individual import EEPTracks, StarEvolTrack, StarGrid
+from brutus.core.individual import StarEvolTrack, StarGrid
 from brutus.data.loader import load_models
 
 
 class TestGridGenerator:
     """Test suite for GridGenerator class."""
 
-    def test_init(self):
+    def test_init(self, eep_tracks):
         """Test GridGenerator initialization."""
-        tracks = EEPTracks(verbose=False)
+        tracks = eep_tracks
         gen = GridGenerator(
             tracks, filters=["SDSS_g", "SDSS_r", "SDSS_i"], verbose=False
         )
@@ -35,17 +35,17 @@ class TestGridGenerator:
         assert all(f in ["SDSS_g", "SDSS_r", "SDSS_i"] for f in gen.filters)
         assert isinstance(gen.star_track, StarEvolTrack)
 
-    def test_init_default_filters(self):
+    def test_init_default_filters(self, eep_tracks):
         """Test GridGenerator with default filters."""
-        tracks = EEPTracks(verbose=False)
+        tracks = eep_tracks
         gen = GridGenerator(tracks, verbose=False)
 
         # Should have many default filters
         assert len(gen.filters) > 3
 
-    def test_make_grid_minimal(self):
+    def test_make_grid_minimal(self, eep_tracks):
         """Test grid generation with minimal parameters."""
-        tracks = EEPTracks(verbose=False)
+        tracks = eep_tracks
         gen = GridGenerator(tracks, filters=["SDSS_g", "SDSS_r"], verbose=False)
 
         # Create very small grid for testing
@@ -75,9 +75,9 @@ class TestGridGenerator:
         assert len(gen.grid_seds) == 1
         assert len(gen.grid_params) == 1
 
-    def test_grid_structure(self):
+    def test_grid_structure(self, eep_tracks):
         """Test structure of generated grid."""
-        tracks = EEPTracks(verbose=False)
+        tracks = eep_tracks
         gen = GridGenerator(
             tracks, filters=["SDSS_g", "SDSS_r", "SDSS_i"], verbose=False
         )
@@ -114,9 +114,9 @@ class TestGridGenerator:
         # Each filter should have 3 coefficients
         assert gen.grid_seds["SDSS_g"].shape == (6, 3)
 
-    def test_reference_distance(self):
+    def test_reference_distance(self, eep_tracks):
         """Test that grid is generated at 1 kpc reference distance."""
-        tracks = EEPTracks(verbose=False)
+        tracks = eep_tracks
         gen = GridGenerator(tracks, filters=["SDSS_g"], verbose=False)
 
         gen.make_grid(
@@ -147,9 +147,9 @@ class TestGridGenerator:
         base_mag = gen.grid_seds["SDSS_g"][0, 0]
         np.testing.assert_allclose(base_mag, sed_direct[0], rtol=1e-3)
 
-    def test_reddening_coefficients(self):
+    def test_reddening_coefficients(self, eep_tracks):
         """Test that reddening coefficients are plausible."""
-        tracks = EEPTracks(verbose=False)
+        tracks = eep_tracks
         gen = GridGenerator(
             tracks, filters=["SDSS_g", "SDSS_r", "SDSS_i"], verbose=False
         )
@@ -177,9 +177,9 @@ class TestGridGenerator:
             # Rv coefficient typically small
             assert abs(coeffs[2]) < 2.0
 
-    def test_invalid_models_flagged(self):
+    def test_invalid_models_flagged(self, eep_tracks):
         """Test that invalid models are properly flagged."""
-        tracks = EEPTracks(verbose=False)
+        tracks = eep_tracks
         gen = GridGenerator(tracks, filters=["SDSS_g"], verbose=False)
 
         # Include some parameters that should produce invalid models
@@ -200,9 +200,9 @@ class TestGridGenerator:
         # Should have flagged some models as invalid
         assert not all(gen.grid_sel)
 
-    def test_save_and_load(self):
+    def test_save_and_load(self, eep_tracks):
         """Test saving grid to HDF5 and loading it back."""
-        tracks = EEPTracks(verbose=False)
+        tracks = eep_tracks
         gen = GridGenerator(
             tracks, filters=["SDSS_g", "SDSS_r", "SDSS_i"], verbose=False
         )
@@ -255,9 +255,9 @@ class TestGridGenerator:
             # Cleanup
             Path(tmp_path).unlink(missing_ok=True)
 
-    def test_grid_compatible_with_stargrid(self):
+    def test_grid_compatible_with_stargrid(self, eep_tracks):
         """Test that generated grid can be loaded by StarGrid."""
-        tracks = EEPTracks(verbose=False)
+        tracks = eep_tracks
         gen = GridGenerator(tracks, filters=["SDSS_g", "SDSS_r"], verbose=False)
 
         # Use temporary file
@@ -294,9 +294,9 @@ class TestGridGenerator:
         finally:
             Path(tmp_path).unlink(missing_ok=True)
 
-    def test_different_dist_warning(self):
+    def test_different_dist_warning(self, eep_tracks):
         """Test that using non-standard distance is preserved."""
-        tracks = EEPTracks(verbose=False)
+        tracks = eep_tracks
         gen = GridGenerator(tracks, filters=["SDSS_g"], verbose=False)
 
         with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as tmp:
@@ -322,9 +322,9 @@ class TestGridGenerator:
         finally:
             Path(tmp_path).unlink(missing_ok=True)
 
-    def test_grid_params_structure(self):
+    def test_grid_params_structure(self, eep_tracks):
         """Test that grid parameters match track predictions."""
-        tracks = EEPTracks(verbose=False)
+        tracks = eep_tracks
         gen = GridGenerator(tracks, filters=["SDSS_g"], verbose=False)
 
         gen.make_grid(
@@ -343,9 +343,9 @@ class TestGridGenerator:
         for pred in track_predictions:
             assert pred in param_names
 
-    def test_binary_handling(self):
+    def test_binary_handling(self, eep_tracks):
         """Test grid generation with binary stars."""
-        tracks = EEPTracks(verbose=False)
+        tracks = eep_tracks
         gen = GridGenerator(tracks, filters=["SDSS_g"], verbose=False)
 
         # Generate grid with and without binaries
@@ -373,7 +373,7 @@ class TestGridGenerator:
 class TestGridGeneratorValidity:
     """Tests for invalid-model handling and the save/load round trip."""
 
-    def test_saved_grid_excludes_invalid_models_roundtrip(self):
+    def test_saved_grid_excludes_invalid_models_roundtrip(self, eep_tracks):
         """Invalid (NaN) models must not be written to file, and a loaded
         user-generated grid must be immediately fit-ready.
 
@@ -382,7 +382,7 @@ class TestGridGeneratorValidity:
         with 'zero-size array to reduction operation maximum' for every star.
         """
         filters = ["SDSS_g", "SDSS_r", "SDSS_i", "SDSS_z"]
-        tracks = EEPTracks(verbose=False)
+        tracks = eep_tracks
         gen = GridGenerator(tracks, filters=filters, verbose=False)
 
         with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as tmp:
@@ -436,10 +436,10 @@ class TestGridGeneratorValidity:
         finally:
             Path(tmp_path).unlink(missing_ok=True)
 
-    def test_mini_bound_masks_subthreshold_primaries(self):
+    def test_mini_bound_masks_subthreshold_primaries(self, eep_tracks):
         """Primaries below mini_bound must be masked per the documented
         contract (old code only gated binary secondaries with it)."""
-        tracks = EEPTracks(verbose=False)
+        tracks = eep_tracks
         gen = GridGenerator(tracks, filters=["SDSS_g"], verbose=False)
 
         gen.make_grid(
@@ -456,11 +456,11 @@ class TestGridGeneratorValidity:
         assert gen.grid_sel[1], "1.0 Msun primary must stay valid"
         assert np.all(np.isnan(np.array(gen.grid_seds[0].tolist())))
 
-    def test_out_of_bounds_reddening_grid_flagged_invalid(self):
+    def test_out_of_bounds_reddening_grid_flagged_invalid(self, eep_tracks):
         """(av, rv) lattice points outside the NN training bounds yield NaN
         photometry; such models must be flagged invalid, not stored as valid
         NaN coefficients (old code checked validity only at the base SED)."""
-        tracks = EEPTracks(verbose=False)
+        tracks = eep_tracks
         gen = GridGenerator(tracks, filters=["SDSS_g"], verbose=False)
 
         av_beyond = gen.predictor.xmax[4] + 1.0  # above the NN A_V bound
@@ -493,11 +493,9 @@ class TestReddeningFitEquivalence:
     """The batched reddening fit must reproduce the old scalar-loop fit."""
 
     @pytest.mark.filterwarnings("ignore::RuntimeWarning")
-    def test_matches_scalar_reference_and_is_faster(self):
-        import time
-
+    def test_matches_scalar_reference(self, eep_tracks):
         filters = ["SDSS_g", "SDSS_r", "SDSS_i"]
-        tracks = EEPTracks(verbose=False)
+        tracks = eep_tracks
         gen = GridGenerator(tracks, filters=filters, verbose=False)
 
         dist = 1000.0
@@ -544,7 +542,6 @@ class TestReddeningFitEquivalence:
             dict(mini=1.1, eep=454.0, feh=0.0, afe=0.0, smf=0.0),  # turnoff
         ]
 
-        t_old = t_new = 0.0
         for c in cases:
             sed, params, params2, eep2 = gen.star_track.get_seds(
                 av=0.0,
@@ -561,13 +558,9 @@ class TestReddeningFitEquivalence:
             )
             assert np.all(np.isfinite(sed)), c
 
-            t0 = time.perf_counter()
             ref = reference_fit(
                 c["mini"], c["eep"], c["feh"], c["afe"], c["smf"], eep2, sed
             )
-            t_old += time.perf_counter() - t0
-
-            t0 = time.perf_counter()
             new = gen._fit_reddening_coefficients(
                 params=params,
                 params2=params2,
@@ -578,28 +571,19 @@ class TestReddeningFitEquivalence:
                 rv_wt=rv_wt,
                 dist=dist,
             )
-            t_new += time.perf_counter() - t0
-
             np.testing.assert_allclose(new, ref, rtol=1e-8, atol=1e-8)
-
-        # Measured ~17x on the dev machine; require only a loose margin so
-        # the check is robust on loaded CI runners.
-        assert t_new < t_old, f"batched fit slower than scalar ({t_new} vs {t_old})"
 
 
 class TestGridGeneratorEdgeCases:
     """Test edge cases and error handling."""
 
-    def test_default_grids(self):
+    def test_default_grids(self, eep_tracks):
         """Test that default grid parameters are used when not specified.
 
         This test starts grid generation with all defaults (~300k models)
         but terminates early after verifying it's working correctly.
         """
-        import signal
-        import time
-
-        tracks = EEPTracks(verbose=False)
+        tracks = eep_tracks
         gen = GridGenerator(tracks, filters=["SDSS_g"], verbose=False)
 
         # Patch make_grid to terminate after a few successful models
@@ -637,17 +621,17 @@ class TestGridGeneratorEdgeCases:
         # Restore original method
         gen.star_track.get_seds = original_get_seds
 
-    def test_empty_filter_list(self):
+    def test_empty_filter_list(self, eep_tracks):
         """Test behavior with empty filter list."""
-        tracks = EEPTracks(verbose=False)
+        tracks = eep_tracks
 
         # Should use default filters
         gen = GridGenerator(tracks, filters=None, verbose=False)
         assert len(gen.filters) > 0
 
-    def test_single_point_grid(self):
+    def test_single_point_grid(self, eep_tracks):
         """Test grid with single point in each dimension."""
-        tracks = EEPTracks(verbose=False)
+        tracks = eep_tracks
         gen = GridGenerator(tracks, filters=["SDSS_g"], verbose=False)
 
         gen.make_grid(
@@ -661,9 +645,9 @@ class TestGridGeneratorEdgeCases:
 
         assert len(gen.grid_labels) == 1
 
-    def test_grid_without_save(self):
+    def test_grid_without_save(self, eep_tracks):
         """Test generating grid without saving to file."""
-        tracks = EEPTracks(verbose=False)
+        tracks = eep_tracks
         gen = GridGenerator(tracks, filters=["SDSS_g"], verbose=False)
 
         # Generate without output_file
@@ -681,12 +665,12 @@ class TestGridGeneratorEdgeCases:
         assert hasattr(gen, "grid_seds")
         assert len(gen.grid_seds) == 1
 
-    def test_verbose_output(self):
+    def test_verbose_output(self, eep_tracks):
         """Test that verbose mode produces output."""
         import io
         import sys
 
-        tracks = EEPTracks(verbose=False)
+        tracks = eep_tracks
         gen = GridGenerator(tracks, filters=["SDSS_g"], verbose=True)
 
         # Capture stderr

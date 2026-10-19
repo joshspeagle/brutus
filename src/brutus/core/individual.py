@@ -98,7 +98,7 @@ from ..utils.photometry import add_mag
 # Import neural network predictor
 from .neural_nets import FastNNPredictor
 
-__all__ = ["EEPTracks", "StarEvolTrack"]
+__all__ = ["EEPTracks", "StarEvolTrack", "StarGrid"]
 
 
 # EEPTracks pickle-cache format version. Bump whenever the set of cached
@@ -195,10 +195,12 @@ class EEPTracks:
         Input parameter names: ['mini', 'eep', 'feh', 'afe']
 
     predictions : list of str
-        Output parameter names as specified in initialization
+        Output column names of `get_predictions`: the requested
+        predictions, then ``"agewt"`` when ``ageweight=True``.
 
     ndim, npred : int
-        Number of input dimensions and predicted parameters
+        Number of input dimensions and of requested predictions. `npred`
+        does not count the appended ``"agewt"`` column.
 
     interpolator : scipy.interpolate.RegularGridInterpolator
         The main interpolation object for stellar parameter prediction

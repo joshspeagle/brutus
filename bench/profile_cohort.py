@@ -19,8 +19,8 @@ import time
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(__file__))
-import harness as H  # noqa: E402
 import disteq as D  # noqa: E402
+import harness as H  # noqa: E402
 
 
 def stage_timings(repeats=3):

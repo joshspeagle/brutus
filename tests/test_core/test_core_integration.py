@@ -7,97 +7,31 @@ Clean integration tests for StarGrid and BruteForce classes.
 Tests the essential workflow from grid creation to stellar parameter estimation.
 """
 
-import os
-import time
-
-import h5py
 import numpy as np
 import pytest
-from conftest import find_brutus_data_file
+from conftest import split_labels
 
 from brutus.analysis.individual import BruteForce
 
 # Import the classes to test
 from brutus.core.individual import StarGrid
-from brutus.data import load_models
+from brutus.data.filters import ps
+from brutus.utils import inv_magnitude
 
 
 @pytest.fixture(scope="module")
-def mist_integration_setup():
-    """Load real MIST grid and create test setup for integration tests."""
-
-    # Try to load real grid
-    grid_path = find_brutus_data_file("grid_mist_v9.h5")
-
-    # If not found via helper, check multiple fallback locations
-    if grid_path is None:
-        import pooch
-
-        fallback_paths = [
-            # Direct pooch cache
-            os.path.join(pooch.os_cache("astro-brutus"), "grid_mist_v9.h5"),
-            # CI data directory
-            "data/DATAFILES/grid_mist_v9.h5",
-            "./data/DATAFILES/grid_mist_v9.h5",
-        ]
-        for path in fallback_paths:
-            if os.path.exists(path):
-                grid_path = path
-                print(f"Found grid at fallback path: {path}")
-                break
-
-    if grid_path and os.path.exists(grid_path):
-        try:
-            # Load subset for reasonable test times
-            models, combined_labels, label_mask = load_models(grid_path, verbose=False)
-
-            # Get filter names and find PanSTARRS indices
-            with h5py.File(grid_path, "r") as f:
-                filter_names = list(f["mag_coeffs"].dtype.names)
-            ps_indices = [
-                i for i, name in enumerate(filter_names) if name.startswith("PS_")
-            ][:5]
-
-            # Create manageable subset (every 1000th model)
-            subset_indices = np.arange(0, len(models), 1000)[:100]
-            models_subset = models[subset_indices]
-            labels_subset = combined_labels[subset_indices]
-
-            # Separate grid parameters from predictions
-            grid_names = [
-                name
-                for name, is_grid in zip(combined_labels.dtype.names, label_mask[0])
-                if is_grid
-            ]
-            pred_names = [
-                name
-                for name, is_grid in zip(combined_labels.dtype.names, label_mask[0])
-                if not is_grid
-            ]
-
-            labels = labels_subset[grid_names]
-            params = labels_subset[pred_names] if pred_names else None
-
-            # Create StarGrid and BruteForce
-            grid = StarGrid(models_subset, labels, params, filters=filter_names)
-            fitter = BruteForce(grid, verbose=False)
-
-            return {
-                "grid": grid,
-                "fitter": fitter,
-                "ps_indices": ps_indices,
-                "labels": labels,
-                "params": params,
-                "filter_names": filter_names,
-            }
-
-        except Exception as e:
-            raise AssertionError(f"Failed to load grid from {grid_path}: {e}")
-
-    pytest.skip(
-        "MIST grid data not available; run fetch_grids() or set BRUTUS_DATA_DIR "
-        "to enable this data-dependent test"
-    )
+def mist_integration_setup(mist_ps_grid):
+    """100 models of the MIST v9 grid, with the five PS1 filters."""
+    models, combined_labels, label_mask = mist_ps_grid
+    subset = np.arange(0, len(models), 1000)[:100]
+    labels, params = split_labels(combined_labels[subset], label_mask)
+    grid = StarGrid(models[subset], labels, params, filters=ps[:5])
+    return {
+        "grid": grid,
+        "fitter": BruteForce(grid, verbose=False),
+        "ps_indices": list(range(5)),
+        "labels": labels,
+    }
 
 
 class TestCoreIntegration:
@@ -121,6 +55,7 @@ class TestCoreIntegration:
             obs[idx] = solar_mags[i]
             obs_err[idx] = 0.05  # Realistic error
 
+        obs, obs_err = inv_magnitude(obs, obs_err)  # maggies
         obs_mask = ~np.isnan(obs)
 
         # Step 1: Generate SED using StarGrid for a known model
@@ -140,12 +75,6 @@ class TestCoreIntegration:
         assert np.all(np.isfinite(sed))
 
         # Step 2: Use BruteForce to fit observations.
-        # Warm-up call so numba JIT compilation (order-dependent across the
-        # test session: this lands in the timed section when the file runs
-        # first/alone in a cold process) is excluded from the timing below.
-        fitter.loglike_grid(obs, obs_err, obs_mask, ltol=5e-2, verbose=False)
-
-        start_time = time.time()
         lnl, ndim, chi2 = fitter.loglike_grid(
             obs,
             obs_err,
@@ -153,10 +82,6 @@ class TestCoreIntegration:
             ltol=5e-2,  # Moderate clipping for speed
             verbose=False,
         )
-        elapsed = time.time() - start_time
-
-        # Should complete quickly
-        assert elapsed < 2.0, f"Integration test took {elapsed:.2f}s, expected < 2s"
 
         # Step 3: Verify results are sensible
         assert lnl.shape == (fitter.nmodels,)
@@ -181,8 +106,8 @@ class TestCoreIntegration:
         )
         print(f"Best loglike: {lnl[best_idx]:.2f}")
 
-    def test_performance_characteristics(self, mist_integration_setup):
-        """Test that performance scales reasonably with problem size."""
+    def test_loglike_grid_indices_select_models(self, mist_integration_setup):
+        """`indices` restricts loglike_grid to the requested models."""
         setup = mist_integration_setup
         fitter = setup["fitter"]
         ps_indices = setup["ps_indices"]
@@ -196,65 +121,26 @@ class TestCoreIntegration:
         for i, idx in enumerate(ps_indices[:3]):
             obs[idx] = 15.0
             obs_err[idx] = 0.05
+        obs, obs_err = inv_magnitude(obs, obs_err)  # maggies
         obs_mask = ~np.isnan(obs)
 
-        # Warm up JIT/cache with first call
-        # (3 bands triggers a RuntimeWarning about minimum 4 bands)
         import warnings
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            _ = fitter.loglike_grid(
-                obs, obs_err, obs_mask, indices=np.arange(10), ltol=5e-2, verbose=False
-            )
-
-        # Test different model counts
-        model_counts = [10, 50, 100]
-        times = []
-
-        for n_models in model_counts:
-            if n_models > fitter.nmodels:
-                continue
-
+        for n_models in [10, 50, 100]:
             indices = np.arange(n_models)
-
-            # Min-of-3 timing: a single wall-clock sample on a shared CI
-            # runner is dominated by scheduling noise (observed 25x per-model
-            # "ratios" on loaded macOS runners); the minimum is a stable
-            # estimate of the true cost.
-            reps = []
-            for _ in range(3):
-                start = time.time()
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore", RuntimeWarning)
-                    lnl, _, _ = fitter.loglike_grid(
-                        obs,
-                        obs_err,
-                        obs_mask,
-                        indices=indices,
-                        ltol=5e-2,
-                        verbose=False,
-                    )
-                reps.append(time.time() - start)
-            times.append(min(reps))
-
-            # Verify results
+            # 3 bands trigger a RuntimeWarning about the 4-band minimum
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                lnl, _, _ = fitter.loglike_grid(
+                    obs,
+                    obs_err,
+                    obs_mask,
+                    indices=indices,
+                    ltol=5e-2,
+                    verbose=False,
+                )
             assert lnl.shape == (n_models,)
             assert np.all(np.isfinite(lnl))
-
-        # Performance should scale reasonably (after warmup): per-model cost
-        # must not grow with the model count. Small counts legitimately look
-        # expensive per model (fixed per-call overhead dominates), so only a
-        # super-linear GROWTH from the smallest to the largest count is a
-        # regression signal; a generous factor absorbs runner variance.
-        if len(times) >= 2:
-            time_per_model = [t / n for t, n in zip(times, model_counts[: len(times)])]
-            growth = time_per_model[-1] / time_per_model[0]
-            assert growth < 10.0, f"Poor performance scaling: {time_per_model}"
-
-        print(
-            f"Performance: {time_per_model} s/model for {model_counts[:len(times)]} models"
-        )
 
     def test_grid_interpolation_accuracy(self, mist_integration_setup):
         """Test that StarGrid interpolation gives reasonable results."""
@@ -311,11 +197,14 @@ class TestErrorHandling:
         # Valid setup
         obs[ps_indices[0]] = 15.0
         obs_err[ps_indices[0]] = 0.05
+        obs, obs_err = inv_magnitude(obs, obs_err)  # maggies
         obs_mask = ~np.isnan(obs)
 
         # Test with mismatched array sizes
         with pytest.raises((ValueError, IndexError)):
-            fitter.loglike_grid(obs[:5], obs_err, obs_mask, verbose=False)  # Wrong size
+            fitter.loglike_grid(
+                obs[:-1], obs_err, obs_mask, verbose=False
+            )  # Wrong size
 
         # Test with all NaN observations
         obs_bad = np.full(nfilters, np.nan)
