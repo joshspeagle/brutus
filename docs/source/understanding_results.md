@@ -103,7 +103,18 @@ pred = get_seds(models[idx], av=av, rv=rv, return_flux=True) / dist[:, None] ** 
 ratio = pred.std(axis=0) / (flux_err[i] * offsets)  # the errors as fitted
 ```
 
-Here `models` must come from the grid loaded with the bands of the fit, in the same order, and `offsets` are the `phot_offsets` of the fit (1 if none). A ratio much above 1 in a band means the parameters are poorly constrained there. {func}`~brutus.plotting.posterior_predictive` plots the same comparison.
+Here `models` must come from the grid loaded with the bands of the fit, in the same order, and `offsets` are the `phot_offsets` of the fit (1 if none). A ratio much above 1 in a band means the parameters are poorly constrained there.
+
+```{raw} html
+:file: figures/star-posterior.svg
+:class: figure-svg
+```
+
+:::{div} figure-caption
+One star of the Orion example in {doc}`scientific_background`. Left: the draws of distance and extinction; about three quarters lie inside the range its parallax allows, with a tail to larger distance and less extinction. Right: model minus data in each band. The draws spread over about 0.1 mag, two to three times the data errors in some bands, so the photometry constrains this star's parameters only loosely.
+:::
+
+{func}`~brutus.plotting.posterior_predictive` plots the same comparison.
 
 ### Monte Carlo weights
 

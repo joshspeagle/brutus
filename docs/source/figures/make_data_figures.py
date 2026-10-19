@@ -2,21 +2,36 @@
 
 Run by hand, not by the docs build: ``python make_data_figures.py GRID OFFSETS``,
 where GRID is ``grid_mist_v9.h5`` from ``brutus.data.fetch_grids`` and OFFSETS is
-``offsets_mist_v9.txt`` from ``brutus.data.fetch_offsets``. The figures use
-the helpers of ``make_figures.py``, so they follow the light and dark themes.
+``offsets_mist_v9.txt`` from ``brutus.data.fetch_offsets``. It also fits the
+Orion stars of the tutorials, which takes a few minutes. Each figure records the
+git blob hashes of the figure scripts, the brutus version, the data files with
+their SHA-256 and the seed in a comment. The figures use the helpers
+of ``make_figures.py``, so they follow the light and dark themes.
 """
 
+import hashlib
+import subprocess
 import sys
+import tempfile
+from functools import lru_cache
 from pathlib import Path
 
 import h5py
 import numpy as np
 from make_figures import axes, c, path, svg, text
+from matplotlib.ticker import MaxNLocator
+from scipy.stats import chi2
 
-from brutus.data.filters import gaia
-from brutus.utils import add_mag
+import brutus
+from brutus.analysis import BruteForce
+from brutus.core import StarGrid, get_seds
+from brutus.data import load_models, load_offsets
+from brutus.data.filters import gaia, ps, tmass
+from brutus.utils import add_mag, inv_magnitude, magnitude
 
 OUT = Path(__file__).parent
+ORION = OUT.parents[2] / "tutorials" / "Orion_l209.1_b-19.9.h5"
+SEED = 42
 # MIST primary EEPs (Dotter 2016) that the default grid spans.
 PRIMARY = {
     202: "ZAMS",
@@ -173,7 +188,7 @@ def cluster_cmd(labels, params, mags, feh0):
         style = f"fill:{c('amber')}" if filled else f"fill:none;stroke:{c('red')}"
         return f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3.2" style="{style}" stroke-width="1.5"/>'
 
-    rng = np.random.default_rng(3)
+    rng = np.random.default_rng(SEED)
     n_members, n_field, noise = 120, 60, 0.03
     # Masses uniform in log mass; 30% of members have a companion with mass
     # ratio 0.6 to 1. Companions below the grid's lowest mass are left out.
@@ -270,9 +285,219 @@ def offsets_chart(offsets_file):
     )
 
 
+def fit_orion(grid_file, offsets_file):
+    """Fit the Orion stars of tutorial 5 with default settings, offset errors and seed."""
+    filters = ps[:5] + tmass
+    with h5py.File(ORION, "r") as f:
+        stars = f["photometry"]["pixel 0-0"][:]
+    mask = np.isfinite(stars["err"])
+    # Missing bands hold mag = -999 and err = inf; give them harmless values.
+    mag = np.where(mask, stars["mag"], 0.0)
+    flux, err = inv_magnitude(mag, np.where(mask, stars["err"], 1.0))
+    # Offset uncertainties, paper Table 5: 0.02 mag optical, 0.03 mag near-infrared.
+    sys_mag = np.array([0.02] * (len(filters) - len(tmass)) + [0.03] * len(tmass))
+    err = np.hypot(err, flux * sys_mag * np.log(10) / 2.5)
+    parallax = stars["parallax"].astype(float)
+    parallax_err = stars["parallax_error"].astype(float)
+    bad = (parallax_err <= 0) | (parallax_err > 1e6) | (parallax == 0)
+    parallax[bad] = parallax_err[bad] = np.nan
+
+    models, labels, _ = load_models(grid_file, filters=filters, verbose=False)
+    offsets = load_offsets(offsets_file, filters=filters, verbose=False)
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "orion.h5"
+        BruteForce(StarGrid(models, labels, verbose=False), verbose=False).fit(
+            flux,
+            err,
+            mask,
+            stars["obj_id"],
+            str(out),
+            phot_offsets=offsets,
+            parallax=parallax,
+            parallax_err=parallax_err,
+            data_coords=np.c_[stars["l"], stars["b"]],
+            rstate=np.random.RandomState(SEED),
+            verbose=False,
+        )
+        with h5py.File(out, "r") as f:
+            fit = {k: f[k][:] for k in f}
+    fit["pvalue"] = chi2.sf(fit["obj_chi2min"], np.maximum(fit["obj_Nbands"] - 3, 1))
+    # The data as the fit saw them: offsets applied to fluxes and errors.
+    fit.update(
+        flux=flux * offsets,
+        err=err * offsets,
+        mask=mask,
+        models=models,
+        parallax=parallax,
+        parallax_err=parallax_err,
+        filters=filters,
+    )
+    return fit
+
+
+def orion_sightline(fit):
+    W, H = 760, 380
+    x0, y0, x1, y1 = 80, 30, 640, 320
+    dmax, amax = 2.5, 6.0
+    dist, av = fit["samps_dist"], fit["samps_red"]
+    med_d, med_a = np.median(dist, axis=1), np.median(av, axis=1)
+    good = (fit["pvalue"] > 1e-3) & (med_d < dmax)
+
+    def X(d):
+        return x0 + d / dmax * (x1 - x0)
+
+    def Y(a):
+        return y1 - a / amax * (y1 - y0)
+
+    rng = np.random.default_rng(SEED)
+    out = axes(x0, y0, x1, y1, "distance (kpc)", "extinction A(V) (mag)", 40, 36)
+    for d in np.arange(0.5, dmax + 0.1, 0.5):
+        out += text(X(d), y1 + 16, f"{d:g}", size=11)
+    for a in range(0, int(amax) + 1, 2):
+        out += text(x0 - 8, Y(a) + 4, f"{a}", anchor="end", size=11)
+    for i in np.flatnonzero(good):
+        for j in rng.choice(dist.shape[1], 25, replace=False):
+            if dist[i, j] < dmax and av[i, j] < amax:
+                out += (
+                    f'<circle cx="{X(dist[i, j]):.1f}" cy="{Y(av[i, j]):.1f}" r="1.3" '
+                    f'style="fill:{c("amber")}" opacity="0.35"/>'
+                )
+    for i in np.flatnonzero(good):
+        out += (
+            f'<circle cx="{X(med_d[i]):.1f}" cy="{Y(med_a[i]):.1f}" '
+            f'r="3" style="fill:{c("red")}"/>'
+        )
+    lx = 655
+    out += f'<circle cx="{lx + 6}" cy="60" r="3" style="fill:{c("red")}"/>'
+    out += text(lx + 16, 64, "median", anchor="start", size=12)
+    out += f'<circle cx="{lx + 6}" cy="84" r="2" style="fill:{c("amber")}"/>'
+    out += text(lx + 16, 88, "draws", anchor="start", size=12)
+    out += text(lx, 130, f"{good.sum()} stars,", anchor="start", size=12)
+    out += text(lx, 148, "p > 0.001,", anchor="start", size=12)
+    out += text(lx, 166, f"d < {dmax:g} kpc", anchor="start", size=12)
+    return svg(
+        "orion-sightline",
+        W,
+        H,
+        out,
+        "Distances and extinctions of stars towards Orion",
+        f"Posterior draws and medians of distance and extinction for {good.sum()} well-fitted stars "
+        f"within {dmax:g} kpc towards l = 209.1, b = -19.9. Extinction is low out to about 0.4 kpc "
+        "and rises, with scatter, to 2 to 5 mag beyond 0.5 kpc, behind the Orion molecular cloud.",
+    )
+
+
+def star_posterior(fit):
+    W, H = 820, 360
+    snr = fit["parallax"] / fit["parallax_err"]
+    dist, av = fit["samps_dist"], fit["samps_red"]
+    # A well-fitted star behind the cloud with a moderate parallax.
+    pick = (
+        (fit["pvalue"] > 0.05) & (snr > 5) & (snr < 15) & (np.median(av, axis=1) > 1.5)
+    )
+    if not pick.any():
+        raise ValueError(
+            "no star meets the selection of star_posterior; relax its cuts"
+        )
+    i = np.flatnonzero(pick)[0]
+    d, a = dist[i], av[i]
+
+    # Left: the joint posterior of distance and A(V), with the parallax.
+    x0, y0, x1, y1 = 70, 30, 360, 300
+    dlo, dhi = np.quantile(d, [0.005, 0.995]) * [0.8, 1.2]
+    alo, ahi = np.quantile(a, [0.005, 0.995]) + [-0.3, 0.3]
+
+    def X(v):
+        return x0 + (v - dlo) / (dhi - dlo) * (x1 - x0)
+
+    def Y(v):
+        return y1 - (v - alo) / (ahi - alo) * (y1 - y0)
+
+    out = axes(x0, y0, x1, y1, "distance (kpc)", "A(V) (mag)", 40, 40)
+    near, far = 1 / (fit["parallax"][i] + np.array([1, -1]) * fit["parallax_err"][i])
+    left, right = X(max(near, dlo)), X(min(far, dhi))
+    out += f'<rect x="{left:.1f}" y="{y0}" width="{right - left:.1f}" height="{y1 - y0}" style="fill:{c("copper")}" opacity="0.15"/>'
+    for v in MaxNLocator(4).tick_values(dlo, dhi):
+        if dlo < v < dhi:
+            out += text(X(v), y1 + 16, f"{v:g}", size=11)
+    for v in MaxNLocator(4).tick_values(alo, ahi):
+        if alo < v < ahi:
+            out += text(x0 - 8, Y(v) + 4, f"{v:g}", anchor="end", size=11)
+    out += "".join(
+        f'<circle cx="{X(dv):.1f}" cy="{Y(av_):.1f}" r="2" style="fill:{c("amber")}" opacity="0.6"/>'
+        for dv, av_ in zip(d, a)
+    )
+    out += text((x0 + x1) / 2, 20, "posterior draws; band: parallax ± 1σ", size=12)
+
+    # Right: residuals of the drawn models in each band, against the data errors.
+    x0, y0, x1, y1 = 480, 30, 800, 300
+    obs, obs_err = magnitude(fit["flux"][i], fit["err"][i])
+    used = fit["mask"][i] & (obs_err < 0.25)  # the bands the fit kept (merr_max)
+    mags = get_seds(fit["models"][fit["model_idx"][i]], av=a, rv=fit["samps_dred"][i])
+    mags += 5 * np.log10(d)[:, None]
+    lo, hi = np.quantile(mags - obs, [0.025, 0.975], axis=0)
+    lim = 0.3
+    step = (x1 - x0) / len(used)
+
+    def Yr(r):
+        return (y0 + y1) / 2 - r / lim * (y1 - y0) / 2
+
+    out += axes(x0, y0, x0, y1, "", "model − data (mag)", ylabel_gap=40)
+    out += path([(x0, Yr(0)), (x1, Yr(0))], width=1)
+    for r in (-0.2, -0.1, 0.1, 0.2):
+        out += text(x0 - 8, Yr(r) + 4, f"{r:+.1f}", anchor="end", size=11)
+    for b, name in enumerate(fit["filters"]):
+        if not used[b]:
+            continue
+        x = x0 + (b + 0.5) * step
+        top, bottom = Yr(obs_err[b]), Yr(-obs_err[b])
+        out += f'<rect x="{x - 12:.1f}" y="{top:.1f}" width="24" height="{bottom - top:.1f}" style="fill:{c("copper")}" opacity="0.2"/>'
+        out += path([(x, Yr(lo[b])), (x, Yr(hi[b]))], stroke=c("amber"), width=6)
+        out += text(x, y1 + 16, name.replace("2MASS_", "").replace("PS_", ""), size=11)
+    out += text((x0 + x1) / 2, 20, "bars: 95% of model draws; band: data ± 1σ", size=12)
+    return svg(
+        "star-posterior",
+        W,
+        H,
+        out,
+        "The posterior of one star",
+        f"One star towards Orion, fitted with a parallax of {fit['parallax'][i]:.2f} ± {fit['parallax_err'][i]:.2f} mas. "
+        "Left: posterior draws of distance and extinction, against the parallax range. "
+        "Right: in each band, the range of the drawn models' magnitudes minus the observed magnitude, against the data error.",
+    )
+
+
+@lru_cache
+def sha256(file):
+    """First 10 hex digits of a file's SHA-256, read in 1 MB blocks."""
+    digest = hashlib.sha256()
+    with open(file, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()[:10]
+
+
+def save(name, figure, sources, made_by):
+    files = ", ".join(f"{Path(f).name} {sha256(f)}" for f in sources)
+    note = f"<!-- {made_by}; data: {files}; seed {SEED} -->\n"
+    (OUT / f"{name}.svg").write_text(note + figure)
+
+
 if __name__ == "__main__":
-    labels, params, mags, feh0 = solar_slice(sys.argv[1])
-    (OUT / "hr-tracks.svg").write_text(hr_tracks(labels, params, feh0))
-    (OUT / "grid-coverage.svg").write_text(grid_coverage(labels, feh0))
-    (OUT / "cluster-cmd.svg").write_text(cluster_cmd(labels, params, mags, feh0))
-    (OUT / "offsets.svg").write_text(offsets_chart(sys.argv[2]))
+    grid_file, offsets_file = sys.argv[1:3]
+    # Git blob hashes of both figure scripts identify the code and survive rebases.
+    scripts = [__file__, OUT / "make_figures.py"]
+    blobs = subprocess.run(
+        ["git", "hash-object", *scripts], capture_output=True, text=True, check=True
+    ).stdout.split()
+    made_by = ", ".join(f"{Path(s).name} {b[:10]}" for s, b in zip(scripts, blobs))
+    made_by += f", brutus {brutus.__version__}"
+    labels, params, mags, feh0 = solar_slice(grid_file)
+    save("hr-tracks", hr_tracks(labels, params, feh0), [grid_file], made_by)
+    save("grid-coverage", grid_coverage(labels, feh0), [grid_file], made_by)
+    save("cluster-cmd", cluster_cmd(labels, params, mags, feh0), [grid_file], made_by)
+    save("offsets", offsets_chart(offsets_file), [offsets_file], made_by)
+    fit = fit_orion(grid_file, offsets_file)
+    sources = [grid_file, offsets_file, ORION]
+    save("orion-sightline", orion_sightline(fit), sources, made_by)
+    save("star-posterior", star_posterior(fit), sources, made_by)

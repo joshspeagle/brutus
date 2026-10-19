@@ -110,6 +110,21 @@ Without a parallax, the Galactic and dust priors set where along this degeneracy
 
 For each star, the output file holds the posterior draws of distance, $A_V$ and $R_V$, the grid model of each draw (from which mass, age, temperature and the other properties follow), and fit diagnostics: the best $\chi^2$, the number of bands, and the log-{term}`evidence`. {doc}`understanding_results` describes each field.
 
+## An example: a sightline towards Orion
+
+The tutorials include 207 stars in one small field towards Orion ($\ell = 209.1°$, $b = -19.9°$), with Pan-STARRS and 2MASS photometry and Gaia parallaxes. Fitted with the default grid and priors, the stars that fit well trace the dust along the sightline: their extinction is low out to about 0.4 kpc and, with scatter, rises to 2 to 5 mag beyond 0.5 kpc, behind the Orion molecular cloud.
+
+```{raw} html
+:file: figures/orion-sightline.svg
+:class: figure-svg
+```
+
+:::{div} figure-caption
+Distance and extinction of the stars with p-value above $10^{-3}$ ({doc}`understanding_results`) and median distance below 2.5 kpc, without a dust-map prior. Each star contributes 25 posterior draws and its median.
+:::
+
+Fitting a dust profile to many such posteriors is how brutus maps dust in 3D; tutorial 7 shows it.
+
 ## Assumptions
 
 - **Single stars.** The default grid has no unresolved binaries. A binary looks too bright, so its distance comes out too small.
