@@ -11,8 +11,6 @@ from pathlib import Path
 
 import numpy as np
 
-OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).parent
-
 
 def c(var):
     """Fill or stroke colour from a brutus CSS variable."""
@@ -361,10 +359,12 @@ def degeneracy():
     )
 
 
-for name, fn in (
-    ("forward-model", forward_model),
-    ("pipeline", pipeline),
-    ("degeneracy", degeneracy),
-):
-    (OUT / f"{name}.svg").write_text(fn())
-    print(name)
+if __name__ == "__main__":
+    OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).parent
+    for name, fn in (
+        ("forward-model", forward_model),
+        ("pipeline", pipeline),
+        ("degeneracy", degeneracy),
+    ):
+        (OUT / f"{name}.svg").write_text(fn())
+        print(name)
