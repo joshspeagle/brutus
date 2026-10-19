@@ -64,8 +64,11 @@ speed/*
 *.npy
 */calib/*
 
-# Claude Code files
-.claude/
+# Claude Code files: track the shared rules, skills and settings only
+.claude/*
+!.claude/rules/
+!.claude/skills/
+!.claude/settings.json
 .claude_code/
 claude_*.md
 claude_*.txt
