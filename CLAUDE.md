@@ -7,7 +7,7 @@ brutus infers stellar properties, distances and extinctions from photometry and 
 - `src/brutus/`: the package. `core/` holds the stellar models (`EEPTracks`, `StarGrid`, `Isochrone`, `StellarPop`) and SED generation, `analysis/` the fitting (`BruteForce`, cluster and line-of-sight fitting, photometric offsets), `priors/` the IMF, Galactic and extinction priors, `dust/` the 3D dust maps, `data/` downloading (Pooch, Harvard Dataverse) and loading, `plotting/` the figures, and `utils/` math, photometry and sampling.
 - `tests/`: the test suite, one directory per subpackage.
 - `tutorials/`: Jupyter notebooks numbered 00 to 11. They need downloaded model data. The docs build copies them into `docs/source/tutorials/`.
-- `docs/source/`: the documentation site (Sphinx, reStructuredText, `sphinx-book-theme`). Read the Docs builds it at https://brutus.readthedocs.io, the address that `README.md` and `pyproject.toml` give; the docs workflow also deploys it to GitHub Pages from `master`.
+- `docs/source/`: the documentation site (Sphinx with the Furo theme, Markdown pages through MyST). `_static/brutus.css` holds the brutus style; the theme colours are in `conf.py`. Read the Docs builds it at https://brutus.readthedocs.io, the address that `README.md` and `pyproject.toml` give; the docs workflow also deploys it to GitHub Pages from `master`.
 - `bench/`: manual benchmark and verification tools for the `BruteForce` hot path, described in `bench/README.md`. Not packaged, not run in CI.
 - `.github/scripts/fetch_test_data.py`: downloads the data the CI tests use.
 - `CHANGELOG.md`: user-visible changes, in Keep a Changelog format.
@@ -18,7 +18,7 @@ brutus infers stellar properties, distances and extinctions from photometry and 
 - Test: `pytest`. Tests that need downloaded model data skip when it is absent; `python .github/scripts/fetch_test_data.py` downloads what CI uses.
 - Coverage: `NUMBA_DISABLE_JIT=1 pytest --cov=brutus`. Without that variable, coverage cannot see inside `@jit` functions. Run plain tests with JIT on, so the compiled parallel code is what runs.
 - Lint and format: `pre-commit run --all-files` (black, isort, flake8 and file hygiene).
-- Docs: `cd docs && make html`. The site builds into `docs/build/html/`.
+- Docs: `cd docs && make html SPHINXOPTS="-W --keep-going"`. Warnings are errors, as in CI. The site builds into `docs/build/html/`.
 - CI runs the tests on Ubuntu and macOS for Python 3.9 to 3.13, plus a numpy 1.x leg, and builds the docs, for every push to and pull request against `master`. CI tests with `NUMBA_DISABLE_JIT=1`, so it never runs the compiled code: before pushing a change to a jitted function, run its tests locally with JIT on.
 
 ## Plan

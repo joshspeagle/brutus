@@ -1,0 +1,194 @@
+# Core Module (`brutus.core`)
+
+The core module provides the fundamental stellar modeling infrastructure for brutus. It contains classes and functions for generating synthetic photometry from stellar evolution models, both for individual stars and stellar populations.
+
+**Key Components:**
+
+- **Individual Stars**: `EEPTracks` predicts stellar parameters along evolutionary tracks, `StarGrid` provides fast grid-based photometry
+- **Populations**: `Isochrone` models coeval stellar populations, `StellarPop` generates population photometry
+- **Neural Networks**: `FastNN` and `FastNNPredictor` compute bolometric corrections efficiently
+- **Grid Generation**: `GridGenerator` creates pre-computed model grids for large-scale fitting
+
+**Design Philosophy:**
+
+The module follows a clean separation of concerns:
+
+- **Parameter Prediction** (`EEPTracks`, `Isochrone`): Maps intrinsic stellar parameters (mass, age, metallicity) to observable parameters (temperature, luminosity, radius, surface gravity)
+- **Photometry Generation** (`StarEvolTrack`, `StellarPop`): Converts stellar parameters to synthetic photometry using neural network bolometric corrections and extinction modeling
+
+This separation allows flexible combinations: you can use different photometry generators with the same parameter predictors, or vice versa.
+
+**Typical Usage Patterns:**
+
+For **individual field stars** with unknown evolutionary state:
+
+```python
+from brutus.core import EEPTracks, StarEvolTrack
+
+# Parameter prediction
+tracks = EEPTracks()
+
+# Photometry generation (on-the-fly)
+star = StarEvolTrack(tracks=tracks, filters=['PS_g', 'PS_r', 'PS_i', 'PS_z'])
+sed, params1, params2 = star.get_seds(
+    mini=1.0, eep=400, feh=0.0,
+    av=0.1, dist=1000.0
+)
+```
+
+For **large samples** requiring speed:
+
+```python
+from brutus.core import StarGrid
+from brutus.data import load_models
+
+# Load pre-computed grid
+models, labels, label_mask = load_models('grid_mist_v9.h5')
+grid = StarGrid(models, labels)
+
+# Fast photometry lookup (no re-computation)
+# Use with BruteForce fitter for thousands to millions of stars
+```
+
+For **stellar clusters** with shared age and metallicity:
+
+```python
+from brutus.core import Isochrone, StellarPop
+
+# Population parameter prediction
+iso = Isochrone()
+
+# Population photometry
+pop = StellarPop(isochrone=iso)
+seds, params1, params2 = pop.get_seds(
+    feh=0.0, loga=9.0, av=0.5, dist=2000.0
+)
+```
+
+**See Also:**
+
+- {doc}`/stellar_models` - Conceptual overview of MIST models, EEP, and isochrones
+- {doc}`/grid_generation` - Guide to creating and using pre-computed grids
+- {doc}`/population_modeling` - Population-based cluster fitting
+
+```{eval-rst}
+.. currentmodule:: brutus.core
+```
+
+## Individual Star Models
+
+```{eval-rst}
+.. autoclass:: EEPTracks
+   :members:
+   :undoc-members:
+   :show-inheritance:
+```
+
+```{eval-rst}
+.. autoclass:: StarGrid
+   :members:
+   :undoc-members:
+   :show-inheritance:
+```
+
+```{eval-rst}
+.. autoclass:: StarEvolTrack
+   :members:
+   :undoc-members:
+   :show-inheritance:
+```
+
+## Population Models
+
+```{eval-rst}
+.. autoclass:: Isochrone
+   :members:
+   :undoc-members:
+   :show-inheritance:
+```
+
+```{eval-rst}
+.. autoclass:: StellarPop
+   :members:
+   :undoc-members:
+   :show-inheritance:
+```
+
+## Neural Networks
+
+```{eval-rst}
+.. autoclass:: FastNN
+   :members:
+   :undoc-members:
+   :show-inheritance:
+```
+
+```{eval-rst}
+.. autoclass:: FastNNPredictor
+   :members:
+   :undoc-members:
+   :show-inheritance:
+```
+
+## Grid Generation
+
+```{eval-rst}
+.. autoclass:: GridGenerator
+   :members:
+   :undoc-members:
+   :show-inheritance:
+```
+
+## SED Utilities
+
+```{eval-rst}
+.. autofunction:: get_seds
+```
+
+```{eval-rst}
+.. autofunction:: _get_seds
+```
+
+## Submodules
+
+For advanced users who need access to internal implementations:
+
+```{eval-rst}
+.. automodule:: brutus.core.individual
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :no-index:
+```
+
+```{eval-rst}
+.. automodule:: brutus.core.populations
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :no-index:
+```
+
+```{eval-rst}
+.. automodule:: brutus.core.neural_nets
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :no-index:
+```
+
+```{eval-rst}
+.. automodule:: brutus.core.sed_utils
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :no-index:
+```
+
+```{eval-rst}
+.. automodule:: brutus.core.grid_generation
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :no-index:
+```

@@ -1,8 +1,4 @@
-# Configuration file for the Sphinx documentation builder.
-#
-# This file only contains a selection of the most common options. For a full
-# list see the documentation:
-# https://www.sphinx-doc.org/en/master/usage/configuration.html
+"""Sphinx configuration for the brutus documentation."""
 
 import os
 import shutil
@@ -51,9 +47,6 @@ version = release
 
 # -- General configuration ---------------------------------------------------
 
-# Add any Sphinx extension module names here, as strings. They can be
-# extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
-# extensions.
 extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.autosummary",
@@ -69,28 +62,81 @@ extensions = [
 
 # myst-nb configuration
 nb_execution_mode = "off"  # Use pre-rendered outputs, don't execute during build
-nb_custom_formats = {}
 suppress_warnings = ["mystnb.unknown_mime_type"]
-
-# Add any paths that contain templates here, relative to this directory.
-templates_path = ["_templates"]
-
-# List of patterns, relative to source directory, that match files and
-# directories to ignore when looking for source files.
-# This pattern also affects html_static_path and html_extra_path.
-exclude_patterns = []
+myst_enable_extensions = ["colon_fence", "dollarmath", "substitution"]
+myst_substitutions = {"version": version}
+myst_heading_anchors = 3
 
 # -- Options for HTML output -------------------------------------------------
 
-# The theme to use for HTML and HTML Help pages.  See the documentation for
-# a list of builtin themes.
-html_theme = "sphinx_book_theme"
-
-# Add any paths that contain custom static files (such as style sheets) here,
-# relative to this directory. They are copied after the builtin static files,
-# so a file named "default.css" will overwrite the builtin "default.css".
+html_theme = "furo"
+html_title = "brutus"
+html_favicon = "_static/favicon.svg"
 html_static_path = ["_static"]
-html_css_files = ["custom.css"]
+html_css_files = ["brutus.css"]
+html_last_updated_fmt = "%b %d, %Y"
+
+# The palette comes from the logo: gold, sand, amber, copper and deep red.
+html_theme_options = {
+    "light_logo": "brutus-logo-light.svg",
+    "dark_logo": "brutus-logo-dark.svg",
+    "sidebar_hide_name": True,
+    # No view or edit buttons: the tutorial pages are notebooks copied in at
+    # build time, so their source links would point to missing files.
+    "top_of_page_buttons": [],
+    "footer_icons": [
+        {
+            "name": "GitHub",
+            "url": "https://github.com/joshspeagle/brutus",
+            "html": '<svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>',
+            "class": "",
+        },
+        {
+            "name": "PyPI",
+            "url": "https://pypi.org/project/astro-brutus/",
+            "html": "PyPI",
+            "class": "",
+        },
+    ],
+    "light_css_variables": {
+        "color-brand-primary": "#7C0008",
+        "color-brand-content": "#A3401A",
+        "color-brand-visited": "#8A3A1E",
+        "color-background-primary": "#FFFDF9",
+        "color-background-secondary": "#FBF4EA",
+        "color-background-hover": "#F5E6D3",
+        "color-highlighted-background": "#FBE7C4",
+        "color-card-border": "#ECD9C2",
+        "color-card-background": "#FFFDF9",
+        "sd-color-primary": "#7C0008",
+        "sd-color-primary-highlight": "#A3401A",
+        "sd-color-primary-text": "#FFFFFF",
+        "brutus-gold": "#F6C35F",
+        "brutus-amber": "#D58A4C",
+        "brutus-copper": "#B5562B",
+        "brutus-red": "#7C0008",
+        "brutus-dot": "rgba(124, 0, 8, 0.16)",
+    },
+    "dark_css_variables": {
+        "color-brand-primary": "#FCD07C",
+        "color-brand-content": "#ECB068",
+        "color-brand-visited": "#D89054",
+        "color-background-primary": "#15110F",
+        "color-background-secondary": "#1D1714",
+        "color-background-hover": "#2A201B",
+        "color-highlighted-background": "#4A2E1A",
+        "color-card-border": "#3A2B23",
+        "color-card-background": "#15110F",
+        "sd-color-primary": "#FCD07C",
+        "sd-color-primary-highlight": "#ECB068",
+        "sd-color-primary-text": "#15110F",
+        "brutus-gold": "#FCD07C",
+        "brutus-amber": "#D89054",
+        "brutus-copper": "#E08A55",
+        "brutus-red": "#D9544D",
+        "brutus-dot": "rgba(252, 208, 124, 0.13)",
+    },
+}
 
 # -- Extension configuration -------------------------------------------------
 
@@ -105,19 +151,8 @@ autodoc_default_options = {
 
 # Napoleon settings for NumPy-style docstrings
 napoleon_google_docstring = False
-napoleon_numpy_docstring = True
-napoleon_include_init_with_doc = False
-napoleon_include_private_with_doc = False
-napoleon_include_special_with_doc = True
-napoleon_use_admonition_for_examples = False
-napoleon_use_admonition_for_notes = False
-napoleon_use_admonition_for_references = False
-napoleon_use_ivar = False
-napoleon_use_param = True
-napoleon_use_rtype = True
-napoleon_preprocess_types = False
-napoleon_type_aliases = None
-napoleon_attr_annotations = True
+# Module docstrings list their contents under these headings.
+napoleon_custom_sections = ["Classes", "Functions"]
 
 # autosummary settings
 autosummary_generate = True
@@ -136,70 +171,3 @@ intersphinx_mapping = {
 copybutton_prompt_text = r">>> |\.\.\. |\$ |In \[\d*\]: | {2,5}\.\.\.: | {5,8}: "
 copybutton_prompt_is_regexp = True
 copybutton_remove_prompts = True
-
-# -- HTML theme options ------------------------------------------------------
-
-html_theme_options = {
-    "repository_url": "https://github.com/joshspeagle/brutus",
-    "use_repository_button": True,
-    "use_download_button": False,
-    "use_fullscreen_button": False,
-    "repository_branch": "master",
-    "path_to_docs": "docs/source",
-    "show_navbar_depth": 1,
-    "show_toc_level": 2,
-    "navigation_with_keys": True,
-    "logo": {
-        "image_light": "_static/brutus-logo-light.svg",
-        "image_dark": "_static/brutus-logo-dark.svg",
-        "text": "brutus",
-    },
-    "icon_links": [
-        {
-            "name": "PyPI",
-            "url": "https://pypi.org/project/astro-brutus/",
-            "icon": "fa-brands fa-python",
-            "type": "fontawesome",
-        },
-    ],
-}
-
-# HTML context
-html_context = {
-    "github_user": "joshspeagle",
-    "github_repo": "brutus",
-    "github_version": "master",
-    "doc_path": "docs/source",
-}
-
-html_title = "brutus Documentation"
-html_short_title = "brutus"
-html_favicon = "_static/favicon.svg"
-
-# Additional HTML options
-html_use_smartypants = True
-html_last_updated_fmt = "%b %d, %Y"
-html_split_index = False
-# sphinx_book_theme handles sidebars automatically
-html_additional_pages = {}
-html_domain_indices = True
-html_use_index = True
-html_show_sourcelink = True
-html_show_sphinx = True
-html_show_copyright = True
-
-# LaTeX output
-latex_elements = {
-    # The paper size ('letterpaper' or 'a4paper').
-    #
-    # 'papersize': 'letterpaper',
-    # The font size ('10pt', '11pt' or '12pt').
-    #
-    # 'pointsize': '10pt',
-    # Additional stuff for the LaTeX preamble.
-    #
-    # 'preamble': '',
-    # Latex figure (float) alignment
-    #
-    # 'figure_align': 'htbp',
-}

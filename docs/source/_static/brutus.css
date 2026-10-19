@@ -1,0 +1,104 @@
+/* brutus style: the motifs. Every colour, light and dark, is set in conf.py. */
+
+/* Page titles: a short temperature-gradient bar, as on the logo's isochrone. */
+article h1::after {
+  content: "";
+  display: block;
+  width: 4.5rem;
+  height: 0.28rem;
+  margin-top: 0.45rem;
+  border-radius: 0.14rem;
+  background: linear-gradient(90deg, var(--brutus-gold), var(--brutus-amber), var(--brutus-red));
+}
+
+article h2 {
+  color: var(--color-brand-primary);
+}
+
+.sidebar-logo {
+  max-width: 85%;
+}
+
+/* Landing page ------------------------------------------------------------- */
+
+/* The landing page keeps its h1 for the page title but shows the logo instead. */
+section:has(> .hero) > h1 {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+/* Hero: a faint model grid, densest where a posterior would peak. */
+.hero {
+  position: relative;
+  isolation: isolate;
+  text-align: center;
+  padding: 2.5rem 1rem 2rem;
+  margin-bottom: 1.5rem;
+}
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-image: radial-gradient(circle, var(--brutus-dot) 1.6px, transparent 2.1px);
+  background-size: 20px 20px;
+  -webkit-mask-image: radial-gradient(ellipse 60% 70% at 55% 45%, #000 0%, transparent 75%);
+  mask-image: radial-gradient(ellipse 60% 70% at 55% 45%, #000 0%, transparent 75%);
+}
+.hero img {
+  width: min(520px, 92%);
+  margin: 0 auto;
+}
+.hero-tagline {
+  font-size: 1.3rem;
+  line-height: 1.45;
+  max-width: 36rem;
+  margin: 1.4rem auto 1.6rem;
+  color: var(--color-foreground-secondary);
+}
+.hero-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+}
+.hero-buttons p {
+  margin: 0;
+}
+.hero .sd-btn {
+  border-radius: 999px;
+  padding: 0.45rem 1.2rem;
+  font-weight: 600;
+}
+
+.sd-card-title {
+  color: var(--color-brand-primary);
+}
+
+/* Numbered steps on the landing page. */
+.steps ol {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 1rem;
+  margin: 1rem 0 1.5rem;
+}
+.steps li {
+  margin: 0;
+  padding: 0.9rem 1rem 1rem;
+  border-top: 0.25rem solid var(--brutus-amber);
+  background: var(--color-background-secondary);
+  border-radius: 0 0 0.5rem 0.5rem;
+  font-size: 0.95rem;
+}
+.steps li::before {
+  content: counter(list-item);
+  display: block;
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--brutus-copper);
+}
