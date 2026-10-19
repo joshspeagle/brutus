@@ -18,13 +18,15 @@ Development Setup
 
    .. code-block:: bash
 
-      pip install -e ".[dev]"
+      pip install -e ".[dev]" pre-commit
+      pre-commit install
 
-4. Create a new branch for your feature:
+4. Open an issue that states one goal, then create a branch for it named
+   ``<issue number>-<short-slug>``:
 
    .. code-block:: bash
 
-      git checkout -b feature-name
+      git checkout -b 42-fix-parallax-units
 
 Running Tests
 -------------
@@ -47,21 +49,12 @@ We use pytest for testing. Run tests with:
 Code Style
 ----------
 
-We use several tools to maintain code quality:
-
-- **black**: Code formatting
-- **isort**: Import sorting
-- **flake8**: Linting
-- **mypy**: Type checking
-
-Run these tools before submitting:
+The pre-commit hooks run **black** (formatting), **isort** (import order)
+and **flake8** (linting) on each commit. To run them on every file:
 
 .. code-block:: bash
 
-   black src/ tests/
-   isort src/ tests/
-   flake8 src/ tests/
-   mypy src/
+   pre-commit run --all-files
 
 Documentation
 -------------
@@ -78,13 +71,18 @@ Documentation
 Submitting Changes
 ------------------
 
-1. Commit your changes with a descriptive message
-2. Push to your fork on GitHub
-3. Create a pull request with:
+1. Make small commits, one change each. Write the subject as
+   ``type(scope): summary`` in the imperative, for example
+   ``fix(priors): normalize the masked-bin dust prior``. Add
+   ``[output-change]`` before the colon when the change alters results.
+2. Push to your fork on GitHub.
+3. Open one pull request per goal. Fill in the template, and close the issue
+   with ``Closes #<issue number>``.
+4. Include tests for new behaviour and a line under "Unreleased" in
+   ``CHANGELOG.md`` for each user-visible change.
 
-   - Clear description of changes
-   - Tests for new functionality
-   - Updated documentation as needed
+The full rules for maintainers and coding agents are in ``CLAUDE.md`` at the
+repository root.
 
 Issue Reporting
 ---------------
