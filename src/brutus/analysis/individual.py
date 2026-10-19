@@ -117,6 +117,12 @@ def _has_parallax(parallax, parallax_err):
     )
 
 
+def _clean_bands(data, data_err):
+    """Return True for bands with a finite flux and a finite, positive error."""
+    with np.errstate(invalid="ignore"):
+        return np.isfinite(data) & np.isfinite(data_err) & (data_err > 0.0)
+
+
 def _check_shape(name, arr, shape):
     """Raise ValueError naming `name` unless `arr` has shape `shape`."""
     if np.shape(arr) != shape:
@@ -1073,9 +1079,10 @@ class BruteForce:
             warnings.simplefilter("ignore")
             mags, merr = magnitude(data, data_err)
 
-        # Mask bad data
+        # Mask bad data. With _clean_bands this is the final mask, so fit()
+        # can tell which objects have no valid bands.
         mask_update = (mags < mag_max) & (merr < merr_max)
-        data_mask = data_mask & mask_update
+        data_mask = data_mask & mask_update & _clean_bands(data, data_err)
 
         # Initialize prior if not provided
         if lnprior is None:
@@ -1252,9 +1259,7 @@ class BruteForce:
             ("data_mask", data_mask),
         ]:
             _check_shape(name, arr, (Nfilt,))
-        with np.errstate(invalid="ignore"):
-            clean = np.isfinite(data) & np.isfinite(data_err) & (data_err > 0.0)
-        data_mask = data_mask & clean
+        data_mask = data_mask & _clean_bands(data, data_err)
         Ndim = int(data_mask.sum())
 
         if Ndim == 0:
@@ -2072,6 +2077,10 @@ class BruteForce:
           concentration diagnostic rather than a strict count of independent
           samples, and may read up to ~2x optimistic for well-mixed models.
 
+        An object with no valid bands is not fitted. Its row has
+        ``model_idx = -99``, ``obj_Nbands = 0`` and NaN in every float field,
+        and ``fit`` warns once with the number of such objects.
+
         If save_dar_draws=True, also includes:
 
         - ``samps_dist``: Distance draws in kpc (Ndata, Ndraws)
@@ -2178,229 +2187,136 @@ class BruteForce:
         # Get model labels for priors
         dlabels = self.models_labels if apply_dlabels else None
 
-        # Initialize results file
-        out = h5py.File(save_file, "w")
-        out.create_dataset("labels", data=data_labels)
+        # Output fields, in the order _fit returns them:
+        # name -> (shape per object, dtype, fill value)
+        fields = {
+            "model_idx": ((Ndraws,), "int32", -99),
+            "ml_scale": ((Ndraws,), "float32", 1.0),
+            "ml_av": ((Ndraws,), "float32", 0.0),
+            "ml_rv": ((Ndraws,), "float32", 0.0),
+            "ml_cov_sar": ((Ndraws, 3, 3), "float32", 0.0),
+            "obj_Nbands": ((), "int16", 0),
+            "obj_log_post": ((Ndraws,), "float32", 0.0),
+            "obj_log_evid": ((), "float32", 0.0),
+            "obj_chi2min": ((), "float32", 0.0),
+        }
+        if save_dar_draws:
+            for name in ["samps_dist", "samps_red", "samps_dred", "samps_logp"]:
+                fields[name] = ((Ndraws,), "float32", 1.0)
+        fields["mc_ess"] = ((Ndraws,), "float32", 0.0)
 
-        # TODO: Consolidate HDF5 dataset creation for streaming and batch modes
-        # into a shared specification dict to reduce duplication.
-        if running_io:
-            # Streaming mode: create datasets upfront, write as we go
-            out.create_dataset(
-                "model_idx", data=np.full((Ndata, Ndraws), -99, dtype="int32")
-            )
-            out.create_dataset(
-                "ml_scale", data=np.ones((Ndata, Ndraws), dtype="float32")
-            )
-            out.create_dataset("ml_av", data=np.zeros((Ndata, Ndraws), dtype="float32"))
-            out.create_dataset("ml_rv", data=np.zeros((Ndata, Ndraws), dtype="float32"))
-            out.create_dataset(
-                "ml_cov_sar", data=np.zeros((Ndata, Ndraws, 3, 3), dtype="float32")
-            )
-            out.create_dataset(
-                "obj_log_post", data=np.zeros((Ndata, Ndraws), dtype="float32")
-            )
-            out.create_dataset("obj_log_evid", data=np.zeros(Ndata, dtype="float32"))
-            out.create_dataset("obj_chi2min", data=np.zeros(Ndata, dtype="float32"))
-            out.create_dataset("obj_Nbands", data=np.zeros(Ndata, dtype="int16"))
-            out.create_dataset(
-                "mc_ess", data=np.zeros((Ndata, Ndraws), dtype="float32")
-            )
-            if save_dar_draws:
-                out.create_dataset(
-                    "samps_dist", data=np.ones((Ndata, Ndraws), dtype="float32")
-                )
-                out.create_dataset(
-                    "samps_red", data=np.ones((Ndata, Ndraws), dtype="float32")
-                )
-                out.create_dataset(
-                    "samps_dred", data=np.ones((Ndata, Ndraws), dtype="float32")
-                )
-                out.create_dataset(
-                    "samps_logp", data=np.ones((Ndata, Ndraws), dtype="float32")
-                )
-        else:
-            # Batch mode: accumulate in memory, write at end
-            idxs_arr = np.full((Ndata, Ndraws), -99, dtype="int32")
-            scale_arr = np.ones((Ndata, Ndraws), dtype="float32")
-            av_arr = np.zeros((Ndata, Ndraws), dtype="float32")
-            rv_arr = np.zeros((Ndata, Ndraws), dtype="float32")
-            cov_arr = np.zeros((Ndata, Ndraws, 3, 3), dtype="float32")
-            logpost_arr = np.zeros((Ndata, Ndraws), dtype="float32")
-            logevid_arr = np.zeros(Ndata, dtype="float32")
-            chi2best_arr = np.zeros(Ndata, dtype="float32")
-            nbands_arr = np.zeros(Ndata, dtype="int16")
-            mc_ess_arr = np.zeros((Ndata, Ndraws), dtype="float32")
-            if save_dar_draws:
-                dist_arr = np.ones((Ndata, Ndraws), dtype="float32")
-                red_arr = np.ones((Ndata, Ndraws), dtype="float32")
-                dred_arr = np.ones((Ndata, Ndraws), dtype="float32")
-                logp_arr = np.ones((Ndata, Ndraws), dtype="float32")
+        # An object with no valid bands is written as not fitted.
+        unfitted = dict.fromkeys(fields, np.nan) | {"model_idx": -99, "obj_Nbands": 0}
+        nbands_valid = data_mask_proc.sum(axis=1)
 
-        # Fit data
-        if verbose:
-            t1 = time.time()
-            t = 0.0
-            sys.stderr.write(f"\rFitting object 1/{Ndata}  ")
-            sys.stderr.flush()
-
-        for i in range(Ndata):
-            # Get parallax for this object
-            par_i = parallax[i] if parallax is not None else None
-            par_err_i = parallax_err[i] if parallax_err is not None else None
-            coord_i = data_coords[i] if data_coords is not None else None
-
-            # Fit individual object
-            results = self._fit(
-                data_proc[i],
-                data_err_proc[i],
-                data_mask_proc[i],
-                parallax=par_i,
-                parallax_err=par_err_i,
-                coord=coord_i,
-                Nmc_prior=Nmc_prior,
-                avlim=avlim,
-                av_gauss=av_gauss,
-                rvlim=rvlim,
-                rv_gauss=rv_gauss,
-                lnprior=lnprior_proc,
-                wt_thresh=wt_thresh,
-                cdf_thresh=cdf_thresh,
-                Ndraws=Ndraws,
-                lngalprior=lngalprior_proc,
-                lndustprior=lndustprior_proc,
-                dustfile=dustfile,
-                dlabels=dlabels,
-                logl_dim_prior=logl_dim_prior,
-                ltol=ltol,
-                ltol_subthresh=ltol_subthresh,
-                logl_initthresh=logl_initthresh,
-                mem_lim=mem_lim,
-                precision_shrinkage=precision_shrinkage,
-                max_models=max_models,
-                subsample_mode=subsample_mode,
-                rstate=rstate,
-                return_distreds=save_dar_draws,
-                R_solar=R_solar,
-                Z_solar=Z_solar,
-            )
-
-            # Unpack results
-            if save_dar_draws:
-                (
-                    idxs,
-                    scales,
-                    avs,
-                    rvs,
-                    covs_sar,
-                    Ndim,
-                    lpost,
-                    levid,
-                    chi2min,
-                    dists,
-                    reds,
-                    dreds,
-                    logwt,
-                    mc_ess_i,
-                ) = results
+        with h5py.File(save_file, "w") as out:
+            out.create_dataset("labels", data=data_labels)
+            if running_io:
+                # Streaming mode: create datasets upfront, write as we go
+                store = out
+                for name, (shape, dtype, fill) in fields.items():
+                    out.create_dataset(
+                        name, shape=(Ndata,) + shape, dtype=dtype, fillvalue=fill
+                    )
             else:
-                (
-                    idxs,
-                    scales,
-                    avs,
-                    rvs,
-                    covs_sar,
-                    Ndim,
-                    lpost,
-                    levid,
-                    chi2min,
-                    mc_ess_i,
-                ) = results
+                # Batch mode: accumulate in memory, write at end
+                store = {
+                    name: np.full((Ndata,) + shape, fill, dtype=dtype)
+                    for name, (shape, dtype, fill) in fields.items()
+                }
 
-            # Print progress
-            if verbose and i < Ndata - 1:
+            # Fit data
+            if verbose:
+                t1 = time.time()
+                t = 0.0
+                sys.stderr.write(f"\rFitting object 1/{Ndata}  ")
+                sys.stderr.flush()
+
+            for i in range(Ndata):
+                if nbands_valid[i] == 0:
+                    row = unfitted
+                else:
+                    results = self._fit(
+                        data_proc[i],
+                        data_err_proc[i],
+                        data_mask_proc[i],
+                        parallax=None if parallax is None else parallax[i],
+                        parallax_err=None if parallax_err is None else parallax_err[i],
+                        coord=None if data_coords is None else data_coords[i],
+                        Nmc_prior=Nmc_prior,
+                        avlim=avlim,
+                        av_gauss=av_gauss,
+                        rvlim=rvlim,
+                        rv_gauss=rv_gauss,
+                        lnprior=lnprior_proc,
+                        wt_thresh=wt_thresh,
+                        cdf_thresh=cdf_thresh,
+                        Ndraws=Ndraws,
+                        lngalprior=lngalprior_proc,
+                        lndustprior=lndustprior_proc,
+                        dustfile=dustfile,
+                        dlabels=dlabels,
+                        logl_dim_prior=logl_dim_prior,
+                        ltol=ltol,
+                        ltol_subthresh=ltol_subthresh,
+                        logl_initthresh=logl_initthresh,
+                        mem_lim=mem_lim,
+                        precision_shrinkage=precision_shrinkage,
+                        max_models=max_models,
+                        subsample_mode=subsample_mode,
+                        rstate=rstate,
+                        return_distreds=save_dar_draws,
+                        R_solar=R_solar,
+                        Z_solar=Z_solar,
+                    )
+                    row = dict(zip(fields, results, strict=True))
+
+                for name, value in row.items():
+                    store[name][i] = value
+
+                # Print progress
+                if verbose and i < Ndata - 1:
+                    t2 = time.time()
+                    dt = t2 - t1
+                    t1 = t2
+                    t += dt
+                    t_avg = t / (i + 1)
+                    t_est = t_avg * (Ndata - i - 1)
+                    sys.stderr.write(
+                        f"\rFitting object {i + 2}/{Ndata} "
+                        f"[chi2/n: {row['obj_chi2min']:.1f}/{row['obj_Nbands']}] "
+                        f"(mean time: {t_avg:.3f} s/obj, "
+                        f"est. remaining: {t_est:.3f} s)    "
+                    )
+                    sys.stderr.flush()
+
+            # Final progress update
+            if verbose:
                 t2 = time.time()
                 dt = t2 - t1
-                t1 = t2
                 t += dt
-                t_avg = t / (i + 1)
-                t_est = t_avg * (Ndata - i - 1)
+                t_avg = t / Ndata
                 sys.stderr.write(
-                    f"\rFitting object {i + 2}/{Ndata} "
-                    f"[chi2/n: {chi2min:.1f}/{Ndim}] "
+                    f"\rFitting object {Ndata}/{Ndata} "
+                    f"[chi2/n: {row['obj_chi2min']:.1f}/{row['obj_Nbands']}] "
                     f"(mean time: {t_avg:.3f} s/obj, "
-                    f"est. remaining: {t_est:.3f} s)    "
+                    f"total: {t:.3f} s)    \n"
                 )
                 sys.stderr.flush()
 
-            # Save results
-            if running_io:
-                out["model_idx"][i] = idxs
-                out["ml_scale"][i] = scales
-                out["ml_av"][i] = avs
-                out["ml_rv"][i] = rvs
-                out["ml_cov_sar"][i] = covs_sar
-                out["obj_Nbands"][i] = Ndim
-                out["obj_log_post"][i] = lpost
-                out["obj_log_evid"][i] = levid
-                out["obj_chi2min"][i] = chi2min
-                out["mc_ess"][i] = mc_ess_i
-                if save_dar_draws:
-                    out["samps_dist"][i] = dists
-                    out["samps_red"][i] = reds
-                    out["samps_dred"][i] = dreds
-                    out["samps_logp"][i] = logwt
-            else:
-                idxs_arr[i] = idxs
-                scale_arr[i] = scales
-                av_arr[i] = avs
-                rv_arr[i] = rvs
-                cov_arr[i] = covs_sar
-                logpost_arr[i] = lpost
-                logevid_arr[i] = levid
-                chi2best_arr[i] = chi2min
-                nbands_arr[i] = Ndim
-                mc_ess_arr[i] = mc_ess_i
-                if save_dar_draws:
-                    dist_arr[i] = dists
-                    red_arr[i] = reds
-                    dred_arr[i] = dreds
-                    logp_arr[i] = logwt
+            # Dump results to disk if using batch mode
+            if not running_io:
+                for name, arr in store.items():
+                    out.create_dataset(name, data=arr)
 
-        # Final progress update
-        if verbose:
-            t2 = time.time()
-            dt = t2 - t1
-            t += dt
-            t_avg = t / Ndata
-            sys.stderr.write(
-                f"\rFitting object {Ndata}/{Ndata} "
-                f"[chi2/n: {chi2min:.1f}/{Ndim}] "
-                f"(mean time: {t_avg:.3f} s/obj, "
-                f"total: {t:.3f} s)    \n"
+        nskipped = int(np.sum(nbands_valid == 0))
+        if nskipped:
+            warnings.warn(
+                f"{nskipped} of {Ndata} objects have no valid bands and were not "
+                "fitted: they are written with model_idx = -99 and NaN values.",
+                RuntimeWarning,
+                stacklevel=2,
             )
-            sys.stderr.flush()
-
-        # Dump results to disk if using batch mode
-        if not running_io:
-            out.create_dataset("model_idx", data=idxs_arr)
-            out.create_dataset("ml_scale", data=scale_arr)
-            out.create_dataset("ml_av", data=av_arr)
-            out.create_dataset("ml_rv", data=rv_arr)
-            out.create_dataset("ml_cov_sar", data=cov_arr)
-            out.create_dataset("obj_log_post", data=logpost_arr)
-            out.create_dataset("obj_log_evid", data=logevid_arr)
-            out.create_dataset("obj_chi2min", data=chi2best_arr)
-            out.create_dataset("obj_Nbands", data=nbands_arr)
-            out.create_dataset("mc_ess", data=mc_ess_arr)
-            if save_dar_draws:
-                out.create_dataset("samps_dist", data=dist_arr)
-                out.create_dataset("samps_red", data=red_arr)
-                out.create_dataset("samps_dred", data=dred_arr)
-                out.create_dataset("samps_logp", data=logp_arr)
-
-        # Close output file
-        out.close()
 
         return save_file
 

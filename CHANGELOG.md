@@ -47,6 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the bare function does, unless the partial binds `avlim` itself. A prior
   such as `partial(logp_extinction, scatter=0.3)` was normalized over its
   default (0, 20) instead of the fitted range.
+- **`BruteForce.fit` skips an object with no valid bands** instead of
+  stopping the whole run with `ValueError`. The object is written with
+  `model_idx = -99`, `obj_Nbands = 0` and NaN values, and `fit` warns once
+  with the number of such objects. The output file now closes on every exit
+  path.
 
 ### Changed
 

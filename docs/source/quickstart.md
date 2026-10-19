@@ -48,7 +48,7 @@ You also need, per star:
 | `coords` | `(Nstars, 2)` | Galactic longitude and latitude, degrees |
 | `ids` | `(Nstars,)` | an integer or byte-string label for each star (h5py cannot save unicode strings) |
 
-A star needs at least 4 valid bands: the fit has 3 free parameters per model (distance, $A_V$ and $R_V$). With fewer, brutus warns; with none, it raises an error that stops the whole fit. Keep only the stars with enough bands:
+A star needs at least 4 valid bands: the fit has 3 free parameters per model (distance, $A_V$ and $R_V$). With fewer, brutus warns; with none, it skips the star and writes it with `model_idx = -99`. Keep only the stars with enough bands:
 
 ```python
 keep = (mask & (mag_err < 0.25)).sum(axis=1) >= 4

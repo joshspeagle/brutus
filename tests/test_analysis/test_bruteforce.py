@@ -2130,3 +2130,44 @@ class TestSubsetResults:
 def test_get_sed_grid_rejects_wrong_length_av(fitter):
     with pytest.raises(ValueError, match="av"):
         fitter.get_sed_grid(av=np.zeros(2))
+
+
+class TestUnfittedObjects:
+    @pytest.mark.parametrize("running_io", [True, False])
+    def test_object_without_valid_bands_is_skipped(
+        self, fitter, batch, tmp_path, running_io
+    ):
+        batch["data_mask"][0] = False
+        with pytest.warns(RuntimeWarning, match="1 of 2 objects") as record:
+            path = fitter.fit(
+                save_file=str(tmp_path / "out"),
+                Ndraws=10,
+                Nmc_prior=10,
+                running_io=running_io,
+                rstate=np.random.RandomState(3),
+                verbose=False,
+                **batch,
+            )
+        assert sum("no valid bands" in str(w.message) for w in record) == 1
+        with h5py.File(path, "r") as f:
+            assert np.all(f["model_idx"][0] == -99)
+            assert f["obj_Nbands"][0] == 0
+            assert np.all(np.isnan(f["samps_dist"][0]))
+            assert np.isnan(f["obj_log_evid"][0])
+            assert np.all(f["model_idx"][1] >= 0)
+            assert f["obj_Nbands"][1] == 5
+
+    def test_output_file_closes_when_a_fit_raises(
+        self, fitter, batch, tmp_path, monkeypatch
+    ):
+        def fail(*args, **kwargs):
+            raise RuntimeError("fit failed")
+
+        monkeypatch.setattr(fitter, "_fit", fail)
+        path = tmp_path / "out.h5"
+        # Keeping the traceback keeps fit's frame alive, as Jupyter does.
+        with pytest.raises(RuntimeError, match="fit failed") as excinfo:
+            fitter.fit(save_file=str(path), verbose=False, **batch)
+        # HDF5 refuses to truncate a file that is still open.
+        h5py.File(path, "w").close()
+        assert excinfo.traceback
