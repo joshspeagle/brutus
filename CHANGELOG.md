@@ -37,6 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rewritten getting-started pages and method overview, with schematics of
   the forward model, the fit and the distance-extinction degeneracy, and a
   References page.
+- Rewritten stellar models and model grid pages. The EEP values of the main
+  sequence are corrected, and the coverage of the default grid (0.5 to 2.0
+  solar masses, [Fe/H] -3.0 to +0.45) is stated.
 
 ## [1.2.0] - 2026-07-17
 
