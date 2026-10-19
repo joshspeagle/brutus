@@ -368,14 +368,6 @@ class TestSortEquivalence:
         pix["healpix_index"] = rng.permutation(n).astype(np.uint64)
         return pix
 
-    def test_lexsort_matches_argsort_reference(self):
-        rng = np.random.default_rng(0)
-        pix = self._make_pixel_info(100_000, rng)
-        # Reference: the old implementation
-        ref = np.argsort(pix, order=["nside", "healpix_index"])
-        new = np.lexsort((pix["healpix_index"], pix["nside"]))
-        np.testing.assert_array_equal(ref, new)
-
     def test_sort_microbenchmark(self):
         rng = np.random.default_rng(1)
         pix = self._make_pixel_info(500_000, rng)

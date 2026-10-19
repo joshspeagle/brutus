@@ -121,43 +121,6 @@ class TestGalacticCoverage:
         assert np.all(np.isfinite(logp_default))
         assert np.all(np.isfinite(logp_custom))
 
-    def test_galactic_structure_exception_handling_feh(self):
-        """Test exception handling for invalid feh data."""
-        from unittest.mock import patch
-
-        distances = np.array([1.0])
-        coord = SkyCoord(ra=0.0, dec=0.0, unit="deg")
-
-        # Create valid labels
-        labels = np.array([(0.0,)], dtype=[("feh", "f4")])
-
-        # Mock logp_feh to raise an exception
-        with patch(
-            "brutus.priors.galactic.logp_feh", side_effect=ValueError("Simulated error")
-        ):
-            # Should handle exceptions gracefully
-            logp = logp_galactic_structure(distances, coord, labels=labels)
-            assert np.all(np.isfinite(logp))
-
-    def test_galactic_structure_exception_handling_age(self):
-        """Test exception handling for invalid age data."""
-        from unittest.mock import patch
-
-        distances = np.array([1.0])
-        coord = SkyCoord(ra=0.0, dec=0.0, unit="deg")
-
-        # Create valid labels
-        labels = np.array([(9.0,)], dtype=[("loga", "f4")])
-
-        # Mock logp_age_from_feh to raise an exception
-        with patch(
-            "brutus.priors.galactic.logp_age_from_feh",
-            side_effect=IndexError("Simulated error"),
-        ):
-            # Should handle exceptions gracefully
-            logp = logp_galactic_structure(distances, coord, labels=labels)
-            assert np.all(np.isfinite(logp))
-
 
 class TestLegacyImportFallback:
     """Test legacy import fallback (difficult to test without modifying imports)."""

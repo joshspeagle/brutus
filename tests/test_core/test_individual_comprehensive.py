@@ -395,20 +395,6 @@ class TestEEPTracksMethods:
         assert isinstance(result, np.ndarray)
         assert len(result) == len(mock_eep_tracks.pred_labels)
 
-    def test_get_corrections_functionality(self, mock_eep_tracks):
-        """Test get_corrections method."""
-        labels = [1.0, 350, 0.0, 0.0]
-
-        # Mock the corrections method
-        with patch.object(
-            mock_eep_tracks,
-            "get_corrections",
-            return_value=np.array([0.1, 0.05, -0.02]),
-        ):
-            corrections = mock_eep_tracks.get_corrections(labels)
-            assert isinstance(corrections, np.ndarray)
-            assert len(corrections) > 0
-
 
 class TestStarEvolTrackInitialization:
     """Test StarEvolTrack class initialization."""

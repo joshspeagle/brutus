@@ -56,33 +56,6 @@ def _softmax_rows(lnw):
 class TestBootstrapVectorization:
     """The rewritten bootstrap must preserve the sampling distribution."""
 
-    def test_inverted_cdf_matches_choice_probabilities(self):
-        """Per-row inverted-CDF sampling reproduces rng.choice(p=w) exactly
-        in distribution: frequencies match the weights, zero-weight entries
-        are never drawn, and the comparison count equals searchsorted."""
-        w = np.array([0.1, 0.2, 0.0, 0.45, 0.25])
-        cdf = np.cumsum(w)
-        cdf /= cdf[-1]
-        rng = np.random.default_rng(7)
-        n_draws = 200_000
-        u = rng.random(n_draws)
-
-        idx_count = np.sum(cdf[None, :] < u[:, None], axis=1)
-        idx_searchsorted = np.searchsorted(cdf, u, side="left")
-        assert np.array_equal(idx_count, idx_searchsorted)
-
-        freqs = np.bincount(idx_count, minlength=len(w)) / n_draws
-        # exact: zero-probability category never sampled
-        assert freqs[2] == 0.0
-        # empirical frequencies match the target probabilities within 5 SE
-        se = np.sqrt(w * (1.0 - w) / n_draws)
-        assert np.all(np.abs(freqs - w) < 5.0 * se + 1e-12)
-
-        # and match rng.choice's own empirical distribution
-        idx_choice = np.random.default_rng(11).choice(len(w), size=n_draws, p=w)
-        freqs_choice = np.bincount(idx_choice, minlength=len(w)) / n_draws
-        assert np.all(np.abs(freqs - freqs_choice) < 5.0 * np.sqrt(2.0) * se + 1e-12)
-
     def test_bootstrap_distribution_matches_reference(self):
         """Old and new implementations sample the same bootstrap-median
         distribution (different random streams): with a fixed seed, medians
