@@ -264,6 +264,25 @@ class TestCholeskyPSD:
         np.testing.assert_allclose(out[:, :, 0].std(axis=1), 1.0, atol=0.1)
         np.testing.assert_allclose(out[:, :, 2].std(axis=1), np.sqrt(2.0), atol=0.1)
 
+    def test_sampler_integer_covariance_keeps_variance(self):
+        """An integer cov gave an integer Cholesky factor: sqrt(2) became 1."""
+        from brutus.utils.sampling import sample_multivariate_normal
+
+        covs = np.tile(2 * np.eye(3, dtype=int), (4, 1, 1))
+        out = sample_multivariate_normal(
+            np.zeros((4, 3)), covs, size=20000, rstate=np.random.RandomState(5)
+        )
+        # The standard error of each std is about sqrt(2) / sqrt(40000) = 0.007.
+        np.testing.assert_allclose(out.std(axis=1), np.sqrt(2.0), atol=0.05)
+
+    def test_sampler_mismatched_covariance_raises(self):
+        from brutus.utils.sampling import sample_multivariate_normal
+
+        with pytest.raises(ValueError, match="`cov`"):
+            sample_multivariate_normal(
+                np.zeros((5, 3)), np.tile(np.eye(3), (2, 1, 1)), rstate=np.random
+            )
+
 
 # ---------------------------------------------------------------------------
 # 4. quantile convention consistency

@@ -456,6 +456,12 @@ def sample_multivariate_normal(
         Sampled values. For a single distribution, returns `(dim, size)`.
         For multiple distributions, returns `(dim, size, Ndist)`.
 
+    Raises
+    ------
+    ValueError
+        If `mean` is not 1-D or 2-D, or if `cov` does not have shape
+        `(Ndist, dim, dim)` for a 2-D `mean`.
+
     Notes
     -----
     Provided covariances must be positive semi-definite. Use the `isPSD`
@@ -469,15 +475,15 @@ def sample_multivariate_normal(
     --------
     >>> import numpy as np
     >>> # Single distribution
-    >>> mean = np.array([0, 1])
-    >>> cov = np.array([[1, 0.5], [0.5, 1]])
+    >>> mean = np.array([0.0, 1.0])
+    >>> cov = np.array([[1.0, 0.5], [0.5, 1.0]])
     >>> samples = sample_multivariate_normal(mean, cov, size=100)
     >>> samples.shape
     (2, 100)
 
     >>> # Multiple distributions
-    >>> means = np.array([[0, 1], [2, 3]])  # 2 distributions, 2D each
-    >>> covs = np.array([[[1, 0], [0, 1]], [[2, 0.5], [0.5, 2]]])
+    >>> means = np.array([[0.0, 1.0], [2.0, 3.0]])  # 2 distributions, 2D each
+    >>> covs = np.array([[[1.0, 0.0], [0.0, 1.0]], [[2.0, 0.5], [0.5, 2.0]]])
     >>> samples = sample_multivariate_normal(means, covs, size=50)
     >>> samples.shape
     (2, 50, 2)
@@ -490,8 +496,17 @@ def sample_multivariate_normal(
         samples = rstate.multivariate_normal(mean, cov, size=size)
         return samples.T  # Transpose to match expected (dim, size) format
 
-    # For multiple distributions, check dimension compatibility
-    N, d = np.shape(mean)
+    mean = np.asarray(mean, dtype=float)
+    cov = np.asarray(cov, dtype=float)
+    if mean.ndim != 2:
+        raise ValueError(
+            f"`mean` must have shape (dim,) or (Ndist, dim); got {mean.shape}."
+        )
+    N, d = mean.shape
+    if cov.shape != (N, d, d):
+        raise ValueError(
+            f"`cov` must have shape {(N, d, d)} to match `mean`; got {cov.shape}."
+        )
 
     if d == 3:
         # Use numba-accelerated version for 3D case

@@ -132,6 +132,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `inverse3` converts `A` to float and raises `ValueError` unless its shape
   is `(3, 3)` or `(N, 3, 3)`. An integer matrix gave an integer inverse that
   truncated 0.5 to 0.
+- `sample_multivariate_normal` converts `mean` and `cov` to float and raises
+  `ValueError` when `cov` does not have shape `(Ndist, dim, dim)`. An
+  integer `cov` shrank the spread of the draws, and a short `cov` returned
+  garbage with JIT on.
 - `plotting.posterior_predictive` treats an integer 0/1 `data_mask` as a
   mask and raises `ValueError` for a mask of the wrong shape. It plotted
   band 0 and repeated band 1 in place of the unmasked bands.
