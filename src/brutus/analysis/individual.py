@@ -1685,11 +1685,17 @@ class BruteForce:
         a_mc = samples_all[1]  # Shape: (Nmc, Nsel)
         r_mc = samples_all[2]  # Shape: (Nmc, Nsel)
 
-        # Convert ln(d) to distance
-        dist_mc = np.exp(eta_samples)
-        dist_mc = np.clip(dist_mc, 0.001, 1e6)
-        a_mc = np.clip(a_mc, avlim[0], avlim[1])
-        r_mc = np.clip(r_mc, rvlim[0], rvlim[1])
+        # Convert ln(d) to distance. Draws outside the support are truncated:
+        # they get zero weight below. Their values are clipped only so that
+        # the priors stay finite and no saved draw leaves the support.
+        dist_raw = np.exp(eta_samples)
+        dist_mc = np.clip(dist_raw, 0.001, 1e6)
+        outside = dist_mc != dist_raw
+        a_clip = np.clip(a_mc, avlim[0], avlim[1])
+        outside |= a_clip != a_mc
+        r_clip = np.clip(r_mc, rvlim[0], rvlim[1])
+        outside |= r_clip != r_mc
+        a_mc, r_mc = a_clip, r_clip
 
         # Initialize log-posterior from base (without parallax scale approx).
         # The exact parallax likelihood is added below via logp_parallax.
@@ -1782,6 +1788,8 @@ class BruteForce:
             lnp_parallax_all = logp_parallax(par_mc, parallax, parallax_err)
             lnp_mc += lnp_parallax_all
 
+        lnp_mc[outside] = LOG_ZERO
+
         # Compute integrated posterior (VECTORIZED)
         lnp = logsumexp(lnp_mc, axis=0) - np.log(Nmc)
 
@@ -1806,7 +1814,9 @@ class BruteForce:
         w_sum = w.sum(axis=0, keepdims=True)  # (1, Nsel)
         w_normed = w / np.maximum(w_sum, 1e-300)  # (Nmc, Nsel)
         mc_ess = 1.0 / np.sum(w_normed**2, axis=0)  # (Nsel,)
-        mc_ess = np.where(w_sum.ravel() > 0, mc_ess, 0.0)
+        # A model with no draw of nonzero weight (lw_max = LOG_ZERO) gets 0;
+        # its weights above would be spuriously uniform.
+        mc_ess = np.where(lw_max.ravel() > LOG_ZERO, mc_ess, 0.0)
 
         return sel, cov_sar, lnp, dist_mc.T, a_mc.T, r_mc.T, lnp_mc.T, mc_ess
 

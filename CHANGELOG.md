@@ -36,6 +36,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   passed the initial cut, so the culled models sat that constant (about 90
   log-units for fluxes in maggies) too low. Culled models keep their
   magnitude-space fit of (scale, A(V), R(V)).
+- **`logpost_grid` truncates the Monte Carlo draws** of A(V), R(V) and
+  distance at `avlim`, `rvlim` and (0.001, 1e6) kpc. A draw outside the
+  support now gets zero weight. Before, it was clipped to the bound at full
+  weight: about half of the A(V) draws of an unreddened model sat at
+  exactly 0, and such a model gained up to ln 2 in `lnp`. This changes
+  `samps_red`, `samps_dred`, `samps_dist`, `obj_log_post`, `obj_log_evid`
+  and `mc_ess`; `mc_ess` is 0 for a model with no draw of nonzero weight.
 
 ### Changed
 

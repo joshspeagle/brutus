@@ -1985,3 +1985,73 @@ class TestLikelihoodNormalization:
         lnl, ndim, chi2 = fitter.loglike_grid(flux, flux_err, mask, dim_prior=False)
         expected = -0.5 * (ndim * np.log(2 * np.pi) + np.sum(np.log(flux_err**2)))
         np.testing.assert_allclose(lnl + 0.5 * chi2, expected, rtol=1e-12)
+
+
+class TestTruncatedDraws:
+    def test_saved_av_draws_stay_off_the_bound(self, fitter, observation):
+        # An unreddened star: about half of the raw A(V) draws fall below 0.
+        flux, flux_err, mask = observation
+        out = fitter._fit(
+            flux,
+            flux_err,
+            mask,
+            coord=(120.0, 45.0),
+            Nmc_prior=50,
+            Ndraws=500,
+            rstate=np.random.RandomState(11),
+        )
+        reds = out[10]
+        assert np.all(reds > 0.0) and np.all(reds <= 20.0)
+
+    @pytest.mark.parametrize("param", ["dist", "av", "rv"])
+    def test_model_with_no_draw_inside_support_gets_zero_weight(self, fitter, param):
+        cov = np.diag([1e-4, 1e-4, 1e-4])
+        far = np.diag([1e-32, 1e-4, 1e-4])  # scale 1e-14 known to 1%
+        covs = [cov, far if param == "dist" else cov]
+        like = list(_make_loglike_results([1.0, 1.0], covs))
+        if param == "dist":
+            like[3][1] = 1e-14  # 1e7 kpc, beyond the 1e6 kpc limit
+        else:
+            like[4 if param == "av" else 5][1] = -5.0 if param == "av" else 20.0
+        sel, _, lnp, d_mc, a_mc, r_mc, _, mc_ess = fitter.logpost_grid(
+            tuple(like),
+            wt_thresh=None,
+            cdf_thresh=None,
+            Nmc_prior=20,
+            rstate=np.random.RandomState(5),
+        )
+        assert list(sel) == [0, 1]
+        assert np.all(np.isfinite(lnp)) and lnp[1] < -1e299 and lnp[0] > -1e299
+        assert mc_ess[1] == 0.0 and mc_ess[0] > 0.0
+        assert np.all(d_mc <= 1e6) and np.all(a_mc >= 0.0) and np.all(r_mc <= 8.0)
+
+    def test_model_with_zero_prior_everywhere_gets_zero_ess(self, fitter):
+        cov = np.diag([1e-4, 1e-4, 1e-4])
+        like = _make_loglike_results([1.0, 1.0], [cov, cov])
+        mc_ess = fitter.logpost_grid(
+            like,
+            coord=(120.0, 45.0),
+            lngalprior=lambda d, coord, labels=None: np.full(np.shape(d), -1e300),
+            dlabels=fitter.models_labels[:2],
+            lnprior=np.zeros(2),
+            wt_thresh=None,
+            cdf_thresh=None,
+            Nmc_prior=20,
+            rstate=np.random.RandomState(5),
+        )[7]
+        np.testing.assert_array_equal(mc_ess, 0.0)
+
+    def test_model_on_the_bound_loses_half_its_weight(self, fitter):
+        # Antithetic pairs put exactly half of the A(V) draws of a model at
+        # A(V) = 0 below the bound, so truncation lowers its lnp by ln 2.
+        cov = np.diag([1e-12, 1e-2, 1e-12])
+        like = list(_make_loglike_results([1.0, 1.0], [cov, cov]))
+        like[4] = np.array([0.5, 0.0])
+        _, _, lnp, *_ = fitter.logpost_grid(
+            tuple(like),
+            wt_thresh=None,
+            cdf_thresh=None,
+            Nmc_prior=20,
+            rstate=np.random.RandomState(5),
+        )
+        np.testing.assert_allclose(lnp[1] - lnp[0], np.log(0.5), atol=1e-6)
