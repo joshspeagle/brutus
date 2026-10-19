@@ -83,6 +83,20 @@ def _powerlaw_mass_integral(m_lo, m_hi, alpha):
     return (m_hi ** (1.0 - alpha) - m_lo ** (1.0 - alpha)) / (1.0 - alpha)
 
 
+def _log_imf_unnormalized(mgrid, alpha_low, alpha_high, mass_min, mass_break, mass_max):
+    mgrid = np.asarray(mgrid)
+    logp = np.full_like(mgrid, LOG_ZERO, dtype=float)
+    valid_mass = (mgrid >= mass_min) & (mgrid <= mass_max)
+    low_mass = valid_mass & (mgrid <= mass_break)
+    logp[low_mass] = -alpha_low * np.log(mgrid[low_mass])
+    # The high-mass piece is scaled to be continuous at mass_break.
+    high_mass = valid_mass & (mgrid > mass_break)
+    logp[high_mass] = -alpha_high * np.log(mgrid[high_mass]) + (
+        alpha_high - alpha_low
+    ) * np.log(mass_break)
+    return logp
+
+
 def logp_imf(
     mgrid,
     alpha_low=1.3,
@@ -148,23 +162,9 @@ def logp_imf(
     ----------
     Kroupa, P. (2001), MNRAS, 322, 231
     """
-    mgrid = np.asarray(mgrid)
-
-    # Initialize log-prior with LOG_ZERO for invalid masses
-    logp = np.full_like(mgrid, LOG_ZERO, dtype=float)
-
-    # Valid mass range
-    valid_mass = (mgrid >= mass_min) & (mgrid <= mass_max)
-
-    # Low-mass regime: M ≤ mass_break
-    low_mass = valid_mass & (mgrid <= mass_break)
-    logp[low_mass] = -alpha_low * np.log(mgrid[low_mass])
-
-    # High-mass regime: M > mass_break
-    high_mass = valid_mass & (mgrid > mass_break)
-    logp[high_mass] = -alpha_high * np.log(mgrid[high_mass]) + (
-        alpha_high - alpha_low
-    ) * np.log(mass_break)
+    logp = _log_imf_unnormalized(
+        mgrid, alpha_low, alpha_high, mass_min, mass_break, mass_max
+    )
 
     # Compute normalization factor over [mass_min, mass_max], integrating
     # only over the power-law regime(s) the range actually overlaps. The
@@ -200,22 +200,9 @@ def logp_imf(
 
     # Handle binary component if provided
     if mgrid2 is not None:
-        mgrid2 = np.asarray(mgrid2)
-
-        # Compute prior for secondary
-        logp2 = np.full_like(mgrid2, LOG_ZERO, dtype=float)
-
-        valid_mass2 = (mgrid2 >= mass_min) & (mgrid2 <= mass_max)
-        low_mass2 = valid_mass2 & (mgrid2 <= mass_break)
-        high_mass2 = valid_mass2 & (mgrid2 > mass_break)
-
-        logp2[low_mass2] = -alpha_low * np.log(mgrid2[low_mass2])
-        logp2[high_mass2] = -alpha_high * np.log(mgrid2[high_mass2]) + (
-            alpha_high - alpha_low
-        ) * np.log(mass_break)
-
-        # Combined log-prior for binary system
-        logp = logp + logp2
+        logp = logp + _log_imf_unnormalized(
+            mgrid2, alpha_low, alpha_high, mass_min, mass_break, mass_max
+        )
 
         # Updated normalization for binary (independent sampling)
         norm = norm**2

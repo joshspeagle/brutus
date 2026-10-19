@@ -349,7 +349,7 @@ def logp_extinction(
         # Fast path: fused numba kernel (one binary search per point, no
         # full-size temporaries) for the large elementwise-array case
         # used by BruteForce (Nmc * Nsel points per object). The numpy
-        # branch below remains the fallback / NUMBA_DISABLE_JIT path.
+        # branch below handles the other cases.
         map_d = np.ascontiguousarray(map_distances, dtype=np.float64)
         av_p = np.ascontiguousarray(av_profile, dtype=np.float64)
         std_p = np.ascontiguousarray(std_profile, dtype=np.float64)
@@ -362,24 +362,16 @@ def logp_extinction(
             and av_p.shape == map_d.shape
             and std_p.shape == map_d.shape
         ):
-            try:
-                return _extinction_prior_3d_fused(
-                    avs,
-                    distance,
-                    map_d,
-                    av_p,
-                    std_p,
-                    av_lo,
-                    av_hi,
-                    lnp_unif,
-                )
-            except Exception as e:
-                warnings.warn(
-                    f"Numba fused extinction prior failed, falling back "
-                    f"to numpy: {e}",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
+            return _extinction_prior_3d_fused(
+                avs,
+                distance,
+                map_d,
+                av_p,
+                std_p,
+                av_lo,
+                av_hi,
+                lnp_unif,
+            )
 
         # Interpolate dust map profiles to requested distance(s)
         av_mean = np.interp(distance, map_distances, av_profile)
