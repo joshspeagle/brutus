@@ -1,1380 +1,323 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
+"""Tests of `photometric_offsets` and `photometric_offsets_2d`.
 
+The data are synthetic but run through the real `get_seds`, `magnitude` and
+`phot_loglike`, so the tests check the plotted numbers.
 """
-Tests for photometric offset plotting functions.
-
-This test suite provides comprehensive coverage for the photometric_offsets
-and photometric_offsets_2d functions.
-"""
-
-import warnings
 
 import matplotlib
 import numpy as np
 import pytest
 
 matplotlib.use("Agg")  # Use non-interactive backend for testing
-from unittest.mock import patch
-
 import matplotlib.pyplot as plt
 
 from brutus.plotting.offsets import photometric_offsets, photometric_offsets_2d
+from brutus.utils.photometry import inv_magnitude
 
 
-class TestPhotometricOffsets:
-    """Comprehensive tests for photometric_offsets function."""
+def _offsets_dataset(nobj=30, nfilt=6, nsamps=8, seed=3):
+    """Deterministic synthetic dataset exercised with the real (unmocked)
+    get_seds / magnitude / phot_loglike stack."""
+    rng = np.random.RandomState(seed)
+    nmodels = 40
+    models = np.zeros((nmodels, nfilt, 3))
+    models[:, :, 0] = rng.uniform(4.0, 7.0, (nmodels, nfilt))
+    models[:, :, 1] = rng.uniform(0.8, 1.2, (nmodels, nfilt))
+    models[:, :, 2] = rng.uniform(-0.05, 0.05, (nmodels, nfilt))
+    idxs = rng.randint(0, nmodels, (nobj, nsamps))
+    reds = rng.uniform(0.1, 0.5, (nobj, nsamps))
+    dreds = rng.normal(3.3, 0.1, (nobj, nsamps))
+    dists = rng.uniform(0.8, 2.0, (nobj, nsamps))
+    mag = rng.uniform(5.0, 8.0, (nobj, nfilt))
+    magerr = np.full((nobj, nfilt), 0.05)
+    flux, fluxerr = inv_magnitude(mag, magerr)
+    mask = np.ones((nobj, nfilt), dtype=bool)
+    return dict(
+        models=models,
+        idxs=idxs,
+        reds=reds,
+        dreds=dreds,
+        dists=dists,
+        mag=mag,
+        magerr=magerr,
+        flux=flux,
+        fluxerr=fluxerr,
+        mask=mask,
+        nobj=nobj,
+        nfilt=nfilt,
+    )
 
-    @pytest.fixture
-    def mock_photometry_data(self):
-        """Generate mock photometry data for testing."""
-        np.random.seed(42)
-        nobj, nfilt = 20, 4
 
-        # Create realistic photometry with errors and masks
-        phot = np.random.uniform(1e-14, 1e-12, (nobj, nfilt))  # Flux values
-        err = phot * np.random.uniform(0.05, 0.15, (nobj, nfilt))  # 5-15% errors
-        mask = np.random.choice(
-            [True, False], (nobj, nfilt), p=[0.8, 0.2]
-        )  # 80% detection rate
+def _panel_hist_arrays(axes, nfilt):
+    """Extract the per-panel hist2d QuadMesh arrays from photometric_offsets."""
+    ax = axes.flatten()
+    out = []
+    for i in range(nfilt):
+        arr = np.ma.filled(np.asanyarray(ax[i].collections[0].get_array()), np.nan)
+        out.append(np.array(arr, dtype=float))
+    return out
 
-        return phot, err, mask
 
-    @pytest.fixture
-    def mock_models(self):
-        """Generate mock model coefficients."""
-        np.random.seed(42)
-        nmodels, nfilt, ncoeff = 30, 4, 3
+class TestPhotometricOffsetsFixes:
+    """Magnitude-space offset arithmetic, integer masks, and finiteness
+    selection in photometric_offsets / photometric_offsets_2d."""
 
-        models = np.random.uniform(10, 20, (nmodels, nfilt, ncoeff))
-        # Add some structure - first coefficient is base magnitude
-        models[:, :, 0] += np.random.uniform(-2, 2, (nmodels, nfilt))
+    SPANS = dict(xspan=None, yspan=None)
 
-        return models
-
-    @pytest.fixture
-    def mock_posterior_samples(self, mock_photometry_data, mock_models):
-        """Generate mock posterior samples."""
-        np.random.seed(42)
-        phot, err, mask = mock_photometry_data
-        nobj = phot.shape[0]
-        nmodels = mock_models.shape[0]
-        nsamps = 25
-
-        # Create sample indices and parameters
-        idxs = np.random.choice(nmodels, (nobj, nsamps), replace=True)
-        reds = np.random.exponential(0.3, (nobj, nsamps))  # Av samples
-        dreds = np.random.normal(3.1, 0.2, nsamps)  # Rv samples (shared)
-        dists = np.random.lognormal(
-            np.log(1.5), 0.4, (nobj, nsamps)
-        )  # Distance samples
-
-        return idxs, reds, dreds, dists
-
-    def test_photometric_offsets_basic(
-        self, mock_photometry_data, mock_models, mock_posterior_samples
-    ):
-        """Test basic photometric_offsets functionality."""
-        phot, err, mask = mock_photometry_data
-        idxs, reds, dreds, dists = mock_posterior_samples
-
-        # Mock get_seds and related functions
-        nobj, nsamps, nfilt = idxs.shape[0], idxs.shape[1], phot.shape[1]
-        mock_seds = np.random.uniform(15, 20, (nobj * nsamps, nfilt))
-        mock_magnitude_result = (
-            np.random.uniform(15, 20, (nobj, nfilt)),
-            np.random.uniform(0.05, 0.15, (nobj, nfilt)),
+    def _run(self, d, phot, err, mask, flux, **extra):
+        xspan = [(4.0, 9.0)] * d["nfilt"]
+        yspan = [(-3.0, 3.0)] * d["nfilt"]
+        fig, axes = photometric_offsets(
+            phot,
+            err,
+            mask,
+            d["models"],
+            d["idxs"],
+            d["reds"],
+            d["dreds"],
+            d["dists"],
+            flux=flux,
+            xspan=xspan,
+            yspan=yspan,
+            bins=20,
+            **extra,
         )
-
-        # Mock phot_loglike to return proper shape (Nobj=1, Nmod=nsamps)
-        def mock_phot_loglike_func(mo, me, mp, mask=None, dim_prior=True):
-            nmod = mp.shape[1]
-            return np.random.uniform(-10, -1, (1, nmod))
-
-        # Mock logsumexp to return evidence for selected objects
-        def mock_logsumexp_func(lnl, axis=1):
-            # lnl should have shape (n_selected_objects, nsamps)
-            # Return evidence for each selected object
-            return np.random.uniform(-5, 0, lnl.shape[0])
-
-        # Mock quantile to return reasonable bounds
-        def mock_quantile_func(x, q, weights=None):
-            if len(x) == 0:
-                return [15.0, 20.0]  # Default bounds
-            return [np.min(x), np.max(x)]
-
-        with (
-            patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-            patch(
-                "brutus.plotting.offsets.magnitude", return_value=mock_magnitude_result
-            ),
-            patch(
-                "brutus.plotting.offsets.phot_loglike",
-                side_effect=mock_phot_loglike_func,
-            ),
-            patch("brutus.plotting.offsets.logsumexp", side_effect=mock_logsumexp_func),
-            patch("brutus.plotting.offsets.quantile", side_effect=mock_quantile_func),
-        ):
-
-            fig, axes = photometric_offsets(
-                phot, err, mask, mock_models, idxs, reds, dreds, dists
-            )
-
-        # Should return figure and axes
-        assert fig is not None
-        assert axes is not None
-        assert hasattr(axes, "shape")
-
+        arrays = _panel_hist_arrays(axes, d["nfilt"])
         plt.close(fig)
+        return arrays
 
-    def test_photometric_offsets_with_x_values(
-        self, mock_photometry_data, mock_models, mock_posterior_samples
-    ):
-        """Test photometric_offsets with custom x values."""
-        phot, err, mask = mock_photometry_data
-        idxs, reds, dreds, dists = mock_posterior_samples
-        nobj = phot.shape[0]
+    def test_flux_false_matches_flux_true(self):
+        """The same photometry passed as magnitudes (flux=False) or fluxes
+        (flux=True) must produce identical diagnostics; the old code added
+        the multiplicative flux offset (default 1.0) to every magnitude."""
+        d = _offsets_dataset()
+        arrays_flux = self._run(d, d["flux"], d["fluxerr"], d["mask"], flux=True)
+        arrays_mag = self._run(d, d["mag"], d["magerr"], d["mask"], flux=False)
+        for a, b in zip(arrays_flux, arrays_mag):
+            np.testing.assert_allclose(a, b, rtol=1e-6, atol=1e-9, equal_nan=True)
 
-        # Create custom x values
-        x = np.random.uniform(15, 20, nobj)  # Magnitudes for x-axis
-
-        nobj, nsamps, nfilt = idxs.shape[0], idxs.shape[1], phot.shape[1]
-        mock_seds = np.random.uniform(15, 20, (nobj * nsamps, nfilt))
-        mock_magnitude_result = (
-            np.random.uniform(15, 20, (nobj, nfilt)),
-            np.random.uniform(0.05, 0.15, (nobj, nfilt)),
+    def test_flux_false_applies_offset_in_mag_space(self):
+        """A multiplicative flux offset must enter magnitudes as
+        -2.5 log10(offset), matching the flux=True path exactly."""
+        d = _offsets_dataset()
+        offset = np.linspace(0.95, 1.05, d["nfilt"])
+        arrays_flux = self._run(
+            d, d["flux"], d["fluxerr"], d["mask"], flux=True, offset=offset
         )
-        mock_loglike = np.random.uniform(-10, -1, nsamps)
+        arrays_mag = self._run(
+            d, d["mag"], d["magerr"], d["mask"], flux=False, offset=offset
+        )
+        for a, b in zip(arrays_flux, arrays_mag):
+            np.testing.assert_allclose(a, b, rtol=1e-6, atol=1e-9, equal_nan=True)
 
-        with (
-            patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-            patch(
-                "brutus.plotting.offsets.magnitude", return_value=mock_magnitude_result
-            ),
-            patch("brutus.plotting.offsets.phot_loglike", return_value=mock_loglike),
-            patch(
-                "brutus.plotting.offsets.logsumexp",
-                return_value=np.random.uniform(-5, 0, nobj),
-            ),
-            patch("brutus.plotting.offsets.quantile", return_value=[15.0, 20.0]),
-        ):
+    def test_integer_mask_matches_boolean_mask(self):
+        """A documented 0/1 integer mask must behave like a boolean mask
+        instead of fancy-indexing rows 0/1."""
+        d = _offsets_dataset()
+        rng = np.random.RandomState(11)
+        mask_bool = np.ones((d["nobj"], d["nfilt"]), dtype=bool)
+        # Knock out one random band per object (>= 4 observed bands remain).
+        mask_bool[np.arange(d["nobj"]), rng.randint(0, d["nfilt"], d["nobj"])] = False
+        # Give masked bands finite values so only mask semantics differ.
+        arrays_bool = self._run(d, d["flux"], d["fluxerr"], mask_bool, flux=True)
+        arrays_int = self._run(
+            d, d["flux"], d["fluxerr"], mask_bool.astype(int), flux=True
+        )
+        for a, b in zip(arrays_bool, arrays_int):
+            np.testing.assert_allclose(a, b, rtol=1e-6, atol=1e-9, equal_nan=True)
 
-            fig, axes = photometric_offsets(
-                phot, err, mask, mock_models, idxs, reds, dreds, dists, x=x
-            )
+    def test_nonfinite_flux_in_masked_bands_does_not_empty_selection(self):
+        """Objects with nonpositive flux in *unobserved* bands (the case masks
+        exist for) must still populate every panel."""
+        d = _offsets_dataset()
+        rng = np.random.RandomState(13)
+        flux = d["flux"].copy()
+        mask = np.ones((d["nobj"], d["nfilt"]), dtype=bool)
+        # Each object is missing one band, encoded as flux = 0 (-> mag = inf).
+        missing = rng.randint(0, d["nfilt"], d["nobj"])
+        mask[np.arange(d["nobj"]), missing] = False
+        flux[np.arange(d["nobj"]), missing] = 0.0
 
-        assert fig is not None
-        plt.close(fig)
+        arrays = self._run(d, flux, d["fluxerr"], mask, flux=True)
+        for arr in arrays:
+            assert np.nansum(arr) > 0  # every panel keeps objects
 
-    def test_photometric_offsets_magnitude_mode(
-        self, mock_photometry_data, mock_models, mock_posterior_samples
-    ):
-        """Test photometric_offsets with magnitude input."""
-        phot, err, mask = mock_photometry_data
-        idxs, reds, dreds, dists = mock_posterior_samples
+    def test_2d_integer_mask_matches_boolean_mask(self):
+        """photometric_offsets_2d: integer masks must not bitwise-invert
+        (`~1 == -2`) onto the wrong objects."""
+        d = _offsets_dataset()
+        rng = np.random.RandomState(17)
+        x = rng.uniform(-2, 2, d["nobj"])
+        y = rng.uniform(-1, 1, d["nobj"])
+        mask_bool = np.ones((d["nobj"], d["nfilt"]), dtype=bool)
+        mask_bool[np.arange(d["nobj"]), rng.randint(0, d["nfilt"], d["nobj"])] = False
 
-        # Convert to magnitude-like values
-        mag_phot = np.random.uniform(15, 20, phot.shape)
-        mag_err = np.random.uniform(0.05, 0.15, phot.shape)
-
-        nobj, nsamps, nfilt = idxs.shape[0], idxs.shape[1], phot.shape[1]
-        mock_seds = np.random.uniform(15, 20, (nobj * nsamps, nfilt))
-        mock_loglike = np.random.uniform(-10, -1, nsamps)
-
-        with (
-            patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-            patch("brutus.plotting.offsets.phot_loglike", return_value=mock_loglike),
-            patch(
-                "brutus.plotting.offsets.logsumexp",
-                return_value=np.random.uniform(-5, 0, nobj),
-            ),
-            patch("brutus.plotting.offsets.quantile", return_value=[15.0, 20.0]),
-        ):
-
-            fig, axes = photometric_offsets(
-                mag_phot,
-                mag_err,
+        def run(mask):
+            fig, axes = photometric_offsets_2d(
+                d["flux"],
+                d["fluxerr"],
                 mask,
-                mock_models,
-                idxs,
-                reds,
-                dreds,
-                dists,
-                flux=False,  # Input is already in magnitudes
+                d["models"],
+                d["idxs"],
+                d["reds"],
+                d["dreds"],
+                d["dists"],
+                x,
+                y,
+                bins=4,
+                plot_thresh=1.0,
             )
+            ax = axes.flatten()
+            arrays = [
+                np.ma.filled(np.asanyarray(ax[i].images[0].get_array()), np.nan)
+                for i in range(d["nfilt"])
+            ]
+            plt.close(fig)
+            return arrays
 
-        assert fig is not None
-        plt.close(fig)
+        arrays_bool = run(mask_bool)
+        arrays_int = run(mask_bool.astype(int))
+        for a, b in zip(arrays_bool, arrays_int):
+            np.testing.assert_allclose(a, b, rtol=1e-6, atol=1e-9, equal_nan=True)
 
-    def test_photometric_offsets_with_weights(
-        self, mock_photometry_data, mock_models, mock_posterior_samples
-    ):
-        """Test photometric_offsets with importance weights."""
-        phot, err, mask = mock_photometry_data
-        idxs, reds, dreds, dists = mock_posterior_samples
 
-        # Generate weights
-        nobj, nsamps = idxs.shape
-        weights = np.random.exponential(1.0, (nobj, nsamps))
+def _panel_image_arrays(axes, nfilt):
+    """Extract the per-panel offset maps from photometric_offsets_2d."""
+    ax = axes.flatten()
+    return [
+        np.ma.filled(np.asanyarray(ax[i].images[0].get_array()), np.nan)
+        for i in range(nfilt)
+    ]
 
-        nfilt = phot.shape[1]
-        mock_seds = np.random.uniform(15, 20, (nobj * nsamps, nfilt))
-        mock_magnitude_result = (
-            np.random.uniform(15, 20, (nobj, nfilt)),
-            np.random.uniform(0.05, 0.15, (nobj, nfilt)),
+
+def _run_1d(d, **kwargs):
+    kwargs.setdefault("xspan", [(-10.0, 20.0)] * d["nfilt"])
+    kwargs.setdefault("yspan", [(-20.0, 20.0)] * d["nfilt"])
+    fig, axes = photometric_offsets(
+        d["flux"],
+        d["fluxerr"],
+        d["mask"],
+        d["models"],
+        d["idxs"],
+        d["reds"],
+        d["dreds"],
+        d["dists"],
+        **kwargs,
+    )
+    arrays = _panel_hist_arrays(axes, d["nfilt"])
+    plt.close(fig)
+    return arrays
+
+
+def _run_2d(d, x, y, **kwargs):
+    kwargs.setdefault("bins", 3)
+    kwargs.setdefault("plot_thresh", 1.0)
+    fig, axes = photometric_offsets_2d(
+        d["flux"],
+        d["fluxerr"],
+        d["mask"],
+        d["models"],
+        d["idxs"],
+        d["reds"],
+        d["dreds"],
+        d["dists"],
+        x,
+        y,
+        **kwargs,
+    )
+    arrays = _panel_image_arrays(axes, d["nfilt"])
+    plt.close(fig)
+    return arrays
+
+
+class TestPhotometricOffsets1D:
+    """Histogram weights and binning of `photometric_offsets`."""
+
+    def test_each_object_adds_unit_weight_to_each_panel(self):
+        d = _offsets_dataset()
+        for arr in _run_1d(d, bins=10):
+            assert np.nansum(arr) == pytest.approx(d["nobj"])
+
+    def test_per_object_weights_scale_each_object(self):
+        d = _offsets_dataset()
+        weights = np.where(np.arange(d["nobj"]) < 10, 1.0, 0.0)
+        for arr in _run_1d(d, bins=10, weights=weights):
+            assert np.nansum(arr) == pytest.approx(10.0)
+
+    def test_constant_x_falls_in_one_column(self):
+        d = _offsets_dataset()
+        arrays = _run_1d(
+            d, x=np.zeros(d["nobj"]), xspan=[(-1.0, 1.0)] * d["nfilt"], bins=2
         )
-        mock_loglike = np.random.uniform(-10, -1, nsamps)
+        for arr in arrays:  # shape (ny, nx); x = 0 falls in the second column
+            assert np.nansum(arr[:, 0]) == 0.0
+            assert np.nansum(arr[:, 1]) == pytest.approx(d["nobj"])
 
-        with (
-            patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-            patch(
-                "brutus.plotting.offsets.magnitude", return_value=mock_magnitude_result
-            ),
-            patch("brutus.plotting.offsets.phot_loglike", return_value=mock_loglike),
-            patch(
-                "brutus.plotting.offsets.logsumexp",
-                return_value=np.random.uniform(-5, 0, nobj),
-            ),
-            patch("brutus.plotting.offsets.quantile", return_value=[15.0, 20.0]),
-        ):
+    def test_bins_per_filter_set_each_panel_shape(self):
+        d = _offsets_dataset()
+        bins = [3, 4, 5, 6, 7, 8]
+        for arr, nbin in zip(_run_1d(d, bins=bins), bins):
+            assert arr.size == nbin * nbin
 
-            fig, axes = photometric_offsets(
-                phot, err, mask, mock_models, idxs, reds, dreds, dists, weights=weights
-            )
-
-        assert fig is not None
-        plt.close(fig)
-
-    def test_photometric_offsets_custom_parameters(
-        self, mock_photometry_data, mock_models, mock_posterior_samples
-    ):
-        """Test photometric_offsets with custom parameters."""
-        phot, err, mask = mock_photometry_data
-        idxs, reds, dreds, dists = mock_posterior_samples
-        nfilt = phot.shape[1]
-
-        # Custom parameters
-        bins = [25, 30, 20, 35]  # Different bins per filter
-        offset = np.random.uniform(0.95, 1.05, nfilt)  # ±5% offsets
-        titles = [f"Filter {i}" for i in range(nfilt)]
-        xlabel = "Magnitude"
-
-        nobj, nsamps = idxs.shape
-        mock_seds = np.random.uniform(15, 20, (nobj * nsamps, nfilt))
-        mock_magnitude_result = (
-            np.random.uniform(15, 20, (nobj, nfilt)),
-            np.random.uniform(0.05, 0.15, (nobj, nfilt)),
+    def test_given_figure_is_returned(self):
+        d = _offsets_dataset()
+        figure = plt.subplots(2, 3)
+        fig, axes = photometric_offsets(
+            d["flux"],
+            d["fluxerr"],
+            d["mask"],
+            d["models"],
+            d["idxs"],
+            d["reds"],
+            d["dreds"],
+            d["dists"],
+            bins=5,
+            fig=figure,
         )
-        mock_loglike = np.random.uniform(-10, -1, nsamps)
-
-        with (
-            patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-            patch(
-                "brutus.plotting.offsets.magnitude", return_value=mock_magnitude_result
-            ),
-            patch("brutus.plotting.offsets.phot_loglike", return_value=mock_loglike),
-            patch(
-                "brutus.plotting.offsets.logsumexp",
-                return_value=np.random.uniform(-5, 0, nobj),
-            ),
-            patch("brutus.plotting.offsets.quantile", return_value=[15.0, 20.0]),
-        ):
-
-            fig, axes = photometric_offsets(
-                phot,
-                err,
-                mask,
-                mock_models,
-                idxs,
-                reds,
-                dreds,
-                dists,
-                bins=bins,
-                offset=offset,
-                titles=titles,
-                xlabel=xlabel,
-                cmap="plasma",
-                plot_thresh=5.0,
-            )
-
-        assert fig is not None
-        plt.close(fig)
-
-    def test_photometric_offsets_custom_figure(
-        self, mock_photometry_data, mock_models, mock_posterior_samples
-    ):
-        """Test photometric_offsets with custom figure."""
-        phot, err, mask = mock_photometry_data
-        idxs, reds, dreds, dists = mock_posterior_samples
-        nfilt = phot.shape[1]
-
-        # Create custom figure
-        ncols = 2
-        nrows = (nfilt - 1) // ncols + 1
-        custom_fig, custom_axes = plt.subplots(nrows, ncols, figsize=(8, 6))
-
-        nobj, nsamps = idxs.shape
-        mock_seds = np.random.uniform(15, 20, (nobj * nsamps, nfilt))
-        mock_magnitude_result = (
-            np.random.uniform(15, 20, (nobj, nfilt)),
-            np.random.uniform(0.05, 0.15, (nobj, nfilt)),
-        )
-        mock_loglike = np.random.uniform(-10, -1, nsamps)
-
-        with (
-            patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-            patch(
-                "brutus.plotting.offsets.magnitude", return_value=mock_magnitude_result
-            ),
-            patch("brutus.plotting.offsets.phot_loglike", return_value=mock_loglike),
-            patch(
-                "brutus.plotting.offsets.logsumexp",
-                return_value=np.random.uniform(-5, 0, nobj),
-            ),
-            patch("brutus.plotting.offsets.quantile", return_value=[15.0, 20.0]),
-        ):
-
-            fig, axes = photometric_offsets(
-                phot,
-                err,
-                mask,
-                mock_models,
-                idxs,
-                reds,
-                dreds,
-                dists,
-                fig=(custom_fig, custom_axes),
-            )
-
-        # Should return the same figure and axes
-        assert fig is custom_fig
-        assert axes is custom_axes
-
-        plt.close(fig)
-
-    def test_photometric_offsets_return_format(
-        self, mock_photometry_data, mock_models, mock_posterior_samples
-    ):
-        """Test photometric_offsets return format."""
-        phot, err, mask = mock_photometry_data
-        idxs, reds, dreds, dists = mock_posterior_samples
-
-        nobj, nsamps, nfilt = idxs.shape[0], idxs.shape[1], phot.shape[1]
-        mock_seds = np.random.uniform(15, 20, (nobj * nsamps, nfilt))
-        mock_magnitude_result = (
-            np.random.uniform(15, 20, (nobj, nfilt)),
-            np.random.uniform(0.05, 0.15, (nobj, nfilt)),
-        )
-        mock_loglike = np.random.uniform(-10, -1, nsamps)
-
-        with (
-            patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-            patch(
-                "brutus.plotting.offsets.magnitude", return_value=mock_magnitude_result
-            ),
-            patch("brutus.plotting.offsets.phot_loglike", return_value=mock_loglike),
-            patch(
-                "brutus.plotting.offsets.logsumexp",
-                return_value=np.random.uniform(-5, 0, nobj),
-            ),
-            patch("brutus.plotting.offsets.quantile", return_value=[15.0, 20.0]),
-        ):
-
-            result = photometric_offsets(
-                phot, err, mask, mock_models, idxs, reds, dreds, dists
-            )
-
-        # Should return 2-tuple: (fig, axes)
-        assert len(result) == 2
-        fig, axes = result
-
-        # Check types
-        assert hasattr(fig, "subplots_adjust")  # Figure-like object
-        assert hasattr(axes, "shape")  # Array-like object
-
+        assert fig is figure[0] and axes is figure[1]
         plt.close(fig)
 
 
 class TestPhotometricOffsets2D:
-    """Comprehensive tests for photometric_offsets_2d function."""
+    """Offset maps of `photometric_offsets_2d`."""
 
-    @pytest.fixture
-    def mock_2d_data(self):
-        """Generate mock 2D positioning data."""
-        np.random.seed(42)
-        nobj = 30
+    @staticmethod
+    def _xy(d):
+        rng = np.random.RandomState(5)
+        return rng.uniform(-2, 2, d["nobj"]), rng.uniform(-1, 1, d["nobj"])
 
-        # Generate 2D coordinates (e.g., sky positions, color-magnitude, etc.)
-        x = np.random.uniform(-2, 2, nobj)  # RA-like
-        y = np.random.uniform(-1, 1, nobj)  # Dec-like
+    def test_offset_in_one_band_shifts_only_its_map(self):
+        """A flux offset c in band 0 adds 2.5 log10(c) to that band's map.
 
-        return x, y
-
-    @pytest.fixture
-    def mock_photometry_data_2d(self):
-        """Generate mock photometry data for 2D tests."""
-        np.random.seed(42)
-        nobj, nfilt = 30, 3
-
-        phot = np.random.uniform(1e-14, 1e-12, (nobj, nfilt))
-        err = phot * np.random.uniform(0.05, 0.12, (nobj, nfilt))
-        mask = np.random.choice([True, False], (nobj, nfilt), p=[0.85, 0.15])
-
-        return phot, err, mask
-
-    @pytest.fixture
-    def mock_models_2d(self):
-        """Generate mock models for 2D tests."""
-        np.random.seed(42)
-        nmodels, nfilt, ncoeff = 25, 3, 3
-
-        models = np.random.uniform(10, 20, (nmodels, nfilt, ncoeff))
-        models[:, :, 0] += np.random.uniform(-1.5, 1.5, (nmodels, nfilt))
-
-        return models
-
-    @pytest.fixture
-    def mock_posterior_samples_2d(self, mock_photometry_data_2d, mock_models_2d):
-        """Generate mock posterior samples for 2D tests."""
-        np.random.seed(42)
-        phot, err, mask = mock_photometry_data_2d
-        nobj = phot.shape[0]
-        nmodels = mock_models_2d.shape[0]
-        nsamps = 20
-
-        idxs = np.random.choice(nmodels, (nobj, nsamps), replace=True)
-        reds = np.random.exponential(0.25, (nobj, nsamps))
-        dreds = np.random.normal(3.2, 0.15, nsamps)
-        dists = np.random.lognormal(np.log(1.2), 0.35, (nobj, nsamps))
-
-        return idxs, reds, dreds, dists
-
-    def test_photometric_offsets_2d_basic(
-        self,
-        mock_2d_data,
-        mock_photometry_data_2d,
-        mock_models_2d,
-        mock_posterior_samples_2d,
-    ):
-        """Test basic photometric_offsets_2d functionality."""
-        x, y = mock_2d_data
-        phot, err, mask = mock_photometry_data_2d
-        idxs, reds, dreds, dists = mock_posterior_samples_2d
-
-        nobj, nsamps, nfilt = idxs.shape[0], idxs.shape[1], phot.shape[1]
-        mock_seds = np.random.uniform(15, 20, (nobj * nsamps, nfilt))
-        mock_magnitude_result = (
-            np.random.uniform(15, 20, (nobj, nfilt)),
-            np.random.uniform(0.05, 0.15, (nobj, nfilt)),
-        )
-        mock_loglike = np.random.uniform(-8, -2, (1, nsamps))
-
-        with (
-            patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-            patch(
-                "brutus.plotting.offsets.magnitude", return_value=mock_magnitude_result
-            ),
-            patch("brutus.plotting.offsets.phot_loglike", return_value=mock_loglike),
-            patch(
-                "brutus.plotting.offsets.logsumexp",
-                return_value=np.random.uniform(-4, 0, nobj),
-            ),
-            patch("brutus.plotting.offsets.quantile", return_value=[0.0]),
-        ):
-
-            fig, axes = photometric_offsets_2d(
-                phot, err, mask, mock_models_2d, idxs, reds, dreds, dists, x, y
-            )
-
-        assert fig is not None
-        assert axes is not None
-
-        plt.close(fig)
-
-    def test_photometric_offsets_2d_with_offsets(
-        self,
-        mock_2d_data,
-        mock_photometry_data_2d,
-        mock_models_2d,
-        mock_posterior_samples_2d,
-    ):
-        """Test photometric_offsets_2d with photometric offsets."""
-        x, y = mock_2d_data
-        phot, err, mask = mock_photometry_data_2d
-        idxs, reds, dreds, dists = mock_posterior_samples_2d
-        nfilt = phot.shape[1]
-
-        # Create offsets
-        offset = np.array([0.98, 1.02, 0.99])  # ±2% offsets
-
-        nobj, nsamps = idxs.shape
-        mock_seds = np.random.uniform(15, 20, (nobj * nsamps, nfilt))
-        mock_magnitude_result = (
-            np.random.uniform(15, 20, (nobj, nfilt)),
-            np.random.uniform(0.05, 0.15, (nobj, nfilt)),
-        )
-        mock_loglike = np.random.uniform(-8, -2, (1, nsamps))
-
-        with (
-            patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-            patch(
-                "brutus.plotting.offsets.magnitude", return_value=mock_magnitude_result
-            ),
-            patch("brutus.plotting.offsets.phot_loglike", return_value=mock_loglike),
-            patch(
-                "brutus.plotting.offsets.logsumexp",
-                return_value=np.random.uniform(-4, 0, nobj),
-            ),
-            patch("brutus.plotting.offsets.quantile", return_value=[0.0]),
-        ):
-
-            fig, axes = photometric_offsets_2d(
-                phot,
-                err,
-                mask,
-                mock_models_2d,
-                idxs,
-                reds,
-                dreds,
-                dists,
-                x,
-                y,
-                offset=offset,
-                show_off=True,
-            )
-
-        assert fig is not None
-        plt.close(fig)
-
-    def test_photometric_offsets_2d_custom_parameters(
-        self,
-        mock_2d_data,
-        mock_photometry_data_2d,
-        mock_models_2d,
-        mock_posterior_samples_2d,
-    ):
-        """Test photometric_offsets_2d with custom parameters."""
-        x, y = mock_2d_data
-        phot, err, mask = mock_photometry_data_2d
-        idxs, reds, dreds, dists = mock_posterior_samples_2d
-        nfilt = phot.shape[1]
-
-        # Custom parameters
-        bins = [15, 20, 18]  # Different bins per filter
-        titles = ["g-band", "r-band", "i-band"]
-        xlabel = "RA (deg)"
-        ylabel = "Dec (deg)"
-        clims = (-0.1, 0.1)
-
-        nobj, nsamps = idxs.shape
-        mock_seds = np.random.uniform(15, 20, (nobj * nsamps, nfilt))
-        mock_magnitude_result = (
-            np.random.uniform(15, 20, (nobj, nfilt)),
-            np.random.uniform(0.05, 0.15, (nobj, nfilt)),
-        )
-        mock_loglike = np.random.uniform(-8, -2, (1, nsamps))
-
-        with (
-            patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-            patch(
-                "brutus.plotting.offsets.magnitude", return_value=mock_magnitude_result
-            ),
-            patch("brutus.plotting.offsets.phot_loglike", return_value=mock_loglike),
-            patch(
-                "brutus.plotting.offsets.logsumexp",
-                return_value=np.random.uniform(-4, 0, nobj),
-            ),
-            patch("brutus.plotting.offsets.quantile", return_value=[0.0]),
-        ):
-
-            fig, axes = photometric_offsets_2d(
-                phot,
-                err,
-                mask,
-                mock_models_2d,
-                idxs,
-                reds,
-                dreds,
-                dists,
-                x,
-                y,
-                bins=bins,
-                titles=titles,
-                xlabel=xlabel,
-                ylabel=ylabel,
-                clims=clims,
-                cmap="RdBu_r",
-                plot_thresh=5,
-            )
-
-        assert fig is not None
-        plt.close(fig)
-
-    def test_photometric_offsets_2d_magnitude_mode(
-        self,
-        mock_2d_data,
-        mock_photometry_data_2d,
-        mock_models_2d,
-        mock_posterior_samples_2d,
-    ):
-        """Test photometric_offsets_2d in magnitude mode."""
-        x, y = mock_2d_data
-        phot, err, mask = mock_photometry_data_2d
-        idxs, reds, dreds, dists = mock_posterior_samples_2d
-
-        # Convert to magnitude-like data
-        mag_phot = np.random.uniform(15, 20, phot.shape)
-        mag_err = np.random.uniform(0.05, 0.15, phot.shape)
-
-        nobj, nsamps, nfilt = idxs.shape[0], idxs.shape[1], phot.shape[1]
-        mock_seds = np.random.uniform(15, 20, (nobj * nsamps, nfilt))
-        mock_loglike = np.random.uniform(-8, -2, (1, nsamps))
-
-        with (
-            patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-            patch("brutus.plotting.offsets.phot_loglike", return_value=mock_loglike),
-            patch(
-                "brutus.plotting.offsets.logsumexp",
-                return_value=np.random.uniform(-4, 0, nobj),
-            ),
-            patch("brutus.plotting.offsets.quantile", return_value=[0.0]),
-        ):
-
-            fig, axes = photometric_offsets_2d(
-                mag_phot,
-                mag_err,
-                mask,
-                mock_models_2d,
-                idxs,
-                reds,
-                dreds,
-                dists,
-                x,
-                y,
-                flux=False,
-            )
-
-        assert fig is not None
-        plt.close(fig)
-
-    def test_photometric_offsets_2d_return_format(
-        self,
-        mock_2d_data,
-        mock_photometry_data_2d,
-        mock_models_2d,
-        mock_posterior_samples_2d,
-    ):
-        """Test photometric_offsets_2d return format."""
-        x, y = mock_2d_data
-        phot, err, mask = mock_photometry_data_2d
-        idxs, reds, dreds, dists = mock_posterior_samples_2d
-
-        nobj, nsamps, nfilt = idxs.shape[0], idxs.shape[1], phot.shape[1]
-        mock_seds = np.random.uniform(15, 20, (nobj * nsamps, nfilt))
-        mock_magnitude_result = (
-            np.random.uniform(15, 20, (nobj, nfilt)),
-            np.random.uniform(0.05, 0.15, (nobj, nfilt)),
-        )
-        mock_loglike = np.random.uniform(-8, -2, (1, nsamps))
-
-        with (
-            patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-            patch(
-                "brutus.plotting.offsets.magnitude", return_value=mock_magnitude_result
-            ),
-            patch("brutus.plotting.offsets.phot_loglike", return_value=mock_loglike),
-            patch(
-                "brutus.plotting.offsets.logsumexp",
-                return_value=np.random.uniform(-4, 0, nobj),
-            ),
-            patch("brutus.plotting.offsets.quantile", return_value=[0.0]),
-        ):
-
-            result = photometric_offsets_2d(
-                phot, err, mask, mock_models_2d, idxs, reds, dreds, dists, x, y
-            )
-
-        # Should return 2-tuple: (fig, axes)
-        assert len(result) == 2
-        fig, axes = result
-
-        # Check types
-        assert hasattr(fig, "subplots_adjust")  # Figure-like object
-        assert hasattr(axes, "shape")  # Array-like object
-
-        plt.close(fig)
-
-
-class TestPhotometricOffsetsIntegration:
-    """Integration tests for photometric offset functions."""
-
-    def test_photometric_offsets_realistic_scenario(self):
-        """Test photometric_offsets with realistic astronomical data."""
-        np.random.seed(42)
-
-        # Realistic survey-like data
-        nobj, nfilt, nsamps = 50, 5, 30
-        nmodels, ncoeff = 40, 4
-
-        # Generate realistic photometry (flux + errors)
-        phot = np.random.lognormal(np.log(1e-13), 0.5, (nobj, nfilt))
-        err = phot * np.random.uniform(0.03, 0.20, (nobj, nfilt))  # 3-20% errors
-
-        # Realistic detection mask (brighter = higher detection probability)
-        snr = phot / err
-        detection_prob = 1 / (1 + np.exp(-(snr - 3) / 2))  # Sigmoid around SNR=3
-        mask = np.random.random((nobj, nfilt)) < detection_prob
-
-        # Generate models and posterior samples
-        models = np.random.uniform(8, 22, (nmodels, nfilt, ncoeff))
-        idxs = np.random.choice(nmodels, (nobj, nsamps), replace=True)
-
-        # Realistic astrophysical parameter distributions
-        reds = np.random.exponential(0.2, (nobj, nsamps))  # Low extinction
-        dreds = np.random.normal(3.1, 0.1, nsamps)  # Standard Rv
-        dists = np.random.lognormal(np.log(2.0), 0.6, (nobj, nsamps))  # ~2 kpc
-
-        # Mock dependencies
-        mock_seds = np.random.uniform(12, 19, (nobj * nsamps, nfilt))
-        mock_magnitude_result = (
-            np.random.uniform(12, 19, (nobj, nfilt)),
-            np.random.uniform(0.03, 0.20, (nobj, nfilt)),
-        )
-        mock_loglike = np.random.uniform(-15, -3, nsamps)
-
-        # Mock functions with proper shapes
-        def mock_phot_loglike_func(mo, me, mp, mask=None, dim_prior=True):
-            nmod = mp.shape[1]
-            return np.random.uniform(-15, -3, (1, nmod))
-
-        def mock_logsumexp_func(lnl, axis=1):
-            return np.random.uniform(-8, 0, lnl.shape[0])
-
-        def mock_quantile_func(x, q, weights=None):
-            if len(x) == 0:
-                return [12.0, 19.0]
-            return [np.min(x), np.max(x)]
-
-        with (
-            patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-            patch(
-                "brutus.plotting.offsets.magnitude", return_value=mock_magnitude_result
-            ),
-            patch(
-                "brutus.plotting.offsets.phot_loglike",
-                side_effect=mock_phot_loglike_func,
-            ),
-            patch("brutus.plotting.offsets.logsumexp", side_effect=mock_logsumexp_func),
-            patch("brutus.plotting.offsets.quantile", side_effect=mock_quantile_func),
-        ):
-
-            fig, axes = photometric_offsets(
-                phot,
-                err,
-                mask,
-                models,
-                idxs,
-                reds,
-                dreds,
-                dists,
-                bins=25,
-                titles=["u", "g", "r", "i", "z"],
-            )
-
-        # Should handle realistic scenario without issues
-        assert fig is not None
-        assert axes.size >= nfilt  # Should have at least nfilt subplots
-
-        plt.close(fig)
-
-    def test_photometric_offsets_2d_realistic_scenario(self):
-        """Test photometric_offsets_2d with realistic 2D data."""
-        np.random.seed(42)
-
-        nobj, nfilt, nsamps = 40, 3, 25
-        nmodels, ncoeff = 30, 3
-
-        # Generate sky coordinates (simulating a field)
-        ra = np.random.uniform(150, 152, nobj)  # 2-degree field
-        dec = np.random.uniform(1, 3, nobj)
-
-        # Generate photometry with spatial correlation (e.g., extinction)
-        base_extinction = 0.1 + 0.05 * np.sin(ra * np.pi / 180) * np.cos(
-            dec * np.pi / 180
-        )
-        phot = np.random.lognormal(np.log(1e-13), 0.4, (nobj, nfilt))
-        # Apply extinction-like effect
-        for i in range(nobj):
-            phot[i] *= np.exp(
-                -base_extinction[i] * np.array([1.2, 1.0, 0.8])
-            )  # wavelength dependent
-
-        err = phot * np.random.uniform(0.05, 0.15, (nobj, nfilt))
-        mask = np.random.choice([True, False], (nobj, nfilt), p=[0.9, 0.1])
-
-        # Models and samples
-        models = np.random.uniform(10, 18, (nmodels, nfilt, ncoeff))
-        idxs = np.random.choice(nmodels, (nobj, nsamps), replace=True)
-        reds = np.random.exponential(0.15, (nobj, nsamps))
-        dreds = np.random.normal(3.1, 0.1, nsamps)
-        dists = np.random.lognormal(np.log(1.8), 0.4, (nobj, nsamps))
-
-        # Mock dependencies
-        mock_seds = np.random.uniform(13, 17, (nobj * nsamps, nfilt))
-        mock_magnitude_result = (
-            np.random.uniform(13, 17, (nobj, nfilt)),
-            np.random.uniform(0.05, 0.15, (nobj, nfilt)),
-        )
-
-        def mock_phot_loglike_2d(mo, me, mp, mask=None, dim_prior=True):
-            nmod = mp.shape[1]
-            return np.random.uniform(-12, -2, (1, nmod))
-
-        with (
-            patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-            patch(
-                "brutus.plotting.offsets.magnitude", return_value=mock_magnitude_result
-            ),
-            patch(
-                "brutus.plotting.offsets.phot_loglike",
-                side_effect=mock_phot_loglike_2d,
-            ),
-            patch(
-                "brutus.plotting.offsets.logsumexp",
-                return_value=np.random.uniform(-6, 0, nobj),
-            ),
-            patch("brutus.plotting.offsets.quantile", return_value=[0.0]),
-        ):
-
-            fig, axes = photometric_offsets_2d(
-                phot,
-                err,
-                mask,
-                models,
-                idxs,
-                reds,
-                dreds,
-                dists,
-                ra,
-                dec,
-                xlabel="RA (deg)",
-                ylabel="Dec (deg)",
-                titles=["g", "r", "i"],
-                bins=12,
-            )
-
-        assert fig is not None
-        plt.close(fig)
-
-    def test_photometric_offsets_edge_cases(self):
-        """Test edge cases for photometric offset functions."""
-        # Very small dataset
-        np.random.seed(42)
-        nobj, nfilt, nsamps = 5, 2, 8
-        nmodels, ncoeff = 10, 2
-
-        phot = np.random.uniform(1e-13, 1e-12, (nobj, nfilt))
-        err = phot * 0.1
-        mask = np.ones((nobj, nfilt), dtype=bool)  # All detected
-
-        models = np.random.uniform(15, 18, (nmodels, nfilt, ncoeff))
-        idxs = np.random.choice(nmodels, (nobj, nsamps), replace=True)
-        reds = np.random.uniform(0, 0.5, (nobj, nsamps))
-        dreds = np.random.uniform(2.8, 3.5, nsamps)
-        dists = np.random.uniform(0.5, 3.0, (nobj, nsamps))
-
-        mock_seds = np.random.uniform(15, 18, (nobj * nsamps, nfilt))
-        mock_magnitude_result = (
-            np.random.uniform(15, 18, (nobj, nfilt)),
-            np.random.uniform(0.08, 0.12, (nobj, nfilt)),
-        )
-        mock_loglike = np.random.uniform(-10, -5, nsamps)
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")  # May produce warnings for small dataset
-            with (
-                patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-                patch(
-                    "brutus.plotting.offsets.magnitude",
-                    return_value=mock_magnitude_result,
-                ),
-                patch(
-                    "brutus.plotting.offsets.phot_loglike", return_value=mock_loglike
-                ),
-                patch(
-                    "brutus.plotting.offsets.logsumexp",
-                    return_value=np.random.uniform(-5, 0, nobj),
-                ),
-                patch("brutus.plotting.offsets.quantile", return_value=[15.0, 18.0]),
-            ):
-
-                fig, axes = photometric_offsets(
-                    phot, err, mask, models, idxs, reds, dreds, dists
-                )
-
-        assert fig is not None
-        plt.close(fig)
-
-
-class TestPhotometricOffsetsCoverageGaps:
-    """Tests to close specific coverage gaps in offsets.py."""
-
-    @pytest.fixture
-    def base_data(self):
-        """Generate base mock data for coverage gap tests."""
-        np.random.seed(123)
-        nobj, nfilt, nsamps = 20, 4, 25
-        nmodels, ncoeff = 30, 3
-
-        phot = np.random.uniform(1e-14, 1e-12, (nobj, nfilt))
-        err = phot * np.random.uniform(0.05, 0.15, (nobj, nfilt))
-        mask = np.random.choice([True, False], (nobj, nfilt), p=[0.8, 0.2])
-        models = np.random.uniform(10, 20, (nmodels, nfilt, ncoeff))
-        idxs = np.random.choice(nmodels, (nobj, nsamps), replace=True)
-        reds = np.random.exponential(0.3, (nobj, nsamps))
-        dreds = np.random.normal(3.1, 0.2, nsamps)
-        dists = np.random.lognormal(np.log(1.5), 0.4, (nobj, nsamps))
-
-        return {
-            "phot": phot,
-            "err": err,
-            "mask": mask,
-            "models": models,
-            "idxs": idxs,
-            "reds": reds,
-            "dreds": dreds,
-            "dists": dists,
-            "nobj": nobj,
-            "nfilt": nfilt,
-            "nsamps": nsamps,
-        }
-
-    def _make_mocks(self, nobj, nfilt, nsamps):
-        """Create standard mocks for the plotting functions."""
-        mock_seds = np.random.uniform(15, 20, (nobj * nsamps, nfilt))
-        mock_magnitude_result = (
-            np.random.uniform(15, 20, (nobj, nfilt)),
-            np.random.uniform(0.05, 0.15, (nobj, nfilt)),
-        )
-
-        def mock_phot_loglike_func(mo, me, mt, mp, dim_prior=True):
-            return np.random.uniform(-10, -1, nsamps)
-
-        def mock_logsumexp_func(lnl, axis=1):
-            return np.random.uniform(-5, 0, lnl.shape[0])
-
-        def mock_quantile_func(x, q, weights=None):
-            if len(x) == 0:
-                return [15.0, 20.0]
-            return [np.min(x), np.max(x)]
-
-        return (
-            mock_seds,
-            mock_magnitude_result,
-            mock_phot_loglike_func,
-            mock_logsumexp_func,
-            mock_quantile_func,
-        )
-
-    def test_1d_weights_reshaping(self, base_data):
-        """Test photometric_offsets with 1D weights (line 156, 162)."""
-        d = base_data
-        nobj, nfilt, nsamps = d["nobj"], d["nfilt"], d["nsamps"]
-
-        # 1D weights: shape (nobj,) -- should be reshaped to (nobj, nsamps)
-        weights_1d = np.random.exponential(1.0, nobj)
-
-        mocks = self._make_mocks(nobj, nfilt, nsamps)
-        mock_seds, mock_mag, mock_ll, mock_lse, mock_q = mocks
-
-        with (
-            patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-            patch("brutus.plotting.offsets.magnitude", return_value=mock_mag),
-            patch("brutus.plotting.offsets.phot_loglike", side_effect=mock_ll),
-            patch("brutus.plotting.offsets.logsumexp", side_effect=mock_lse),
-            patch("brutus.plotting.offsets.quantile", side_effect=mock_q),
-        ):
-            fig, axes = photometric_offsets(
-                d["phot"],
-                d["err"],
-                d["mask"],
-                d["models"],
-                d["idxs"],
-                d["reds"],
-                d["dreds"],
-                d["dists"],
-                weights=weights_1d,
-            )
-
-        assert fig is not None
-        plt.close(fig)
-
-    def test_default_span_computation(self, base_data):
-        """Test photometric_offsets with span=None (lines 234, 244, 249).
-
-        When xspan and yspan are both None, the function should auto-compute
-        bounds from data quantiles.
+        The weights for band 0 use only the other bands, so they do not
+        change.
         """
-        d = base_data
-        nobj, nfilt, nsamps = d["nobj"], d["nfilt"], d["nsamps"]
-
-        mocks = self._make_mocks(nobj, nfilt, nsamps)
-        mock_seds, mock_mag, mock_ll, mock_lse, mock_q = mocks
-
-        with (
-            patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-            patch("brutus.plotting.offsets.magnitude", return_value=mock_mag),
-            patch("brutus.plotting.offsets.phot_loglike", side_effect=mock_ll),
-            patch("brutus.plotting.offsets.logsumexp", side_effect=mock_lse),
-            patch("brutus.plotting.offsets.quantile", side_effect=mock_q),
-        ):
-            # Explicitly pass span=None (default) to confirm auto-computation
-            fig, axes = photometric_offsets(
-                d["phot"],
-                d["err"],
-                d["mask"],
-                d["models"],
-                d["idxs"],
-                d["reds"],
-                d["dreds"],
-                d["dists"],
-                xspan=None,
-                yspan=None,
-            )
-
-        assert fig is not None
-        plt.close(fig)
-
-    def test_default_span_with_custom_xspan_only(self, base_data):
-        """Test photometric_offsets with xspan set but yspan=None."""
-        d = base_data
-        nobj, nfilt, nsamps = d["nobj"], d["nfilt"], d["nsamps"]
-
-        xspan = [(14.0, 20.0)] * nfilt
-
-        mocks = self._make_mocks(nobj, nfilt, nsamps)
-        mock_seds, mock_mag, mock_ll, mock_lse, mock_q = mocks
-
-        with (
-            patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-            patch("brutus.plotting.offsets.magnitude", return_value=mock_mag),
-            patch("brutus.plotting.offsets.phot_loglike", side_effect=mock_ll),
-            patch("brutus.plotting.offsets.logsumexp", side_effect=mock_lse),
-            patch("brutus.plotting.offsets.quantile", side_effect=mock_q),
-        ):
-            fig, axes = photometric_offsets(
-                d["phot"],
-                d["err"],
-                d["mask"],
-                d["models"],
-                d["idxs"],
-                d["reds"],
-                d["dreds"],
-                d["dists"],
-                xspan=xspan,
-                yspan=None,
-            )
-
-        assert fig is not None
-        plt.close(fig)
-
-    def test_bins_as_per_filter_list(self, base_data):
-        """Test photometric_offsets with per-filter bin list (nbins != 2 branch)."""
-        d = base_data
-        nobj, nfilt, nsamps = d["nobj"], d["nfilt"], d["nsamps"]
-
-        # Per-filter bins list (length != 2) triggers line 160: bins = [b for b in bins]
-        bins_list = [20, 25, 30, 35]  # length == nfilt == 4
-
-        mocks = self._make_mocks(nobj, nfilt, nsamps)
-        mock_seds, mock_mag, mock_ll, mock_lse, mock_q = mocks
-
-        with (
-            patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-            patch("brutus.plotting.offsets.magnitude", return_value=mock_mag),
-            patch("brutus.plotting.offsets.phot_loglike", side_effect=mock_ll),
-            patch("brutus.plotting.offsets.logsumexp", side_effect=mock_lse),
-            patch("brutus.plotting.offsets.quantile", side_effect=mock_q),
-        ):
-            fig, axes = photometric_offsets(
-                d["phot"],
-                d["err"],
-                d["mask"],
-                d["models"],
-                d["idxs"],
-                d["reds"],
-                d["dreds"],
-                d["dists"],
-                bins=bins_list,
-            )
-
-        assert fig is not None
-        plt.close(fig)
-
-    def _make_2d_mocks(self, nobj, nfilt, nsamps):
-        """Create mocks suitable for photometric_offsets_2d.
-
-        The 2D function calls phot_loglike(mo[None,:], me[None,:],
-        mp[None,:,:], mask=mt[None,:]) per object and then .squeeze(0),
-        so the mock must return shape (1, nsamps).
-        """
-        mock_seds = np.random.uniform(15, 20, (nobj * nsamps, nfilt))
-        mock_magnitude_result = (
-            np.random.uniform(15, 20, (nobj, nfilt)),
-            np.random.uniform(0.05, 0.15, (nobj, nfilt)),
+        d = _offsets_dataset()
+        x, y = self._xy(d)
+        offset = np.ones(d["nfilt"])
+        offset[0] = 1.1
+        base = _run_2d(d, x, y)
+        shifted = _run_2d(d, x, y, offset=offset)
+        np.testing.assert_allclose(
+            shifted[0], base[0] + 2.5 * np.log10(1.1), rtol=1e-10, equal_nan=True
         )
 
-        def mock_phot_loglike_func(mo, me, mp, mask=None, dim_prior=True):
-            n = mp.shape[1]  # nsamps
-            return np.random.uniform(-10, -1, (1, n))
+    def test_shared_1d_weights_match_per_sample_weights(self):
+        d = _offsets_dataset()
+        x, y = self._xy(d)
+        w1 = np.random.RandomState(6).uniform(0.5, 1.5, d["nobj"])
+        w2 = np.repeat(w1[:, None], d["idxs"].shape[1], axis=1)
+        for a, b in zip(_run_2d(d, x, y, weights=w1), _run_2d(d, x, y, weights=w2)):
+            np.testing.assert_array_equal(a, b)
 
-        def mock_logsumexp_func(lnl, axis=1):
-            return np.random.uniform(-5, 0, lnl.shape[0])
+    def test_bins_with_too_few_objects_are_masked(self):
+        d = _offsets_dataset()
+        x, y = self._xy(d)
+        for arr in _run_2d(d, x, y, plot_thresh=d["nobj"] + 1):
+            assert np.all(np.isnan(arr))
 
-        def mock_quantile_func(x, q, weights=None):
-            return [0.0]
-
-        return (
-            mock_seds,
-            mock_magnitude_result,
-            mock_phot_loglike_func,
-            mock_logsumexp_func,
-            mock_quantile_func,
-        )
-
-    def test_2d_offsets_default_params(self, base_data):
-        """Test photometric_offsets_2d with default parameters (lines 426, 469-470)."""
-        d = base_data
-        nobj, nfilt, nsamps = d["nobj"], d["nfilt"], d["nsamps"]
-
-        x = np.random.uniform(-2, 2, nobj)
-        y = np.random.uniform(-1, 1, nobj)
-
-        mocks = self._make_2d_mocks(nobj, nfilt, nsamps)
-        mock_seds, mock_mag, mock_ll, mock_lse, mock_q = mocks
-
-        with (
-            patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-            patch("brutus.plotting.offsets.magnitude", return_value=mock_mag),
-            patch("brutus.plotting.offsets.phot_loglike", side_effect=mock_ll),
-            patch("brutus.plotting.offsets.logsumexp", side_effect=mock_lse),
-            patch("brutus.plotting.offsets.quantile", side_effect=mock_q),
-        ):
-            fig, axes = photometric_offsets_2d(
-                d["phot"],
-                d["err"],
-                d["mask"],
-                d["models"],
-                d["idxs"],
-                d["reds"],
-                d["dreds"],
-                d["dists"],
-                x,
-                y,
-            )
-
-        assert fig is not None
-        assert axes is not None
-        plt.close(fig)
-
-    def test_2d_offsets_custom_span(self, base_data):
-        """Test photometric_offsets_2d with custom xspan and yspan (line 505-548)."""
-        d = base_data
-        nobj, nfilt, nsamps = d["nobj"], d["nfilt"], d["nsamps"]
-
-        x = np.random.uniform(-2, 2, nobj)
-        y = np.random.uniform(-1, 1, nobj)
-
-        xspan = [(-2.5, 2.5)] * nfilt
-        yspan = [(-1.5, 1.5)] * nfilt
-
-        mocks = self._make_2d_mocks(nobj, nfilt, nsamps)
-        mock_seds, mock_mag, mock_ll, mock_lse, mock_q = mocks
-
-        with (
-            patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-            patch("brutus.plotting.offsets.magnitude", return_value=mock_mag),
-            patch("brutus.plotting.offsets.phot_loglike", side_effect=mock_ll),
-            patch("brutus.plotting.offsets.logsumexp", side_effect=mock_lse),
-            patch("brutus.plotting.offsets.quantile", side_effect=mock_q),
-        ):
-            fig, axes = photometric_offsets_2d(
-                d["phot"],
-                d["err"],
-                d["mask"],
-                d["models"],
-                d["idxs"],
-                d["reds"],
-                d["dreds"],
-                d["dists"],
-                x,
-                y,
-                xspan=xspan,
-                yspan=yspan,
-            )
-
-        assert fig is not None
-        plt.close(fig)
-
-    def test_2d_offsets_different_bins(self, base_data):
-        """Test photometric_offsets_2d with different bin counts."""
-        d = base_data
-        nobj, nfilt, nsamps = d["nobj"], d["nfilt"], d["nsamps"]
-
-        x = np.random.uniform(-2, 2, nobj)
-        y = np.random.uniform(-1, 1, nobj)
-
-        mocks = self._make_2d_mocks(nobj, nfilt, nsamps)
-        mock_seds, mock_mag, mock_ll, mock_lse, mock_q = mocks
-
-        with (
-            patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-            patch("brutus.plotting.offsets.magnitude", return_value=mock_mag),
-            patch("brutus.plotting.offsets.phot_loglike", side_effect=mock_ll),
-            patch("brutus.plotting.offsets.logsumexp", side_effect=mock_lse),
-            patch("brutus.plotting.offsets.quantile", side_effect=mock_q),
-        ):
-            fig, axes = photometric_offsets_2d(
-                d["phot"],
-                d["err"],
-                d["mask"],
-                d["models"],
-                d["idxs"],
-                d["reds"],
-                d["dreds"],
-                d["dists"],
-                x,
-                y,
-                bins=15,
-            )
-
-        assert fig is not None
-        plt.close(fig)
-
-    def test_2d_offsets_1d_weights(self, base_data):
-        """Test photometric_offsets_2d with 1D weights (line 419-420)."""
-        d = base_data
-        nobj, nfilt, nsamps = d["nobj"], d["nfilt"], d["nsamps"]
-
-        x = np.random.uniform(-2, 2, nobj)
-        y = np.random.uniform(-1, 1, nobj)
-
-        # 1D weights: should be reshaped internally
-        weights_1d = np.random.exponential(1.0, nobj)
-
-        mocks = self._make_2d_mocks(nobj, nfilt, nsamps)
-        mock_seds, mock_mag, mock_ll, mock_lse, mock_q = mocks
-
-        with (
-            patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-            patch("brutus.plotting.offsets.magnitude", return_value=mock_mag),
-            patch("brutus.plotting.offsets.phot_loglike", side_effect=mock_ll),
-            patch("brutus.plotting.offsets.logsumexp", side_effect=mock_lse),
-            patch("brutus.plotting.offsets.quantile", side_effect=mock_q),
-        ):
-            fig, axes = photometric_offsets_2d(
-                d["phot"],
-                d["err"],
-                d["mask"],
-                d["models"],
-                d["idxs"],
-                d["reds"],
-                d["dreds"],
-                d["dists"],
-                x,
-                y,
-                weights=weights_1d,
-            )
-
-        assert fig is not None
-        plt.close(fig)
-
-    def test_2d_offsets_custom_figure(self):
-        """Test photometric_offsets_2d with custom figure (line 469-470)."""
-        np.random.seed(456)
-        # Use 6 filters to ensure nrows >= 2 (code expects axes.shape to be 2D)
-        nobj, nfilt, nsamps = 20, 6, 25
-        nmodels, ncoeff = 30, 3
-
-        phot = np.random.uniform(1e-14, 1e-12, (nobj, nfilt))
-        err = phot * np.random.uniform(0.05, 0.15, (nobj, nfilt))
-        mask = np.random.choice([True, False], (nobj, nfilt), p=[0.8, 0.2])
-        models = np.random.uniform(10, 20, (nmodels, nfilt, ncoeff))
-        idxs = np.random.choice(nmodels, (nobj, nsamps), replace=True)
-        reds = np.random.exponential(0.3, (nobj, nsamps))
-        dreds = np.random.normal(3.1, 0.2, nsamps)
-        dists = np.random.lognormal(np.log(1.5), 0.4, (nobj, nsamps))
-
-        x = np.random.uniform(-2, 2, nobj)
-        y = np.random.uniform(-1, 1, nobj)
-
-        # Create custom figure with 2D axes (nrows=2, ncols=5 for 6 filters)
-        ncols = 5
-        nrows = (nfilt - 1) // ncols + 1  # = 2
-        custom_fig, custom_axes = plt.subplots(nrows, ncols, figsize=(10, 8))
-
-        mocks = self._make_2d_mocks(nobj, nfilt, nsamps)
-        mock_seds, mock_mag, mock_ll, mock_lse, mock_q = mocks
-
-        with (
-            patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-            patch("brutus.plotting.offsets.magnitude", return_value=mock_mag),
-            patch("brutus.plotting.offsets.phot_loglike", side_effect=mock_ll),
-            patch("brutus.plotting.offsets.logsumexp", side_effect=mock_lse),
-            patch("brutus.plotting.offsets.quantile", side_effect=mock_q),
-        ):
-            fig, axes = photometric_offsets_2d(
-                phot,
-                err,
-                mask,
-                models,
-                idxs,
-                reds,
-                dreds,
-                dists,
-                x,
-                y,
-                fig=(custom_fig, custom_axes),
-            )
-
-        assert fig is custom_fig
-        assert axes is custom_axes
-        plt.close(fig)
-
-    def test_2d_offsets_bins_as_2_element_tuple(self, base_data):
-        """Test photometric_offsets_2d with 2-element bins (line 426)."""
-        d = base_data
-        nobj, nfilt, nsamps = d["nobj"], d["nfilt"], d["nsamps"]
-
-        x = np.random.uniform(-2, 2, nobj)
-        y = np.random.uniform(-1, 1, nobj)
-
-        # 2-element tuple triggers the nbins == 2 branch in 2D function
-        bins_2d = (10, 12)
-
-        mocks = self._make_2d_mocks(nobj, nfilt, nsamps)
-        mock_seds, mock_mag, mock_ll, mock_lse, mock_q = mocks
-
-        with (
-            patch("brutus.plotting.offsets.get_seds", return_value=mock_seds),
-            patch("brutus.plotting.offsets.magnitude", return_value=mock_mag),
-            patch("brutus.plotting.offsets.phot_loglike", side_effect=mock_ll),
-            patch("brutus.plotting.offsets.logsumexp", side_effect=mock_lse),
-            patch("brutus.plotting.offsets.quantile", side_effect=mock_q),
-        ):
-            fig, axes = photometric_offsets_2d(
-                d["phot"],
-                d["err"],
-                d["mask"],
-                d["models"],
-                d["idxs"],
-                d["reds"],
-                d["dreds"],
-                d["dists"],
-                x,
-                y,
-                bins=bins_2d,
-            )
-
-        assert fig is not None
-        plt.close(fig)
+    def test_two_element_bins_set_the_map_shape(self):
+        d = _offsets_dataset()
+        x, y = self._xy(d)
+        for arr in _run_2d(d, x, y, bins=(4, 2)):
+            assert arr.shape == (2, 4)  # imshow of offset2d.T

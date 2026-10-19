@@ -13,9 +13,7 @@ Each test here fails on the pre-fix code:
   mis-pairing,
 - CDF accumulated along the wrong axis in `bin_pdfs_distred`,
 - SAR path crash with a custom `lndistprior` and `coord=None`,
-- `cornerplot` mutating caller kwargs dicts / freezing per-panel contour flags,
-- `photometric_offsets*` magnitude-space offset arithmetic, integer masks,
-  and finiteness selection over unobserved bands.
+- `cornerplot` mutating caller kwargs dicts / freezing per-panel contour flags.
 """
 
 import matplotlib
@@ -28,8 +26,6 @@ import matplotlib.pyplot as plt
 from brutus.plotting.binning import bin_pdfs_distred
 from brutus.plotting.corner import cornerplot
 from brutus.plotting.distance import dist_vs_red
-from brutus.plotting.offsets import photometric_offsets, photometric_offsets_2d
-from brutus.utils.photometry import inv_magnitude
 
 # np.trapezoid is NumPy 2.0+; fall back to np.trapz on NumPy 1.x.
 _trapezoid = getattr(np, "trapezoid", None) or np.trapz
@@ -453,172 +449,6 @@ class TestBinPdfsWeightsAndCoords:
         w_zero[1] = 0.0
         with pytest.raises(ValueError, match="sum to zero"):
             bin_pdfs_distred(data, weights=w_zero, **self.KW)
-
-
-def _offsets_dataset(nobj=30, nfilt=6, nsamps=8, seed=3):
-    """Deterministic synthetic dataset exercised with the real (unmocked)
-    get_seds / magnitude / phot_loglike stack."""
-    rng = np.random.RandomState(seed)
-    nmodels = 40
-    models = np.zeros((nmodels, nfilt, 3))
-    models[:, :, 0] = rng.uniform(4.0, 7.0, (nmodels, nfilt))
-    models[:, :, 1] = rng.uniform(0.8, 1.2, (nmodels, nfilt))
-    models[:, :, 2] = rng.uniform(-0.05, 0.05, (nmodels, nfilt))
-    idxs = rng.randint(0, nmodels, (nobj, nsamps))
-    reds = rng.uniform(0.1, 0.5, (nobj, nsamps))
-    dreds = rng.normal(3.3, 0.1, (nobj, nsamps))
-    dists = rng.uniform(0.8, 2.0, (nobj, nsamps))
-    mag = rng.uniform(5.0, 8.0, (nobj, nfilt))
-    magerr = np.full((nobj, nfilt), 0.05)
-    flux, fluxerr = inv_magnitude(mag, magerr)
-    mask = np.ones((nobj, nfilt), dtype=bool)
-    return dict(
-        models=models,
-        idxs=idxs,
-        reds=reds,
-        dreds=dreds,
-        dists=dists,
-        mag=mag,
-        magerr=magerr,
-        flux=flux,
-        fluxerr=fluxerr,
-        mask=mask,
-        nobj=nobj,
-        nfilt=nfilt,
-    )
-
-
-def _panel_hist_arrays(axes, nfilt):
-    """Extract the per-panel hist2d QuadMesh arrays from photometric_offsets."""
-    ax = axes.flatten()
-    out = []
-    for i in range(nfilt):
-        arr = np.ma.filled(np.asanyarray(ax[i].collections[0].get_array()), np.nan)
-        out.append(np.array(arr, dtype=float))
-    return out
-
-
-class TestPhotometricOffsetsFixes:
-    """Magnitude-space offset arithmetic, integer masks, and finiteness
-    selection in photometric_offsets / photometric_offsets_2d."""
-
-    SPANS = dict(xspan=None, yspan=None)
-
-    def _run(self, d, phot, err, mask, flux, **extra):
-        xspan = [(4.0, 9.0)] * d["nfilt"]
-        yspan = [(-3.0, 3.0)] * d["nfilt"]
-        fig, axes = photometric_offsets(
-            phot,
-            err,
-            mask,
-            d["models"],
-            d["idxs"],
-            d["reds"],
-            d["dreds"],
-            d["dists"],
-            flux=flux,
-            xspan=xspan,
-            yspan=yspan,
-            bins=20,
-            **extra,
-        )
-        arrays = _panel_hist_arrays(axes, d["nfilt"])
-        plt.close(fig)
-        return arrays
-
-    def test_flux_false_matches_flux_true(self):
-        """The same photometry passed as magnitudes (flux=False) or fluxes
-        (flux=True) must produce identical diagnostics; the old code added
-        the multiplicative flux offset (default 1.0) to every magnitude."""
-        d = _offsets_dataset()
-        arrays_flux = self._run(d, d["flux"], d["fluxerr"], d["mask"], flux=True)
-        arrays_mag = self._run(d, d["mag"], d["magerr"], d["mask"], flux=False)
-        for a, b in zip(arrays_flux, arrays_mag):
-            np.testing.assert_allclose(a, b, rtol=1e-6, atol=1e-9, equal_nan=True)
-
-    def test_flux_false_applies_offset_in_mag_space(self):
-        """A multiplicative flux offset must enter magnitudes as
-        -2.5 log10(offset), matching the flux=True path exactly."""
-        d = _offsets_dataset()
-        offset = np.linspace(0.95, 1.05, d["nfilt"])
-        arrays_flux = self._run(
-            d, d["flux"], d["fluxerr"], d["mask"], flux=True, offset=offset
-        )
-        arrays_mag = self._run(
-            d, d["mag"], d["magerr"], d["mask"], flux=False, offset=offset
-        )
-        for a, b in zip(arrays_flux, arrays_mag):
-            np.testing.assert_allclose(a, b, rtol=1e-6, atol=1e-9, equal_nan=True)
-
-    def test_integer_mask_matches_boolean_mask(self):
-        """A documented 0/1 integer mask must behave like a boolean mask
-        instead of fancy-indexing rows 0/1."""
-        d = _offsets_dataset()
-        rng = np.random.RandomState(11)
-        mask_bool = np.ones((d["nobj"], d["nfilt"]), dtype=bool)
-        # Knock out one random band per object (>= 4 observed bands remain).
-        mask_bool[np.arange(d["nobj"]), rng.randint(0, d["nfilt"], d["nobj"])] = False
-        # Give masked bands finite values so only mask semantics differ.
-        arrays_bool = self._run(d, d["flux"], d["fluxerr"], mask_bool, flux=True)
-        arrays_int = self._run(
-            d, d["flux"], d["fluxerr"], mask_bool.astype(int), flux=True
-        )
-        for a, b in zip(arrays_bool, arrays_int):
-            np.testing.assert_allclose(a, b, rtol=1e-6, atol=1e-9, equal_nan=True)
-
-    def test_nonfinite_flux_in_masked_bands_does_not_empty_selection(self):
-        """Objects with nonpositive flux in *unobserved* bands (the case masks
-        exist for) must still populate every panel."""
-        d = _offsets_dataset()
-        rng = np.random.RandomState(13)
-        flux = d["flux"].copy()
-        mask = np.ones((d["nobj"], d["nfilt"]), dtype=bool)
-        # Each object is missing one band, encoded as flux = 0 (-> mag = inf).
-        missing = rng.randint(0, d["nfilt"], d["nobj"])
-        mask[np.arange(d["nobj"]), missing] = False
-        flux[np.arange(d["nobj"]), missing] = 0.0
-
-        arrays = self._run(d, flux, d["fluxerr"], mask, flux=True)
-        for arr in arrays:
-            assert np.nansum(arr) > 0  # every panel keeps objects
-
-    def test_2d_integer_mask_matches_boolean_mask(self):
-        """photometric_offsets_2d: integer masks must not bitwise-invert
-        (`~1 == -2`) onto the wrong objects."""
-        d = _offsets_dataset()
-        rng = np.random.RandomState(17)
-        x = rng.uniform(-2, 2, d["nobj"])
-        y = rng.uniform(-1, 1, d["nobj"])
-        mask_bool = np.ones((d["nobj"], d["nfilt"]), dtype=bool)
-        mask_bool[np.arange(d["nobj"]), rng.randint(0, d["nfilt"], d["nobj"])] = False
-
-        def run(mask):
-            fig, axes = photometric_offsets_2d(
-                d["flux"],
-                d["fluxerr"],
-                mask,
-                d["models"],
-                d["idxs"],
-                d["reds"],
-                d["dreds"],
-                d["dists"],
-                x,
-                y,
-                bins=4,
-                plot_thresh=1.0,
-            )
-            ax = axes.flatten()
-            arrays = [
-                np.ma.filled(np.asanyarray(ax[i].images[0].get_array()), np.nan)
-                for i in range(d["nfilt"])
-            ]
-            plt.close(fig)
-            return arrays
-
-        arrays_bool = run(mask_bool)
-        arrays_int = run(mask_bool.astype(int))
-        for a, b in zip(arrays_bool, arrays_int):
-            np.testing.assert_allclose(a, b, rtol=1e-6, atol=1e-9, equal_nan=True)
 
 
 class TestCornerplotKwargsHandling:

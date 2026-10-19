@@ -175,6 +175,41 @@ class TestCacheVersioning:
             assert attr not in cached_data
 
 
+class TestBuildFromFile:
+    """EEPTracks built from a small HDF5 file reproduces the stored tracks."""
+
+    def test_predictions_at_a_grid_node_equal_the_stored_values(self, tmp_path):
+        mistfile = _make_synthetic_mist_file(tmp_path / "tracks.h5")
+        tracks = EEPTracks(
+            mistfile=mistfile, predictions=PREDICTIONS, verbose=False, use_cache=False
+        )
+        eep = 210.0
+        preds = tracks.get_predictions([1.0, eep, 0.0, 0.0], apply_corr=False)
+        expected = [
+            np.log10(AGE_SLOPE * eep),
+            0.01 * (eep - 200.0) + 1.0,
+            3.7 - 0.001 * (eep - 200.0),
+            4.5 - 0.002 * (eep - 200.0),
+            AGE_SLOPE,  # agewt = d(age)/d(EEP)
+        ]
+        assert tracks.predictions == PREDICTIONS + ["agewt"]
+        np.testing.assert_allclose(preds, expected, rtol=1e-12)
+
+    def test_corrupt_cache_falls_back_to_the_hdf5_file(self, tmp_path):
+        mistfile = _make_synthetic_mist_file(tmp_path / "tracks.h5")
+        EEPTracks(mistfile=mistfile, predictions=PREDICTIONS, verbose=False)
+        cache_file = next(iter(tmp_path.glob("*.pkl")))
+        cache_file.write_bytes(b"not a pickle")
+
+        tracks = EEPTracks(mistfile=mistfile, predictions=PREDICTIONS, verbose=False)
+        preds = tracks.get_predictions([1.0, 210.0, 0.0, 0.0], apply_corr=False)
+        np.testing.assert_allclose(preds[0], np.log10(AGE_SLOPE * 210.0), rtol=1e-12)
+
+    def test_missing_file_raises(self, tmp_path):
+        with pytest.raises(RuntimeError, match="Failed to initialize EEPTracks"):
+            EEPTracks(mistfile=tmp_path / "absent.h5", verbose=False)
+
+
 class TestMakeLibSinglePass:
     """Single-pass HDF5 read must be equivalent to the old per-column read."""
 
