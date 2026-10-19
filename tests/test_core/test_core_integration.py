@@ -16,6 +16,7 @@ from brutus.analysis.individual import BruteForce
 # Import the classes to test
 from brutus.core.individual import StarGrid
 from brutus.data.filters import ps
+from brutus.utils import inv_magnitude
 
 
 @pytest.fixture(scope="module")
@@ -24,15 +25,12 @@ def mist_integration_setup(mist_ps_grid):
     models, combined_labels, label_mask = mist_ps_grid
     subset = np.arange(0, len(models), 1000)[:100]
     labels, params = split_labels(combined_labels[subset], label_mask)
-    filter_names = ps[:5]
-    grid = StarGrid(models[subset], labels, params, filters=filter_names)
+    grid = StarGrid(models[subset], labels, params, filters=ps[:5])
     return {
         "grid": grid,
         "fitter": BruteForce(grid, verbose=False),
         "ps_indices": list(range(5)),
         "labels": labels,
-        "params": params,
-        "filter_names": filter_names,
     }
 
 
@@ -57,6 +55,7 @@ class TestCoreIntegration:
             obs[idx] = solar_mags[i]
             obs_err[idx] = 0.05  # Realistic error
 
+        obs, obs_err = inv_magnitude(obs, obs_err)  # maggies
         obs_mask = ~np.isnan(obs)
 
         # Step 1: Generate SED using StarGrid for a known model
@@ -122,6 +121,7 @@ class TestCoreIntegration:
         for i, idx in enumerate(ps_indices[:3]):
             obs[idx] = 15.0
             obs_err[idx] = 0.05
+        obs, obs_err = inv_magnitude(obs, obs_err)  # maggies
         obs_mask = ~np.isnan(obs)
 
         import warnings
@@ -197,6 +197,7 @@ class TestErrorHandling:
         # Valid setup
         obs[ps_indices[0]] = 15.0
         obs_err[ps_indices[0]] = 0.05
+        obs, obs_err = inv_magnitude(obs, obs_err)  # maggies
         obs_mask = ~np.isnan(obs)
 
         # Test with mismatched array sizes

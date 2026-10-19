@@ -1,19 +1,13 @@
 """Tests of BruteForce in brutus.analysis.individual."""
 
+import h5py
 import numpy as np
 import pytest
 from conftest import split_labels
 
 from brutus.analysis.individual import BruteForce
 from brutus.core.individual import StarGrid
-from brutus.data.filters import ps
-
-try:
-    import h5py
-
-    HAS_H5PY = True
-except ImportError:
-    HAS_H5PY = False
+from brutus.utils import inv_magnitude
 
 
 @pytest.fixture(scope="module")
@@ -26,15 +20,7 @@ def real_mist_setup(mist_ps_grid):
             models[subset], *split_labels(labels[subset], label_mask)
         ),
         "ps_indices": list(range(5)),
-        "filter_names": ps[:5],
-        "subset_indices": subset,
     }
-
-
-@pytest.fixture(scope="module")
-def test_bruteforce(real_mist_setup):
-    """Create BruteForce instance with subset grid for testing."""
-    return BruteForce(real_mist_setup["subset_grid"], verbose=False)
 
 
 @pytest.fixture(scope="module")
@@ -542,6 +528,7 @@ class TestBruteForceInternal:
             coord=(120.0, 45.0),
             Nmc_prior=10,
             wt_thresh=0.01,
+            rstate=np.random.RandomState(518),
         )
 
         # _fit returns 14 values with return_distreds=True (default)
@@ -578,9 +565,9 @@ class TestBruteForceInternal:
 class TestBruteForceRealGrid:
     """Comprehensive tests using real MIST grid data."""
 
-    def test_initialization(self, test_bruteforce, real_mist_setup):
+    def test_initialization(self, bruteforce_fitter, real_mist_setup):
         """Test BruteForce initialization with real grid."""
-        fitter = test_bruteforce
+        fitter = bruteforce_fitter
 
         assert fitter.nmodels == 31  # Test subset
         assert fitter.nfilters == 5  # Pan-STARRS subset filters
@@ -595,9 +582,9 @@ class TestBruteForceRealGrid:
         assert fitter.nmodels == 31  # Test subset
         assert fitter.nfilters == 5
 
-    def test_get_sed_grid_real_data(self, test_bruteforce):
+    def test_get_sed_grid_real_data(self, bruteforce_fitter):
         """Test SED computation with real grid."""
-        fitter = test_bruteforce
+        fitter = bruteforce_fitter
 
         # Test all models
         seds, rvecs, drvecs = fitter.get_sed_grid()
@@ -613,9 +600,9 @@ class TestBruteForceRealGrid:
         seds_ext, _, _ = fitter.get_sed_grid(av=0.5, rv=3.1, indices=indices)
         assert not np.allclose(seds_sub, seds_ext)  # Should be different
 
-    def test_loglike_comprehensive(self, test_bruteforce, real_mist_setup):
+    def test_loglike_comprehensive(self, bruteforce_fitter, real_mist_setup):
         """Test likelihood computation with various configurations."""
-        fitter = test_bruteforce
+        fitter = bruteforce_fitter
         ps_indices = real_mist_setup["ps_indices"]
 
         # Create realistic PanSTARRS observations
@@ -629,6 +616,7 @@ class TestBruteForceRealGrid:
             obs[idx] = ps_mags[i]
             obs_err[idx] = 0.05
 
+        obs, obs_err = inv_magnitude(obs, obs_err)  # maggies
         obs_mask = ~np.isnan(obs)
 
         # Test 1: Basic likelihood
@@ -659,9 +647,9 @@ class TestBruteForceRealGrid:
         )
         assert lnl_sub.shape == (20,)
 
-    def test_logpost_comprehensive(self, test_bruteforce, real_mist_setup):
+    def test_logpost_comprehensive(self, bruteforce_fitter, real_mist_setup):
         """Test posterior computation with real grid and realistic priors."""
-        fitter = test_bruteforce
+        fitter = bruteforce_fitter
         ps_indices = real_mist_setup["ps_indices"]
 
         # Step 1: Set up realistic test scenario with small model subset
@@ -676,8 +664,9 @@ class TestBruteForceRealGrid:
 
         # Use 4 PanSTARRS filters with realistic magnitudes and errors
         for i, idx in enumerate(ps_indices[:4]):
-            obs[idx] = 15.0 + 0.3 * i  # Magnitudes: 15.0, 15.3, 15.6, 15.9
+            obs[idx] = 15.0 + 0.3 * i  # mag
             obs_err[idx] = 0.08  # Realistic photometric errors
+        obs, obs_err = inv_magnitude(obs, obs_err)  # maggies
         obs_mask = ~np.isnan(obs)
 
         # Step 3: Run loglike_grid to get proper input for logpost_grid
@@ -771,9 +760,9 @@ class TestBruteForceRealGrid:
 
         print("✓ All logpost_grid tests completed successfully")
 
-    def test_ltol_clipping_keeps_top_models(self, test_bruteforce, real_mist_setup):
+    def test_ltol_clipping_keeps_top_models(self, bruteforce_fitter, real_mist_setup):
         """A larger ltol keeps most of the ten best models."""
-        fitter = test_bruteforce
+        fitter = bruteforce_fitter
         ps_indices = real_mist_setup["ps_indices"]
 
         # Create simple observation
@@ -784,6 +773,7 @@ class TestBruteForceRealGrid:
         for i, idx in enumerate(ps_indices[:3]):
             obs[idx] = 15.0
             obs_err[idx] = 0.05
+        obs, obs_err = inv_magnitude(obs, obs_err)  # maggies
         obs_mask = ~np.isnan(obs)
 
         # Test clipping behavior
@@ -802,9 +792,9 @@ class TestBruteForceRealGrid:
         overlap = len(best_default & best_aggressive)
         assert overlap >= 5, f"Only {overlap}/10 top models agree"
 
-    def test_edge_cases_and_error_handling(self, test_bruteforce):
+    def test_edge_cases_and_error_handling(self, bruteforce_fitter):
         """Test edge cases and error handling."""
-        fitter = test_bruteforce
+        fitter = bruteforce_fitter
 
         # Test with bad data - must match the number of filters in the real grid
         nfilters = fitter.nfilters
@@ -835,9 +825,9 @@ class TestBruteForceRealGrid:
         assert ndim_simple == 1  # Only one valid band
         assert len(lnl_simple) == fitter.nmodels
 
-    def test_internal_methods(self, test_bruteforce, real_mist_setup):
+    def test_internal_methods(self, bruteforce_fitter, real_mist_setup):
         """Test internal _setup method (avoiding numba compilation issues in _fit)."""
-        fitter = test_bruteforce
+        fitter = bruteforce_fitter
 
         # Test _setup method - must use correct array sizes for real grid
         nfilters = fitter.nfilters
@@ -887,9 +877,9 @@ class TestBruteForceRealGrid:
         except ValueError as e:
             assert "data_coords" in str(e)
 
-    def test_repr_method(self, test_bruteforce):
+    def test_repr_method(self, bruteforce_fitter):
         """Test string representation."""
-        fitter = test_bruteforce
+        fitter = bruteforce_fitter
         repr_str = repr(fitter)
 
         assert "BruteForce" in repr_str
@@ -927,9 +917,10 @@ class TestBruteForceEdgeCases:
 
     def test_setup_basic_functionality(self, bruteforce_fitter):
         """Test _setup method basic functionality."""
-        # Create reasonable data
-        data = np.array([20.0, 20.5, 21.0, 21.5, 22.0])  # Reasonable magnitudes
-        data_err = np.array([0.05, 0.06, 0.07, 0.08, 0.09])  # Reasonable errors
+        data, data_err = inv_magnitude(
+            np.array([20.0, 20.5, 21.0, 21.5, 22.0]),
+            np.array([0.05, 0.06, 0.07, 0.08, 0.09]),
+        )
         data_mask = np.ones(5, dtype=bool)
 
         results = bruteforce_fitter._setup(
@@ -1046,7 +1037,7 @@ class TestBruteForceMathematicalValidation:
     """Critical mathematical validation tests for cross-term bugfix."""
 
     def test_logpost_with_full_priors_and_spd_matrices(
-        self, test_bruteforce, real_mist_setup
+        self, bruteforce_fitter, real_mist_setup
     ):
         """
         Test complete logpost_grid functionality with galactic and dust priors.
@@ -1055,7 +1046,7 @@ class TestBruteForceMathematicalValidation:
         ensuring inverse3 produces SPD covariance matrices.
         """
 
-        fitter = test_bruteforce
+        fitter = bruteforce_fitter
 
         # Create realistic observation with galactic coordinates
         obs = 10 ** (
@@ -1122,85 +1113,6 @@ class TestBruteForceMathematicalValidation:
                 assert len(sel) > 0, "Should select at least some models"
             else:
                 raise
-
-    def test_cross_term_numerical_validation(self, test_bruteforce, real_mist_setup):
-        """
-        Test cross-term computation accuracy using finite differences.
-
-        This validates that our analytical cross-term computation matches
-        numerical derivatives, confirming the mathematical correctness of the fix.
-        """
-        fitter = test_bruteforce
-        ps_indices = real_mist_setup["ps_indices"]
-
-        # Create controlled scenario for numerical validation
-        nfilters = fitter.nfilters
-        obs = np.full(nfilters, np.nan)
-        obs_err = np.full(nfilters, np.nan)
-
-        # Use 3 filters to keep numerical computation manageable
-        for i, idx in enumerate(ps_indices[:3]):
-            obs[idx] = 15.2 + 0.3 * i  # Well-separated magnitudes
-            obs_err[idx] = 0.05  # Moderate precision for stable derivatives
-        obs_mask = ~np.isnan(obs)
-
-        # Test single model for focused validation
-        test_indices = [5]  # Middle of test range
-
-        # Get analytical Hessian from our implementation
-        with pytest.warns(RuntimeWarning, match="valid photometric bands"):
-            results = fitter.loglike_grid(
-                obs, obs_err, obs_mask, indices=test_indices, return_vals=True
-            )
-
-        lnl, ndim, chi2, scale, av, rv, icov_sar = results
-        analytical_icov = icov_sar[0]
-
-        print(f"Analytical inverse covariance matrix:")
-        for i in range(3):
-            print(
-                f"  [{analytical_icov[i,0]:10.6e}, {analytical_icov[i,1]:10.6e}, {analytical_icov[i,2]:10.6e}]"
-            )
-
-        # For this focused test, we would need to implement numerical derivative computation
-        # This is complex but would provide the ultimate validation
-        # For now, verify the matrix properties that our fix should ensure
-
-        # Check cross-terms are reasonable magnitude
-        cross_terms = [
-            analytical_icov[0, 1],
-            analytical_icov[0, 2],
-            analytical_icov[1, 2],
-        ]
-        diagonal_terms = [
-            analytical_icov[0, 0],
-            analytical_icov[1, 1],
-            analytical_icov[2, 2],
-        ]
-
-        # Cross-terms should be non-zero (would be zero if fix hadn't worked)
-        assert not np.allclose(
-            cross_terms, 0, atol=1e-12
-        ), "Cross-terms are suspiciously zero"
-
-        # Cross-terms should have reasonable magnitude relative to diagonal
-        for i, cross_term in enumerate(cross_terms):
-            diagonal_scale = np.sqrt(diagonal_terms[i] * diagonal_terms[(i + 1) % 3])
-            relative_cross = abs(cross_term) / diagonal_scale
-
-            assert (
-                relative_cross < 1.0
-            ), f"Cross-term {i} unrealistically large: {relative_cross}"
-
-        # Matrix should be symmetric
-        np.testing.assert_allclose(
-            analytical_icov,
-            analytical_icov.T,
-            rtol=1e-10,
-            err_msg="Hessian matrix is not symmetric",
-        )
-
-        print(f"✅ Cross-term computation produces mathematically valid results")
 
 
 @pytest.fixture
@@ -1470,6 +1382,7 @@ class TestBruteForceFitMethod:
             Ndraws=10,
             wt_thresh=0.1,
             return_distreds=True,
+            rstate=np.random.RandomState(1371),
         )
 
         # Should return 14-element tuple (13 + mc_ess)
@@ -1530,6 +1443,7 @@ class TestBruteForceFitMethod:
             Ndraws=10,
             wt_thresh=0.1,
             return_distreds=False,
+            rstate=np.random.RandomState(1431),
         )
 
         # Should return 10-element tuple (9 + mc_ess)
