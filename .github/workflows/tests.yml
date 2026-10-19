@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [ master, main ]
 
+# A new push to a pull request cancels the run of the commit it replaces. A
+# push to a branch gets its own group, so every commit on master is tested.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: true
+
 jobs:
   data:
     # Download the test data once per OS (instead of once per matrix leg) and
@@ -20,25 +26,37 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Cache test data files
-      uses: actions/cache@v4
-      id: cache-data
+    - name: Look up the test data cache
+      # Downloads nothing; the cache is restored below only on a miss.
+      uses: actions/cache/restore@v4
+      id: probe
       with:
         path: |
           ~/.cache/astro-brutus/
           ~/Library/Caches/astro-brutus/
-        key: brutus-data-v3-${{ runner.os }}-${{ hashFiles('src/brutus/data/download.py') }}
+        # The test job restores this key; keep the two equal.
+        key: brutus-data-v4-${{ runner.os }}-${{ hashFiles('src/brutus/data/download.py', '.github/scripts/fetch_test_data.py') }}
+        lookup-only: true
+
+    - name: Cache test data files
+      if: steps.probe.outputs.cache-hit != 'true'
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/astro-brutus/
+          ~/Library/Caches/astro-brutus/
+        key: ${{ steps.probe.outputs.cache-primary-key }}
         restore-keys: |
-          brutus-data-v3-${{ runner.os }}-
+          brutus-data-v4-${{ runner.os }}-
 
     - name: Set up Python
-      if: steps.cache-data.outputs.cache-hit != 'true'
+      if: steps.probe.outputs.cache-hit != 'true'
       uses: actions/setup-python@v5
       with:
         python-version: "3.12"
 
     - name: Download test data files
-      if: steps.cache-data.outputs.cache-hit != 'true'
+      if: steps.probe.outputs.cache-hit != 'true'
       run: |
         python -m pip install --upgrade pip
         pip install -e .
@@ -68,6 +86,10 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
+        # The key changes only with pyproject.toml, so new dependency
+        # releases are downloaded until it changes.
+        cache: pip
+        cache-dependency-path: pyproject.toml
 
     - name: Install dependencies
       run: |
@@ -89,8 +111,21 @@ jobs:
         path: |
           ~/.cache/astro-brutus/
           ~/Library/Caches/astro-brutus/
-        key: brutus-data-v3-${{ runner.os }}-${{ hashFiles('src/brutus/data/download.py') }}
+        key: brutus-data-v4-${{ runner.os }}-${{ hashFiles('src/brutus/data/download.py', '.github/scripts/fetch_test_data.py') }}
         fail-on-cache-miss: true
+
+    - name: Cache the EEPTracks pickle
+      # EEPTracks writes its pickle next to the track file, inside the data
+      # directory. Its own small cache saves each leg the rebuild without
+      # touching the data cache. The key holds the Python version (the pickle
+      # holds scipy objects), the code that sets its format, and the data key's
+      # inputs (EEPTracks rebuilds a pickle older than the track file).
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/astro-brutus/MIST_1.2_EEPtrk_*.pkl
+          ~/Library/Caches/astro-brutus/MIST_1.2_EEPtrk_*.pkl
+        key: eeptracks-v1-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('src/brutus/core/individual.py', 'src/brutus/data/download.py', '.github/scripts/fetch_test_data.py') }}
 
     - name: Verify test data files
       # Hash-checks the restored files and symlinks them into data/DATAFILES;
