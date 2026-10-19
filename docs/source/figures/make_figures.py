@@ -53,11 +53,11 @@ def path(pts, stroke="currentColor", width=2, fill="none", dash=None, extra=""):
     )
 
 
-def axes(x0, y0, x1, y1, xlabel, ylabel, xlabel_gap=22):
+def axes(x0, y0, x1, y1, xlabel, ylabel, xlabel_gap=22, ylabel_gap=14):
     out = path([(x0, y0), (x0, y1), (x1, y1)], width=1.5)
     out += text((x0 + x1) / 2, y1 + xlabel_gap, xlabel, size=12)
     out += (
-        f'<text transform="translate({x0 - 14:.1f} {(y0 + y1) / 2:.1f}) rotate(-90)" '
+        f'<text transform="translate({x0 - ylabel_gap:.1f} {(y0 + y1) / 2:.1f}) rotate(-90)" '
         f'text-anchor="middle" font-size="12" fill="currentColor">{ylabel}</text>'
     )
     return out
