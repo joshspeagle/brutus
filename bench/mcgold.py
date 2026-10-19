@@ -35,6 +35,7 @@ def lnp_for(bf, lr, s, i, Nmc, seed, force):
         coord=tuple(s["coords"][i]),
         Nmc_prior=Nmc,
         wt_thresh=1e-3,
+        subsample_mode="topk",  # same models for every seed
         rstate=np.random.RandomState(seed),
     )
     ind.sample_multivariate_normal = orig

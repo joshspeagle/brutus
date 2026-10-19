@@ -97,9 +97,16 @@ Each sample is still marginally N(mean,cov), so the estimator is unbiased, but:
   cohort spanning the full selected-model range (Nsel = 4 … 50000-cap), the
   antithetic-vs-plain z-profile (frac|z|>3 = 0.07) is no larger than the
   plain-vs-plain null (0.08), and output scatter drops (log-evidence 0.76×).
-- Benefit concentrates in well-constrained stars (where MC-integration variance
-  dominates); for poorly-constrained stars that hit the `max_models` subsampling
-  cap the subsampling variance dominates and antithetic is neutral (no harm).
+- The `mcvar.py` and `mcgold.py` figures above come from objects below the
+  `max_models` subsampling cap. An earlier version of this record concluded
+  that for stars at the cap the subsampling variance dominates and antithetic
+  is neutral. The data do not support that conclusion: the tools then compared different model
+  subsets across seeds (#212). The audit verification in #212 aligned the
+  models for cohort objects 9, 29, 39 and 52 (seeds 0 and 1, Nmc=50). The
+  median seed-to-seed difference in `lnp` fell from 1.02-1.27 unaligned to
+  1.3e-5-5.5e-5 aligned. The antithetic-vs-plain ratio at the cap has not been
+  re-measured. Both tools now pass `subsample_mode="topk"`, so every seed keeps
+  the same models.
 
   *Adversarial review (resolved).* A reviewer initially objected that antithetic
   increases variance for even-symmetric integrands. Reconciliation: the brutus
