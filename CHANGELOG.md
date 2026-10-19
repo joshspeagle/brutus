@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   truncation and uniform normalization match the fitted A(V) range (custom
   `lndustprior` functions keep the 4-argument signature).
 
+### Documentation
+
+- New SVG logo, with light and dark variants, and a favicon. The isochrone
+  "S" is drawn as model-grid points coloured by temperature, over a faint
+  posterior across the grid.
+
 ## [1.2.0] - 2026-07-17
 
 Systematic audit of every module outside the `BruteForce` hot path (covered in

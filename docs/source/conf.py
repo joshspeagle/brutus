@@ -150,8 +150,8 @@ html_theme_options = {
     "show_toc_level": 2,
     "navigation_with_keys": True,
     "logo": {
-        "image_light": "_static/brutus_logo.png",
-        "image_dark": "_static/brutus_logo.png",
+        "image_light": "_static/brutus-logo-light.svg",
+        "image_dark": "_static/brutus-logo-dark.svg",
         "text": "brutus",
     },
     "icon_links": [
@@ -174,7 +174,7 @@ html_context = {
 
 html_title = "brutus Documentation"
 html_short_title = "brutus"
-html_favicon = None
+html_favicon = "_static/favicon.svg"
 
 # Additional HTML options
 html_use_smartypants = True

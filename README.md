@@ -2,7 +2,10 @@
 
 *Et tu, Brute?*
 
-![brutus logo](https://github.com/joshspeagle/brutus/blob/master/brutus_logo.png?raw=true)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/joshspeagle/brutus/master/docs/source/_static/brutus-logo-dark.svg">
+  <img alt="brutus logo" src="https://raw.githubusercontent.com/joshspeagle/brutus/master/docs/source/_static/brutus-logo-light.svg" width="480">
+</picture>
 
 [![Tests](https://github.com/joshspeagle/brutus/workflows/Tests/badge.svg)](https://github.com/joshspeagle/brutus/actions)
 [![Coverage](https://codecov.io/gh/joshspeagle/brutus/branch/master/graph/badge.svg)](https://codecov.io/gh/joshspeagle/brutus)
