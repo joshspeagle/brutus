@@ -1,6 +1,6 @@
 # Contributing
 
-We welcome contributions to brutus! This document provides guidelines for contributing to the project.
+Contributions are welcome. This page covers the setup, the checks and how to submit a change. `CLAUDE.md` at the repository root holds the full rules.
 
 ## Development Setup
 
@@ -16,7 +16,7 @@ We welcome contributions to brutus! This document provides guidelines for contri
 3. Install in development mode:
 
    ```bash
-   pip install -e ".[dev]" pre-commit
+   pip install -e ".[dev,docs]" pre-commit
    pre-commit install
    ```
 
@@ -32,7 +32,9 @@ We welcome contributions to brutus! This document provides guidelines for contri
 We use pytest for testing. Run tests with:
 
 ```bash
-# Basic tests
+# Download the data that CI uses; without it, tests that need it skip
+python .github/scripts/fetch_test_data.py
+
 pytest
 
 # Skip slow tests (marked with the "slow" marker; they load large
@@ -43,6 +45,8 @@ pytest -m "not slow"
 # functions otherwise report 0% coverage even when exercised)
 NUMBA_DISABLE_JIT=1 pytest --cov=brutus
 ```
+
+CI runs the tests with `NUMBA_DISABLE_JIT=1`, so it never runs the compiled code. Before you push a change to a jitted function, run its tests locally with JIT on.
 
 ## Code Style
 
@@ -55,16 +59,12 @@ pre-commit run --all-files
 
 ## Documentation
 
-- All public functions and classes should have NumPy-style docstrings
+Every public module, class and function has a NumPy-style docstring. The site is Sphinx with MyST Markdown pages in `docs/source/`. Build it as CI does, with warnings as errors:
 
-- Update documentation when adding new features
-
-- Build docs locally to test:
-
-  ```bash
-  cd docs
-  make html
-  ```
+```bash
+cd docs
+make html SPHINXOPTS="-W --keep-going"
+```
 
 ## Submitting Changes
 
@@ -77,9 +77,6 @@ pre-commit run --all-files
    with `Closes #<issue number>`.
 4. Include tests for new behaviour and a line under "Unreleased" in
    `CHANGELOG.md` for each user-visible change.
-
-The full rules for maintainers and coding agents are in `CLAUDE.md` at the
-repository root.
 
 ## Issue Reporting
 
@@ -97,17 +94,11 @@ For feature requests:
 - Consider if it fits the scope of brutus
 - Be willing to help implement or test
 
-## Release Process
+## Releases
 
-Releases follow semantic versioning (MAJOR.MINOR.PATCH):
-
-- **MAJOR**: Incompatible API changes
-- **MINOR**: New functionality, backward compatible
-- **PATCH**: Bug fixes, backward compatible
+Releases follow semantic versioning (MAJOR.MINOR.PATCH). The lead maintainer approves each release and uploads it to PyPI.
 
 ## Contact
 
 - GitHub Issues: <https://github.com/joshspeagle/brutus/issues>
 - Email: <mailto:j.speagle@utoronto.ca>
-
-Thank you for contributing to brutus!
