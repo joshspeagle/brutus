@@ -101,7 +101,7 @@ def measure(M=40, Nmc=50, nobj=6):
         )
     print(
         f"\nmean variance-reduction ratio (anti/plain): "
-        f"{np.mean(std_anti/np.maximum(std_plain,1e-30)):.3f}  "
+        f"{np.mean(std_anti / np.maximum(std_plain, 1e-30)):.3f}  "
         f"(<1 = antithetic is less noisy)"
     )
 

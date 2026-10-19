@@ -287,7 +287,7 @@ def _stats(a, b, name):
     nan_mismatch = int((np.isfinite(a) != np.isfinite(b)).sum())
     return (
         f"  {name}: max|abs|={da.max():.3e} max|rel|={rel.max():.3e} "
-        f"bitwise={'Y' if np.array_equal(a, b) or (np.array_equal(a[fin],b[fin]) and nan_mismatch==0) else 'N'} "
+        f"bitwise={'Y' if np.array_equal(a, b) or (np.array_equal(a[fin], b[fin]) and nan_mismatch == 0) else 'N'} "
         f"nanmis={nan_mismatch}"
     )
 
