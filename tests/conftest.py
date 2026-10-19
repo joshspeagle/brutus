@@ -8,34 +8,36 @@ Coverage of ``@jit`` functions needs ``NUMBA_DISABLE_JIT=1``; plain test runs
 keep JIT on so that the compiled code is what runs.
 """
 
-import os
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
-import pooch
 import pytest
 
 # Fixtures that load a full data file; tests that use them are marked slow.
-SLOW_FIXTURES = {"mist_ps_grid", "bayestar_map", "eep_tracks"}
+SLOW_FIXTURES = {
+    "mist_ps_grid",
+    "bayestar_map",
+    "eep_tracks",
+    "real_isochrone",
+    "real_stellarpop",
+}
 
 
 def find_brutus_data_file(filename):
     """Return the path of a downloaded data file, or None if it is absent.
 
-    The search order is ``$ASTRO_BRUTUS_DATA_DIR``, the Pooch cache, then
-    ``data/DATAFILES`` in the repository (where CI links the files).
+    The search order is the download directory of `brutus.data` (the Pooch
+    cache, or ``$ASTRO_BRUTUS_DATA_DIR`` when set), then ``data/DATAFILES`` in
+    the repository (where CI links the files).
     """
-    dirs = [
-        os.environ.get("ASTRO_BRUTUS_DATA_DIR"),
-        pooch.os_cache("astro-brutus"),
-        Path(__file__).resolve().parents[1] / "data" / "DATAFILES",
-    ]
+    from brutus.data.download import strato
+
+    dirs = [strato.abspath, Path(__file__).resolve().parents[1] / "data" / "DATAFILES"]
     for directory in dirs:
-        if directory is not None:
-            path = Path(directory) / filename
-            if path.exists():  # False for a broken symlink
-                return str(path)
+        path = Path(directory) / filename
+        if path.exists():  # False for a broken symlink
+            return str(path)
     return None
 
 
@@ -87,8 +89,29 @@ def eep_tracks():
 
 
 @pytest.fixture(scope="session")
+def real_isochrone():
+    """The MIST isochrones, loaded once per session."""
+    from brutus.core.populations import Isochrone
+
+    return Isochrone(mistfile=requires_data("MIST_1.2_iso_vvcrit0.0.h5"), verbose=False)
+
+
+@pytest.fixture(scope="session")
+def real_stellarpop(real_isochrone):
+    """A StellarPop with the SDSS g, r and i filters."""
+    from brutus.core.populations import StellarPop
+
+    return StellarPop(
+        isochrone=real_isochrone,
+        filters=["SDSS_g", "SDSS_r", "SDSS_i"],
+        nnfile=requires_data("nn_c3k.h5"),
+        verbose=False,
+    )
+
+
+@pytest.fixture(scope="module")
 def bayestar_map():
-    """The Bayestar19 dust map, loaded once per session."""
+    """The Bayestar19 dust map (about 2 GB), freed after each module."""
     from brutus.dust import Bayestar
 
     return Bayestar(dustfile=requires_data("bayestar2019_v1.h5"))

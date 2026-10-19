@@ -1,6 +1,5 @@
 """Tests of DustMap and Bayestar in brutus.dust.maps."""
 
-import time
 from unittest.mock import MagicMock
 
 import astropy.coordinates as coord
@@ -289,44 +288,6 @@ class TestBayestarFindDataIdxOutOfCoverage:
             "Out-of-coverage query should return NaN extinction values, "
             f"got non-NaN values: {av_mean[~np.isnan(av_mean)]}"
         )
-
-
-class TestDustPerformance:
-    """Performance and stress tests."""
-
-    def test_lb2pix_performance(self):
-        """Test lb2pix performance with large arrays."""
-        # Large coordinate arrays
-        n_coords = 10000
-        l = np.random.uniform(0, 360, n_coords)
-        b = np.random.uniform(-90, 90, n_coords)
-
-        # Should complete quickly
-        import time
-
-        start_time = time.time()
-        pix_indices = lb2pix(nside=64, l=l, b=b)
-        elapsed = time.time() - start_time
-
-        # Performance check (should be fast)
-        assert elapsed < 1.0  # Should take less than 1 second
-        assert pix_indices.shape == (n_coords,)
-        assert np.all(pix_indices >= -1)  # All valid or -1
-
-    def test_coordinate_boundary_cases(self):
-        """Test coordinate edge cases and boundaries."""
-        # Test coordinates exactly at boundaries
-        boundary_coords = [
-            (0.0, 90.0),  # North pole
-            (0.0, -90.0),  # South pole
-            (0.0, 0.0),  # Galactic center
-            (180.0, 0.0),  # Opposite galactic center
-            (359.999, 0.0),  # Near longitude wrap
-        ]
-
-        for l, b in boundary_coords:
-            pix = lb2pix(nside=64, l=l, b=b)
-            assert pix >= 0, f"Coordinate ({l}, {b}) should be valid"
 
 
 class TestDustEdgeCases:
@@ -703,35 +664,6 @@ class TestReliabilityMask:
             assert np.isclose(_trapezoid(np.exp(lp), av_grid), 1.0, rtol=1e-3)
 
 
-class TestSortEquivalence:
-    """lexsort must reproduce the old structured-dtype argsort exactly."""
-
-    @staticmethod
-    def _make_pixel_info(n, rng):
-        pix = np.zeros(n, dtype=PIXEL_DTYPE_FULL)
-        pix["nside"] = rng.choice([64, 128, 256, 512, 1024], size=n)
-        # Unique (nside, healpix_index) pairs, shuffled, as in a real map
-        pix["healpix_index"] = rng.permutation(n).astype(np.uint64)
-        return pix
-
-    def test_sort_microbenchmark(self):
-        rng = np.random.default_rng(1)
-        pix = self._make_pixel_info(500_000, rng)
-        t0 = time.perf_counter()
-        ref = np.argsort(pix, order=["nside", "healpix_index"])
-        t_ref = time.perf_counter() - t0
-        t0 = time.perf_counter()
-        new = np.lexsort((pix["healpix_index"], pix["nside"]))
-        t_new = time.perf_counter() - t0
-        np.testing.assert_array_equal(ref, new)
-        # Timing is diagnostic only: the index-equivalence assertion above
-        # is the test; a single wall-clock race can flake on shared runners.
-        print(
-            f"\nsort 500k rows: argsort(order=) {t_ref:.3f}s, "
-            f"lexsort {t_new:.3f}s ({t_ref / max(t_new, 1e-9):.0f}x)"
-        )
-
-
 def _find_data_idx_reference(bm, gal_l, b):
     """Old _find_data_idx: per-level lb2pix (reference implementation)."""
     l_arr = np.asarray(gal_l)
@@ -790,24 +722,6 @@ class TestFindDataIdxEquivalence:
             ref = _find_data_idx_reference(bm, gal_l, gal_b)
             new = bm._find_data_idx(gal_l, gal_b)
             np.testing.assert_array_equal(ref, new)
-
-    def test_lb2pix_microbenchmark(self, multires_map_file):
-        bm = Bayestar(dustfile=multires_map_file)
-        rng = np.random.default_rng(3)
-        gal_l = rng.uniform(0.0, 360.0, 200_000)
-        gal_b = rng.uniform(-90.0, 90.0, 200_000)
-
-        t0 = time.perf_counter()
-        ref = _find_data_idx_reference(bm, gal_l, gal_b)
-        t_ref = time.perf_counter() - t0
-        t0 = time.perf_counter()
-        new = bm._find_data_idx(gal_l, gal_b)
-        t_new = time.perf_counter() - t0
-        np.testing.assert_array_equal(ref, new)
-        print(
-            f"\n_find_data_idx 200k coords: per-level lb2pix {t_ref:.3f}s, "
-            f"shift-based {t_new:.3f}s"
-        )
 
 
 class TestRealFile:

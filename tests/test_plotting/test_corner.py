@@ -26,7 +26,7 @@ class TestCornerplot:
     @pytest.fixture
     def basic_params(self):
         """Generate basic structured parameter array for testing."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         n_models = 100
 
         # Create a structured array with stellar parameters
@@ -40,9 +40,9 @@ class TestCornerplot:
         )
 
         params = np.empty(n_models, dtype=dtype)
-        params["mass"] = np.random.uniform(0.5, 2.0, n_models)
-        params["age"] = np.random.uniform(0.1, 10.0, n_models)
-        params["feh"] = np.random.uniform(-2.0, 0.5, n_models)
+        params["mass"] = rng.uniform(0.5, 2.0, n_models)
+        params["age"] = rng.uniform(0.1, 10.0, n_models)
+        params["feh"] = rng.uniform(-2.0, 0.5, n_models)
         params["agewt"] = np.ones(n_models)  # Should be ignored
 
         return params
@@ -50,24 +50,24 @@ class TestCornerplot:
     @pytest.fixture
     def sample_indices(self):
         """Generate sample indices for resampling."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         n_samples = 50
         n_models = 100
 
         # Create indices that resample from the model grid
-        idxs = np.random.choice(n_models, n_samples, replace=True)
+        idxs = rng.choice(n_models, n_samples, replace=True)
         return idxs
 
     @pytest.fixture
     def direct_data(self):
         """Generate direct (dists, reds, dreds) data format."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         n_samples = 50
 
         # Generate realistic distance/reddening samples
-        dists = np.random.lognormal(np.log(2.0), 0.3, n_samples)  # ~2 kpc
-        reds = np.random.exponential(0.5, n_samples)  # Av ~ 0.5
-        dreds = np.random.normal(3.3, 0.3, n_samples)  # Rv ~ 3.3
+        dists = rng.lognormal(np.log(2.0), 0.3, n_samples)  # ~2 kpc
+        reds = rng.exponential(0.5, n_samples)  # Av ~ 0.5
+        dreds = rng.normal(3.3, 0.3, n_samples)  # Rv ~ 3.3
 
         return (dists, reds, dreds)
 
@@ -158,8 +158,8 @@ class TestCornerplot:
 
     def test_cornerplot_with_weights(self, sample_indices, basic_params, direct_data):
         """Test cornerplot with sample weights."""
-        np.random.seed(42)
-        weights = np.random.exponential(1.0, len(sample_indices))
+        rng = np.random.RandomState(42)
+        weights = rng.exponential(1.0, len(sample_indices))
 
         fig, axes = cornerplot(
             sample_indices,
@@ -308,18 +308,18 @@ class TestCornerplot:
 
     def test_cornerplot_sar_data(self, sample_indices, basic_params):
         """Test cornerplot with SAR data format."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         n_samples = 50
 
         # Create SAR format data
-        scales = np.random.exponential(1.0, n_samples)
-        avs = np.random.exponential(0.5, n_samples)
-        rvs = np.random.normal(3.3, 0.3, n_samples)
+        scales = rng.exponential(1.0, n_samples)
+        avs = rng.exponential(0.5, n_samples)
+        rvs = rng.normal(3.3, 0.3, n_samples)
 
         # Create proper positive semidefinite covariance matrices
         covs_sar = np.zeros((n_samples, 3, 3))
         for i in range(n_samples):
-            A = np.random.randn(3, 3)
+            A = rng.randn(3, 3)
             covs_sar[i] = np.dot(A, A.T) * 0.01
 
         sar_data = (scales, avs, rvs, covs_sar)
@@ -340,15 +340,15 @@ class TestCornerplot:
 
     def test_cornerplot_sar_no_coord_error(self, sample_indices, basic_params):
         """Test SAR data without coordinates raises error."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         n_samples = len(sample_indices)  # Match the sample_indices size
 
-        scales = np.random.exponential(1.0, n_samples)
-        avs = np.random.exponential(0.5, n_samples)
-        rvs = np.random.normal(3.3, 0.3, n_samples)
+        scales = rng.exponential(1.0, n_samples)
+        avs = rng.exponential(0.5, n_samples)
+        rvs = rng.normal(3.3, 0.3, n_samples)
         covs_sar = np.zeros((n_samples, 3, 3))
         for i in range(n_samples):
-            A = np.random.randn(3, 3)
+            A = rng.randn(3, 3)
             covs_sar[i] = np.dot(A, A.T) * 0.01
 
         sar_data = (scales, avs, rvs, covs_sar)
@@ -441,21 +441,21 @@ class TestCornerplot:
 
     def test_cornerplot_single_parameter(self):
         """Test cornerplot with single parameter."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         n_models = 50
         n_samples = 20
 
         # Single parameter
         dtype = np.dtype([("mass", "f4")])
         params = np.empty(n_models, dtype=dtype)
-        params["mass"] = np.random.uniform(0.5, 2.0, n_models)
+        params["mass"] = rng.uniform(0.5, 2.0, n_models)
 
-        idxs = np.random.choice(n_models, n_samples, replace=True)
+        idxs = rng.choice(n_models, n_samples, replace=True)
 
         # Simple direct data
-        dists = np.random.lognormal(np.log(2.0), 0.3, n_samples)
-        reds = np.random.exponential(0.5, n_samples)
-        dreds = np.random.normal(3.3, 0.3, n_samples)
+        dists = rng.lognormal(np.log(2.0), 0.3, n_samples)
+        reds = rng.exponential(0.5, n_samples)
+        dreds = rng.normal(3.3, 0.3, n_samples)
         data = (dists, reds, dreds)
 
         fig, axes = cornerplot(
@@ -471,7 +471,7 @@ class TestCornerplotIntegration:
 
     def test_cornerplot_realistic_stellar_data(self):
         """Test with realistic stellar parameter distributions."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         n_models = 100
         n_samples = 40
 
@@ -487,22 +487,18 @@ class TestCornerplotIntegration:
         params = np.empty(n_models, dtype=dtype)
 
         # Main sequence stars concentrated around solar values
-        params["mass"] = np.random.lognormal(np.log(1.0), 0.3, n_models)
-        params["age"] = np.random.uniform(0.1, 13.0, n_models)
-        params["feh"] = np.random.normal(0.0, 0.2, n_models)
+        params["mass"] = rng.lognormal(np.log(1.0), 0.3, n_models)
+        params["age"] = rng.uniform(0.1, 13.0, n_models)
+        params["feh"] = rng.normal(0.0, 0.2, n_models)
 
         # Sample with preference for solar-like stars
         mass_weights = np.exp(-(((params["mass"] - 1.0) / 0.2) ** 2))
-        idxs = np.random.choice(
-            n_models, n_samples, p=mass_weights / mass_weights.sum()
-        )
+        idxs = rng.choice(n_models, n_samples, p=mass_weights / mass_weights.sum())
 
         # Distance and reddening data
-        dists = np.random.lognormal(
-            np.log(1.0), 0.5, n_samples
-        )  # Mix of nearby/distant
-        reds = np.random.exponential(0.3, n_samples)
-        dreds = np.random.normal(3.1, 0.2, n_samples)
+        dists = rng.lognormal(np.log(1.0), 0.5, n_samples)  # Mix of nearby/distant
+        reds = rng.exponential(0.3, n_samples)
+        dreds = rng.normal(3.1, 0.2, n_samples)
         data = (dists, reds, dreds)
 
         fig, axes = cornerplot(
@@ -523,7 +519,7 @@ class TestCornerplotIntegration:
 
     def test_cornerplot_edge_cases(self):
         """Test various edge cases."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
 
         # Very small sample
         n_models = 10
@@ -531,14 +527,14 @@ class TestCornerplotIntegration:
 
         dtype = np.dtype([("mass", "f4")])
         params = np.empty(n_models, dtype=dtype)
-        params["mass"] = np.random.uniform(0.8, 1.2, n_models)
+        params["mass"] = rng.uniform(0.8, 1.2, n_models)
 
-        idxs = np.random.choice(n_models, n_samples, replace=True)
+        idxs = rng.choice(n_models, n_samples, replace=True)
 
         # Minimal data
-        dists = np.random.uniform(1.0, 3.0, n_samples)
-        reds = np.random.uniform(0.0, 0.5, n_samples)
-        dreds = np.random.uniform(2.5, 4.0, n_samples)
+        dists = rng.uniform(1.0, 3.0, n_samples)
+        reds = rng.uniform(0.0, 0.5, n_samples)
+        dreds = rng.uniform(2.5, 4.0, n_samples)
         data = (dists, reds, dreds)
 
         with warnings.catch_warnings():

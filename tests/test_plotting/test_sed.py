@@ -28,37 +28,37 @@ class TestPosteriorPredictive:
     @pytest.fixture
     def mock_models(self):
         """Generate mock model coefficients for testing."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         nmodels, nfilt, ncoeff = 50, 5, 3
 
         # Create realistic polynomial coefficients for magnitude models
-        models = np.random.uniform(10, 20, (nmodels, nfilt, ncoeff))
+        models = rng.uniform(10, 20, (nmodels, nfilt, ncoeff))
         # Add some structure - first coefficient is base magnitude
-        models[:, :, 0] += np.random.uniform(-2, 2, (nmodels, nfilt))
+        models[:, :, 0] += rng.uniform(-2, 2, (nmodels, nfilt))
 
         return models
 
     @pytest.fixture
     def sample_indices(self):
         """Generate sample indices for resampling."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         n_samples = 30
         n_models = 50
 
         # Create indices that resample from the model grid
-        idxs = np.random.choice(n_models, n_samples, replace=True)
+        idxs = rng.choice(n_models, n_samples, replace=True)
         return idxs
 
     @pytest.fixture
     def sample_parameters(self, sample_indices):
         """Generate corresponding reds, dreds, dists arrays."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         n_samples = len(sample_indices)
 
         # Generate realistic distance/reddening samples
-        dists = np.random.lognormal(np.log(2.0), 0.3, n_samples)  # ~2 kpc
-        reds = np.random.exponential(0.5, n_samples)  # Av ~ 0.5
-        dreds = np.random.normal(3.3, 0.3, n_samples)  # Rv ~ 3.3
+        dists = rng.lognormal(np.log(2.0), 0.3, n_samples)  # ~2 kpc
+        reds = rng.exponential(0.5, n_samples)  # Av ~ 0.5
+        dreds = rng.normal(3.3, 0.3, n_samples)  # Rv ~ 3.3
 
         return reds, dreds, dists
 
@@ -66,12 +66,11 @@ class TestPosteriorPredictive:
         self, mock_models, sample_indices, sample_parameters
     ):
         """Test basic posterior_predictive functionality."""
+        rng = np.random.RandomState(0)
         reds, dreds, dists = sample_parameters
 
         # Mock get_seds to return realistic SED values
-        mock_seds = np.random.uniform(
-            15, 20, (len(sample_indices), mock_models.shape[1])
-        )
+        mock_seds = rng.uniform(15, 20, (len(sample_indices), mock_models.shape[1]))
 
         with patch("brutus.plotting.sed.get_seds", return_value=mock_seds):
             fig, ax, parts = posterior_predictive(
@@ -93,12 +92,10 @@ class TestPosteriorPredictive:
         reds, dreds, dists = sample_parameters
 
         # Generate importance weights
-        np.random.seed(42)
-        weights = np.random.exponential(1.0, len(sample_indices))
+        rng = np.random.RandomState(42)
+        weights = rng.exponential(1.0, len(sample_indices))
 
-        mock_seds = np.random.uniform(
-            15, 20, (len(sample_indices), mock_models.shape[1])
-        )
+        mock_seds = rng.uniform(15, 20, (len(sample_indices), mock_models.shape[1]))
 
         with patch("brutus.plotting.sed.get_seds", return_value=mock_seds):
             fig, ax, parts = posterior_predictive(
@@ -112,10 +109,11 @@ class TestPosteriorPredictive:
         self, mock_models, sample_indices, sample_parameters
     ):
         """Test posterior_predictive in flux space."""
+        rng = np.random.RandomState(0)
         reds, dreds, dists = sample_parameters
 
         # Mock flux SEDs (smaller values than magnitudes)
-        mock_flux_seds = np.random.uniform(
+        mock_flux_seds = rng.uniform(
             1e-15, 1e-12, (len(sample_indices), mock_models.shape[1])
         )
 
@@ -133,11 +131,10 @@ class TestPosteriorPredictive:
         self, mock_models, sample_indices, sample_parameters
     ):
         """Test posterior_predictive in magnitude space."""
+        rng = np.random.RandomState(0)
         reds, dreds, dists = sample_parameters
 
-        mock_seds = np.random.uniform(
-            15, 20, (len(sample_indices), mock_models.shape[1])
-        )
+        mock_seds = rng.uniform(15, 20, (len(sample_indices), mock_models.shape[1]))
 
         with patch("brutus.plotting.sed.get_seds", return_value=mock_seds):
             fig, ax, parts = posterior_predictive(
@@ -159,13 +156,13 @@ class TestPosteriorPredictive:
         nfilt = mock_models.shape[1]
 
         # Generate mock observational data
-        np.random.seed(42)
-        data = np.random.uniform(1e-14, 1e-12, nfilt)  # Flux values
+        rng = np.random.RandomState(42)
+        data = rng.uniform(1e-14, 1e-12, nfilt)  # Flux values
         data_err = data * 0.1  # 10% errors
         data_mask = np.ones(nfilt, dtype=bool)
         data_mask[-1] = False  # Mask one filter
 
-        mock_seds = np.random.uniform(15, 20, (len(sample_indices), nfilt))
+        mock_seds = rng.uniform(15, 20, (len(sample_indices), nfilt))
 
         with (
             patch("brutus.plotting.sed.get_seds", return_value=mock_seds),
@@ -173,8 +170,8 @@ class TestPosteriorPredictive:
         ):
             # Mock magnitude function return
             mock_magnitude.return_value = (
-                np.random.uniform(15, 20, nfilt - 1),
-                np.random.uniform(0.01, 0.1, nfilt - 1),
+                rng.uniform(15, 20, nfilt - 1),
+                rng.uniform(0.01, 0.1, nfilt - 1),
             )
 
             fig, ax, parts = posterior_predictive(
@@ -199,11 +196,11 @@ class TestPosteriorPredictive:
         nfilt = mock_models.shape[1]
 
         # Generate mock flux data
-        np.random.seed(42)
-        data = np.random.uniform(1e-14, 1e-12, nfilt)
+        rng = np.random.RandomState(42)
+        data = rng.uniform(1e-14, 1e-12, nfilt)
         data_err = data * 0.05
 
-        mock_flux_seds = np.random.uniform(1e-15, 1e-12, (len(sample_indices), nfilt))
+        mock_flux_seds = rng.uniform(1e-15, 1e-12, (len(sample_indices), nfilt))
 
         with patch("brutus.plotting.sed.get_seds", return_value=mock_flux_seds):
             fig, ax, parts = posterior_predictive(
@@ -228,20 +225,20 @@ class TestPosteriorPredictive:
         nfilt = mock_models.shape[1]
 
         # Generate mock data and offsets
-        np.random.seed(42)
-        data = np.random.uniform(1e-14, 1e-12, nfilt)
+        rng = np.random.RandomState(42)
+        data = rng.uniform(1e-14, 1e-12, nfilt)
         data_err = data * 0.1
-        offset = np.random.uniform(0.9, 1.1, nfilt)  # ±10% offsets
+        offset = rng.uniform(0.9, 1.1, nfilt)  # ±10% offsets
 
-        mock_seds = np.random.uniform(15, 20, (len(sample_indices), nfilt))
+        mock_seds = rng.uniform(15, 20, (len(sample_indices), nfilt))
 
         with (
             patch("brutus.plotting.sed.get_seds", return_value=mock_seds),
             patch("brutus.plotting.sed.magnitude") as mock_magnitude,
         ):
             mock_magnitude.return_value = (
-                np.random.uniform(15, 20, nfilt),
-                np.random.uniform(0.01, 0.1, nfilt),
+                rng.uniform(15, 20, nfilt),
+                rng.uniform(0.01, 0.1, nfilt),
             )
 
             fig, ax, parts = posterior_predictive(
@@ -262,11 +259,10 @@ class TestPosteriorPredictive:
         self, mock_models, sample_indices, sample_parameters
     ):
         """Test posterior_predictive with custom colors."""
+        rng = np.random.RandomState(0)
         reds, dreds, dists = sample_parameters
 
-        mock_seds = np.random.uniform(
-            15, 20, (len(sample_indices), mock_models.shape[1])
-        )
+        mock_seds = rng.uniform(15, 20, (len(sample_indices), mock_models.shape[1]))
 
         with patch("brutus.plotting.sed.get_seds", return_value=mock_seds):
             fig, ax, parts = posterior_predictive(
@@ -288,12 +284,13 @@ class TestPosteriorPredictive:
         self, mock_models, sample_indices, sample_parameters
     ):
         """Test posterior_predictive with filter labels."""
+        rng = np.random.RandomState(0)
         reds, dreds, dists = sample_parameters
         nfilt = mock_models.shape[1]
 
         labels = [f"Filter_{i}" for i in range(nfilt)]
 
-        mock_seds = np.random.uniform(15, 20, (len(sample_indices), nfilt))
+        mock_seds = rng.uniform(15, 20, (len(sample_indices), nfilt))
 
         with patch("brutus.plotting.sed.get_seds", return_value=mock_seds):
             fig, ax, parts = posterior_predictive(
@@ -310,14 +307,13 @@ class TestPosteriorPredictive:
         self, mock_models, sample_indices, sample_parameters
     ):
         """Test posterior_predictive with custom figure."""
+        rng = np.random.RandomState(0)
         reds, dreds, dists = sample_parameters
 
         # Create custom figure
         custom_fig, custom_ax = plt.subplots(figsize=(8, 6))
 
-        mock_seds = np.random.uniform(
-            15, 20, (len(sample_indices), mock_models.shape[1])
-        )
+        mock_seds = rng.uniform(15, 20, (len(sample_indices), mock_models.shape[1]))
 
         with patch("brutus.plotting.sed.get_seds", return_value=mock_seds):
             fig, ax, parts = posterior_predictive(
@@ -339,6 +335,7 @@ class TestPosteriorPredictive:
         self, mock_models, sample_indices, sample_parameters
     ):
         """Test posterior_predictive with custom random state."""
+        rng = np.random.RandomState(0)
         reds, dreds, dists = sample_parameters
 
         # Create custom random state
@@ -349,9 +346,7 @@ class TestPosteriorPredictive:
             : len(sample_indices)
         ]
 
-        mock_seds = np.random.uniform(
-            15, 20, (len(sample_indices), mock_models.shape[1])
-        )
+        mock_seds = rng.uniform(15, 20, (len(sample_indices), mock_models.shape[1]))
 
         with patch("brutus.plotting.sed.get_seds", return_value=mock_seds):
             fig, ax, parts = posterior_predictive(
@@ -369,10 +364,11 @@ class TestPosteriorPredictive:
 
     def test_posterior_predictive_error_conditions(self, mock_models, sample_indices):
         """Test error handling in posterior_predictive."""
+        rng = np.random.RandomState(0)
         n_samples = len(sample_indices)
-        reds = np.random.exponential(0.5, n_samples)
-        dreds = np.random.normal(3.3, 0.3, n_samples)
-        dists = np.random.lognormal(np.log(2.0), 0.3, n_samples)
+        reds = rng.exponential(0.5, n_samples)
+        dreds = rng.normal(3.3, 0.3, n_samples)
+        dists = rng.lognormal(np.log(2.0), 0.3, n_samples)
 
         # Test wrong weight dimensions
         wrong_weights = np.ones((n_samples, 2))  # 2D instead of 1D
@@ -404,22 +400,23 @@ class TestPosteriorPredictive:
         self, mock_models, sample_indices, sample_parameters
     ):
         """Test custom psig parameter for error bars."""
+        rng = np.random.RandomState(0)
         reds, dreds, dists = sample_parameters
         nfilt = mock_models.shape[1]
 
         # Generate data with errors
-        data = np.random.uniform(1e-14, 1e-12, nfilt)
+        data = rng.uniform(1e-14, 1e-12, nfilt)
         data_err = data * 0.1
 
-        mock_seds = np.random.uniform(15, 20, (len(sample_indices), nfilt))
+        mock_seds = rng.uniform(15, 20, (len(sample_indices), nfilt))
 
         with (
             patch("brutus.plotting.sed.get_seds", return_value=mock_seds),
             patch("brutus.plotting.sed.magnitude") as mock_magnitude,
         ):
             mock_magnitude.return_value = (
-                np.random.uniform(15, 20, nfilt),
-                np.random.uniform(0.01, 0.1, nfilt),
+                rng.uniform(15, 20, nfilt),
+                rng.uniform(0.01, 0.1, nfilt),
             )
 
             fig, ax, parts = posterior_predictive(
@@ -440,11 +437,10 @@ class TestPosteriorPredictive:
         self, mock_models, sample_indices, sample_parameters
     ):
         """Test that all default parameters work correctly."""
+        rng = np.random.RandomState(0)
         reds, dreds, dists = sample_parameters
 
-        mock_seds = np.random.uniform(
-            15, 20, (len(sample_indices), mock_models.shape[1])
-        )
+        mock_seds = rng.uniform(15, 20, (len(sample_indices), mock_models.shape[1]))
 
         with patch("brutus.plotting.sed.get_seds", return_value=mock_seds):
             # Test with minimal arguments - should use all defaults
@@ -462,11 +458,10 @@ class TestPosteriorPredictive:
         self, mock_models, sample_indices, sample_parameters
     ):
         """Test the return value format."""
+        rng = np.random.RandomState(0)
         reds, dreds, dists = sample_parameters
 
-        mock_seds = np.random.uniform(
-            15, 20, (len(sample_indices), mock_models.shape[1])
-        )
+        mock_seds = rng.uniform(15, 20, (len(sample_indices), mock_models.shape[1]))
 
         with patch("brutus.plotting.sed.get_seds", return_value=mock_seds):
             result = posterior_predictive(
@@ -495,27 +490,27 @@ class TestSummaryPlot:
 
         from brutus.plotting.summary import summary_plot
 
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         nmodels, nfilt, ncoeff = 20, 5, 3
         n_samples = 25
 
-        models = np.random.uniform(10, 20, (nmodels, nfilt, ncoeff))
-        idxs = np.random.choice(nmodels, n_samples, replace=True)
-        reds = np.random.exponential(0.3, n_samples)
-        dreds = np.random.normal(3.3, 0.2, n_samples)
-        dists = np.random.lognormal(np.log(1.5), 0.4, n_samples)
+        models = rng.uniform(10, 20, (nmodels, nfilt, ncoeff))
+        idxs = rng.choice(nmodels, n_samples, replace=True)
+        reds = rng.exponential(0.3, n_samples)
+        dreds = rng.normal(3.3, 0.2, n_samples)
+        dists = rng.lognormal(np.log(1.5), 0.4, n_samples)
 
         # Create structured params array (corner plot needs named fields)
         dtype = np.dtype(
             [("mass", "f4"), ("age", "f4"), ("feh", "f4"), ("agewt", "f4")]
         )
         params = np.empty(nmodels, dtype=dtype)
-        params["mass"] = np.random.uniform(0.5, 2.0, nmodels)
-        params["age"] = np.random.uniform(0.1, 10.0, nmodels)
-        params["feh"] = np.random.uniform(-2.0, 0.5, nmodels)
+        params["mass"] = rng.uniform(0.5, 2.0, nmodels)
+        params["age"] = rng.uniform(0.1, 10.0, nmodels)
+        params["feh"] = rng.uniform(-2.0, 0.5, nmodels)
         params["agewt"] = np.ones(nmodels)
 
-        mock_seds = np.random.uniform(14, 18, (n_samples, nfilt))
+        mock_seds = rng.uniform(14, 18, (n_samples, nfilt))
 
         with patch("brutus.plotting.sed.get_seds", return_value=mock_seds):
             with warnings.catch_warnings():
@@ -538,23 +533,23 @@ class TestPosteriorPredictiveIntegration:
 
     def test_posterior_predictive_realistic_stellar_sed(self):
         """Test with realistic stellar SED data."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
 
         # Create realistic model parameters
         nmodels, nfilt, ncoeff = 20, 7, 4  # 7 filters (UBVRIJHK-like)
         n_samples = 25
 
         # Generate model coefficients that represent stellar SEDs
-        models = np.random.uniform(8, 25, (nmodels, nfilt, ncoeff))
+        models = rng.uniform(8, 25, (nmodels, nfilt, ncoeff))
 
         # Generate sample parameters
-        idxs = np.random.choice(nmodels, n_samples, replace=True)
-        reds = np.random.exponential(0.3, n_samples)  # Low reddening
-        dreds = np.random.normal(3.1, 0.2, n_samples)  # Standard Rv
-        dists = np.random.lognormal(np.log(1.5), 0.4, n_samples)  # ~1.5 kpc
+        idxs = rng.choice(nmodels, n_samples, replace=True)
+        reds = rng.exponential(0.3, n_samples)  # Low reddening
+        dreds = rng.normal(3.1, 0.2, n_samples)  # Standard Rv
+        dists = rng.lognormal(np.log(1.5), 0.4, n_samples)  # ~1.5 kpc
 
         # Mock realistic SED output
-        mock_seds = np.random.uniform(12, 18, (n_samples, nfilt))
+        mock_seds = rng.uniform(12, 18, (n_samples, nfilt))
         # Add realistic color trend (bluer to redder)
         for i in range(nfilt):
             mock_seds[:, i] += i * 0.3
@@ -581,23 +576,23 @@ class TestPosteriorPredictiveIntegration:
 
     def test_posterior_predictive_with_photometry(self):
         """Test with realistic photometric data overlay."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
 
         nmodels, nfilt, ncoeff = 15, 5, 3
         n_samples = 20
 
-        models = np.random.uniform(10, 20, (nmodels, nfilt, ncoeff))
-        idxs = np.random.choice(nmodels, n_samples, replace=True)
-        reds = np.random.exponential(0.5, n_samples)
-        dreds = np.random.normal(3.3, 0.3, n_samples)
-        dists = np.random.lognormal(np.log(2.0), 0.3, n_samples)
+        models = rng.uniform(10, 20, (nmodels, nfilt, ncoeff))
+        idxs = rng.choice(nmodels, n_samples, replace=True)
+        reds = rng.exponential(0.5, n_samples)
+        dreds = rng.normal(3.3, 0.3, n_samples)
+        dists = rng.lognormal(np.log(2.0), 0.3, n_samples)
 
         # Realistic flux measurements with errors and some missing data
         data = np.array([2.1e-13, 1.8e-13, 1.5e-13, 1.2e-13, 1.0e-13])
         data_err = data * 0.08  # 8% errors
         data_mask = np.array([True, True, False, True, True])  # Missing R-band
 
-        mock_seds = np.random.uniform(15, 19, (n_samples, nfilt))
+        mock_seds = rng.uniform(15, 19, (n_samples, nfilt))
 
         with (
             patch("brutus.plotting.sed.get_seds", return_value=mock_seds),
@@ -606,8 +601,8 @@ class TestPosteriorPredictiveIntegration:
             # Mock realistic magnitude conversion
             masked_data = data[data_mask]
             masked_err = data_err[data_mask]
-            mock_mags = np.random.uniform(15, 18, len(masked_data))
-            mock_mag_errs = np.random.uniform(0.05, 0.15, len(masked_data))
+            mock_mags = rng.uniform(15, 18, len(masked_data))
+            mock_mag_errs = rng.uniform(0.05, 0.15, len(masked_data))
             mock_magnitude.return_value = (mock_mags, mock_mag_errs)
 
             fig, ax, parts = posterior_predictive(
@@ -628,17 +623,18 @@ class TestPosteriorPredictiveIntegration:
 
     def test_posterior_predictive_edge_cases(self):
         """Test edge cases and boundary conditions."""
+        rng = np.random.RandomState(0)
         # Very small sample
         nmodels, nfilt, ncoeff = 5, 3, 2
         n_samples = 3
 
-        models = np.random.uniform(15, 20, (nmodels, nfilt, ncoeff))
-        idxs = np.random.choice(nmodels, n_samples, replace=True)
-        reds = np.random.uniform(0, 1, n_samples)
-        dreds = np.random.uniform(2.5, 4.0, n_samples)
-        dists = np.random.uniform(0.5, 5.0, n_samples)
+        models = rng.uniform(15, 20, (nmodels, nfilt, ncoeff))
+        idxs = rng.choice(nmodels, n_samples, replace=True)
+        reds = rng.uniform(0, 1, n_samples)
+        dreds = rng.uniform(2.5, 4.0, n_samples)
+        dists = rng.uniform(0.5, 5.0, n_samples)
 
-        mock_seds = np.random.uniform(16, 19, (n_samples, nfilt))
+        mock_seds = rng.uniform(16, 19, (n_samples, nfilt))
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")  # May produce warnings for small dataset

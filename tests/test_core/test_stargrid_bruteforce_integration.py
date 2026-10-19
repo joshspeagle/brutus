@@ -33,7 +33,6 @@ def mist_grid(mist_ps_grid):
 @pytest.fixture
 def multi_star_observations():
     """Create multiple synthetic stellar observations."""
-    np.random.seed(42)
 
     # Define different stellar types
     star_params = [
@@ -82,7 +81,14 @@ class TestStarGridBruteForceIntegration:
         mask = np.ones(5, dtype=bool)
 
         # Fit through BruteForce
-        results = fitter._fit(flux, flux_err, mask, Nmc_prior=20, wt_thresh=0.05)
+        results = fitter._fit(
+            flux,
+            flux_err,
+            mask,
+            Nmc_prior=20,
+            wt_thresh=0.05,
+            rstate=np.random.RandomState(84),
+        )
 
         # _fit returns 14 values with return_distreds=True (default)
         (
@@ -173,6 +179,7 @@ class TestStarGridBruteForceIntegration:
 
     def test_multi_object_fitting(self, mist_grid, multi_star_observations):
         """Test fitting multiple objects."""
+        rng = np.random.RandomState(0)
         grid = mist_grid
         fitter = BruteForce(grid, verbose=False)
 
@@ -181,12 +188,19 @@ class TestStarGridBruteForceIntegration:
         for params in multi_star_observations:
             # Generate synthetic SED
             sed, _, _ = grid.get_seds(**params, return_flux=True)
-            flux = sed * (1 + np.random.normal(0, 0.05, len(sed)))
+            flux = sed * (1 + rng.normal(0, 0.05, len(sed)))
             flux_err = sed * 0.05
             mask = np.ones(len(sed), dtype=bool)
 
             # Fit
-            result = fitter._fit(flux, flux_err, mask, Nmc_prior=10, wt_thresh=0.1)
+            result = fitter._fit(
+                flux,
+                flux_err,
+                mask,
+                Nmc_prior=10,
+                wt_thresh=0.1,
+                rstate=np.random.RandomState(189),
+            )
             results.append(result)
 
         # All fits should succeed
@@ -202,14 +216,13 @@ class TestStarGridBruteForceIntegration:
 
     def test_prior_effects_on_posteriors(self, mist_grid):
         """Test that priors affect posterior distributions."""
+        rng = np.random.RandomState(0)
         grid = mist_grid
         fitter = BruteForce(grid, verbose=False)
 
         # Create ambiguous data (high noise)
         true_model = grid.models[15, :, 0]
-        flux = 10 ** (-0.4 * true_model) * (
-            1 + np.random.normal(0, 0.3, len(true_model))
-        )
+        flux = 10 ** (-0.4 * true_model) * (1 + rng.normal(0, 0.3, len(true_model)))
         flux_err = 10 ** (-0.4 * true_model) * 0.3
         mask = np.ones(len(true_model), dtype=bool)
 
@@ -370,6 +383,7 @@ class TestRealWorldScenarios:
 
     def test_typical_photometric_survey(self, mist_grid):
         """Test scenario like typical photometric survey."""
+        rng = np.random.RandomState(0)
         grid = mist_grid
         fitter = BruteForce(grid, verbose=False)
 
@@ -379,7 +393,7 @@ class TestRealWorldScenarios:
         flux = 10 ** (-0.4 * true_model)
 
         # Add realistic noise
-        flux = flux * (1 + np.random.normal(0, 0.02, 5))
+        flux = flux * (1 + rng.normal(0, 0.02, 5))
         flux_err = flux * 0.02
         mask = np.ones(5, dtype=bool)
 
@@ -393,6 +407,7 @@ class TestRealWorldScenarios:
             coord=(180.0, 30.0),  # Some Galactic coordinates
             Nmc_prior=50,
             wt_thresh=0.01,
+            rstate=np.random.RandomState(387),
         )
 
         # _fit returns 14 values with return_distreds=True (default)
@@ -423,6 +438,7 @@ class TestRealWorldScenarios:
 
     def test_reddened_star_scenario(self, mist_grid):
         """Test scenario with significant reddening."""
+        rng = np.random.RandomState(0)
         grid = mist_grid
         fitter = BruteForce(grid, verbose=False)
 
@@ -432,7 +448,7 @@ class TestRealWorldScenarios:
             **true_params, av=2.0, rv=3.1, dist=200.0, return_flux=True
         )
 
-        flux = true_sed * (1 + np.random.normal(0, 0.04, len(true_sed)))
+        flux = true_sed * (1 + rng.normal(0, 0.04, len(true_sed)))
         flux_err = true_sed * 0.04
         mask = np.ones(len(true_sed), dtype=bool)
 
@@ -445,6 +461,7 @@ class TestRealWorldScenarios:
             rvlim=(2.5, 4.5),
             Nmc_prior=30,
             wt_thresh=0.02,
+            rstate=np.random.RandomState(441),
         )
 
         # _fit returns 14 values with return_distreds=True (default)

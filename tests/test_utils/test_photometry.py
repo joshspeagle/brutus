@@ -194,10 +194,10 @@ class TestPhotometryIntegration:
     def test_realistic_photometry_pipeline(self):
         """Test a realistic photometry processing pipeline."""
         # Simulate realistic survey data
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
 
         # True magnitudes for a range of stars
-        true_mags = np.random.uniform(14, 24, 100)
+        true_mags = rng.uniform(14, 24, 100)
         true_fluxes = 10 ** (-0.4 * true_mags)
 
         # Add realistic errors (magnitude-dependent)
@@ -205,7 +205,7 @@ class TestPhotometryIntegration:
         flux_errors = true_fluxes / snr
 
         # Add noise
-        observed_fluxes = true_fluxes + np.random.normal(0, flux_errors)
+        observed_fluxes = true_fluxes + rng.normal(0, flux_errors)
 
         # Convert to magnitudes
         obs_mags, obs_mag_errs = magnitude(observed_fluxes, flux_errors)
@@ -292,6 +292,7 @@ class TestPhotLoglike:
 
     def test_phot_loglike_dim_prior(self):
         """Test photometric likelihood with dimensionality prior."""
+        rng = np.random.RandomState(0)
 
         # Simple test case with dimensionality prior
         nobjs = 5
@@ -299,11 +300,11 @@ class TestPhotLoglike:
         nfilts = 4
 
         # Mock observed fluxes and errors
-        fluxes = np.random.rand(nobjs, nfilts) * 1000 + 100  # Positive fluxes
-        flux_errors = np.random.rand(nobjs, nfilts) * 50 + 10
+        fluxes = rng.rand(nobjs, nfilts) * 1000 + 100  # Positive fluxes
+        flux_errors = rng.rand(nobjs, nfilts) * 50 + 10
 
         # Mock model fluxes
-        model_fluxes = np.random.rand(nobjs, nmods, nfilts) * 1000 + 100
+        model_fluxes = rng.rand(nobjs, nmods, nfilts) * 1000 + 100
 
         # Test with dimensionality prior enabled
         lnl_dim = phot_loglike(fluxes, flux_errors, model_fluxes, dim_prior=True)

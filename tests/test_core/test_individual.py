@@ -1,9 +1,8 @@
 """Tests of EEPTracks and StarEvolTrack in brutus.core.individual."""
 
 import pickle
-import time
 import warnings
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import h5py
 import numpy as np
@@ -38,8 +37,9 @@ class TestStarEvolTrackInitialization:
     @pytest.fixture
     def mock_eep_tracks(self):
         """Create a mock EEPTracks for StarEvolTrack testing."""
+        rng = np.random.RandomState(0)
         tracks = MagicMock()
-        tracks.get_predictions.return_value = np.random.random(6)  # 6 parameters
+        tracks.get_predictions.return_value = rng.random(6)  # 6 parameters
         tracks.pred_labels = ["age", "logl", "logt", "logr", "logg", "phase"]
         return tracks
 
@@ -76,8 +76,9 @@ class TestStarEvolTrackMethods:
     @pytest.fixture
     def mock_star_evol_track(self):
         """Create a mock StarEvolTrack for testing."""
+        rng = np.random.RandomState(0)
         tracks = MagicMock()
-        tracks.get_predictions.return_value = np.random.random(7)
+        tracks.get_predictions.return_value = rng.random(7)
         tracks.pred_labels = [
             "loga",
             "logl",
@@ -496,33 +497,24 @@ class TestMakeLibSinglePass:
                 output[:, i] = col
         return libparams, output
 
-    def test_equivalence_and_benchmark(self, tmp_path):
+    def test_matches_per_column_reference(self, tmp_path):
         mistfile = _make_synthetic_mist_file(tmp_path / "tracks.h5", n_eep=200)
 
         # New implementation, captured before __init__ frees the arrays
         tracks = EEPTracks.__new__(EEPTracks)
         tracks.labels = ["mini", "eep", "feh", "afe"]
         tracks.predictions = list(PREDICTIONS)
-        t0 = time.perf_counter()
         with h5py.File(mistfile, "r") as misth5:
             tracks._make_lib(misth5, verbose=False)
-        t_new = time.perf_counter() - t0
 
-        t0 = time.perf_counter()
         ref_libparams, ref_output = self._reference_make_lib(
             mistfile, tracks.labels, tracks.predictions
         )
-        t_ref = time.perf_counter() - t0
 
         assert tracks.libparams.dtype.names == ref_libparams.dtype.names
         for name in ref_libparams.dtype.names:
             np.testing.assert_array_equal(tracks.libparams[name], ref_libparams[name])
         np.testing.assert_array_equal(tracks.output, ref_output)
-
-        print(
-            f"\n_make_lib: single-pass {1e3 * t_new:.1f} ms vs per-column "
-            f"reference {1e3 * t_ref:.1f} ms ({t_ref / t_new:.1f}x)"
-        )
 
 
 class TestAgeWeightJacobian:
@@ -662,7 +654,7 @@ class TestSecondaryEEPInversionRealTracks:
             return res.x[0]
         return np.nan
 
-    def test_equivalence_and_speed(self, star_track):
+    def test_matches_nelder_mead_reference(self, star_track):
         st = star_track
         tracks = st.tracks
         aidx = tracks.predictions.index("loga")
@@ -681,21 +673,15 @@ class TestSecondaryEEPInversionRealTracks:
         ]
 
         n_agree = 0
-        t_new = t_ref = 0.0
         for mini, eep, feh, smf in cases:
             loga = tracks.get_predictions([mini, eep, feh, 0.0], apply_corr=False)[aidx]
             if not np.isfinite(loga):
                 continue
 
-            t0 = time.perf_counter()
             eep2_new = st._get_eep_for_secondary(loga, mini, eep, feh, 0.0, smf, tol)
-            t_new += time.perf_counter() - t0
-
-            t0 = time.perf_counter()
             eep2_ref = self._nelder_mead_reference(
                 st, loga, mini, eep, feh, 0.0, smf, tol
             )
-            t_ref += time.perf_counter() - t0
 
             if np.isfinite(eep2_ref):
                 assert np.isfinite(eep2_new), (mini, eep, feh, smf)
@@ -710,11 +696,3 @@ class TestSecondaryEEPInversionRealTracks:
                 n_agree += 1
 
         assert n_agree >= 6  # the vast majority of cases must be comparable
-        # Timing is reported as a diagnostic only: the agreement assertions
-        # above are the test; a wall-clock race is flaky on shared runners.
-        print(
-            f"\nsecondary EEP solve ({n_agree} cases): vectorized inversion "
-            f"{1e3 * t_new / len(cases):.2f} ms/solve vs Nelder-Mead "
-            f"{1e3 * t_ref / len(cases):.2f} ms/solve "
-            f"({t_ref / t_new:.1f}x faster)"
-        )

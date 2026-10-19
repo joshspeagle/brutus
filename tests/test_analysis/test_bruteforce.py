@@ -1,7 +1,5 @@
 """Tests of BruteForce in brutus.analysis.individual."""
 
-import time
-
 import numpy as np
 import pytest
 from conftest import split_labels
@@ -42,7 +40,6 @@ def test_bruteforce(real_mist_setup):
 @pytest.fixture(scope="module")
 def mock_grid():
     """Create a small mock grid for testing."""
-    np.random.seed(42)
 
     # Create small grid (3x3x3 = 27 models)
     nmodels = 27
@@ -102,7 +99,6 @@ def bruteforce_fitter(real_mist_setup):
 @pytest.fixture
 def synthetic_observation(real_mist_setup):
     """Create synthetic observation from known model."""
-    np.random.seed(42)
 
     grid = real_mist_setup["subset_grid"]
     # Use model index that exists in the subset grid
@@ -123,7 +119,7 @@ def synthetic_observation(real_mist_setup):
 @pytest.fixture
 def noisy_synthetic_observation(real_mist_setup):
     """Create noisy synthetic observation for realistic testing."""
-    np.random.seed(42)
+    rng = np.random.RandomState(42)
 
     grid = real_mist_setup["subset_grid"]
     # Use model index that exists in the subset grid
@@ -133,7 +129,7 @@ def noisy_synthetic_observation(real_mist_setup):
     # Convert to flux and add realistic noise
     true_flux = 10 ** (-0.4 * true_model)
     noise_level = 0.05  # 5% noise
-    flux = true_flux * (1 + np.random.normal(0, noise_level, len(true_flux)))
+    flux = true_flux * (1 + rng.normal(0, noise_level, len(true_flux)))
     flux_err = true_flux * noise_level
 
     # All bands observed
@@ -381,7 +377,10 @@ class TestBruteForcePosterior:
 
         # Compute posteriors
         results = bruteforce_fitter.logpost_grid(
-            like_results, Nmc_prior=10, wt_thresh=0.01  # Small for testing
+            like_results,
+            Nmc_prior=10,
+            wt_thresh=0.01,  # Small for testing
+            rstate=np.random.RandomState(379),
         )
 
         sel, cov, lnp, dist_mc, av_mc, rv_mc, lnp_mc, mc_ess = results
@@ -409,7 +408,11 @@ class TestBruteForcePosterior:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             results = bruteforce_fitter.logpost_grid(
-                like_results, Nmc_prior=10, wt_thresh=0.01, mem_lim=1e-4
+                like_results,
+                Nmc_prior=10,
+                wt_thresh=0.01,
+                mem_lim=1e-4,
+                rstate=np.random.RandomState(407),
             )
         sel, _, lnp, dist_mc = results[0], results[1], results[2], results[3]
         assert len(sel) > 0
@@ -444,12 +447,20 @@ class TestBruteForcePosterior:
 
         # Test weight threshold
         results_wt = bruteforce_fitter.logpost_grid(
-            like_results, Nmc_prior=10, wt_thresh=1e-3, cdf_thresh=None
+            like_results,
+            Nmc_prior=10,
+            wt_thresh=1e-3,
+            cdf_thresh=None,
+            rstate=np.random.RandomState(442),
         )
 
         # Test CDF threshold
         results_cdf = bruteforce_fitter.logpost_grid(
-            like_results, Nmc_prior=10, wt_thresh=None, cdf_thresh=0.95
+            like_results,
+            Nmc_prior=10,
+            wt_thresh=None,
+            cdf_thresh=0.95,
+            rstate=np.random.RandomState(447),
         )
 
         # Both should select some models
@@ -470,6 +481,7 @@ class TestBruteForcePosterior:
             like_results,
             Nmc_prior=100,  # More samples for better statistics
             wt_thresh=0.01,
+            rstate=np.random.RandomState(465),
         )
 
         sel, cov, lnp, dist_mc, av_mc, rv_mc, lnp_mc, mc_ess = results
@@ -691,6 +703,7 @@ class TestBruteForceRealGrid:
             coord=None,  # No spatial priors initially
             dustfile=None,  # No dust priors initially
             parallax=None,  # No parallax constraints initially
+            rstate=np.random.RandomState(683),
         )
 
         # Verify basic posterior computation works
@@ -723,6 +736,7 @@ class TestBruteForceRealGrid:
             coord=coord_galactic,  # Add galactic structure prior
             dustfile=None,
             parallax=None,
+            rstate=np.random.RandomState(715),
         )
 
         # Verify galactic prior integration works
@@ -739,6 +753,7 @@ class TestBruteForceRealGrid:
             wt_thresh=None,
             cdf_thresh=0.5,  # Select top 50% of models
             coord=coord_galactic,
+            rstate=np.random.RandomState(732),
         )
 
         sel_cdf, _, _, _, _, _, _, _ = results_cdf
@@ -756,8 +771,8 @@ class TestBruteForceRealGrid:
 
         print("✓ All logpost_grid tests completed successfully")
 
-    def test_performance_and_clipping(self, test_bruteforce, real_mist_setup):
-        """Test performance characteristics and clipping behavior."""
+    def test_ltol_clipping_keeps_top_models(self, test_bruteforce, real_mist_setup):
+        """A larger ltol keeps most of the ten best models."""
         fitter = test_bruteforce
         ps_indices = real_mist_setup["ps_indices"]
 
@@ -772,23 +787,14 @@ class TestBruteForceRealGrid:
         obs_mask = ~np.isnan(obs)
 
         # Test clipping behavior
-        start = time.time()
         with pytest.warns(RuntimeWarning, match="valid photometric bands"):
             lnl_default, _, _ = fitter.loglike_grid(
                 obs, obs_err, obs_mask, ltol=3e-2, return_vals=False
             )
-        time_default = time.time() - start
-
-        start = time.time()
         with pytest.warns(RuntimeWarning, match="valid photometric bands"):
             lnl_aggressive, _, _ = fitter.loglike_grid(
                 obs, obs_err, obs_mask, ltol=1e-1, return_vals=False
             )
-        time_aggressive = time.time() - start
-
-        # Should run reasonably fast
-        assert time_default < 5.0, f"Default test took {time_default:.1f}s"
-        assert time_aggressive < 5.0, f"Aggressive test took {time_aggressive:.1f}s"
 
         # Top models should be similar
         best_default = set(np.argsort(lnl_default)[-10:])
@@ -943,12 +949,13 @@ class TestBruteForceEdgeCases:
 
     def test_setup_prior_initialization_edge_cases(self, bruteforce_fitter):
         """Test prior initialization with various model configurations."""
+        rng = np.random.RandomState(0)
         data = 10 ** (-0.4 * np.array([15, 14.8, 14.7, 14.6, 14.55]))
         data_err = data * 0.05
         data_mask = np.ones(5, dtype=bool)
 
         # Test with custom prior
-        custom_prior = np.random.normal(0, 1, bruteforce_fitter.nmodels)
+        custom_prior = rng.normal(0, 1, bruteforce_fitter.nmodels)
 
         results = bruteforce_fitter._setup(
             data,
@@ -1025,7 +1032,10 @@ class TestBruteForceCoverageCompletion:
 
         # Should handle gracefully with diagonal approximation
         results = bruteforce_fitter.logpost_grid(
-            tuple(like_results), Nmc_prior=5, wt_thresh=0.1
+            tuple(like_results),
+            Nmc_prior=5,
+            wt_thresh=0.1,
+            rstate=np.random.RandomState(1015),
         )
 
         sel, cov, lnp, dist_mc, av_mc, rv_mc, lnp_mc, mc_ess = results
@@ -1072,6 +1082,7 @@ class TestBruteForceMathematicalValidation:
                 coord=coord,  # Galactic coordinates for dust/galactic priors
                 Nmc_prior=10,  # Small for speed
                 wt_thresh=0.1,
+                rstate=np.random.RandomState(1058),
             )
 
             # Unpack results - check what we actually get
@@ -1102,7 +1113,10 @@ class TestBruteForceMathematicalValidation:
                 # Dust map not available - test basic functionality without dust prior
                 print("Dust map not available, testing without dust prior")
                 logpost_results = fitter.logpost_grid(
-                    loglike_results, Nmc_prior=10, wt_thresh=0.1
+                    loglike_results,
+                    Nmc_prior=10,
+                    wt_thresh=0.1,
+                    rstate=np.random.RandomState(1092),
                 )
                 sel = logpost_results[0]
                 assert len(sel) > 0, "Should select at least some models"
@@ -1198,7 +1212,6 @@ def mock_fitter(mock_grid):
 @pytest.fixture
 def mock_synthetic_observation(mock_grid):
     """Create synthetic observation from mock grid."""
-    np.random.seed(42)
     true_idx = 13  # Pick a model from the mock grid
     true_model = mock_grid.models[true_idx, :, 0]  # Base magnitudes
 
@@ -1223,8 +1236,8 @@ class TestBruteForceFitMethod:
         nfilters = 5
 
         # Create synthetic photometry
-        np.random.seed(42)
-        data = 10 ** (-0.4 * (15 + np.random.randn(ndata, nfilters) * 0.5))
+        rng = np.random.RandomState(42)
+        data = 10 ** (-0.4 * (15 + rng.randn(ndata, nfilters) * 0.5))
         data_err = data * 0.05
         data_mask = np.ones((ndata, nfilters), dtype=bool)
 
@@ -1254,6 +1267,7 @@ class TestBruteForceFitMethod:
             running_io=True,
             save_dar_draws=True,
             verbose=False,
+            rstate=np.random.RandomState(1231),
         )
 
         # Verify output file exists and has correct structure
@@ -1294,8 +1308,8 @@ class TestBruteForceFitMethod:
         ndata = 2
         nfilters = 5
 
-        np.random.seed(123)
-        data = 10 ** (-0.4 * (14.5 + np.random.randn(ndata, nfilters) * 0.3))
+        rng = np.random.RandomState(123)
+        data = 10 ** (-0.4 * (14.5 + rng.randn(ndata, nfilters) * 0.3))
         data_err = data * 0.03
         data_mask = np.ones((ndata, nfilters), dtype=bool)
         data_labels = np.array([(i,) for i in range(ndata)], dtype=[("id", "i4")])
@@ -1316,6 +1330,7 @@ class TestBruteForceFitMethod:
             running_io=False,  # Batch mode
             save_dar_draws=True,
             verbose=False,
+            rstate=np.random.RandomState(1293),
         )
 
         # Verify output
@@ -1332,8 +1347,8 @@ class TestBruteForceFitMethod:
         ndata = 2
         nfilters = 5
 
-        np.random.seed(456)
-        data = 10 ** (-0.4 * (15 + np.random.randn(ndata, nfilters) * 0.4))
+        rng = np.random.RandomState(456)
+        data = 10 ** (-0.4 * (15 + rng.randn(ndata, nfilters) * 0.4))
         data_err = data * 0.04
         data_mask = np.ones((ndata, nfilters), dtype=bool)
         data_labels = np.array([(i,) for i in range(ndata)], dtype=[("id", "i4")])
@@ -1353,6 +1368,7 @@ class TestBruteForceFitMethod:
             wt_thresh=0.2,
             save_dar_draws=False,  # Don't save distance/reddening draws
             verbose=False,
+            rstate=np.random.RandomState(1331),
         )
 
         with h5py.File(result_file, "r") as f:
@@ -1371,8 +1387,8 @@ class TestBruteForceFitMethod:
         ndata = 2
         nfilters = 5
 
-        np.random.seed(789)
-        data = 10 ** (-0.4 * (14 + np.random.randn(ndata, nfilters) * 0.3))
+        rng = np.random.RandomState(789)
+        data = 10 ** (-0.4 * (14 + rng.randn(ndata, nfilters) * 0.3))
         data_err = data * 0.03
         data_mask = np.ones((ndata, nfilters), dtype=bool)
         data_labels = np.array([(i,) for i in range(ndata)], dtype=[("id", "i4")])
@@ -1397,6 +1413,7 @@ class TestBruteForceFitMethod:
             Nmc_prior=3,
             wt_thresh=0.2,
             verbose=False,
+            rstate=np.random.RandomState(1374),
         )
 
         with h5py.File(result_file, "r") as f:
@@ -1430,6 +1447,7 @@ class TestBruteForceFitMethod:
             Nmc_prior=2,
             wt_thresh=0.3,
             verbose=False,
+            rstate=np.random.RandomState(1409),
         )
 
         # Should add .h5 extension
@@ -1553,6 +1571,7 @@ class TestBruteForceFitMethod:
             Nmc_prior=2,
             wt_thresh=0.3,
             verbose=True,
+            rstate=np.random.RandomState(1532),
         )
 
         stderr_output = sys.stderr.getvalue()
@@ -1600,6 +1619,7 @@ class TestBruteForceFitIntegration:
             Nmc_prior=20,
             wt_thresh=0.01,  # Tight threshold
             verbose=False,
+            rstate=np.random.RandomState(1579),
         )
 
         # Verify results file has valid structure and values
@@ -1868,6 +1888,7 @@ class TestDustPriorGating:
                 lndustprior=self._mock_dust([]),
                 Nmc_prior=5,
                 wt_thresh=0.1,
+                rstate=np.random.RandomState(1851),
             )
 
     def test_dustfile_without_coord_ok_when_prior_disabled(self, fitter, observation):

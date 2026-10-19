@@ -49,11 +49,12 @@ class TestSedUtilsCoverage:
 
     def test_get_seds_wrapper_parameter_branches(self):
         """Test specific parameter handling branches in get_seds wrapper."""
+        rng = np.random.RandomState(0)
         from brutus.core.sed_utils import get_seds
 
         # Create test data
         Nmodels, Nbands = 2, 3
-        mag_coeffs = np.random.random((Nmodels, Nbands, 3))
+        mag_coeffs = rng.random((Nmodels, Nbands, 3))
         mag_coeffs[:, :, 0] = 15.0
         mag_coeffs[:, :, 1] = 1.0
         mag_coeffs[:, :, 2] = 0.1
@@ -114,11 +115,12 @@ class TestSedUtilsCoverage:
 
     def test_get_seds_wrapper_return_combinations(self):
         """Test all return value combinations in get_seds wrapper."""
+        rng = np.random.RandomState(0)
         from brutus.core.sed_utils import get_seds
 
         # Create test data
         Nmodels, Nbands = 2, 3
-        mag_coeffs = np.random.random((Nmodels, Nbands, 3))
+        mag_coeffs = rng.random((Nmodels, Nbands, 3))
         mag_coeffs[:, :, 0] = 15.0
         mag_coeffs[:, :, 1] = 1.0
         mag_coeffs[:, :, 2] = 0.1
@@ -267,14 +269,14 @@ class TestGetSedsCore:
         n_models = 100
         n_bands = 10
 
-        np.random.seed(42)
-        mag_coeffs = np.random.random((n_models, n_bands, 3))
-        mag_coeffs[:, :, 0] = np.random.uniform(14, 20, (n_models, n_bands))
-        mag_coeffs[:, :, 1] = np.random.uniform(0.5, 2.0, (n_models, n_bands))
-        mag_coeffs[:, :, 2] = np.random.uniform(0.0, 0.3, (n_models, n_bands))
+        rng = np.random.RandomState(42)
+        mag_coeffs = rng.random((n_models, n_bands, 3))
+        mag_coeffs[:, :, 0] = rng.uniform(14, 20, (n_models, n_bands))
+        mag_coeffs[:, :, 1] = rng.uniform(0.5, 2.0, (n_models, n_bands))
+        mag_coeffs[:, :, 2] = rng.uniform(0.0, 0.3, (n_models, n_bands))
 
-        av = np.random.uniform(0.0, 3.0, n_models)
-        rv = np.random.uniform(2.0, 5.0, n_models)
+        av = rng.uniform(0.0, 3.0, n_models)
+        rv = rng.uniform(2.0, 5.0, n_models)
 
         seds, rvecs, drvecs = _get_seds(mag_coeffs, av, rv, return_flux=False)
 
@@ -544,10 +546,10 @@ class TestSedPerformance:
         n_models = 1000
         n_bands = 20
 
-        np.random.seed(42)
-        mag_coeffs = np.random.random((n_models, n_bands, 3))
-        av = np.random.uniform(0.0, 3.0, n_models)
-        rv = np.random.uniform(2.5, 4.5, n_models)
+        rng = np.random.RandomState(42)
+        mag_coeffs = rng.random((n_models, n_bands, 3))
+        av = rng.uniform(0.0, 3.0, n_models)
+        rv = rng.uniform(2.5, 4.5, n_models)
 
         # This should complete in reasonable time
         seds = get_seds(mag_coeffs, av=av, rv=rv)
@@ -561,23 +563,24 @@ class TestSedIntegration:
 
     def test_expected_magnitude_ranges(self):
         """Test that computed magnitudes are in expected ranges."""
+        rng = np.random.RandomState(0)
         from brutus.core.sed_utils import get_seds
 
         # Realistic stellar parameters
         mag_coeffs = np.ones((10, 5, 3))
 
         # Realistic base magnitudes (14-20 mag)
-        mag_coeffs[:, :, 0] = np.random.uniform(14, 20, (10, 5))
+        mag_coeffs[:, :, 0] = rng.uniform(14, 20, (10, 5))
 
         # Realistic reddening vectors (0.5-2.0)
-        mag_coeffs[:, :, 1] = np.random.uniform(0.5, 2.0, (10, 5))
+        mag_coeffs[:, :, 1] = rng.uniform(0.5, 2.0, (10, 5))
 
         # Small RV dependence
-        mag_coeffs[:, :, 2] = np.random.uniform(0.0, 0.2, (10, 5))
+        mag_coeffs[:, :, 2] = rng.uniform(0.0, 0.2, (10, 5))
 
         # Realistic reddening
-        av = np.random.uniform(0.0, 3.0, 10)
-        rv = np.random.uniform(2.5, 4.5, 10)
+        av = rng.uniform(0.0, 3.0, 10)
+        rv = rng.uniform(2.5, 4.5, 10)
 
         seds = get_seds(mag_coeffs, av=av, rv=rv)
 

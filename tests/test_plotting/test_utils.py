@@ -26,13 +26,13 @@ class TestHist2d:
     @pytest.fixture
     def sample_data(self):
         """Generate sample 2D data for testing."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         n_samples = 200
 
         # Create correlated 2D data
         mean = [0, 0]
         cov = [[1, 0.7], [0.7, 1]]  # Some correlation
-        data = np.random.multivariate_normal(mean, cov, n_samples)
+        data = rng.multivariate_normal(mean, cov, n_samples)
         x, y = data.T
 
         return x, y
@@ -40,12 +40,12 @@ class TestHist2d:
     @pytest.fixture
     def weighted_sample_data(self):
         """Generate sample 2D data with weights."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         n_samples = 100
 
-        x = np.random.normal(0, 1, n_samples)
-        y = np.random.normal(0, 1, n_samples)
-        weights = np.random.exponential(1, n_samples)  # Exponential weights
+        x = rng.normal(0, 1, n_samples)
+        y = rng.normal(0, 1, n_samples)
+        weights = rng.exponential(1, n_samples)  # Exponential weights
 
         return x, y, weights
 
@@ -357,7 +357,7 @@ class TestHist2dIntegration:
 
     def test_hist2d_realistic_astronomical_data(self):
         """Test with realistic astronomical data distributions."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
 
         # Simulate stellar parameters with realistic distributions
         # Distance modulus vs. reddening
@@ -370,9 +370,9 @@ class TestHist2dIntegration:
 
         for dm_center in dm_clusters:
             n_cluster = n_stars // len(dm_clusters)
-            dm_cluster = np.random.normal(dm_center, 0.3, n_cluster)
+            dm_cluster = rng.normal(dm_center, 0.3, n_cluster)
             # Reddening correlated with distance for realistic ISM
-            av_cluster = np.random.exponential(0.2 * (dm_center - 10), n_cluster)
+            av_cluster = rng.exponential(0.2 * (dm_center - 10), n_cluster)
             av_cluster = np.maximum(av_cluster, 0)  # No negative reddening
 
             dm.extend(dm_cluster)
@@ -396,11 +396,11 @@ class TestHist2dIntegration:
 
     def test_hist2d_performance_large_dataset(self):
         """Test performance with larger dataset."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         n_large = 2000
 
-        x = np.random.standard_t(3, n_large)  # Heavy-tailed distribution
-        y = np.random.standard_t(3, n_large)
+        x = rng.standard_t(3, n_large)  # Heavy-tailed distribution
+        y = rng.standard_t(3, n_large)
 
         plt.figure(figsize=(6, 6))
         hist2d(x, y, smooth=0.02)

@@ -493,9 +493,7 @@ class TestReddeningFitEquivalence:
     """The batched reddening fit must reproduce the old scalar-loop fit."""
 
     @pytest.mark.filterwarnings("ignore::RuntimeWarning")
-    def test_matches_scalar_reference_and_is_faster(self, eep_tracks):
-        import time
-
+    def test_matches_scalar_reference(self, eep_tracks):
         filters = ["SDSS_g", "SDSS_r", "SDSS_i"]
         tracks = eep_tracks
         gen = GridGenerator(tracks, filters=filters, verbose=False)
@@ -544,7 +542,6 @@ class TestReddeningFitEquivalence:
             dict(mini=1.1, eep=454.0, feh=0.0, afe=0.0, smf=0.0),  # turnoff
         ]
 
-        t_old = t_new = 0.0
         for c in cases:
             sed, params, params2, eep2 = gen.star_track.get_seds(
                 av=0.0,
@@ -561,13 +558,9 @@ class TestReddeningFitEquivalence:
             )
             assert np.all(np.isfinite(sed)), c
 
-            t0 = time.perf_counter()
             ref = reference_fit(
                 c["mini"], c["eep"], c["feh"], c["afe"], c["smf"], eep2, sed
             )
-            t_old += time.perf_counter() - t0
-
-            t0 = time.perf_counter()
             new = gen._fit_reddening_coefficients(
                 params=params,
                 params2=params2,
@@ -578,13 +571,7 @@ class TestReddeningFitEquivalence:
                 rv_wt=rv_wt,
                 dist=dist,
             )
-            t_new += time.perf_counter() - t0
-
             np.testing.assert_allclose(new, ref, rtol=1e-8, atol=1e-8)
-
-        # Measured ~17x on the dev machine; require only a loose margin so
-        # the check is robust on loaded CI runners.
-        assert t_new < t_old, f"batched fit slower than scalar ({t_new} vs {t_old})"
 
 
 class TestGridGeneratorEdgeCases:
@@ -596,7 +583,6 @@ class TestGridGeneratorEdgeCases:
         This test starts grid generation with all defaults (~300k models)
         but terminates early after verifying it's working correctly.
         """
-
         tracks = eep_tracks
         gen = GridGenerator(tracks, filters=["SDSS_g"], verbose=False)
 

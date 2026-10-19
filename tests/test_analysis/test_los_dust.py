@@ -282,17 +282,17 @@ class TestLogLikelihood:
     def setup_method(self):
         """Set up synthetic data for testing."""
         # Create synthetic stellar samples
-        np.random.seed(42)  # For reproducible tests
+        rng = np.random.RandomState(42)  # For reproducible tests
         self.nstars = 20
         self.nsamps = 100
 
         # Distance samples (distance modulus, uniform in range)
-        self.dsamps = np.random.uniform(6, 12, (self.nstars, self.nsamps))
+        self.dsamps = rng.uniform(6, 12, (self.nstars, self.nsamps))
 
         # Reddening samples (A_V extinction, with some structure)
         # Create a simple extinction profile: low at near distances, higher further
         base_extinction = 0.1 + 0.3 * (self.dsamps - 6) / 6  # Linear increase
-        noise = np.random.normal(0, 0.05, self.dsamps.shape)
+        noise = rng.normal(0, 0.05, self.dsamps.shape)
         self.rsamps = np.maximum(0, base_extinction + noise)
 
         # 1-cloud model parameters: [pb, s0, s, fred, dist1, red1]
@@ -358,8 +358,9 @@ class TestLogLikelihood:
 
     def test_loglike_template_reds(self):
         """Test log-likelihood with template reddenings."""
+        rng = np.random.RandomState(0)
         # Create template reddenings for each star
-        template_reds = np.random.uniform(0.8, 1.2, self.nstars)
+        template_reds = rng.uniform(0.8, 1.2, self.nstars)
 
         loglike = los_clouds_loglike_samples(
             self.theta_1cloud, self.dsamps, self.rsamps, template_reds=template_reds
@@ -453,6 +454,7 @@ class TestLogLikelihood:
 
     def test_loglike_input_validation(self):
         """Test input validation for log-likelihood function."""
+        rng = np.random.RandomState(0)
         # Test invalid theta dimensions
         with pytest.raises(ValueError, match="theta must be a 1D array"):
             los_clouds_loglike_samples(
@@ -500,7 +502,7 @@ class TestLogLikelihood:
             los_clouds_loglike_samples(theta_bad_dist, self.dsamps, self.rsamps)
 
         # Test invalid template_reds shape
-        template_wrong_shape = np.random.uniform(0.8, 1.2, self.nstars + 5)
+        template_wrong_shape = rng.uniform(0.8, 1.2, self.nstars + 5)
         with pytest.raises(ValueError, match="template_reds must have shape"):
             los_clouds_loglike_samples(
                 self.theta_1cloud,
@@ -542,9 +544,9 @@ class TestIntegration:
 
         # Generate synthetic data
         nstars, nsamps = 15, 50
-        np.random.seed(42)
-        dsamps = np.random.uniform(6, 12, (nstars, nsamps))
-        rsamps = np.random.uniform(0, 1, (nstars, nsamps))
+        rng = np.random.RandomState(42)
+        dsamps = rng.uniform(6, 12, (nstars, nsamps))
+        rsamps = rng.uniform(0, 1, (nstars, nsamps))
 
         # Compute likelihood with monotonic constraint
         loglike = los_clouds_loglike_samples(theta, dsamps, rsamps, monotonic=True)
@@ -572,19 +574,19 @@ class TestIntegration:
 
     def test_multiple_cloud_configurations(self):
         """Test different numbers of clouds in the model."""
-        np.random.seed(456)
+        rng = np.random.RandomState(456)
 
         # Generate synthetic data
         nstars, nsamps = 10, 30
-        dsamps = np.random.uniform(7, 11, (nstars, nsamps))
-        rsamps = np.random.uniform(0, 0.8, (nstars, nsamps))
+        dsamps = rng.uniform(7, 11, (nstars, nsamps))
+        rsamps = rng.uniform(0, 0.8, (nstars, nsamps))
 
         # Test 1, 2, and 3 cloud models
         loglikes = []
         for nclouds in [1, 2, 3]:
             ndim = 2 * nclouds + 4
             # Create unit cube values that will produce monotonic extinctions
-            u = np.random.uniform(0, 1, ndim)
+            u = rng.uniform(0, 1, ndim)
             # Ensure monotonic extinction by using sorted values for extinction parameters
             extinction_indices = list(
                 range(3, ndim, 2)
@@ -605,19 +607,19 @@ class TestIntegration:
 
     def test_realistic_extinction_profile(self):
         """Test with a realistic extinction profile."""
-        np.random.seed(789)
+        rng = np.random.RandomState(789)
 
         # Create realistic extinction profile
         nstars = 25
         nsamps = 75
 
         # Distance samples with realistic clustering
-        dsamps = np.random.normal(8.5, 1.0, (nstars, nsamps))  # Centered around 8.5 DM
+        dsamps = rng.normal(8.5, 1.0, (nstars, nsamps))  # Centered around 8.5 DM
         dsamps = np.clip(dsamps, 6.0, 12.0)  # Clip to reasonable range
 
         # Extinction that increases with distance, with scatter
         mean_extinction = 0.05 + 0.15 * (dsamps - 6.0) / 6.0  # Linear increase
-        rsamps = np.random.lognormal(np.log(mean_extinction + 0.01), 0.3)
+        rsamps = rng.lognormal(np.log(mean_extinction + 0.01), 0.3)
         rsamps = np.clip(rsamps, 0.001, 3.0)  # Reasonable extinction range
 
         # 2-cloud model with monotonically increasing extinctions

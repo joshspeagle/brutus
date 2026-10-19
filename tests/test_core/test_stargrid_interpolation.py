@@ -19,7 +19,6 @@ Covers the audit fixes to `brutus.core.individual.StarGrid`:
 """
 
 import itertools
-import time
 import warnings
 
 import numpy as np
@@ -348,44 +347,6 @@ class TestMultilinearEquivalence:
         wmap = _as_weight_map(idx, w)
         assert wmap.get(0, 0.0) == pytest.approx(1.0)
         assert 1 not in wmap
-
-    def test_benchmark_faster_than_reference(self):
-        # Moderate synthetic grid: 40 x 30 x 20 = 24,000 models
-        minis = np.linspace(0.3, 2.5, 40)
-        eeps = np.linspace(202.0, 605.0, 30)
-        fehs = np.linspace(-2.0, 0.5, 20)
-        tuples = [(m, e, z) for m in minis for e in eeps for z in fehs]
-        grid = _make_grid(tuples)
-
-        rng = np.random.default_rng(1)
-        queries = [
-            dict(
-                mini=float(rng.uniform(0.3, 2.5)),
-                eep=float(rng.uniform(202.0, 605.0)),
-                feh=float(rng.uniform(-2.0, 0.5)),
-            )
-            for _ in range(30)
-        ]
-
-        t0 = time.perf_counter()
-        for q in queries:
-            grid._find_neighbors_multilinear(**q)
-        t_new = time.perf_counter() - t0
-
-        t0 = time.perf_counter()
-        for q in queries:
-            _reference_multilinear(grid, **q)
-        t_ref = time.perf_counter() - t0
-
-        # Timing is reported as a diagnostic only: a hard "new beats old"
-        # assertion is a coin-flip on a loaded CI runner and the correctness
-        # equivalence above is what this test actually guards.
-        print(
-            f"\nmultilinear neighbor lookup ({grid.nmodels} models, "
-            f"{len(queries)} queries): new {1e3 * t_new / len(queries):.3f} "
-            f"ms/query vs reference {1e3 * t_ref / len(queries):.3f} ms/query "
-            f"({t_ref / t_new:.0f}x)"
-        )
 
 
 if __name__ == "__main__":

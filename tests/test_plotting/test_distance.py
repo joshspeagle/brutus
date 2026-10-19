@@ -24,13 +24,13 @@ class TestDistVsRed:
     @pytest.fixture
     def direct_test_data(self):
         """Test data in direct format: (dists, reds, dreds)."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         n_samples = 50
 
         # Generate realistic distance/reddening samples for single object
-        dists = np.random.lognormal(np.log(2.0), 0.3, n_samples)  # ~2 kpc
-        reds = np.random.exponential(0.5, n_samples)  # Av ~ 0.5
-        dreds = np.random.normal(3.3, 0.3, n_samples)  # Rv ~ 3.3
+        dists = rng.lognormal(np.log(2.0), 0.3, n_samples)  # ~2 kpc
+        reds = rng.exponential(0.5, n_samples)  # Av ~ 0.5
+        dreds = rng.normal(3.3, 0.3, n_samples)  # Rv ~ 3.3
 
         return (dists, reds, dreds)
 
@@ -224,12 +224,12 @@ class TestDistVsRedBackwardCompatibility:
         plt.figure(figsize=(6, 6))
 
         # Create simple test data
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         n_samples = 20
         test_data = (
-            np.random.lognormal(np.log(2.0), 0.3, n_samples),  # distances
-            np.random.exponential(0.5, n_samples),  # Av
-            np.random.normal(3.3, 0.3, n_samples),  # Rv
+            rng.lognormal(np.log(2.0), 0.3, n_samples),  # distances
+            rng.exponential(0.5, n_samples),  # Av
+            rng.normal(3.3, 0.3, n_samples),  # Rv
         )
 
         result = dist_vs_red(test_data, bins=(5, 4))
@@ -247,19 +247,19 @@ class TestDistVsRedBackwardCompatibility:
 
     def test_dist_vs_red_with_sar_data_format(self):
         """Test with SAR (4-tuple) data format."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         n_samples = 30
 
         # Create SAR format data: (scales, avs, rvs, covs_sar)
-        scales = np.random.exponential(1.0, n_samples)
-        avs = np.random.exponential(0.5, n_samples)
-        rvs = np.random.normal(3.3, 0.3, n_samples)
+        scales = rng.exponential(1.0, n_samples)
+        avs = rng.exponential(0.5, n_samples)
+        rvs = rng.normal(3.3, 0.3, n_samples)
 
         # Create proper positive semidefinite covariance matrices
         covs_sar = np.zeros((n_samples, 3, 3))
         for i in range(n_samples):
             # Create a random positive semidefinite matrix
-            A = np.random.randn(3, 3)
+            A = rng.randn(3, 3)
             covs_sar[i] = np.dot(A, A.T) * 0.01  # Small covariance
 
         sar_data = (scales, avs, rvs, covs_sar)
@@ -279,13 +279,13 @@ class TestDistVsRedBackwardCompatibility:
 
     def test_dist_vs_red_with_parallax_info(self):
         """Test with parallax and parallax_err provided."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         n_samples = 30
 
         # Generate test data
-        dists = np.random.lognormal(np.log(2.0), 0.3, n_samples)
-        reds = np.random.exponential(0.5, n_samples)
-        dreds = np.random.normal(3.3, 0.3, n_samples)
+        dists = rng.lognormal(np.log(2.0), 0.3, n_samples)
+        reds = rng.exponential(0.5, n_samples)
+        dreds = rng.normal(3.3, 0.3, n_samples)
         test_data = (dists, reds, dreds)
 
         plt.figure(figsize=(6, 6))
@@ -304,14 +304,14 @@ class TestDistVsRedBackwardCompatibility:
 
     def test_dist_vs_red_multi_object_case(self):
         """Test with multi-object data format."""
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         n_objects = 2
         n_samples = 20
 
         # Multi-object data: shape (n_objects, n_samples)
-        dists = np.random.lognormal(np.log(2.0), 0.3, (n_objects, n_samples))
-        reds = np.random.exponential(0.5, (n_objects, n_samples))
-        dreds = np.random.normal(3.3, 0.3, (n_objects, n_samples))
+        dists = rng.lognormal(np.log(2.0), 0.3, (n_objects, n_samples))
+        reds = rng.exponential(0.5, (n_objects, n_samples))
+        dreds = rng.normal(3.3, 0.3, (n_objects, n_samples))
 
         multi_data = (dists, reds, dreds)
 

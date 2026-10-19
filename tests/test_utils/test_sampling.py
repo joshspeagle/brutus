@@ -27,7 +27,6 @@ class TestDrawSARFunction:
         from brutus.utils.sampling import draw_sar
 
         # Simple test case
-        np.random.seed(42)
         nsamps = 2
         ndraws = 100
 
@@ -59,7 +58,6 @@ class TestDrawSARFunction:
         """Test that draw_sar produces samples with correct means."""
         from brutus.utils.sampling import draw_sar
 
-        np.random.seed(42)
         nsamps = 1
         ndraws = 5000  # Large number for statistical accuracy
 
@@ -81,8 +79,6 @@ class TestDrawSARFunction:
     def test_draw_sar_limits(self):
         """Test draw_sar respects limits."""
         from brutus.utils.sampling import draw_sar
-
-        np.random.seed(42)
 
         # Set up case where samples would naturally exceed limits
         scales = np.array([1.0])
@@ -118,8 +114,6 @@ class TestSampleMultivariateNormal:
         """Test single distribution sampling."""
         from brutus.utils.sampling import sample_multivariate_normal
 
-        np.random.seed(42)
-
         # 2D distribution
         mean = np.array([1.0, 2.0])
         cov = np.array([[1.0, 0.5], [0.5, 1.0]])
@@ -142,8 +136,6 @@ class TestSampleMultivariateNormal:
     def test_sample_multivariate_normal_multiple(self):
         """Test multiple distribution sampling."""
         from brutus.utils.sampling import sample_multivariate_normal
-
-        np.random.seed(42)
 
         # 2 distributions, 2D each
         means = np.array([[1.0, 2.0], [3.0, 4.0]])
@@ -270,8 +262,6 @@ class TestSamplingIntegration:
         """Test a realistic sampling workflow."""
         from brutus.utils.sampling import draw_sar, quantile, sample_multivariate_normal
 
-        np.random.seed(42)
-
         # Step 1: Generate initial samples from multivariate normal
         means = np.array([[1.0, 0.1, 3.1], [1.1, 0.2, 3.3]])  # scale, av, rv
         covs = np.array(
@@ -313,8 +303,6 @@ class TestSamplingIntegration:
     def test_mcmc_like_workflow(self):
         """Test an MCMC-like workflow using sampling utilities."""
         from brutus.utils.sampling import quantile, sample_multivariate_normal
-
-        np.random.seed(42)
 
         # Simulate an MCMC chain
         nsteps = 1000

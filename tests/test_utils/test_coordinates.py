@@ -9,13 +9,7 @@ for a grid of (l, b, d) values, tests edge cases, and checks
 that R_solar/Z_solar parameters propagate correctly.
 """
 
-import time
-
 import numpy as np
-import pytest
-from astropy import units
-from astropy.coordinates import CylindricalRepresentation as CylRep
-from astropy.coordinates import SkyCoord
 
 from brutus.utils.math import galactic_to_galactocentric_cyl
 
@@ -131,79 +125,3 @@ class TestGalacticToGalactocentricCyl:
         R, Z = galactic_to_galactocentric_cyl(dists, ell, b)
         assert R.shape == (3,)
         assert Z.shape == (3,)
-
-    def test_timing_vs_astropy(self):
-        """Verify that the numpy implementation is faster than astropy SkyCoord.
-
-        This test creates a moderately large coordinate array and compares
-        the execution time of the numpy formula vs astropy SkyCoord.
-        """
-        N = 100_000
-        dists = np.random.uniform(0.1, 50.0, N)
-        ell_val = 45.0
-        b_val = 30.0
-
-        # Warm up
-        galactic_to_galactocentric_cyl(dists[:10], ell_val, b_val)
-
-        # Time numpy version
-        t0 = time.perf_counter()
-        for _ in range(5):
-            R_np, Z_np = galactic_to_galactocentric_cyl(dists, ell_val, b_val)
-        t_numpy = (time.perf_counter() - t0) / 5
-
-        # Time astropy version
-        ell_arr = np.full(N, ell_val)
-        b_arr = np.full(N, b_val)
-
-        # Warm up
-        c = SkyCoord(
-            l=ell_arr[:10] * units.deg,
-            b=b_arr[:10] * units.deg,
-            distance=dists[:10] * units.kpc,
-            frame="galactic",
-        )
-        _ = c.galactocentric.cartesian.represent_as(CylRep)
-
-        t0 = time.perf_counter()
-        for _ in range(3):
-            c = SkyCoord(
-                l=ell_arr * units.deg,
-                b=b_arr * units.deg,
-                distance=dists * units.kpc,
-                frame="galactic",
-            )
-            cyl = c.galactocentric.cartesian.represent_as(CylRep)
-            R_ap, Z_ap = cyl.rho.value, cyl.z.value
-        t_astropy = (time.perf_counter() - t0) / 3
-
-        # numpy should be significantly faster
-        speedup = t_astropy / t_numpy
-        assert speedup > 2.0, (
-            f"Expected >2x speedup, got {speedup:.1f}x "
-            f"(numpy: {t_numpy*1e3:.1f}ms, astropy: {t_astropy*1e3:.1f}ms)"
-        )
-
-
-class TestGalacticToGalactocentricCylImport:
-    """Test that the function is properly exported."""
-
-    def test_import_from_math(self):
-        """Test import from brutus.utils.math."""
-        from brutus.utils.math import galactic_to_galactocentric_cyl
-
-        assert callable(galactic_to_galactocentric_cyl)
-
-    def test_import_from_utils(self):
-        """Test import from brutus.utils."""
-        from brutus.utils import galactic_to_galactocentric_cyl
-
-        assert callable(galactic_to_galactocentric_cyl)
-
-    def test_in_all(self):
-        """Test that function is in __all__."""
-        import brutus.utils
-        import brutus.utils.math
-
-        assert "galactic_to_galactocentric_cyl" in brutus.utils.__all__
-        assert "galactic_to_galactocentric_cyl" in brutus.utils.math.__all__

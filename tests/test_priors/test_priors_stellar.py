@@ -195,26 +195,26 @@ class TestNumericalStability:
 @pytest.fixture
 def simulated_stellar_data():
     """Generate simulated stellar parameter data for testing."""
-    np.random.seed(42)
+    rng = np.random.RandomState(42)
     n_stars = 1000
 
     # Simulate stellar parameters
-    masses = np.random.lognormal(0, 0.5, n_stars)  # M_sun
-    ages = np.random.uniform(0.1, 13.0, n_stars)  # Gyr
-    fehs = np.random.normal(-0.2, 0.3, n_stars)  # [Fe/H]
+    masses = rng.lognormal(0, 0.5, n_stars)  # M_sun
+    ages = rng.uniform(0.1, 13.0, n_stars)  # Gyr
+    fehs = rng.normal(-0.2, 0.3, n_stars)  # [Fe/H]
 
     # Simulate astrometry
-    parallaxes = np.random.lognormal(-1, 0.8, n_stars)  # mas
-    parallax_errors = 0.1 * parallaxes * np.random.uniform(0.5, 2.0, n_stars)
+    parallaxes = rng.lognormal(-1, 0.8, n_stars)  # mas
+    parallax_errors = 0.1 * parallaxes * rng.uniform(0.5, 2.0, n_stars)
 
     # Simulate sky positions
-    ra = np.random.uniform(0, 360, n_stars)  # deg
-    dec = np.arcsin(np.random.uniform(-1, 1, n_stars)) * 180 / np.pi  # deg
+    ra = rng.uniform(0, 360, n_stars)  # deg
+    dec = np.arcsin(rng.uniform(-1, 1, n_stars)) * 180 / np.pi  # deg
     coords = SkyCoord(ra=ra, dec=dec, unit="deg")
 
     # Simulate extinction
     distances = 1.0 / (parallaxes * 1e-3)  # kpc (approximate)
-    extinctions = 0.1 * np.random.exponential(1, n_stars)  # A_V
+    extinctions = 0.1 * rng.exponential(1, n_stars)  # A_V
 
     return {
         "masses": masses,
@@ -233,11 +233,12 @@ class TestIntegration:
 
     def test_prior_integration_workflow(self, simulated_stellar_data):
         """Test complete prior evaluation workflow."""
+        rng = np.random.RandomState(0)
         data = simulated_stellar_data
 
         # Evaluate all priors for subset of stars
         n_test = 50
-        idx = np.random.choice(len(data["masses"]), n_test, replace=False)
+        idx = rng.choice(len(data["masses"]), n_test, replace=False)
 
         # IMF prior
         logp_masses = logp_imf(data["masses"][idx])

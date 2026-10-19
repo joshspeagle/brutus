@@ -4,7 +4,6 @@ import warnings
 
 import numpy as np
 import pytest
-from conftest import requires_data
 
 from brutus.analysis.populations import (
     apply_isochrone_mixture_model,
@@ -14,7 +13,6 @@ from brutus.analysis.populations import (
     isochrone_population_loglike,
     marginalize_isochrone_grid,
 )
-from brutus.core.populations import Isochrone, StellarPop
 from brutus.utils.photometry import phot_loglike, uniform_outlier_loglike
 
 
@@ -48,19 +46,19 @@ def real_isochrone_grid(real_stellarpop):
 @pytest.fixture
 def mock_observations():
     """Create mock stellar observations for testing."""
-    np.random.seed(42)  # Reproducible results
+    rng = np.random.RandomState(42)  # Reproducible results
 
     # Create realistic mock observations
     n_stars = 5
     n_filters = 3
 
     # Mock fluxes: bright stars with some scatter
-    obs_flux = np.random.uniform(0.5, 2.0, (n_stars, n_filters))
-    obs_err = np.random.uniform(0.05, 0.15, (n_stars, n_filters))
+    obs_flux = rng.uniform(0.5, 2.0, (n_stars, n_filters))
+    obs_err = rng.uniform(0.05, 0.15, (n_stars, n_filters))
 
     # Add some parallax data
-    parallax = np.random.uniform(0.5, 2.0, n_stars)  # 0.5-2 mas
-    parallax_err = np.random.uniform(0.05, 0.2, n_stars)
+    parallax = rng.uniform(0.5, 2.0, n_stars)  # 0.5-2 mas
+    parallax_err = rng.uniform(0.05, 0.2, n_stars)
 
     return {
         "obs_flux": obs_flux,
@@ -441,18 +439,6 @@ class TestIntegration:
         assert np.all(np.isfinite(lnl_marginalized))
 
         print("✅ All workflow components working correctly with real MIST data")
-
-
-@pytest.fixture(scope="module")
-def real_stellarpop():
-    """Load real MIST StellarPop with neural network once for module tests."""
-    iso = Isochrone(mistfile=requires_data("MIST_1.2_iso_vvcrit0.0.h5"), verbose=False)
-    return StellarPop(
-        isochrone=iso,
-        filters=["SDSS_g", "SDSS_r", "SDSS_i"],
-        nnfile=requires_data("nn_c3k.h5"),
-        verbose=False,
-    )
 
 
 class MockStellarPop:

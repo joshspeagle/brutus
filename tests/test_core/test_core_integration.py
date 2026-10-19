@@ -7,8 +7,6 @@ Clean integration tests for StarGrid and BruteForce classes.
 Tests the essential workflow from grid creation to stellar parameter estimation.
 """
 
-import time
-
 import numpy as np
 import pytest
 from conftest import split_labels
@@ -78,12 +76,6 @@ class TestCoreIntegration:
         assert np.all(np.isfinite(sed))
 
         # Step 2: Use BruteForce to fit observations.
-        # Warm-up call so numba JIT compilation (order-dependent across the
-        # test session: this lands in the timed section when the file runs
-        # first/alone in a cold process) is excluded from the timing below.
-        fitter.loglike_grid(obs, obs_err, obs_mask, ltol=5e-2, verbose=False)
-
-        start_time = time.time()
         lnl, ndim, chi2 = fitter.loglike_grid(
             obs,
             obs_err,
@@ -91,10 +83,6 @@ class TestCoreIntegration:
             ltol=5e-2,  # Moderate clipping for speed
             verbose=False,
         )
-        elapsed = time.time() - start_time
-
-        # Should complete quickly
-        assert elapsed < 2.0, f"Integration test took {elapsed:.2f}s, expected < 2s"
 
         # Step 3: Verify results are sensible
         assert lnl.shape == (fitter.nmodels,)
@@ -119,8 +107,8 @@ class TestCoreIntegration:
         )
         print(f"Best loglike: {lnl[best_idx]:.2f}")
 
-    def test_performance_characteristics(self, mist_integration_setup):
-        """Test that performance scales reasonably with problem size."""
+    def test_loglike_grid_indices_select_models(self, mist_integration_setup):
+        """`indices` restricts loglike_grid to the requested models."""
         setup = mist_integration_setup
         fitter = setup["fitter"]
         ps_indices = setup["ps_indices"]
@@ -136,63 +124,23 @@ class TestCoreIntegration:
             obs_err[idx] = 0.05
         obs_mask = ~np.isnan(obs)
 
-        # Warm up JIT/cache with first call
-        # (3 bands triggers a RuntimeWarning about minimum 4 bands)
         import warnings
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            _ = fitter.loglike_grid(
-                obs, obs_err, obs_mask, indices=np.arange(10), ltol=5e-2, verbose=False
-            )
-
-        # Test different model counts
-        model_counts = [10, 50, 100]
-        times = []
-
-        for n_models in model_counts:
-            if n_models > fitter.nmodels:
-                continue
-
+        for n_models in [10, 50, 100]:
             indices = np.arange(n_models)
-
-            # Min-of-3 timing: a single wall-clock sample on a shared CI
-            # runner is dominated by scheduling noise (observed 25x per-model
-            # "ratios" on loaded macOS runners); the minimum is a stable
-            # estimate of the true cost.
-            reps = []
-            for _ in range(3):
-                start = time.time()
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore", RuntimeWarning)
-                    lnl, _, _ = fitter.loglike_grid(
-                        obs,
-                        obs_err,
-                        obs_mask,
-                        indices=indices,
-                        ltol=5e-2,
-                        verbose=False,
-                    )
-                reps.append(time.time() - start)
-            times.append(min(reps))
-
-            # Verify results
+            # 3 bands trigger a RuntimeWarning about the 4-band minimum
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                lnl, _, _ = fitter.loglike_grid(
+                    obs,
+                    obs_err,
+                    obs_mask,
+                    indices=indices,
+                    ltol=5e-2,
+                    verbose=False,
+                )
             assert lnl.shape == (n_models,)
             assert np.all(np.isfinite(lnl))
-
-        # Performance should scale reasonably (after warmup): per-model cost
-        # must not grow with the model count. Small counts legitimately look
-        # expensive per model (fixed per-call overhead dominates), so only a
-        # super-linear GROWTH from the smallest to the largest count is a
-        # regression signal; a generous factor absorbs runner variance.
-        if len(times) >= 2:
-            time_per_model = [t / n for t, n in zip(times, model_counts[: len(times)])]
-            growth = time_per_model[-1] / time_per_model[0]
-            assert growth < 10.0, f"Poor performance scaling: {time_per_model}"
-
-        print(
-            f"Performance: {time_per_model} s/model for {model_counts[:len(times)]} models"
-        )
 
     def test_grid_interpolation_accuracy(self, mist_integration_setup):
         """Test that StarGrid interpolation gives reasonable results."""

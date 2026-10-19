@@ -60,6 +60,7 @@ class TestIsochroneInitialization:
 
     def test_isochrone_verbose_output(self, capsys):
         """Test that verbose output is produced when requested."""
+        rng = np.random.RandomState(0)
         with patch("h5py.File") as mock_file:
             mock_context = MagicMock()
             mock_file.return_value.__enter__.return_value = mock_context
@@ -67,7 +68,7 @@ class TestIsochroneInitialization:
             afe_grid = np.array([0.0])
             loga_grid = np.array([9.0])
             eep_grid = np.arange(202, 808)
-            predictions = np.random.random((1, 1, 1, len(eep_grid), 8))
+            predictions = rng.random((1, 1, 1, len(eep_grid), 8))
 
             mock_predictions = MagicMock()
             mock_predictions.__getitem__.return_value = predictions
@@ -151,8 +152,9 @@ class TestStellarPopInitialization:
     @pytest.fixture
     def mock_isochrone(self):
         """Create a mock isochrone for StellarPop testing."""
+        rng = np.random.RandomState(0)
         iso = MagicMock()
-        iso.get_predictions.return_value = np.random.random((100, 8))
+        iso.get_predictions.return_value = rng.random((100, 8))
         return iso
 
     def test_stellarpop_basic_initialization(self, mock_isochrone):
@@ -277,6 +279,7 @@ class TestPopulationsIntegration:
     @pytest.fixture
     def integrated_system(self):
         """Create integrated Isochrone + StellarPop system."""
+        rng = np.random.RandomState(0)
         # Mock the file loading and neural network for integration testing
         with (
             patch("h5py.File") as mock_file,
@@ -290,7 +293,7 @@ class TestPopulationsIntegration:
             afe_grid = np.array([0.0, 0.4])
             loga_grid = np.array([8.5, 9.0, 9.5, 10.0])
             eep_grid = np.arange(202, 808)
-            predictions = np.random.random((3, 2, 4, len(eep_grid), 8))
+            predictions = rng.random((3, 2, 4, len(eep_grid), 8))
 
             mock_predictions = MagicMock()
             mock_predictions.__getitem__.return_value = predictions
@@ -379,6 +382,7 @@ class TestPopulationsEdgeCases:
 
     def test_isochrone_extreme_parameters(self):
         """Test isochrone behavior with extreme parameters."""
+        rng = np.random.RandomState(0)
         with patch("h5py.File") as mock_file:
             mock_context = MagicMock()
             mock_file.return_value.__enter__.return_value = mock_context
@@ -386,7 +390,7 @@ class TestPopulationsEdgeCases:
             afe_grid = np.array([0.0, 0.4])
             loga_grid = np.array([8.0, 10.0])
             eep_grid = np.arange(202, 808)
-            predictions = np.random.random((3, 2, 2, len(eep_grid), 8))
+            predictions = rng.random((3, 2, 2, len(eep_grid), 8))
 
             mock_predictions = MagicMock()
             mock_predictions.__getitem__.return_value = predictions
@@ -523,6 +527,7 @@ class TestPopulationsEdgeCases:
 
     def test_empty_predictions(self):
         """Test behavior with empty prediction arrays."""
+        rng = np.random.RandomState(0)
         with patch("h5py.File") as mock_file:
             mock_context = MagicMock()
             mock_file.return_value.__enter__.return_value = mock_context
@@ -530,7 +535,7 @@ class TestPopulationsEdgeCases:
             afe_grid = np.array([0.0])
             loga_grid = np.array([9.0])
             eep_grid = np.arange(202, 808)
-            predictions = np.random.random((1, 1, 1, len(eep_grid), 8))
+            predictions = rng.random((1, 1, 1, len(eep_grid), 8))
 
             mock_predictions = MagicMock()
             mock_predictions.__getitem__.return_value = predictions
@@ -567,6 +572,7 @@ class TestPopulationsPerformance:
     @pytest.fixture
     def performance_setup(self):
         """Setup for performance testing."""
+        rng = np.random.RandomState(0)
         with (
             patch("h5py.File") as mock_file,
             mock_nn_predictor("brutus.core.populations") as mock_nn,
@@ -579,7 +585,7 @@ class TestPopulationsPerformance:
             afe_grid = np.array([0.0, 0.2, 0.4])
             loga_grid = np.linspace(8, 10.5, 25)
             eep_grid = np.arange(202, 808)
-            predictions = np.random.random((50, 3, 25, len(eep_grid), 8))
+            predictions = rng.random((50, 3, 25, len(eep_grid), 8))
 
             mock_predictions = MagicMock()
             mock_predictions.__getitem__.return_value = predictions
@@ -643,21 +649,6 @@ class TestPopulationsPerformance:
             params = iso.get_predictions(feh=feh, loga=9.0)
             assert isinstance(params, np.ndarray)
             assert np.all(np.isfinite(params))
-
-
-@pytest.fixture(scope="module")
-def real_isochrone():
-    return Isochrone(mistfile=requires_data("MIST_1.2_iso_vvcrit0.0.h5"), verbose=False)
-
-
-@pytest.fixture(scope="module")
-def real_stellarpop(real_isochrone):
-    return StellarPop(
-        isochrone=real_isochrone,
-        filters=["SDSS_g", "SDSS_r", "SDSS_i"],
-        nnfile=requires_data("nn_c3k.h5"),
-        verbose=False,
-    )
 
 
 class TestIsochronePredictionsArgument:

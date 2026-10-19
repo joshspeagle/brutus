@@ -18,26 +18,26 @@ from brutus.utils.photometry import phot_loglike
 @pytest.fixture
 def mock_data():
     """Create realistic mock data for testing."""
-    np.random.seed(42)
+    rng = np.random.RandomState(42)
 
     n_obj, n_filt, n_samp, n_models = 50, 5, 20, 100
 
     # Mock photometry
-    phot = np.random.uniform(0.1, 10.0, (n_obj, n_filt))
+    phot = rng.uniform(0.1, 10.0, (n_obj, n_filt))
     err = 0.05 * phot + 0.01  # Realistic errors
-    mask = np.random.choice([0, 1], (n_obj, n_filt), p=[0.1, 0.9])
+    mask = rng.choice([0, 1], (n_obj, n_filt), p=[0.1, 0.9])
 
     # Mock models with realistic coefficients
-    models = np.random.random((n_models, n_filt, 3))
-    models[:, :, 0] = np.random.uniform(14, 20, (n_models, n_filt))  # Base mags
-    models[:, :, 1] = np.random.uniform(0.5, 2.0, (n_models, n_filt))  # A(V) coeffs
-    models[:, :, 2] = np.random.uniform(0.0, 0.3, (n_models, n_filt))  # R(V) coeffs
+    models = rng.random((n_models, n_filt, 3))
+    models[:, :, 0] = rng.uniform(14, 20, (n_models, n_filt))  # Base mags
+    models[:, :, 1] = rng.uniform(0.5, 2.0, (n_models, n_filt))  # A(V) coeffs
+    models[:, :, 2] = rng.uniform(0.0, 0.3, (n_models, n_filt))  # R(V) coeffs
 
     # Mock fitted parameters
-    idxs = np.random.randint(0, n_models, (n_obj, n_samp))
-    reds = np.random.uniform(0.0, 3.0, (n_obj, n_samp))
-    dreds = np.random.uniform(2.5, 4.5, (n_obj, n_samp))
-    dists = np.random.uniform(0.5, 10.0, (n_obj, n_samp))
+    idxs = rng.randint(0, n_models, (n_obj, n_samp))
+    reds = rng.uniform(0.0, 3.0, (n_obj, n_samp))
+    dreds = rng.uniform(2.5, 4.5, (n_obj, n_samp))
+    dists = rng.uniform(0.5, 10.0, (n_obj, n_samp))
 
     return {
         "phot": phot,
@@ -61,8 +61,6 @@ def injected_offsets():
     Each object's samples sit at its true model, A(V), R(V) and distance, so
     `photometric_offsets` should return ``1 / TRUE_OFFSETS``.
     """
-    from brutus.core.sed_utils import get_seds
-
     rng = np.random.RandomState(0)
     n_obj, n_filt, n_models, n_samp = 80, len(TRUE_OFFSETS), 20, 10
     models = np.zeros((n_models, n_filt, 3))
@@ -169,17 +167,17 @@ class TestPhotometricOffsetsCore:
     """photometric_offsets recovers offsets injected into synthetic data."""
 
     @staticmethod
-    def _run(data, **kwargs):
-        from brutus.analysis.offsets import (
-            PhotometricOffsetsConfig,
-            photometric_offsets,
-        )
-
+    def _run(
+        data,
+        uncertainty_method="bootstrap_iqr",
+        use_vectorized_bootstrap=True,
+        **kwargs,
+    ):
         config = PhotometricOffsetsConfig(
             n_bootstrap=50,
             progress_interval=0,
-            uncertainty_method=kwargs.pop("uncertainty_method", "bootstrap_iqr"),
-            use_vectorized_bootstrap=kwargs.pop("use_vectorized_bootstrap", True),
+            uncertainty_method=uncertainty_method,
+            use_vectorized_bootstrap=use_vectorized_bootstrap,
         )
         return photometric_offsets(
             **data, config=config, verbose=False, rng=np.random.default_rng(1), **kwargs
@@ -340,17 +338,17 @@ class TestParameterRecovery:
         n_models, n_samp = 25, 12
 
         # Create realistic model grid
-        np.random.seed(42)
-        models = np.random.random((n_models, n_filt, 3))
-        models[:, :, 0] = np.random.uniform(15, 19, (n_models, n_filt))
-        models[:, :, 1] = np.random.uniform(0.6, 1.8, (n_models, n_filt))
-        models[:, :, 2] = np.random.uniform(0.0, 0.25, (n_models, n_filt))
+        rng = np.random.RandomState(42)
+        models = rng.random((n_models, n_filt, 3))
+        models[:, :, 0] = rng.uniform(15, 19, (n_models, n_filt))
+        models[:, :, 1] = rng.uniform(0.6, 1.8, (n_models, n_filt))
+        models[:, :, 2] = rng.uniform(0.0, 0.25, (n_models, n_filt))
 
         # True parameters for data generation
-        true_model_idxs = np.random.randint(0, n_models, n_obj)
-        true_avs = np.random.uniform(0.0, 1.2, n_obj)
-        true_rvs = np.random.uniform(3.1, 3.5, n_obj)
-        true_dists = np.random.uniform(0.9, 1.1, n_obj)
+        true_model_idxs = rng.randint(0, n_models, n_obj)
+        true_avs = rng.uniform(0.0, 1.2, n_obj)
+        true_rvs = rng.uniform(3.1, 3.5, n_obj)
+        true_dists = rng.uniform(0.9, 1.1, n_obj)
 
         # Generate observed photometry using real get_seds
         observed_phot = np.zeros((n_obj, n_filt))
@@ -364,7 +362,7 @@ class TestParameterRecovery:
             observed_phot[i] = true_sed[0] / (true_dists[i] ** 2)
 
         # Add realistic noise
-        noise = np.random.normal(0, 0.025 * observed_phot)
+        noise = rng.normal(0, 0.025 * observed_phot)
         observed_phot += noise
         observed_phot = np.maximum(observed_phot, 0.1 * np.abs(observed_phot))
 
@@ -379,9 +377,9 @@ class TestParameterRecovery:
 
         for i in range(n_obj):
             idxs[i] = true_model_idxs[i]
-            reds[i] = np.random.normal(true_avs[i], 0.015, n_samp)
-            dreds[i] = np.random.normal(true_rvs[i], 0.008, n_samp)
-            dists[i] = np.random.normal(true_dists[i], 0.008, n_samp)
+            reds[i] = rng.normal(true_avs[i], 0.015, n_samp)
+            dreds[i] = rng.normal(true_rvs[i], 0.008, n_samp)
+            dists[i] = rng.normal(true_dists[i], 0.008, n_samp)
 
             reds[i] = np.clip(reds[i], 0.0, 2.5)
             dreds[i] = np.clip(dreds[i], 2.9, 3.9)

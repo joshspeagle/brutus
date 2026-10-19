@@ -34,11 +34,11 @@ class TestMatrixOperations:
         """Test batch matrix inversion."""
         from brutus.utils.math import inverse3
 
-        np.random.seed(42)
+        rng = np.random.RandomState(42)
         batch_size = 5
 
         # Create batch of random invertible matrices
-        A = np.random.random((batch_size, 3, 3))
+        A = rng.random((batch_size, 3, 3))
         A = A + np.transpose(A, (0, 2, 1)) + 3 * np.eye(3)[None, :, :]
 
         A_inv = inverse3(A)
@@ -229,13 +229,13 @@ class TestMathEdgeCases:
 
     def test_inverse3_regularization(self):
         """Test matrix regularization functionality."""
-        import numpy as np
+        rng = np.random.RandomState(0)
 
         from brutus.utils.math import inverse3, isPSD
 
         # Create a matrix with small negative eigenvalues
         eigenvals = np.array([1.0, -1e-15, 0.5])  # One tiny negative eigenvalue
-        Q = np.linalg.qr(np.random.randn(3, 3))[0]
+        Q = np.linalg.qr(rng.randn(3, 3))[0]
         A = Q @ np.diag(eigenvals) @ Q.T
 
         # Invert with regularization
@@ -249,7 +249,7 @@ class TestMathEdgeCases:
 
     def test_inverse3_batch_regularization(self):
         """Test batch matrix regularization with arrays."""
-        import numpy as np
+        rng = np.random.RandomState(0)
 
         from brutus.utils.math import inverse3, isPSD
 
@@ -262,11 +262,11 @@ class TestMathEdgeCases:
 
         # Matrix 1: needs output regularization (small eigenvalues)
         eigenvals = np.array([1.0, -1e-14, 0.1])
-        Q = np.linalg.qr(np.random.randn(3, 3))[0]
+        Q = np.linalg.qr(rng.randn(3, 3))[0]
         matrices[1] = Q @ np.diag(eigenvals) @ Q.T
 
         # Matrix 2: well-conditioned
-        matrices[2] = np.eye(3) + 0.1 * np.random.randn(3, 3)
+        matrices[2] = np.eye(3) + 0.1 * rng.randn(3, 3)
         matrices[2] = matrices[2] @ matrices[2].T  # Make PSD
 
         # Test batch regularization
@@ -349,7 +349,6 @@ class TestInternalFunctions:
 
     def test_internal_helper_functions(self):
         """Test internal helper functions to improve coverage."""
-        import numpy as np
 
         from brutus.utils.math import _invert_3x3_analytical, _matrix_det_3x3
 
@@ -371,7 +370,6 @@ class TestInternalFunctions:
 
     def test_batch_operations_coverage(self):
         """Test batch matrix operations to hit remaining coverage."""
-        import numpy as np
 
         from brutus.utils.math import _batch_invert_3x3, inverse3
 
