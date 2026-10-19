@@ -437,16 +437,8 @@ def phot_loglike(
         # Guard against tiny negative values from floating-point cancellation.
         np.maximum(chi2, 0.0, out=chi2)
     else:
-        # Mask fluxes and model fluxes.
-        flux_masked = flux[:, None, :] * mask[:, None, :]  # (Nobj, 1, Nfilt)
-        mfluxes_masked = mfluxes * mask[:, None, :]  # (Nobj, Nmod, Nfilt)
-        var_masked = var[:, None, :] * mask[:, None, :]  # (Nobj, 1, Nfilt)
-
-        # Compute residuals.
-        resid = flux_masked - mfluxes_masked  # (Nobj, Nmod, Nfilt)
-
-        # Compute chi-squared.
-        chi2 = np.sum(resid**2 / np.where(var_masked > 0, var_masked, np.inf), axis=2)
+        w = mask / var  # (Nobj, Nfilt); zero in masked bands
+        chi2 = np.sum((flux[:, None, :] - mfluxes) ** 2 * w[:, None, :], axis=2)
 
     # Fold in any auxiliary chi-square contributions (e.g. parallax) so they
     # share the same measure as the photometry under the dimensionality prior.

@@ -77,6 +77,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `brutus.core` no longer exports the private `_get_seds`; import it from
   `brutus.core.sed_utils`. `brutus.dust.__version__` is removed.
 - `StarGrid` is in `brutus.core.individual.__all__`.
+- `brutus.utils` re-exports `chisquare_outlier_loglike` and
+  `uniform_outlier_loglike`. The private, unused `_function_wrapper` is
+  removed from `brutus.utils.math`.
 - Package metadata declares the license as the SPDX expression `MIT`
   (`License-Expression: MIT`) instead of a license table and classifier.
   Only `LICENSE` is packaged as a license file; `AUTHORS.md` stays in the

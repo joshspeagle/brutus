@@ -180,36 +180,6 @@ class TestStatisticalDistributions:
         np.testing.assert_array_equal(result, expected)
 
 
-class TestFunctionWrapper:
-    """Unit tests for the function wrapper utility."""
-
-    def test_function_wrapper_basic(self):
-        """Test basic function wrapper functionality."""
-        from brutus.utils.math import _function_wrapper
-
-        def test_func(x, a, b=2):
-            return x * a + b
-
-        wrapped = _function_wrapper(test_func, args=(3,), kwargs={"b": 5}, name="test")
-
-        result = wrapped(10)
-        expected = 10 * 3 + 5  # = 35
-
-        assert result == expected
-
-    def test_function_wrapper_error_handling(self):
-        """Test function wrapper error handling."""
-        from brutus.utils.math import _function_wrapper
-
-        def failing_func(x):
-            raise ValueError("Test error")
-
-        wrapped = _function_wrapper(failing_func, args=(), kwargs={}, name="failing")
-
-        with pytest.raises(ValueError, match="Test error"):
-            wrapped(1)
-
-
 class TestMathEdgeCases:
     """Test singular, nearly singular and scalar inputs."""
 

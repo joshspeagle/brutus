@@ -22,11 +22,13 @@ from .math import (
 # Photometry functions
 from .photometry import (
     add_mag,
+    chisquare_outlier_loglike,
     inv_luptitude,
     inv_magnitude,
     luptitude,
     magnitude,
     phot_loglike,
+    uniform_outlier_loglike,
 )
 
 # Sampling utilities
@@ -40,6 +42,8 @@ __all__ = [
     "inv_luptitude",
     "add_mag",
     "phot_loglike",
+    "chisquare_outlier_loglike",
+    "uniform_outlier_loglike",
     # Mathematical functions
     "galactic_to_galactocentric_cyl",
     "inverse3",

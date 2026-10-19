@@ -71,47 +71,6 @@ __all__ = [
 ]
 
 
-class _function_wrapper:
-    """
-    A hack to make functions pickleable when `args` or `kwargs` are.
-
-    also included. Based on the implementation in
-    `emcee <http://dan.iel.fm/emcee/>`_.
-
-    Parameters
-    ----------
-    func : callable
-        The function to wrap.
-    args : tuple
-        Additional positional arguments to pass to the function.
-    kwargs : dict
-        Additional keyword arguments to pass to the function.
-    name : str, optional
-        Name for the function (used in error messages).
-    """
-
-    def __init__(self, func, args, kwargs, name="input"):
-        self.func = func
-        self.args = args
-        self.kwargs = kwargs
-        self.name = name
-
-    def __call__(self, x):
-        """Call the wrapped function with stored arguments."""
-        try:
-            return self.func(x, *self.args, **self.kwargs)
-        except Exception:
-            import traceback
-
-            print(f"Exception while calling {self.name} function:")
-            print("  params:", x)
-            print("  args:", self.args)
-            print("  kwargs:", self.kwargs)
-            print("  exception:")
-            traceback.print_exc()
-            raise
-
-
 @jit(nopython=True, cache=True)
 def _matrix_det_3x3(A):
     """Compute 3x3 matrix determinant - numba compatible."""
