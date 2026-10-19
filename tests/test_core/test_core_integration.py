@@ -7,97 +7,35 @@ Clean integration tests for StarGrid and BruteForce classes.
 Tests the essential workflow from grid creation to stellar parameter estimation.
 """
 
-import os
 import time
 
-import h5py
 import numpy as np
 import pytest
-from conftest import find_brutus_data_file
+from conftest import split_labels
 
 from brutus.analysis.individual import BruteForce
 
 # Import the classes to test
 from brutus.core.individual import StarGrid
-from brutus.data import load_models
+from brutus.data.filters import ps
 
 
 @pytest.fixture(scope="module")
-def mist_integration_setup():
-    """Load real MIST grid and create test setup for integration tests."""
-
-    # Try to load real grid
-    grid_path = find_brutus_data_file("grid_mist_v9.h5")
-
-    # If not found via helper, check multiple fallback locations
-    if grid_path is None:
-        import pooch
-
-        fallback_paths = [
-            # Direct pooch cache
-            os.path.join(pooch.os_cache("astro-brutus"), "grid_mist_v9.h5"),
-            # CI data directory
-            "data/DATAFILES/grid_mist_v9.h5",
-            "./data/DATAFILES/grid_mist_v9.h5",
-        ]
-        for path in fallback_paths:
-            if os.path.exists(path):
-                grid_path = path
-                print(f"Found grid at fallback path: {path}")
-                break
-
-    if grid_path and os.path.exists(grid_path):
-        try:
-            # Load subset for reasonable test times
-            models, combined_labels, label_mask = load_models(grid_path, verbose=False)
-
-            # Get filter names and find PanSTARRS indices
-            with h5py.File(grid_path, "r") as f:
-                filter_names = list(f["mag_coeffs"].dtype.names)
-            ps_indices = [
-                i for i, name in enumerate(filter_names) if name.startswith("PS_")
-            ][:5]
-
-            # Create manageable subset (every 1000th model)
-            subset_indices = np.arange(0, len(models), 1000)[:100]
-            models_subset = models[subset_indices]
-            labels_subset = combined_labels[subset_indices]
-
-            # Separate grid parameters from predictions
-            grid_names = [
-                name
-                for name, is_grid in zip(combined_labels.dtype.names, label_mask[0])
-                if is_grid
-            ]
-            pred_names = [
-                name
-                for name, is_grid in zip(combined_labels.dtype.names, label_mask[0])
-                if not is_grid
-            ]
-
-            labels = labels_subset[grid_names]
-            params = labels_subset[pred_names] if pred_names else None
-
-            # Create StarGrid and BruteForce
-            grid = StarGrid(models_subset, labels, params, filters=filter_names)
-            fitter = BruteForce(grid, verbose=False)
-
-            return {
-                "grid": grid,
-                "fitter": fitter,
-                "ps_indices": ps_indices,
-                "labels": labels,
-                "params": params,
-                "filter_names": filter_names,
-            }
-
-        except Exception as e:
-            raise AssertionError(f"Failed to load grid from {grid_path}: {e}")
-
-    pytest.skip(
-        "MIST grid data not available; run fetch_grids() or set BRUTUS_DATA_DIR "
-        "to enable this data-dependent test"
-    )
+def mist_integration_setup(mist_ps_grid):
+    """100 models of the MIST v9 grid, with the five PS1 filters."""
+    models, combined_labels, label_mask = mist_ps_grid
+    subset = np.arange(0, len(models), 1000)[:100]
+    labels, params = split_labels(combined_labels[subset], label_mask)
+    filter_names = ps[:5]
+    grid = StarGrid(models[subset], labels, params, filters=filter_names)
+    return {
+        "grid": grid,
+        "fitter": BruteForce(grid, verbose=False),
+        "ps_indices": list(range(5)),
+        "labels": labels,
+        "params": params,
+        "filter_names": filter_names,
+    }
 
 
 class TestCoreIntegration:
@@ -315,7 +253,9 @@ class TestErrorHandling:
 
         # Test with mismatched array sizes
         with pytest.raises((ValueError, IndexError)):
-            fitter.loglike_grid(obs[:5], obs_err, obs_mask, verbose=False)  # Wrong size
+            fitter.loglike_grid(
+                obs[:-1], obs_err, obs_mask, verbose=False
+            )  # Wrong size
 
         # Test with all NaN observations
         obs_bad = np.full(nfilters, np.nan)

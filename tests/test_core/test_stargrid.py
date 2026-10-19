@@ -11,11 +11,11 @@ import warnings
 
 import numpy as np
 import pytest
-from conftest import find_brutus_data_file
 
 # Import the class to test
+from conftest import split_labels
+
 from brutus.core.individual import StarGrid
-from brutus.data import load_models
 
 # ============================================================================
 # Module-level fixtures
@@ -23,57 +23,10 @@ from brutus.data import load_models
 
 
 @pytest.fixture(scope="module")
-def mist_grid():
-    """Load MIST v9 grid once for all tests in this module."""
-    import os
-
-    # Try different paths for the MIST grid file
-    grid_paths = [
-        find_brutus_data_file("grid_mist_v9.h5"),
-        "./data/DATAFILES/grid_mist_v9.h5",
-        "data/DATAFILES/grid_mist_v9.h5",
-    ]
-
-    for path in grid_paths:
-        if path and os.path.exists(path):
-            try:
-                models, combined_labels, label_mask = load_models(path)
-
-                # Separate grid parameters from predictions using label_mask
-                grid_names = [
-                    name
-                    for name, is_grid in zip(combined_labels.dtype.names, label_mask[0])
-                    if is_grid
-                ]
-                pred_names = [
-                    name
-                    for name, is_grid in zip(combined_labels.dtype.names, label_mask[0])
-                    if not is_grid
-                ]
-
-                # Extract grid parameters
-                if grid_names:
-                    labels = combined_labels[grid_names]
-                else:
-                    # Fallback to standard grid parameters
-                    grid_names = ["mini", "eep", "feh"]
-                    labels = combined_labels[grid_names]
-
-                # Extract predictions if available
-                if pred_names:
-                    params = combined_labels[pred_names]
-                else:
-                    params = None
-
-                return StarGrid(models, labels, params)
-            except Exception as e:
-                continue
-
-    # If the real grid is unavailable, skip dependent tests (CI pre-downloads).
-    pytest.skip(
-        "MIST grid data not available; run fetch_grids() or set BRUTUS_DATA_DIR "
-        "to enable this data-dependent test"
-    )
+def mist_grid(mist_ps_grid):
+    """The MIST v9 grid with the five PS1 filters."""
+    models, labels, label_mask = mist_ps_grid
+    return StarGrid(models, *split_labels(labels, label_mask))
 
 
 @pytest.fixture(scope="module")

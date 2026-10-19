@@ -4,10 +4,10 @@ import time
 
 import numpy as np
 import pytest
+from conftest import split_labels
 
 from brutus.analysis.individual import BruteForce
 from brutus.core.individual import StarGrid
-from brutus.data import load_models
 from brutus.data.filters import ps
 
 try:
@@ -19,95 +19,18 @@ except ImportError:
 
 
 @pytest.fixture(scope="module")
-def real_mist_setup():
-    """Load real MIST grid once and create both full grid and subset for all tests."""
-    import os
-
-    from conftest import find_brutus_data_file
-
-    # Debug: show current working directory and what files exist
-    print(f"Current working directory: {os.getcwd()}")
-    if os.path.exists("data/DATAFILES"):
-        files = os.listdir("data/DATAFILES")
-        print(f"Files in data/DATAFILES: {files[:5]}...")  # Show first 5
-
-    # Try to load real MIST grid using the helper
-    path = find_brutus_data_file("grid_mist_v9.h5")
-
-    if path is None:
-        # Debug: Check pooch cache directly
-        import pooch
-
-        cache_dir = pooch.os_cache("astro-brutus")
-        cache_file = os.path.join(cache_dir, "grid_mist_v9.h5")
-        if os.path.exists(cache_file):
-            print(f"Grid found in pooch cache: {cache_file}")
-            path = cache_file
-        else:
-            print(f"Grid NOT in pooch cache: {cache_file}")
-
-    if path is not None and os.path.exists(path):
-        try:
-            print(f"Loading MIST grid from {path}")
-            # Use only first 5 Pan-STARRS filters for faster testing
-            ps_filters = ps[:5]  # PS_g, PS_r, PS_i, PS_z, PS_y
-            models, combined_labels, label_mask = load_models(
-                path, filters=ps_filters, verbose=False
-            )
-
-            # PanSTARRS filter indices (0-4 since we only loaded 5 filters)
-            ps_indices = list(range(5))
-
-            # Separate grid parameters from predictions
-            grid_names = [
-                name
-                for name, is_grid in zip(combined_labels.dtype.names, label_mask[0])
-                if is_grid
-            ]
-            pred_names = [
-                name
-                for name, is_grid in zip(combined_labels.dtype.names, label_mask[0])
-                if not is_grid
-            ]
-
-            # Create full grid
-            labels_full = combined_labels[grid_names]
-            params_full = combined_labels[pred_names] if pred_names else None
-            full_grid = StarGrid(models, labels_full, params_full)
-
-            # Create test subset for performance (every 20000th model to get ~30 models)
-            subset_indices = slice(0, None, 20000)
-            models_subset = models[subset_indices]
-            labels_subset = combined_labels[subset_indices]
-
-            labels_sub = labels_subset[grid_names]
-            params_sub = labels_subset[pred_names] if pred_names else None
-            subset_grid = StarGrid(models_subset, labels_sub, params_sub)
-
-            return {
-                "full_grid": full_grid,
-                "subset_grid": subset_grid,
-                "ps_indices": ps_indices,
-                "filter_names": ps_filters,
-                "subset_indices": subset_indices,
-            }
-
-        except Exception as e:
-            raise AssertionError(f"Failed to load grid from {path}: {e}")
-
-    # If the real grid is unavailable, skip the tests that require it so the
-    # suite still runs offline. CI pre-downloads the data, so it exercises
-    # these paths.
-    pytest.skip(
-        "MIST grid data not available; run fetch_grids() or set BRUTUS_DATA_DIR "
-        "to enable this data-dependent test"
-    )
-
-
-@pytest.fixture(scope="module")
-def full_bruteforce(real_mist_setup):
-    """Create BruteForce instance with full MIST grid."""
-    return BruteForce(real_mist_setup["full_grid"], verbose=False)
+def real_mist_setup(mist_ps_grid):
+    """Every 20000th model of the MIST v9 grid, with the five PS1 filters."""
+    models, labels, label_mask = mist_ps_grid
+    subset = slice(0, None, 20000)
+    return {
+        "subset_grid": StarGrid(
+            models[subset], *split_labels(labels[subset], label_mask)
+        ),
+        "ps_indices": list(range(5)),
+        "filter_names": ps[:5],
+        "subset_indices": subset,
+    }
 
 
 @pytest.fixture(scope="module")

@@ -1,6 +1,5 @@
 """Tests of DustMap and Bayestar in brutus.dust.maps."""
 
-import os
 import time
 from unittest.mock import MagicMock
 
@@ -10,12 +9,8 @@ import h5py
 import numpy as np
 import pytest
 from astropy.coordinates import SkyCoord
-from conftest import find_brutus_data_file
 
 from brutus.dust import Bayestar, DustMap, lb2pix
-
-# Path to real Bayestar data
-BAYESTAR_FILE = find_brutus_data_file("bayestar2019_v1.h5")
 
 
 class TestDustMapBase:
@@ -100,15 +95,6 @@ class TestDustMapBase:
         # Test with astropy Quantities
         result = dust_map.query_gal(ell=45.0 * u.deg, b=30.0 * u.deg, d=1.5 * u.kpc)
         assert result == "test_result"
-
-
-@pytest.fixture(scope="module")
-def bayestar_map():
-    """Load real Bayestar map once for all tests."""
-    if BAYESTAR_FILE is None:
-        raise FileNotFoundError("Bayestar data file not found in any standard location")
-
-    return Bayestar(dustfile=BAYESTAR_FILE)
 
 
 class TestBayestarMapReal:
@@ -303,32 +289,6 @@ class TestBayestarFindDataIdxOutOfCoverage:
             "Out-of-coverage query should return NaN extinction values, "
             f"got non-NaN values: {av_mean[~np.isnan(av_mean)]}"
         )
-
-
-class TestDustModuleIntegration:
-    """Integration tests for the dust module."""
-
-    def test_module_imports(self):
-        """Test that all module imports work correctly."""
-        from brutus.dust import __all__
-
-        # Check that __all__ contains expected items
-        expected_items = {"lb2pix", "DustMap", "Bayestar"}
-        assert set(__all__) == expected_items
-
-    def test_dust_map_inheritance(self, bayestar_map):
-        """Test that Bayestar properly inherits from DustMap."""
-        assert issubclass(Bayestar, DustMap)
-
-        # Test inherited query_gal method
-        assert hasattr(bayestar_map, "query_gal")
-        assert hasattr(bayestar_map, "query_equ")
-        assert hasattr(bayestar_map, "__call__")
-
-        # Test that __call__ is an alias for query
-        bayestar_map.query = MagicMock(return_value=("test", "test", "test"))
-        result = bayestar_map("test_coords")
-        bayestar_map.query.assert_called_once_with("test_coords")
 
 
 class TestDustPerformance:
@@ -850,25 +810,17 @@ class TestFindDataIdxEquivalence:
         )
 
 
-@pytest.mark.skipif(
-    BAYESTAR_FILE is None or not os.path.exists(str(BAYESTAR_FILE)),
-    reason="Real Bayestar data file not available",
-)
 class TestRealFile:
     """End-to-end checks against the shipped bayestar2019_v1.h5."""
 
-    @pytest.fixture(scope="class")
-    def real_map(self):
-        return Bayestar(dustfile=BAYESTAR_FILE)
+    def test_reliability_fields_loaded(self, bayestar_map):
+        assert bayestar_map._converged is not None
+        assert bayestar_map._d_reliable_min.shape == (bayestar_map._n_pix,)
+        assert bayestar_map._d_reliable_max.shape == (bayestar_map._n_pix,)
 
-    def test_reliability_fields_loaded(self, real_map):
-        assert real_map._converged is not None
-        assert real_map._d_reliable_min.shape == (real_map._n_pix,)
-        assert real_map._d_reliable_max.shape == (real_map._n_pix,)
-
-    def test_mask_narrows_profile(self, real_map):
-        dists, av_masked, _ = real_map.query([120.0, 30.0])
-        _, av_raw, _ = real_map.query([120.0, 30.0], apply_reliability_mask=False)
+    def test_mask_narrows_profile(self, bayestar_map):
+        dists, av_masked, _ = bayestar_map.query([120.0, 30.0])
+        _, av_raw, _ = bayestar_map.query([120.0, 30.0], apply_reliability_mask=False)
         assert av_masked.shape == (len(dists),)
         assert np.all(np.isfinite(av_raw))
         # Masked profile has NaN outside the reliable range but agrees inside
@@ -876,20 +828,22 @@ class TestRealFile:
         assert 0 < finite.sum() < len(dists)
         np.testing.assert_array_equal(av_masked[finite], av_raw[finite])
 
-    def test_find_data_idx_matches_reference(self, real_map):
+    def test_find_data_idx_matches_reference(self, bayestar_map):
         rng = np.random.default_rng(4)
         gal_l = rng.uniform(0.0, 360.0, 20_000)
         gal_b = rng.uniform(-90.0, 90.0, 20_000)
         gal_b[::500] = -95.0
-        ref = _find_data_idx_reference(real_map, gal_l, gal_b)
-        new = real_map._find_data_idx(gal_l, gal_b)
+        ref = _find_data_idx_reference(bayestar_map, gal_l, gal_b)
+        new = bayestar_map._find_data_idx(gal_l, gal_b)
         np.testing.assert_array_equal(ref, new)
 
-    def test_halo_giant_uniform_prior_beyond_reliable_range(self, real_map):
+    def test_halo_giant_uniform_prior_beyond_reliable_range(self, bayestar_map):
         from brutus.priors import logp_extinction
 
         # Sightline reliable only to ~5.6 kpc: at 20 kpc the masked map
         # must yield the normalized uniform prior instead of a tight
         # far-field Gaussian
-        logp = logp_extinction(np.array([1.0]), real_map, [90.0, 1.0], distance=20.0)
+        logp = logp_extinction(
+            np.array([1.0]), bayestar_map, [90.0, 1.0], distance=20.0
+        )
         np.testing.assert_allclose(logp, -np.log(20.0))

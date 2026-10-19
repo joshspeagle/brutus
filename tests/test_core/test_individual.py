@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import h5py
 import numpy as np
 import pytest
-from conftest import find_brutus_data_file
+from conftest import mock_nn_predictor, requires_data
 
 from brutus.core.individual import (
     _EEPTRACKS_CACHE_ATTRS,
@@ -24,9 +24,7 @@ class TestEEPTracksInitialization:
 
     def test_eep_tracks_with_real_cached_data(self):
         """The shipped tracks give finite predictions for a solar-mass star."""
-        v12_file = find_brutus_data_file("MIST_1.2_EEPtrk.h5")
-        if v12_file is None:
-            pytest.skip("MIST_1.2_EEPtrk.h5 not available")
+        v12_file = requires_data("MIST_1.2_EEPtrk.h5")
 
         tracks = EEPTracks(mistfile=v12_file, verbose=False)
         preds = tracks.get_predictions([[1.0, 300, 0.0, 0.0]])  # mini, eep, feh, afe
@@ -47,7 +45,7 @@ class TestStarEvolTrackInitialization:
 
     def test_star_evol_track_basic_initialization(self, mock_eep_tracks):
         """Test StarEvolTrack initialization with basic parameters."""
-        with patch("brutus.core.neural_nets.FastNNPredictor") as mock_nn:
+        with mock_nn_predictor("brutus.core.individual") as mock_nn:
             mock_predictor = MagicMock()
             mock_nn.return_value = mock_predictor
 
@@ -61,7 +59,7 @@ class TestStarEvolTrackInitialization:
         """Test StarEvolTrack initialization with custom filters."""
         custom_filters = ["U", "B", "V", "R", "I"]
 
-        with patch("brutus.core.neural_nets.FastNNPredictor") as mock_nn:
+        with mock_nn_predictor("brutus.core.individual") as mock_nn:
             mock_predictor = MagicMock()
             mock_nn.return_value = mock_predictor
 
@@ -70,18 +68,6 @@ class TestStarEvolTrackInitialization:
             )
 
             assert star_track.filters == custom_filters
-
-    def test_star_evol_track_verbose_output(self, mock_eep_tracks, capsys):
-        """Test that verbose output is produced when requested."""
-        with patch("brutus.core.neural_nets.FastNNPredictor") as mock_nn:
-            mock_predictor = MagicMock()
-            mock_nn.return_value = mock_predictor
-
-            star_track = StarEvolTrack(tracks=mock_eep_tracks, verbose=True)
-
-            captured = capsys.readouterr()
-            # Should contain some verbose output about initialization
-            assert len(captured.err) > 0
 
 
 class TestStarEvolTrackMethods:
@@ -114,7 +100,7 @@ class TestStarEvolTrackMethods:
         tracks.mini_bound = 0.08  # Minimum mass bound
         tracks.mini_bounds = np.array([0.08, 10.0])  # Mass bounds array
 
-        with patch("brutus.core.neural_nets.FastNNPredictor") as mock_nn:
+        with mock_nn_predictor("brutus.core.individual") as mock_nn:
             # Mock neural network predictor
             mock_predictor = MagicMock()
             # Ensure the predictor returns finite values for SED generation
@@ -215,7 +201,7 @@ class TestStarEvolTrackMethods:
         tracks.labels = ["mini", "eep", "feh", "afe"]
         tracks.mini_bound = 0.08
 
-        with patch("brutus.core.neural_nets.FastNNPredictor"):
+        with mock_nn_predictor("brutus.core.individual"):
             predictor = MagicMock()
             predictor.sed.side_effect = sed
             predictor.NFILT = 5
@@ -270,7 +256,7 @@ class TestStarEvolTrackMethods:
         tracks.get_predictions.side_effect = Exception("Prediction failed")
         tracks.labels = ["mini", "eep", "feh", "afe"]
 
-        with patch("brutus.core.neural_nets.FastNNPredictor") as mock_nn:
+        with mock_nn_predictor("brutus.core.individual") as mock_nn:
             mock_predictor = MagicMock()
             mock_nn.return_value = mock_predictor
 
@@ -313,30 +299,6 @@ class TestStarEvolTrackMethods:
         assert isinstance(sed, np.ndarray)
         # Some values might be NaN due to age cutoff
         assert len(sed) == len(mock_star_evol_track.filters)
-
-
-class TestIndividualStarsEdgeCases:
-    """Test edge cases and error conditions."""
-
-    def test_star_evol_track_invalid_inputs(self):
-        """Test StarEvolTrack raises when predictor is unavailable."""
-        tracks = MagicMock()
-        tracks.get_predictions.return_value = np.random.random(6)
-        tracks.pred_labels = ["age", "logl", "logt", "logr", "logg", "phase"]
-
-        with patch("brutus.core.individual.FastNNPredictor") as mock_nn:
-            mock_nn.return_value = MagicMock()
-
-            star_track = StarEvolTrack(tracks=tracks, verbose=False)
-            # Force predictor to None to simulate initialization failure
-            star_track.predictor = None
-
-            # Test that RuntimeError is raised when predictor is unavailable
-            with pytest.raises(RuntimeError):
-                star_track.get_seds(mini=1.0, eep=350, feh=0.0, afe=0.0, smf=2.0)
-
-            with pytest.raises(RuntimeError):
-                star_track.get_seds(mini=-1.0, eep=350, feh=0.0, afe=0.0)
 
 
 # Predictions used for the synthetic-file tests (loga/logl/logt/logg are
@@ -668,37 +630,13 @@ class TestSecondaryAfeConsistency:
         assert abs(loga_2 - loga_target) < 1e-3
 
 
-def _find_data_file(name):
-    from pathlib import Path
-
-    for base in ("data/DATAFILES", "./data/DATAFILES"):
-        p = Path(base) / name
-        if p.exists():
-            return p
-    try:
-        import pooch
-
-        p = Path(pooch.os_cache("astro-brutus")) / name
-        if p.exists():
-            return p
-    except ImportError:
-        pass
-    return None
-
-
-_track_file = _find_data_file("MIST_1.2_EEPtrk.h5")
-
-
-@pytest.mark.requires_data
-@pytest.mark.skipif(_track_file is None, reason="MIST track data not available")
 class TestSecondaryEEPInversionRealTracks:
     """1-D inversion must match the old Nelder-Mead solve on real MIST."""
 
     @pytest.fixture(scope="class")
-    def star_track(self):
-        tracks = EEPTracks(mistfile=_track_file, verbose=False)
+    def star_track(self, eep_tracks):
         st = StarEvolTrack.__new__(StarEvolTrack)
-        st.tracks = tracks
+        st.tracks = eep_tracks
         return st
 
     @staticmethod

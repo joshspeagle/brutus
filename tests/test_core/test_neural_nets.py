@@ -4,23 +4,14 @@ import h5py
 import numpy as np
 import numpy.testing as npt
 import pytest
-from conftest import find_brutus_data_file
+from conftest import requires_data
 
 from brutus.core.neural_nets import FastNN, FastNNPredictor
 
 
-def _find_nn_file():
-    """Find the neural network data file."""
-    nn_file = find_brutus_data_file("nn_c3k.h5")
-    if nn_file is None:
-        nn_file = find_brutus_data_file("nnMIST_BC.h5")
-    return nn_file
-
-
-_nn_file = _find_nn_file()
-
-
-_has_nn_data = _nn_file is not None
+@pytest.fixture
+def nn_file():
+    return requires_data("nn_c3k.h5")
 
 
 class TestFastNNEncode:
@@ -70,26 +61,25 @@ class TestFastNNEncode:
         npt.assert_allclose(out, expected)
 
 
-@pytest.mark.skipif(not _has_nn_data, reason="Neural network data file not available")
 class TestFastNNPredictorDefaultFilters:
     """Test FastNNPredictor initialization with filters=None (line 354)."""
 
-    def test_default_filters_initialization(self):
+    def test_default_filters_initialization(self, nn_file):
         """When filters=None, predictor should use all FILTERS."""
         from brutus.core.neural_nets import FastNNPredictor
         from brutus.data.filters import FILTERS
 
-        predictor = FastNNPredictor(filters=None, nnfile=_nn_file, verbose=False)
+        predictor = FastNNPredictor(filters=None, nnfile=nn_file, verbose=False)
 
         # Should have loaded all filters
         assert predictor.NFILT == len(FILTERS)
         npt.assert_array_equal(predictor.filters, np.array(FILTERS))
 
-    def test_default_filters_produce_valid_seds(self):
+    def test_default_filters_produce_valid_seds(self, nn_file):
         """Default filter predictor should produce valid SED output."""
         from brutus.core.neural_nets import FastNNPredictor
 
-        predictor = FastNNPredictor(filters=None, nnfile=_nn_file, verbose=False)
+        predictor = FastNNPredictor(filters=None, nnfile=nn_file, verbose=False)
 
         # Solar-type star at 1 kpc
         sed = predictor.sed(
@@ -108,18 +98,17 @@ class TestFastNNPredictorDefaultFilters:
         assert np.all(np.isfinite(sed))
 
 
-@pytest.mark.skipif(not _has_nn_data, reason="Neural network data file not available")
 class TestFastNNPredictorOutOfBounds:
     """Test out-of-bounds parameter handling (line 505)."""
 
     @pytest.fixture
-    def predictor(self):
+    def predictor(self, nn_file):
         """Create a predictor with a few filters."""
         from brutus.core.neural_nets import FastNNPredictor
 
         # Use a small subset of filters for speed
         filters = ["PS_g", "PS_r", "PS_i"]
-        return FastNNPredictor(filters=filters, nnfile=_nn_file, verbose=False)
+        return FastNNPredictor(filters=filters, nnfile=nn_file, verbose=False)
 
     def test_out_of_bounds_logt_returns_nan(self, predictor):
         """Parameters outside training bounds should return NaN."""
@@ -292,10 +281,7 @@ class TestLoadNNBoundsCheck:
         with pytest.raises(ValueError, match="different"):
             FastNN(filters=["f1", "f2"], nnfile=path, verbose=False)
 
-    def test_real_file_still_loads(self):
-        nn_file = _nn_file
-        if nn_file is None:
-            pytest.skip("Neural network data file not available")
+    def test_real_file_still_loads(self, nn_file):
         nn = FastNN(filters=["SDSS_g", "SDSS_r"], nnfile=nn_file, verbose=False)
         assert nn.xmin.shape == (6,)
 
@@ -303,10 +289,7 @@ class TestLoadNNBoundsCheck:
 class TestSedBatchSingleFilter:
     """sed_batch must work when the predictor has a single filter."""
 
-    def test_single_filter_batch_matches_scalar(self):
-        nn_file = _nn_file
-        if nn_file is None:
-            pytest.skip("Neural network data file not available")
+    def test_single_filter_batch_matches_scalar(self, nn_file):
         pred = FastNNPredictor(filters=["SDSS_g"], nnfile=nn_file, verbose=False)
         n = 5
         seds = pred.sed_batch(
@@ -333,11 +316,8 @@ class TestSedBatchSingleFilter:
         )
         np.testing.assert_allclose(seds[:, 0], ref[0], rtol=1e-12)
 
-    def test_single_valid_star_edge(self):
+    def test_single_valid_star_edge(self, nn_file):
         """n_valid == 1 (squeeze also drops the sample axis)."""
-        nn_file = _nn_file
-        if nn_file is None:
-            pytest.skip("Neural network data file not available")
         pred = FastNNPredictor(filters=["SDSS_g"], nnfile=nn_file, verbose=False)
         seds = pred.sed_batch(
             logt=np.array([3.76, 99.0]),  # second star far out of bounds

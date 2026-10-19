@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, PropertyMock, patch
 import numpy as np
 import numpy.testing as npt
 import pytest
+from conftest import mock_nn_predictor
 
 from brutus.core.populations import Isochrone, StellarPop
 
@@ -72,7 +73,7 @@ def _make_mock_isochrone(n_eep=10):
 
 def _make_stellar_pop(iso, has_sed_batch=True, nfilt=5):
     """Create a StellarPop with a mock predictor."""
-    with patch("brutus.core.neural_nets.FastNNPredictor"):
+    with mock_nn_predictor("brutus.core.populations"):
         pop = StellarPop(isochrone=iso, verbose=False)
 
     mock_predictor = MagicMock()
@@ -422,7 +423,7 @@ class TestAddBinaryComponents:
         params_all_nan = np.full((5, 8), np.nan)
         iso.get_predictions = MagicMock(return_value=params_all_nan)
 
-        with patch("brutus.core.neural_nets.FastNNPredictor"):
+        with mock_nn_predictor("brutus.core.populations"):
             pop = StellarPop(isochrone=iso, verbose=False)
 
         mock_predictor = MagicMock()
@@ -455,7 +456,7 @@ class TestPredictorNotAvailable:
     def test_no_predictor_raises_error(self):
         """get_seds should raise RuntimeError when predictor is None."""
         iso = _make_mock_isochrone(n_eep=5)
-        with patch("brutus.core.neural_nets.FastNNPredictor"):
+        with mock_nn_predictor("brutus.core.populations"):
             pop = StellarPop(isochrone=iso, verbose=False)
         pop.predictor = None
 

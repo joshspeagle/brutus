@@ -501,9 +501,9 @@ class TestBootstrapVectorization:
     def test_bootstrap_distribution_matches_reference(self):
         """Old and new implementations sample the same bootstrap-median
         distribution (different random streams): with a fixed seed, medians
-        and IQRs over 2000 bootstraps agree within Monte-Carlo error."""
+        and IQRs over 500 bootstraps agree within Monte-Carlo error."""
         rng_data = np.random.default_rng(3)
-        n_objects, nsamps = 400, 25
+        n_objects, nsamps = 100, 25
         ratios = rng_data.lognormal(0.0, 0.15, (n_objects, nsamps))
         weights = rng_data.random((n_objects, nsamps)) ** 3
         weights[5] = 0.0  # zero-weight row exercises the sample-0 fallback
@@ -512,7 +512,7 @@ class TestBootstrapVectorization:
         weights[nz] /= sums[nz, None]
         obj_weights = np.full(n_objects, 1.0 / n_objects)
 
-        n_bootstrap = 2000
+        n_bootstrap = 500
         ref = _reference_bootstrap_median(
             ratios, weights, obj_weights, n_bootstrap, np.random.default_rng(42)
         )

@@ -4,6 +4,7 @@ import warnings
 
 import numpy as np
 import pytest
+from conftest import requires_data
 
 from brutus.analysis.populations import (
     apply_isochrone_mixture_model,
@@ -31,20 +32,17 @@ def real_isochrone_grid(real_stellarpop):
     smf_grid = np.array([0.0, 0.5])  # Single stars and equal-mass binaries
     eep_grid = np.linspace(300, 500, 20)  # Smaller range for speed
 
-    try:
-        grid = generate_isochrone_population_grid(
-            real_stellarpop,
-            feh,
-            loga,
-            av,
-            rv,
-            dist,
-            smf_grid=smf_grid,
-            eep_grid=eep_grid,
-        )
-        return grid
-    except Exception as e:
-        raise  # Should not fail with all data available
+    grid = generate_isochrone_population_grid(
+        real_stellarpop,
+        feh,
+        loga,
+        av,
+        rv,
+        dist,
+        smf_grid=smf_grid,
+        eep_grid=eep_grid,
+    )
+    return grid
 
 
 @pytest.fixture
@@ -448,20 +446,11 @@ class TestIntegration:
 @pytest.fixture(scope="module")
 def real_stellarpop():
     """Load real MIST StellarPop with neural network once for module tests."""
-    from conftest import find_brutus_data_file
-
-    iso_file = find_brutus_data_file("MIST_1.2_iso_vvcrit0.0.h5")
-    nn_file = find_brutus_data_file("nnMIST_BC.h5")
-    if nn_file is None:
-        nn_file = find_brutus_data_file("nn_c3k.h5")
-    if iso_file is None or nn_file is None:
-        pytest.skip("MIST isochrone / neural network data files not available")
-
-    iso = Isochrone(mistfile=iso_file, verbose=False)
+    iso = Isochrone(mistfile=requires_data("MIST_1.2_iso_vvcrit0.0.h5"), verbose=False)
     return StellarPop(
         isochrone=iso,
         filters=["SDSS_g", "SDSS_r", "SDSS_i"],
-        nnfile=nn_file,
+        nnfile=requires_data("nn_c3k.h5"),
         verbose=False,
     )
 

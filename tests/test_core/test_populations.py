@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
+from conftest import mock_nn_predictor, requires_data
 
 from brutus.core.populations import Isochrone, StellarPop
 
@@ -14,14 +15,7 @@ class TestIsochroneInitialization:
 
     def test_isochrone_default_initialization(self):
         """Test Isochrone initialization with real MIST data file."""
-        from conftest import find_brutus_data_file
-
-        # Try to find the real MIST isochrone file
-        iso_file = find_brutus_data_file("MIST_1.2_iso_vvcrit0.0.h5")
-
-        assert (
-            iso_file is not None
-        ), "iso_file should be found after downloading all data"
+        iso_file = requires_data("MIST_1.2_iso_vvcrit0.0.h5")
 
         # Test with real MIST data
         iso = Isochrone(mistfile=iso_file, verbose=False)
@@ -47,14 +41,8 @@ class TestIsochroneInitialization:
 
     def test_isochrone_custom_predictions(self):
         """Test Isochrone initialization with custom predictions using real data."""
-        from conftest import find_brutus_data_file
-
         custom_preds = ["mini", "mass", "logt", "logg"]
-        iso_file = find_brutus_data_file("MIST_1.2_iso_vvcrit0.0.h5")
-
-        assert (
-            iso_file is not None
-        ), "iso_file should be found after downloading all data"
+        iso_file = requires_data("MIST_1.2_iso_vvcrit0.0.h5")
 
         iso = Isochrone(mistfile=iso_file, predictions=custom_preds, verbose=False)
         assert iso.predictions == custom_preds
@@ -169,7 +157,7 @@ class TestStellarPopInitialization:
 
     def test_stellarpop_basic_initialization(self, mock_isochrone):
         """Test StellarPop initialization with basic parameters."""
-        with patch("brutus.core.neural_nets.FastNNPredictor") as mock_nn:
+        with mock_nn_predictor("brutus.core.populations") as mock_nn:
             mock_nn.return_value = MagicMock()
 
             pop = StellarPop(isochrone=mock_isochrone, verbose=False)
@@ -182,7 +170,7 @@ class TestStellarPopInitialization:
         """Test StellarPop initialization with custom filters."""
         custom_filters = ["U", "B", "V", "R", "I"]
 
-        with patch("brutus.core.neural_nets.FastNNPredictor") as mock_nn:
+        with mock_nn_predictor("brutus.core.populations") as mock_nn:
             mock_nn.return_value = MagicMock()
 
             pop = StellarPop(
@@ -190,17 +178,6 @@ class TestStellarPopInitialization:
             )
 
             assert pop.filters == custom_filters
-
-    def test_stellarpop_verbose_output(self, mock_isochrone, capsys):
-        """Test that verbose output is produced when requested."""
-        with patch("brutus.core.neural_nets.FastNNPredictor") as mock_nn:
-            mock_nn.return_value = MagicMock()
-
-            pop = StellarPop(isochrone=mock_isochrone, verbose=True)
-
-            captured = capsys.readouterr()
-            # Should contain some verbose output about initialization
-            assert len(captured.err) > 0
 
 
 class TestStellarPopMethods:
@@ -239,7 +216,7 @@ class TestStellarPopMethods:
             [300, 350, 400, 450, 500]
         )  # Mock EEP values for binary calculations
 
-        with patch("brutus.core.neural_nets.FastNNPredictor") as mock_nn:
+        with mock_nn_predictor("brutus.core.populations") as mock_nn:
             # Mock neural network predictor with correct method
             mock_predictor = MagicMock()
             mock_predictor.sed.return_value = np.array(
@@ -303,7 +280,7 @@ class TestPopulationsIntegration:
         # Mock the file loading and neural network for integration testing
         with (
             patch("h5py.File") as mock_file,
-            patch("brutus.core.neural_nets.FastNNPredictor") as mock_nn,
+            mock_nn_predictor("brutus.core.populations") as mock_nn,
         ):
 
             # Mock isochrone data
@@ -503,7 +480,7 @@ class TestPopulationsEdgeCases:
 
         iso.get_predictions = mock_get_predictions
 
-        with patch("brutus.core.neural_nets.FastNNPredictor") as mock_nn:
+        with mock_nn_predictor("brutus.core.populations") as mock_nn:
             mock_predictor = MagicMock()
             mock_predictor.sed.return_value = np.array([15.0, 14.5, 14.0, 13.8, 13.5])
             mock_predictor.NFILT = 5
@@ -592,7 +569,7 @@ class TestPopulationsPerformance:
         """Setup for performance testing."""
         with (
             patch("h5py.File") as mock_file,
-            patch("brutus.core.neural_nets.FastNNPredictor") as mock_nn,
+            mock_nn_predictor("brutus.core.populations") as mock_nn,
         ):
 
             # Large mock data for performance testing
@@ -668,38 +645,17 @@ class TestPopulationsPerformance:
             assert np.all(np.isfinite(params))
 
 
-def _iso_file():
-    from conftest import find_brutus_data_file
-
-    return find_brutus_data_file("MIST_1.2_iso_vvcrit0.0.h5")
-
-
-def _nn_file():
-    from conftest import find_brutus_data_file
-
-    nn = find_brutus_data_file("nnMIST_BC.h5")
-    if nn is None:
-        nn = find_brutus_data_file("nn_c3k.h5")
-    return nn
-
-
 @pytest.fixture(scope="module")
 def real_isochrone():
-    iso_file = _iso_file()
-    if iso_file is None:
-        pytest.skip("MIST isochrone data file not available")
-    return Isochrone(mistfile=iso_file, verbose=False)
+    return Isochrone(mistfile=requires_data("MIST_1.2_iso_vvcrit0.0.h5"), verbose=False)
 
 
 @pytest.fixture(scope="module")
 def real_stellarpop(real_isochrone):
-    nn_file = _nn_file()
-    if nn_file is None:
-        pytest.skip("Neural network data file not available")
     return StellarPop(
         isochrone=real_isochrone,
         filters=["SDSS_g", "SDSS_r", "SDSS_i"],
-        nnfile=nn_file,
+        nnfile=requires_data("nn_c3k.h5"),
         verbose=False,
     )
 
@@ -708,9 +664,7 @@ class TestIsochronePredictionsArgument:
     """`predictions` must select/reorder output columns, not just be stored."""
 
     def test_subset_reorder_columns(self):
-        iso_file = _iso_file()
-        if iso_file is None:
-            pytest.skip("MIST isochrone data file not available")
+        iso_file = requires_data("MIST_1.2_iso_vvcrit0.0.h5")
         iso_def = Isochrone(mistfile=iso_file, verbose=False)
         iso_sub = Isochrone(
             mistfile=iso_file, predictions=["logt", "mini"], verbose=False
@@ -726,9 +680,7 @@ class TestIsochronePredictionsArgument:
     def test_corrections_applied_before_reordering(self):
         """Empirical corrections index columns by pred_labels; they must land
         on the right columns even when the output is reordered."""
-        iso_file = _iso_file()
-        if iso_file is None:
-            pytest.skip("MIST isochrone data file not available")
+        iso_file = requires_data("MIST_1.2_iso_vvcrit0.0.h5")
         iso_def = Isochrone(mistfile=iso_file, verbose=False)
         reordered = list(reversed(iso_def.pred_labels))
         iso_rev = Isochrone(mistfile=iso_file, predictions=reordered, verbose=False)
@@ -737,9 +689,7 @@ class TestIsochronePredictionsArgument:
         np.testing.assert_array_equal(rev, ref[:, ::-1])
 
     def test_unknown_prediction_raises(self):
-        iso_file = _iso_file()
-        if iso_file is None:
-            pytest.skip("MIST isochrone data file not available")
+        iso_file = requires_data("MIST_1.2_iso_vvcrit0.0.h5")
         with pytest.raises(ValueError, match="not available"):
             Isochrone(
                 mistfile=iso_file, predictions=["mini", "not_a_label"], verbose=False

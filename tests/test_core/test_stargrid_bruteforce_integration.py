@@ -7,20 +7,16 @@ Comprehensive integration tests for StarGrid and BruteForce classes.
 Tests the complete workflow from grid creation to stellar parameter estimation.
 """
 
-import os
-import tempfile
 import warnings
 
 import numpy as np
 import pytest
-from conftest import find_brutus_data_file
+from conftest import split_labels
 
 from brutus.analysis.individual import BruteForce
 
 # Import the classes to test
 from brutus.core.individual import StarGrid
-from brutus.data import load_models
-from brutus.data.filters import ps
 
 # ============================================================================
 # Module-level fixtures
@@ -28,85 +24,10 @@ from brutus.data.filters import ps
 
 
 @pytest.fixture(scope="module")
-def mist_grid():
-    """Load MIST v9 grid once for all integration tests."""
-    import os
-
-    # Try different paths for the MIST grid file
-    grid_paths = [
-        find_brutus_data_file("grid_mist_v9.h5"),
-        "./data/DATAFILES/grid_mist_v9.h5",
-        "data/DATAFILES/grid_mist_v9.h5",
-    ]
-
-    for path in grid_paths:
-        if path and os.path.exists(path):
-            try:
-                models, combined_labels, label_mask = load_models(path)
-
-                # Separate grid parameters from predictions using label_mask
-                grid_names = [
-                    name
-                    for name, is_grid in zip(combined_labels.dtype.names, label_mask[0])
-                    if is_grid
-                ]
-                pred_names = [
-                    name
-                    for name, is_grid in zip(combined_labels.dtype.names, label_mask[0])
-                    if not is_grid
-                ]
-
-                # Extract grid parameters
-                if grid_names:
-                    labels = combined_labels[grid_names]
-                else:
-                    # Fallback to standard grid parameters
-                    grid_names = ["mini", "eep", "feh"]
-                    labels = combined_labels[grid_names]
-
-                # Extract predictions if available
-                if pred_names:
-                    params = combined_labels[pred_names]
-                else:
-                    params = None
-
-                # Use only first 5 Pan-STARRS filters for testing (g, r, i, z, y)
-                ps_filters = ps[
-                    :5
-                ]  # Get first 5 PS filters: PS_g, PS_r, PS_i, PS_z, PS_y
-
-                # Load the grid with only PS filters
-                models_ps, combined_labels_ps, label_mask_ps = load_models(
-                    path, filters=ps_filters
-                )
-
-                # Create a subset for faster testing (every 100th model to get ~6000 models)
-                subset_indices = slice(0, None, 100)
-                models_subset = models_ps[subset_indices]
-                labels_subset = combined_labels_ps[subset_indices]
-
-                # Re-extract labels and params for PS-filtered data
-                if grid_names:
-                    labels_final = labels_subset[grid_names]
-                else:
-                    grid_names = ["mini", "eep", "feh"]
-                    labels_final = labels_subset[grid_names]
-
-                if pred_names:
-                    params_final = labels_subset[pred_names]
-                else:
-                    params_final = None
-
-                return StarGrid(models_subset, labels_final, params_final)
-            except Exception as e:
-                continue
-
-    # Skip (rather than error) when the grid is absent so the suite runs
-    # offline; CI pre-downloads the data and exercises these tests.
-    pytest.skip(
-        "MIST grid data not available; run fetch_grids() or set BRUTUS_DATA_DIR "
-        "to enable this data-dependent test"
-    )
+def mist_grid(mist_ps_grid):
+    """Every 100th model of the MIST v9 grid, with the five PS1 filters."""
+    models, labels, label_mask = mist_ps_grid
+    return StarGrid(models[::100], *split_labels(labels[::100], label_mask))
 
 
 @pytest.fixture

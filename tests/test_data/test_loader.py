@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
+from conftest import requires_data
 
 from brutus.data.loader import load_models, load_offsets
 
@@ -19,17 +20,12 @@ class TestDataLoaderFunctions:
         with pytest.raises((FileNotFoundError, OSError)):
             load_models("/non/existent/file.h5")
 
+    @pytest.mark.slow
     def test_load_models_comprehensive_real_data(self):
         """Comprehensive test of load_models with real MIST v9 data (single load for efficiency)."""
-        from conftest import find_brutus_data_file
-
         from brutus.data.loader import load_models
 
-        # Check if the MIST v9 grid file exists
-        data_file = find_brutus_data_file("grid_mist_v9.h5")
-        assert (
-            data_file is not None
-        ), "data_file should be found after downloading all data"
+        data_file = requires_data("grid_mist_v9.h5")
 
         # Single load with reasonable filter set - this covers most functionality
         test_filters = [
@@ -66,17 +62,13 @@ class TestDataLoaderFunctions:
             if param in available_params:
                 assert np.all(np.isfinite(labels[param]))
 
+    @pytest.mark.slow
     def test_load_models_filtering_options_fast(self):
         """Test load_models filtering options with minimal I/O."""
 
-        from conftest import find_brutus_data_file
-
         from brutus.data.loader import load_models
 
-        data_file = find_brutus_data_file("grid_mist_v9.h5")
-        assert (
-            data_file is not None
-        ), "data_file should be found after downloading all data"
+        data_file = requires_data("grid_mist_v9.h5")
 
         # Get baseline with fast filter set
         fast_filters = ["SDSS_g", "SDSS_r"]  # Just 2 filters for speed
@@ -103,17 +95,13 @@ class TestDataLoaderFunctions:
         assert len(models_singles) > 0
         assert len(models_singles) <= len(models_full)  # Should be <= total
 
+    @pytest.mark.slow
     def test_load_models_performance_no_scaling(self):
         """Test that load_models has minimal performance scaling with filter count."""
 
-        from conftest import find_brutus_data_file
-
         from brutus.data.loader import load_models
 
-        data_file = find_brutus_data_file("grid_mist_v9.h5")
-        assert (
-            data_file is not None
-        ), "data_file should be found after downloading all data"
+        data_file = requires_data("grid_mist_v9.h5")
 
         # Test with small and large filter sets (just validate shapes, not timing)
         models_small, _, _ = load_models(
@@ -132,17 +120,13 @@ class TestDataLoaderFunctions:
         assert models_large.shape[1] == 6  # 6 filters
         assert models_small.shape[0] == models_large.shape[0]  # Same number of models
 
+    @pytest.mark.slow
     def test_load_models_with_custom_labels(self):
         """Test load_models with custom label selection (fast version)."""
 
-        from conftest import find_brutus_data_file
-
         from brutus.data.loader import load_models
 
-        data_file = find_brutus_data_file("grid_mist_v9.h5")
-        assert (
-            data_file is not None
-        ), "data_file should be found after downloading all data"
+        data_file = requires_data("grid_mist_v9.h5")
 
         # Test with specific labels (minimal filters for speed)
         custom_labels = ["mini", "feh", "eep", "loga"]
@@ -161,17 +145,13 @@ class TestDataLoaderFunctions:
         ]
         assert len(available_labels) > 0  # Should have some valid labels
 
+    @pytest.mark.slow
     def test_load_models_error_conditions_with_real_data(self):
         """Test load_models error conditions with real data."""
 
-        from conftest import find_brutus_data_file
-
         from brutus.data.loader import load_models
 
-        data_file = find_brutus_data_file("grid_mist_v9.h5")
-        assert (
-            data_file is not None
-        ), "data_file should be found after downloading all data"
+        data_file = requires_data("grid_mist_v9.h5")
 
         # Test invalid include_ms/include_postms combination
         import pytest
@@ -188,14 +168,9 @@ class TestDataLoaderFunctions:
     def test_load_offsets_with_real_mist_v9_data(self):
         """Test load_offsets with real MIST v9 offset data."""
 
-        from conftest import find_brutus_data_file
-
         from brutus.data.loader import load_offsets
 
-        offset_file = find_brutus_data_file("offsets_mist_v9.txt")
-        assert (
-            offset_file is not None
-        ), "offset_file should be found after downloading all data"
+        offset_file = requires_data("offsets_mist_v9.txt")
 
         # Test loading all offsets
         offsets = load_offsets(offset_file, verbose=False)
