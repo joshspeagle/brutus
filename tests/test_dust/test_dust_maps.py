@@ -338,10 +338,6 @@ class TestDustEdgeCases:
         assert result == "test"
 
 
-# np.trapezoid is the NumPy 2.0 name for np.trapz; CI also tests NumPy 1.x
-_trapezoid = getattr(np, "trapezoid", None) or np.trapz
-
-
 PIXEL_DTYPE_FULL = np.dtype(
     [
         ("nside", "<u4"),
@@ -661,7 +657,7 @@ class TestReliabilityMask:
             )
             if numpy_branch:
                 lp = lp[0]
-            assert np.isclose(_trapezoid(np.exp(lp), av_grid), 1.0, rtol=1e-3)
+            assert np.isclose(np.trapezoid(np.exp(lp), av_grid), 1.0, rtol=1e-3)
 
 
 def _find_data_idx_reference(bm, gal_l, b):

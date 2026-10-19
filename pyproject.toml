@@ -19,7 +19,6 @@ classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Natural Language :: English",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -34,9 +33,9 @@ keywords = [
     "cluster", "isochrone", "dust", "reddening",
     "parallax", "distance", "template fitting"
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
-    "numpy>=1.19",
+    "numpy>=2.0",
     "scipy>=1.6.0",
     "matplotlib>=3.3.0",
     "h5py>=3.0.0",
@@ -88,7 +87,7 @@ where = ["src"]
 # Development tools configuration
 [tool.black]
 line-length = 88
-target-version = ['py39', 'py310', 'py311', 'py312', 'py313']
+target-version = ['py310', 'py311', 'py312', 'py313']
 include = '\.pyi?$'
 extend-exclude = '''
 /(
