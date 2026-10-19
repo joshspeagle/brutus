@@ -71,6 +71,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`License-Expression: MIT`) instead of a license table and classifier.
   Only `LICENSE` is packaged as a license file; `AUTHORS.md` stays in the
   source distribution. Building from source needs `setuptools>=77`.
+- `BruteForce.loglike_grid` and `logpost_grid` no longer accept unused
+  `**kwargs`, so a misspelled keyword such as `av_gaus` raises `TypeError`.
+  Before, it was dropped and the default applied.
 - Python 3.10 or later and numpy 2.0 or later are required (the floors were 3.9
   and 1.19). Python 3.9 is past its end of life, and no astropy release for
   Python 3.9 supports numpy 2.

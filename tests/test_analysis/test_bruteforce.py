@@ -2171,3 +2171,12 @@ class TestUnfittedObjects:
         # HDF5 refuses to truncate a file that is still open.
         h5py.File(path, "w").close()
         assert excinfo.traceback
+
+
+def test_misspelled_keyword_raises(fitter, observation):
+    flux, flux_err, mask = observation
+    with pytest.raises(TypeError, match="av_gaus"):
+        fitter.loglike_grid(flux, flux_err, mask, av_gaus=(0.0, 0.01))
+    like = fitter.loglike_grid(flux, flux_err, mask, return_vals=True)
+    with pytest.raises(TypeError, match="Nmc"):
+        fitter.logpost_grid(like, Nmc=10)

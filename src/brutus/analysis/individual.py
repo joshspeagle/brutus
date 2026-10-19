@@ -1160,7 +1160,6 @@ class BruteForce:
         parallax_err=None,
         return_vals=False,
         indices=None,
-        **kwargs,
     ):
         """
         Compute log-likelihood over the stellar model grid.
@@ -1202,11 +1201,6 @@ class BruteForce:
 
         return_vals : bool, optional
             If True, return full results including covariances. Default is False.
-
-        Other Parameters
-        ----------------
-        **kwargs
-            Passed to optimization functions.
 
         Returns
         -------
@@ -1447,7 +1441,6 @@ class BruteForce:
         apply_av_prior=True,
         R_solar=8.2,
         Z_solar=0.025,
-        **kwargs,
     ):
         """
         Compute log-posterior over the stellar model grid.
