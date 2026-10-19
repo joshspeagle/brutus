@@ -182,6 +182,17 @@ def generate_isochrone_population_grid(
     smf_grid = np.asarray(smf_grid)
     eep_grid = np.asarray(eep_grid)
 
+    if smf_grid.ndim != 1 or not np.all(np.isfinite(smf_grid)):
+        raise ValueError("smf_grid must be a finite 1-D array")
+    if len(smf_grid) == 0 or np.any(np.diff(smf_grid) <= 0):
+        raise ValueError("smf_grid must be strictly increasing")
+    if np.any((smf_grid < 0) | (smf_grid > 1)):
+        raise ValueError("smf_grid values must be between 0 and 1")
+    if eep_grid.ndim != 1 or not np.all(np.isfinite(eep_grid)):
+        raise ValueError("eep_grid must be a finite 1-D array")
+    if len(eep_grid) == 0 or np.any(np.diff(eep_grid) <= 0):
+        raise ValueError("eep_grid must be strictly increasing")
+
     # Compute SMF jacobians (grid spacing)
     if len(smf_grid) > 1:
         smf_jacobians = np.gradient(smf_grid)
@@ -388,7 +399,19 @@ def compute_isochrone_cluster_loglike(
     """
     obs_flux = np.asarray(obs_flux)
     obs_err = np.asarray(obs_err)
+    if obs_flux.ndim != 2 or obs_err.shape != obs_flux.shape:
+        raise ValueError("obs_flux and obs_err must be matching 2-D arrays")
     n_objects, n_filters = obs_flux.shape
+
+    if (parallax is None) != (parallax_err is None):
+        raise ValueError("parallax and parallax_err must be provided together")
+    if parallax is not None:
+        parallax = np.asarray(parallax)
+        parallax_err = np.asarray(parallax_err)
+        if parallax.shape != (n_objects,) or parallax_err.shape != (n_objects,):
+            raise ValueError("parallax and parallax_err must have shape (N_objects,)")
+        if distance is None:
+            raise ValueError("distance is required when parallax is provided")
 
     model_photometry = isochrone_grid["photometry"]  # shape (N_grid_points, N_filters)
 
@@ -427,9 +450,6 @@ def compute_isochrone_cluster_loglike(
     extra_dims = None
     lnl_parallax = 0.0
     if parallax is not None and parallax_err is not None and distance is not None:
-        parallax = np.asarray(parallax)
-        parallax_err = np.asarray(parallax_err)
-
         # Parallax prediction from distance
         parallax_pred = 1000.0 / distance  # mas
 
@@ -918,8 +938,16 @@ def isochrone_population_loglike(
     # Check inputs
     obs_phot = np.asarray(obs_phot)
     obs_err = np.asarray(obs_err)
-    if obs_phot.shape != obs_err.shape:
-        raise ValueError("Photometry and error shapes must match")
+    if obs_phot.ndim != 2 or obs_err.shape != obs_phot.shape:
+        raise ValueError("obs_phot and obs_err must be matching 2-D arrays")
+    n_objects, n_filters = obs_phot.shape
+    if mask is not None and np.asarray(mask).shape != (n_objects, n_filters):
+        raise ValueError("mask must have the same shape as obs_phot")
+    if (parallax is None) != (parallax_err is None):
+        raise ValueError("parallax and parallax_err must be provided together")
+    if parallax is not None:
+        if np.asarray(parallax).shape != (n_objects,) or np.asarray(parallax_err).shape != (n_objects,):
+            raise ValueError("parallax and parallax_err must have shape (N_objects,)")
 
     try:
         # 1. Generate isochrone population grid

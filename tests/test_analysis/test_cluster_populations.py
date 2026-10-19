@@ -358,8 +358,39 @@ class TestMainInterface:
         obs_phot = np.array([[1.0, 0.8]])
         obs_err = np.array([[0.1, 0.08, 0.06]])  # Wrong shape
 
-        with pytest.raises(ValueError, match="shapes must match"):
+        with pytest.raises(ValueError, match="matching 2-D"):
             isochrone_population_loglike(theta, None, obs_phot, obs_err)
+
+    def test_malformed_inputs_raise_before_model_evaluation(self):
+        theta = [0.0, 9.5, 0.1, 3.1, 1000.0, 0.05]
+        obs_phot = np.ones((2, 3))
+        obs_err = np.ones((2, 3))
+
+        with pytest.raises(ValueError, match="matching 2-D"):
+            isochrone_population_loglike(theta, None, obs_phot[0], obs_err[0])
+        with pytest.raises(ValueError, match="mask"):
+            isochrone_population_loglike(
+                theta, None, obs_phot, obs_err, mask=np.ones((2, 2))
+            )
+        with pytest.raises(ValueError, match=r"shape \(N_objects"):
+            isochrone_population_loglike(
+                theta,
+                None,
+                obs_phot,
+                obs_err,
+                parallax=np.ones(1),
+                parallax_err=np.ones(1),
+            )
+        with pytest.raises(ValueError, match="provided together"):
+            isochrone_population_loglike(
+                theta, None, obs_phot, obs_err, parallax=np.ones(2)
+            )
+
+    def test_grid_validation_rejects_descending_values(self):
+        with pytest.raises(ValueError, match="smf_grid"):
+            generate_isochrone_population_grid(
+                None, 0.0, 9.5, 0.1, 3.1, 1000.0, smf_grid=[1.0, 0.5, 0.0]
+            )
 
     def test_parallax_integration(self, real_stellarpop, mock_observations):
         """Test main function with parallax data."""
