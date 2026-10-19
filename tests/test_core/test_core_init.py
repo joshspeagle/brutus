@@ -105,66 +105,6 @@ class TestCorePackageInit:
             assert getattr(brutus.core, item) is not None, f"Item '{item}' is None"
 
 
-class TestCoreImportErrorHandling:
-    """Test import error handling for various submodules."""
-
-    def test_sed_utils_import_failure(self):
-        """Test behavior when sed_utils import fails."""
-        # Mock the sed_utils import to fail
-        with patch.dict("sys.modules", {"brutus.core.sed_utils": None}):
-            # Force reload to trigger the ImportError
-            if "brutus.core" in sys.modules:
-                del sys.modules["brutus.core"]
-            if "brutus" in sys.modules:
-                del sys.modules["brutus"]
-
-            # Should raise ImportWarning during transition period
-            with pytest.warns(ImportWarning):
-                import brutus
-
-    def test_neural_nets_import_failure(self):
-        """Test behavior when neural_nets import fails."""
-        # Mock the neural_nets import to fail
-        with patch.dict("sys.modules", {"brutus.core.neural_nets": None}):
-            # Force reload to trigger the ImportError
-            if "brutus.core" in sys.modules:
-                del sys.modules["brutus.core"]
-            if "brutus" in sys.modules:
-                del sys.modules["brutus"]
-
-            # Should raise ImportWarning during transition period
-            with pytest.warns(ImportWarning):
-                import brutus
-
-    def test_individual_import_failure(self):
-        """Test behavior when individual import fails."""
-        # Mock the individual import to fail
-        with patch.dict("sys.modules", {"brutus.core.individual": None}):
-            # Force reload to trigger the ImportError
-            if "brutus.core" in sys.modules:
-                del sys.modules["brutus.core"]
-            if "brutus" in sys.modules:
-                del sys.modules["brutus"]
-
-            # Should raise ImportWarning during transition period
-            with pytest.warns(ImportWarning):
-                import brutus
-
-    def test_populations_import_failure(self):
-        """Test behavior when populations import fails."""
-        # Mock the populations import to fail
-        with patch.dict("sys.modules", {"brutus.core.populations": None}):
-            # Force reload to trigger the ImportError
-            if "brutus.core" in sys.modules:
-                del sys.modules["brutus.core"]
-            if "brutus" in sys.modules:
-                del sys.modules["brutus"]
-
-            # Should raise ImportWarning during transition period
-            with pytest.warns(ImportWarning):
-                import brutus
-
-
 class TestCoreIntegration:
     """Test integration with other brutus components."""
 

@@ -98,7 +98,7 @@ from ..utils.photometry import add_mag
 # Import neural network predictor
 from .neural_nets import FastNNPredictor
 
-__all__ = ["EEPTracks", "StarEvolTrack"]
+__all__ = ["EEPTracks", "StarEvolTrack", "StarGrid"]
 
 
 # EEPTracks pickle-cache format version. Bump whenever the set of cached

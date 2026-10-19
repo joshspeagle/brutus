@@ -24,6 +24,3 @@ from .extinction import lb2pix
 from .maps import Bayestar, DustMap
 
 __all__ = ["lb2pix", "DustMap", "Bayestar"]
-
-# Version info (for future use)
-__version__ = "1.0.0"

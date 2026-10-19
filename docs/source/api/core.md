@@ -146,7 +146,7 @@ seds, params1, params2 = pop.get_seds(
 ```
 
 ```{eval-rst}
-.. autofunction:: _get_seds
+.. autofunction:: brutus.core.sed_utils._get_seds
 ```
 
 ## Submodules

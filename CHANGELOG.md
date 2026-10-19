@@ -27,6 +27,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   truncation and uniform normalization match the fitted A(V) range (custom
   `lndustprior` functions keep the 4-argument signature).
 
+### Changed
+
+- `import brutus` now raises the original `ImportError` when a dependency is
+  missing. Before, it warned with a hidden `ImportWarning` and left most names
+  undefined.
+- `brutus.__version__` comes from the installed package metadata, so the
+  `brutus_version` attribute of generated grids follows the installed release.
+  A source tree that is not installed reports `"unknown"`.
+- The top level re-exports every data fetcher and loader: `fetch_nns`,
+  `fetch_offsets`, `fetch_tracks` and `load_offsets` join `fetch_dustmaps`,
+  `fetch_grids`, `fetch_isos` and `load_models`.
+- `brutus.core` no longer exports the private `_get_seds`; import it from
+  `brutus.core.sed_utils`. `brutus.dust.__version__` is removed.
+- `StarGrid` is in `brutus.core.individual.__all__`.
+
 ### Documentation
 
 - New SVG logo, with light and dark variants, and a favicon. The isochrone
