@@ -1903,3 +1903,69 @@ class TestMaskAndInputs:
         assert mask.all()
         np.testing.assert_array_equal(av_init, 0.5)
         np.testing.assert_array_equal(rv_init, 3.3)
+
+
+@pytest.fixture
+def batch(observation):
+    """fit() inputs for two copies of `observation`."""
+    flux, flux_err, mask = observation
+    return dict(
+        data=np.tile(flux, (2, 1)),
+        data_err=np.tile(flux_err, (2, 1)),
+        data_mask=np.tile(mask, (2, 1)),
+        data_labels=np.zeros(2, dtype=[("id", "i4")]),
+        data_coords=np.tile([120.0, 45.0], (2, 1)),
+    )
+
+
+class TestInputValidation:
+    @pytest.mark.parametrize(
+        "change, match",
+        [
+            (dict(parallax=np.array([5.0, 5.0])), "parallax_err"),
+            (dict(parallax_err=np.array([0.1, 0.1])), "parallax_err"),
+            (
+                dict(parallax=np.array([5.0]), parallax_err=np.array([0.1])),
+                "parallax must have shape",
+            ),
+            (dict(data_coords=np.zeros((2, 3))), "data_coords"),
+            (dict(data_labels=np.zeros(1, dtype=[("id", "i4")])), "data_labels"),
+            (dict(lnprior=np.zeros(5)), "lnprior"),
+            (dict(logl_initthresh=None), "logl_initthresh"),
+            (dict(logl_initthresh=0.0), "logl_initthresh"),
+            (dict(logl_initthresh=1.0), "logl_initthresh"),
+        ],
+    )
+    def test_fit_rejects_bad_input_before_creating_file(
+        self, fitter, batch, tmp_path, change, match
+    ):
+        path = tmp_path / "out.h5"
+        with pytest.raises(ValueError, match=match):
+            fitter.fit(save_file=str(path), verbose=False, **{**batch, **change})
+        assert not path.exists()
+
+    @pytest.mark.parametrize("key", ["data", "data_err", "data_mask"])
+    def test_fit_rejects_wrong_band_count(self, fitter, batch, tmp_path, key):
+        batch[key] = batch[key][:, :4]
+        with pytest.raises(ValueError, match=key):
+            fitter.fit(save_file=str(tmp_path / "out"), verbose=False, **batch)
+
+    @pytest.mark.parametrize(
+        "kwargs, match",
+        [
+            (dict(parallax=5.0), "parallax_err"),
+            (dict(init_thresh=2.0), "init_thresh"),
+        ],
+    )
+    def test_loglike_grid_rejects_bad_input(self, fitter, observation, kwargs, match):
+        flux, flux_err, mask = observation
+        with pytest.raises(ValueError, match=match):
+            fitter.loglike_grid(flux, flux_err, mask, **kwargs)
+
+    def test_zero_parallax_error_counts_as_no_parallax(self, fitter, observation):
+        flux, flux_err, mask = observation
+        with_zero = fitter.loglike_grid(
+            flux, flux_err, mask, parallax=5.0, parallax_err=0.0
+        )
+        without = fitter.loglike_grid(flux, flux_err, mask)
+        np.testing.assert_array_equal(with_zero[0], without[0])

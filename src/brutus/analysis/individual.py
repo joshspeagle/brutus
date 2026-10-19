@@ -64,6 +64,7 @@ Basic usage with grid-based fitting:
 ... )
 """
 
+import numbers
 import os
 import sys
 import time
@@ -104,6 +105,32 @@ LOG_ZERO = -1e300
 
 # Minimum allowed scale factor to prevent division by zero or log(0).
 MIN_SCALE = 1e-20
+
+
+def _has_parallax(parallax, parallax_err):
+    """Return True for a usable parallax, as the parallax priors define it."""
+    return (
+        parallax is not None
+        and np.isfinite(parallax)
+        and np.isfinite(parallax_err)
+        and parallax_err > 0
+    )
+
+
+def _check_shape(name, arr, shape):
+    """Raise ValueError naming `name` unless `arr` has shape `shape`."""
+    if np.shape(arr) != shape:
+        raise ValueError(f"{name} must have shape {shape}, got {np.shape(arr)}")
+
+
+def _check_threshold(name, value):
+    """Raise ValueError naming `name` unless `value` is a real number in (0, 1).
+
+    Models within ``log(value)`` of the best one pass the cut, so 1 would
+    select none.
+    """
+    if not (isinstance(value, numbers.Real) and 0.0 < value < 1.0):
+        raise ValueError(f"{name} must be a number in (0, 1), got {value!r}")
 
 
 # ============================================================================
@@ -1222,12 +1249,18 @@ class BruteForce:
         # Implementation of grid-based likelihood computation
         Nmodels, Nfilt, Ncoef = mag_coeffs.shape
 
+        if (parallax is None) != (parallax_err is None):
+            raise ValueError("parallax and parallax_err must be given together")
+        _check_threshold("init_thresh", init_thresh)
+
         # Clean data. A new mask, so the caller's array is left unchanged.
         data_mask = np.asarray(data_mask, dtype=bool)
-        if data_mask.shape != (Nfilt,):
-            raise ValueError(
-                f"data_mask must have shape ({Nfilt},), got {data_mask.shape}"
-            )
+        for name, arr in [
+            ("data", data),
+            ("data_err", data_err),
+            ("data_mask", data_mask),
+        ]:
+            _check_shape(name, arr, (Nfilt,))
         with np.errstate(invalid="ignore"):
             clean = np.isfinite(data) & np.isfinite(data_err) & (data_err > 0.0)
         data_mask = data_mask & clean
@@ -1311,40 +1344,31 @@ class BruteForce:
         )
         models, rvecs, drvecs, scale, av, rv, icov_sar, resid = results
 
-        if init_thresh is not None:
-            # Cull initial bad fits before moving on
-            chi2 = _chi2_from_resid(resid, tot_var)
-            lnl = -0.5 * chi2
+        # Cull initial bad fits before moving on
+        chi2 = _chi2_from_resid(resid, tot_var)
+        lnl = -0.5 * chi2
 
-            # Add parallax to log-likelihood
-            lnl_p = lnl
-            if parallax is not None and parallax_err is not None:
-                if np.isfinite(parallax) and np.isfinite(parallax_err):
-                    with warnings.catch_warnings():
-                        warnings.simplefilter("ignore")
-                        par = np.sqrt(scale)  # sqrt(scale) = 1/d_kpc = parallax_mas
-                        chi2_p = (par - parallax) ** 2 / parallax_err**2
-                        lnl_p = lnl - 0.5 * chi2_p
+        # Add parallax to log-likelihood
+        lnl_p = lnl
+        if _has_parallax(parallax, parallax_err):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                par = np.sqrt(scale)  # sqrt(scale) = 1/d_kpc = parallax_mas
+                chi2_p = (par - parallax) ** 2 / parallax_err**2
+                lnl_p = lnl - 0.5 * chi2_p
 
-            # Subselect models using log-likelihood thresholding
-            lnl_sel = lnl_p > np.max(lnl_p) + np.log(init_thresh)
-            init_sel = np.where(lnl_sel)[0]
+        # Subselect models using log-likelihood thresholding
+        lnl_sel = lnl_p > np.max(lnl_p) + np.log(init_thresh)
+        init_sel = np.where(lnl_sel)[0]
 
-            # Subselect models (tot_var is 1D and data-only, no subselection needed)
-            models = models[init_sel]
-            rvecs = rvecs[init_sel]
-            drvecs = drvecs[init_sel]
-            av_new = av[init_sel]
-            rv_new = rv[init_sel]
-            mcoeffs = mcoeffs[init_sel]
-            resid = resid[init_sel]
-        else:
-            # Keep all models
-            init_sel = np.arange(Nmodels)
-            chi2 = np.ones(Nmodels) - LOG_ZERO  # Large positive value
-            lnl = np.ones(Nmodels) + LOG_ZERO  # Large negative value
-            av_new = np.array(av, order="F")
-            rv_new = np.array(rv, order="F")
+        # Subselect models (tot_var is 1D and data-only, no subselection needed)
+        models = models[init_sel]
+        rvecs = rvecs[init_sel]
+        drvecs = drvecs[init_sel]
+        av_new = av[init_sel]
+        rv_new = rv[init_sel]
+        mcoeffs = mcoeffs[init_sel]
+        resid = resid[init_sel]
 
         # Iterate until convergence
         lnl_old, lerr = LOG_ZERO, -LOG_ZERO  # -inf, +inf proxies
@@ -1393,10 +1417,7 @@ class BruteForce:
         icov_sar[init_sel] = icov_sar_new
 
         # Apply dimensional prior
-        if dim_prior and Ndim > 0:
-            # Guard against Ndim == 0 (fully-masked object): np.log(0) = -inf
-            # would inject +inf into every model's log-likelihood. For Ndim >= 1
-            # this is identical to the previous behaviour.
+        if dim_prior:
             lnl -= 0.5 * (3.0 - Ndim) * np.log(Ndim)
 
         if return_vals:
@@ -1997,6 +2018,16 @@ class BruteForce:
         str
             Path to the output HDF5 file.
 
+        Raises
+        ------
+        ValueError
+            If the shapes of ``data``, ``data_err``, ``data_mask``,
+            ``data_labels``, ``parallax``, ``parallax_err``, ``data_coords``
+            or ``lnprior`` disagree, if
+            only one of ``parallax`` and ``parallax_err`` is given, or if
+            ``logl_initthresh`` is not in (0, 1). These checks run before the
+            output file is created.
+
         Notes
         -----
         The output HDF5 file contains the following datasets:
@@ -2045,19 +2076,38 @@ class BruteForce:
         ...     data_coords=coords
         ... )
         """
+        data = np.asarray(data, dtype=float)
+        Ndata = len(data)
+        data_mask = np.asarray(data_mask, dtype=bool)
+        for name, arr in [
+            ("data", data),
+            ("data_err", data_err),
+            ("data_mask", data_mask),
+        ]:
+            _check_shape(name, arr, (Ndata, self.nfilters))
+        if (parallax is None) != (parallax_err is None):
+            raise ValueError("parallax and parallax_err must be given together")
+        for name, arr, shape in [
+            ("parallax", parallax, (Ndata,)),
+            ("parallax_err", parallax_err, (Ndata,)),
+            ("data_coords", data_coords, (Ndata, 2)),
+            ("lnprior", lnprior, (self.nmodels,)),
+        ]:
+            if arr is not None:
+                _check_shape(name, arr, shape)
+        if len(data_labels) != Ndata:
+            raise ValueError(
+                f"data_labels must have {Ndata} rows, one per object, "
+                f"got {len(data_labels)}"
+            )
+        _check_threshold("logl_initthresh", logl_initthresh)
+
         # Load dust map from file path (str or os.PathLike) if needed
         # (once for all objects)
         if dustfile is not None and isinstance(dustfile, (str, os.PathLike)):
             from ..dust import Bayestar
 
             dustfile = Bayestar(dustfile=dustfile)
-
-        data_mask = np.asarray(data_mask, dtype=bool)
-        if data_mask.shape != np.shape(data):
-            raise ValueError(
-                f"data_mask must have the shape of data {np.shape(data)}, "
-                f"got {data_mask.shape}"
-            )
 
         # Pre-process data and initialize priors
         setup_results = self._setup(
@@ -2094,8 +2144,6 @@ class BruteForce:
             lngalprior_proc,
             lndustprior_proc,
         ) = setup_results
-
-        Ndata, Nfilt = data.shape
 
         # Initialize random state
         if rstate is None:
@@ -2515,15 +2563,12 @@ class BruteForce:
         # Add parallax contribution to chi2 and Ndim if provided
         Ndim_out = Ndim
         chi2_with_par = chi2.copy()
-        if parallax is not None and parallax_err is not None:
-            if np.isfinite(parallax) and np.isfinite(parallax_err):
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    par_pred = np.sqrt(
-                        scales_all
-                    )  # sqrt(scale) = 1/d_kpc = parallax_mas
-                    chi2_with_par += (par_pred - parallax) ** 2 / parallax_err**2
-                    Ndim_out += 1
+        if _has_parallax(parallax, parallax_err):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                par_pred = np.sqrt(scales_all)  # 1/d_kpc = parallax_mas
+                chi2_with_par += (par_pred - parallax) ** 2 / parallax_err**2
+            Ndim_out += 1
 
         # Compute goodness-of-fit metrics (over ALL models, not just posterior-selected)
         chi2min = np.min(chi2_with_par)

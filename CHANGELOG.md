@@ -59,6 +59,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `plotting.posterior_predictive` treats an integer 0/1 `data_mask` as a
   mask and raises `ValueError` for a mask of the wrong shape. It plotted
   band 0 and repeated band 1 in place of the unmasked bands.
+- `BruteForce.fit` and `loglike_grid` check their input shapes and raise
+  `ValueError` that names the argument, before `fit` creates its output
+  file. A `parallax` given without `parallax_err`, which the fit silently
+  ignored, now raises. `logl_initthresh` (`init_thresh`) must be in (0, 1).
+  A parallax with an error of 0 or less counts as no parallax, as in the
+  parallax priors; it stopped the run with an unclear error.
 
 ### Documentation
 
