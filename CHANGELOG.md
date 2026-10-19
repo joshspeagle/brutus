@@ -54,6 +54,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and 1.19). Python 3.9 is past its end of life, and no astropy release for
   Python 3.9 supports numpy 2.
 
+### Fixed
+
+- `plotting.posterior_predictive` treats an integer 0/1 `data_mask` as a
+  mask and raises `ValueError` for a mask of the wrong shape. It plotted
+  band 0 and repeated band 1 in place of the unmasked bands.
+
 ### Documentation
 
 - New SVG logo, with light and dark variants, and a favicon. The isochrone

@@ -480,6 +480,42 @@ class TestPosteriorPredictive:
 
         plt.close(fig)
 
+    def test_int_mask_plots_unmasked_bands(
+        self, mock_models, sample_indices, sample_parameters
+    ):
+        reds, dreds, dists = sample_parameters
+        data = np.arange(1.0, 6.0) * 1e-4
+        fig, ax, _ = posterior_predictive(
+            mock_models,
+            sample_indices,
+            reds,
+            dreds,
+            dists,
+            flux=True,
+            data=data,
+            data_err=0.1 * data,
+            data_mask=np.array([1, 1, 0, 1, 1]),
+        )
+        line = ax.containers[0].lines[0]
+        np.testing.assert_array_equal(line.get_xdata(), [0, 1, 3, 4])
+        np.testing.assert_array_equal(line.get_ydata(), data[[0, 1, 3, 4]])
+        plt.close(fig)
+
+    def test_wrong_shape_mask_raises(
+        self, mock_models, sample_indices, sample_parameters
+    ):
+        reds, dreds, dists = sample_parameters
+        with pytest.raises(ValueError, match="data_mask"):
+            posterior_predictive(
+                mock_models,
+                sample_indices,
+                reds,
+                dreds,
+                dists,
+                data=np.ones(5),
+                data_mask=np.ones(4, dtype=bool),
+            )
+
 
 class TestSummaryPlot:
     """Basic smoke test for summary_plot."""

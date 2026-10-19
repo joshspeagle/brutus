@@ -74,8 +74,8 @@ def posterior_predictive(
         these will be overplotted as `psig`-sigma error bars (default: 2-sigma).
 
     data_mask : `~numpy.ndarray` of shape `(Nfilt)`
-        Binary mask (0/1) indicating whether the data value was observed.
-        If provided, these will be used to mask missing/bad data values.
+        Boolean mask (or 0/1 values) indicating whether the data value was
+        observed. If provided, these will be used to mask missing/bad data values.
 
     offset : `~numpy.ndarray` of shape `(Nfilt)`, optional
         Multiplicative photometric offsets that will be applied to
@@ -129,6 +129,9 @@ def posterior_predictive(
         data_err = np.zeros(nfilt)
     if data_mask is None:
         data_mask = np.ones(nfilt, dtype="bool")
+    data_mask = np.asarray(data_mask, dtype=bool)
+    if data_mask.shape != (nfilt,):
+        raise ValueError(f"data_mask must have shape ({nfilt},), got {data_mask.shape}")
     if offset is None:
         offset = np.ones(nfilt)
 
