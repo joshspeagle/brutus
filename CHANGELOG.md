@@ -136,6 +136,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ValueError` when `cov` does not have shape `(Ndist, dim, dim)`. An
   integer `cov` shrank the spread of the draws, and a short `cov` returned
   garbage with JIT on.
+- `core.sed_utils.get_seds` raises `ValueError` unless `mag_coeffs` has
+  shape `(Nmodels, Nbands, 3)`. With fewer coefficients, the JIT kernel
+  read past the coefficient axis.
 - `plotting.posterior_predictive` treats an integer 0/1 `data_mask` as a
   mask and raises `ValueError` for a mask of the wrong shape. It plotted
   band 0 and repeated band 1 in place of the unmasked bands.

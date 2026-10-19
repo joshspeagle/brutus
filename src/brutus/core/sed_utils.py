@@ -162,7 +162,8 @@ def get_seds(
     Raises
     ------
     ValueError
-        If `av` or `rv` is an array whose shape is not `(Nmodels,)`.
+        If `mag_coeffs` does not have shape `(Nmodels, Nbands, 3)`, or if
+        `av` or `rv` is an array whose shape is not `(Nmodels,)`.
 
     Examples
     --------
@@ -197,7 +198,12 @@ def get_seds(
 
     where A(λ) is the extinction in a given band.
     """
-    Nmodels, Nbands, Ncoef = mag_coeffs.shape
+    if mag_coeffs.ndim != 3 or mag_coeffs.shape[2] != 3:
+        raise ValueError(
+            "`mag_coeffs` must have shape (Nmodels, Nbands, 3); "
+            f"got {mag_coeffs.shape}."
+        )
+    Nmodels = mag_coeffs.shape[0]
 
     av = _model_array(av, 0.0, Nmodels, "av")
     rv = _model_array(rv, 3.3, Nmodels, "rv")
