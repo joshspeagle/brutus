@@ -43,6 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exactly 0, and such a model gained up to ln 2 in `lnp`. This changes
   `samps_red`, `samps_dred`, `samps_dist`, `obj_log_post`, `obj_log_evid`
   and `mc_ess`; `mc_ess` is 0 for a model with no draw of nonzero weight.
+- **A `functools.partial` of `logp_extinction` gets the fit's `avlim`**, as
+  the bare function does, unless the partial binds `avlim` itself. A prior
+  such as `partial(logp_extinction, scatter=0.3)` was normalized over its
+  default (0, 20) instead of the fitted range.
 
 ### Changed
 

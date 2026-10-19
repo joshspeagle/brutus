@@ -2055,3 +2055,45 @@ class TestTruncatedDraws:
             rstate=np.random.RandomState(5),
         )
         np.testing.assert_allclose(lnp[1] - lnp[0], np.log(0.5), atol=1e-6)
+
+
+class TestDustPriorPartial:
+    @pytest.fixture
+    def spy(self, monkeypatch):
+        import brutus.analysis.individual as individual
+
+        seen = []
+
+        def logp_extinction(avs, dustmap, coord, distance=None, **kwargs):
+            seen.append(kwargs)
+            return np.zeros_like(avs)
+
+        monkeypatch.setattr(individual, "logp_extinction", logp_extinction)
+        return logp_extinction, seen
+
+    @pytest.mark.parametrize(
+        "bound, expected",
+        [
+            ({"scatter": 0.3}, {"avlim": (0.0, 6.0)}),
+            ({"avlim": (0.0, 3.0)}, {}),
+        ],
+    )
+    def test_partial_gets_fit_avlim_unless_bound(
+        self, fitter, observation, spy, bound, expected
+    ):
+        from functools import partial
+
+        func, seen = spy
+        flux, flux_err, mask = observation
+        like = fitter.loglike_grid(flux, flux_err, mask, return_vals=True)
+        fitter.logpost_grid(
+            like,
+            coord=(120.0, 45.0),
+            dustfile=object(),
+            lndustprior=partial(func, **bound),
+            avlim=(0.0, 6.0),
+            Nmc_prior=5,
+            wt_thresh=0.1,
+            rstate=np.random.RandomState(0),
+        )
+        assert seen == [{**bound, **expected}]
