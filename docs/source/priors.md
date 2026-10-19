@@ -50,7 +50,7 @@ Low-mass stars strongly dominate; a randomly drawn star is ~5× more likely to b
 
 ### Evolutionary State (EEP)
 
-The {term}`EEP` prior is uniform, which accounts for varying evolutionary timescales. Stars spend most of their lives on the main sequence (EEP ~300-450), so the uniform EEP prior naturally weights toward main sequence stars when combined with the age prior.
+The {term}`EEP` prior is uniform, which accounts for varying evolutionary timescales. Stars spend most of their lives on the main sequence (EEP 202 to 454), so the uniform EEP prior naturally weights toward main sequence stars when combined with the age prior.
 
 ### 3-D Stellar Density
 

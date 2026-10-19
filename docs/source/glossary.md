@@ -7,15 +7,15 @@ Quick reference for key terms used throughout the brutus documentation.
 ```{glossary}
 EEP
 Equivalent Evolutionary Point
-   A dimensionless index (typically 202-808) that parameterizes a star's evolutionary state independent of mass. Key values: 202 (pre-main sequence), 353 ({term}`ZAMS`), 454 ({term}`TAMS`), 605 (base of RGB). See {doc}`stellar_models` for details.
+   An index along an evolutionary track that marks the same phase on every track, whatever the mass. Key values: 202 ({term}`ZAMS`), 454 ({term}`TAMS`), 605 (tip of the red giant branch). The default grid spans 202 to 808. See {doc}`stellar_models` for the full list.
 
 ZAMS
 Zero-Age Main Sequence
-   The point when a star begins hydrogen fusion in its core (EEP ~ 353). Marks the start of the main sequence phase.
+   The point when a star begins hydrogen fusion in its core (EEP 202). Marks the start of the main sequence phase.
 
 TAMS
 Terminal-Age Main Sequence
-   The point when core hydrogen is exhausted (EEP ~ 454). The star then evolves off the main sequence toward the subgiant and red giant phases.
+   The point when core hydrogen is exhausted (EEP 454). The star then evolves off the main sequence toward the subgiant and red giant phases.
 
 isochrone
    A curve in the HR diagram connecting stars of the *same age* but different masses. Used for modeling stellar clusters where stars formed together. Compare with {term}`evolutionary track`.
