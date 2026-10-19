@@ -102,3 +102,21 @@ section:has(> .hero) > h1 {
   font-weight: 700;
   color: var(--brutus-copper);
 }
+
+/* Schematics in docs/source/figures/: inline SVG, so they follow the theme. */
+.figure-svg {
+  margin: 1.5rem 0 2rem;
+}
+.figure-svg svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.figure-svg:has(+ .figure-caption) {
+  margin-bottom: 0.6rem;
+}
+.figure-caption {
+  font-size: 0.9rem;
+  color: var(--color-foreground-secondary);
+  margin-bottom: 2rem;
+}
