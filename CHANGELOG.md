@@ -110,6 +110,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `logp_extinction` raises `ValueError` for a 3D dust map called without
+  `distance`, and `TypeError` when `dustmap.query` returns something other
+  than a tuple, list or array of length 2 or 3. Both cases returned the
+  uniform prior with no warning, which turned off the dust prior. A list or
+  array result is now read like a tuple.
 - `plotting.posterior_predictive` treats an integer 0/1 `data_mask` as a
   mask and raises `ValueError` for a mask of the wrong shape. It plotted
   band 0 and repeated band 1 in place of the unmasked bands.

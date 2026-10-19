@@ -228,10 +228,13 @@ def logp_extinction(
     Raises
     ------
     ValueError
-        If ``avlim`` is not two finite numbers with ``avlim[0] < avlim[1]``.
+        If ``avlim`` is not two finite numbers with ``avlim[0] < avlim[1]``,
+        or if a 3D dust map is given without ``distance``.
     TypeError
         If ``dustmap`` has no ``query`` method (e.g. a ``str`` or
-        ``pathlib.Path`` that was never loaded into a dust map object).
+        ``pathlib.Path`` that was never loaded into a dust map object), or
+        if ``dustmap.query`` returns anything but a tuple, list or array of
+        length 2 or 3.
 
     Notes
     -----
@@ -317,8 +320,19 @@ def logp_extinction(
             return lnprior, (np.nan, np.nan)
         return lnprior
 
+    if not (isinstance(result, (tuple, list, np.ndarray)) and len(result) in (2, 3)):
+        raise TypeError(
+            "dustmap.query must return (av_mean, av_std) or (distances, "
+            f"av_mean, av_std); got {result!r:.80}"
+        )
+
     # Handle 3D dust maps returning (distances, av_profile, std_profile)
-    if isinstance(result, tuple) and len(result) == 3:
+    if len(result) == 3:
+        if distance is None:
+            raise ValueError(
+                "distance is required with a 3D dust map: the prior is "
+                "interpolated along the map's distance profile"
+            )
         map_distances, av_profile, std_profile = result
 
         # Squeeze single-coordinate queries that return (1, n_dist) arrays
@@ -330,69 +344,63 @@ def logp_extinction(
         # spreads stay invalid; zero spreads become proper Gaussians.
         std_profile = _add_scatter(std_profile, scatter)
 
-        if distance is None:
-            # Cannot evaluate distance-dependent prior without distance
-            lnprior = np.full_like(avs, lnp_unif, dtype=float)
-            av_mean = np.nan
-            av_err = np.nan
-        else:
-            distance = np.asarray(distance, dtype=float)
+        distance = np.asarray(distance, dtype=float)
 
-            # Fast path: fused numba kernel (one binary search per point, no
-            # full-size temporaries) for the large elementwise-array case
-            # used by BruteForce (Nmc * Nsel points per object). The numpy
-            # branch below remains the fallback / NUMBA_DISABLE_JIT path.
-            map_d = np.ascontiguousarray(map_distances, dtype=np.float64)
-            av_p = np.ascontiguousarray(av_profile, dtype=np.float64)
-            std_p = np.ascontiguousarray(std_profile, dtype=np.float64)
-            if (
-                not return_components
-                and avs.ndim == 1
-                and distance.shape == avs.shape
-                and avs.size > 1000
-                and map_d.ndim == 1
-                and av_p.shape == map_d.shape
-                and std_p.shape == map_d.shape
-            ):
-                try:
-                    return _extinction_prior_3d_fused(
-                        avs,
-                        distance,
-                        map_d,
-                        av_p,
-                        std_p,
-                        av_lo,
-                        av_hi,
-                        lnp_unif,
-                    )
-                except Exception as e:
-                    warnings.warn(
-                        f"Numba fused extinction prior failed, falling back "
-                        f"to numpy: {e}",
-                        RuntimeWarning,
-                        stacklevel=2,
-                    )
+        # Fast path: fused numba kernel (one binary search per point, no
+        # full-size temporaries) for the large elementwise-array case
+        # used by BruteForce (Nmc * Nsel points per object). The numpy
+        # branch below remains the fallback / NUMBA_DISABLE_JIT path.
+        map_d = np.ascontiguousarray(map_distances, dtype=np.float64)
+        av_p = np.ascontiguousarray(av_profile, dtype=np.float64)
+        std_p = np.ascontiguousarray(std_profile, dtype=np.float64)
+        if (
+            not return_components
+            and avs.ndim == 1
+            and distance.shape == avs.shape
+            and avs.size > 1000
+            and map_d.ndim == 1
+            and av_p.shape == map_d.shape
+            and std_p.shape == map_d.shape
+        ):
+            try:
+                return _extinction_prior_3d_fused(
+                    avs,
+                    distance,
+                    map_d,
+                    av_p,
+                    std_p,
+                    av_lo,
+                    av_hi,
+                    lnp_unif,
+                )
+            except Exception as e:
+                warnings.warn(
+                    f"Numba fused extinction prior failed, falling back "
+                    f"to numpy: {e}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
 
-            # Interpolate dust map profiles to requested distance(s)
-            av_mean = np.interp(distance, map_distances, av_profile)
-            av_err = np.interp(distance, map_distances, std_profile)
+        # Interpolate dust map profiles to requested distance(s)
+        av_mean = np.interp(distance, map_distances, av_profile)
+        av_err = np.interp(distance, map_distances, std_profile)
 
-            # Compute Gaussian prior where valid
-            valid = np.isfinite(av_mean) & np.isfinite(av_err) & (av_err > 0)
+        # Compute Gaussian prior where valid
+        valid = np.isfinite(av_mean) & np.isfinite(av_err) & (av_err > 0)
 
-            lnprior = np.full_like(avs, lnp_unif, dtype=float)
-            if np.any(valid):
-                # Use safe denominator to avoid division by zero
-                av_err_safe = np.where(valid, av_err, 1.0)
-                chi2 = (avs - av_mean) ** 2 / av_err_safe**2
-                lnorm = np.log(2.0 * np.pi * av_err_safe**2)
-                lnprior = -0.5 * (chi2 + lnorm)
-                # Normalize over the physical support [av_lo, av_hi]
-                lnprior -= _log_truncnorm_z(av_mean, av_err_safe, av_lo, av_hi)
-                lnprior = np.where(valid, lnprior, lnp_unif)
+        lnprior = np.full_like(avs, lnp_unif, dtype=float)
+        if np.any(valid):
+            # Use safe denominator to avoid division by zero
+            av_err_safe = np.where(valid, av_err, 1.0)
+            chi2 = (avs - av_mean) ** 2 / av_err_safe**2
+            lnorm = np.log(2.0 * np.pi * av_err_safe**2)
+            lnprior = -0.5 * (chi2 + lnorm)
+            # Normalize over the physical support [av_lo, av_hi]
+            lnprior -= _log_truncnorm_z(av_mean, av_err_safe, av_lo, av_hi)
+            lnprior = np.where(valid, lnprior, lnp_unif)
 
     # Handle simple dust maps returning (av_mean, av_std)
-    elif isinstance(result, tuple) and len(result) == 2:
+    else:
         av_mean, av_err = result
         av_err = _add_scatter(av_err, scatter)
 
@@ -405,12 +413,6 @@ def logp_extinction(
         else:
             lnprior = np.full_like(avs, lnp_unif, dtype=float)
             av_mean, av_err = np.nan, np.nan
-
-    else:
-        # Unrecognized return format
-        lnprior = np.full_like(avs, lnp_unif, dtype=float)
-        av_mean = np.nan
-        av_err = np.nan
 
     if return_components:
         return lnprior, (av_mean, av_err)
