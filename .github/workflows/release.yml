@@ -10,9 +10,17 @@ name: Publish to PyPI
 #   TestPyPI: https://test.pypi.org/manage/project/astro-brutus/settings/publishing/
 # See https://docs.pypi.org/trusted-publishers/.
 #
-# The flow is: build -> publish to TestPyPI -> install from TestPyPI and import it
-# -> publish to PyPI. A release that cannot be installed from TestPyPI never
-# reaches PyPI. `skip-existing` keeps re-runs of an already-published tag green.
+# The flow is: build -> publish to TestPyPI -> check that TestPyPI serves this
+# build, install it and import it -> wait for the lead's approval -> publish to
+# PyPI. A release that cannot be installed never reaches PyPI. `skip-existing`
+# keeps re-runs of an already-published tag green; the sha256 check then catches
+# a stale upload. Re-run only the failed jobs: a new build job can use a newer
+# setuptools, whose wheel differs from the one on TestPyPI.
+#
+# Approval gate: the "pypi" environment requires a reviewer (joshspeagle), set in
+# the repository settings under Environments. The PyPI job waits until the lead
+# approves it there. The build job also fails unless the tagged commit is on
+# master.
 
 on:
   push:
@@ -25,6 +33,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history for the ancestry check
+
+      - name: Verify the tagged commit is on master
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/master; then
+            echo "::error::Tag $GITHUB_REF_NAME points to a commit that is not on master"
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -33,34 +50,15 @@ jobs:
 
       - name: Build and check distributions
         run: |
-          python -m pip install --upgrade pip build twine
+          python -m pip install --upgrade pip build twine trove-classifiers
+          # Timestamps from the commit make the wheel byte-identical when the
+          # same commit is built again (checked against TestPyPI below).
+          export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
           python -m build
           twine check --strict dist/*
 
-      # `twine check` does NOT validate classifiers against the trove list, but
-      # PyPI rejects unknown ones at upload time with a 400. An invalid
-      # "Operating System :: Microsoft :: Windows :: Windows Subsystem for Linux"
-      # classifier silently broke the 1.1.0 and 1.2.0 releases this way.
       - name: Validate trove classifiers
-        run: |
-          python -m pip install trove-classifiers
-          python - <<'PY'
-          import glob, sys, zipfile
-          from email.parser import BytesParser
-          from trove_classifiers import classifiers as VALID
-
-          whl = glob.glob("dist/*.whl")[0]
-          z = zipfile.ZipFile(whl)
-          meta_name = [n for n in z.namelist() if n.endswith(".dist-info/METADATA")][0]
-          meta = BytesParser().parsebytes(z.read(meta_name))
-          found = meta.get_all("Classifier") or []
-          bad = [c for c in found if c not in VALID]
-          for c in bad:
-              print(f"::error::invalid trove classifier: {c}")
-          if bad:
-              sys.exit(1)
-          print(f"all {len(found)} classifiers valid")
-          PY
+        run: python .github/scripts/check_dist.py
 
       - name: Verify the tag matches the package version
         run: |
@@ -105,29 +103,50 @@ jobs:
     needs: publish-testpypi
     runs-on: ubuntu-latest
     steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # Dependencies come from real PyPI; only astro-brutus itself is pulled from
-      # TestPyPI. The retry loop absorbs TestPyPI index propagation lag.
-      - name: Install the freshly published release
+      # Installing the local wheel takes every dependency from PyPI, so no
+      # package on TestPyPI can stand in for one.
+      - name: Install the built wheel
+        run: pip install dist/*.whl
+
+      # The retry loop absorbs TestPyPI index propagation lag.
+      - name: Download the release wheel from TestPyPI
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           for attempt in 1 2 3 4 5; do
-            if pip install \
+            if pip download --no-deps --only-binary=:all: \
                 --index-url https://test.pypi.org/simple/ \
-                --extra-index-url https://pypi.org/simple/ \
-                "astro-brutus==${VERSION}"; then
-              echo "installed on attempt ${attempt}"
+                -d testpypi/ "astro-brutus==${VERSION}"; then
+              echo "downloaded on attempt ${attempt}"
               exit 0
             fi
             echo "attempt ${attempt} failed; waiting for TestPyPI to propagate"
             sleep 15
           done
-          echo "::error::could not install astro-brutus==${VERSION} from TestPyPI"
+          echo "::error::could not download astro-brutus==${VERSION} from TestPyPI"
           exit 1
+
+      # With skip-existing, an earlier upload of the same version may be what
+      # TestPyPI serves; it must be byte-identical to this run's build.
+      - name: Check the TestPyPI wheel is this run's build
+        run: |
+          built=$(sha256sum dist/*.whl | cut -d' ' -f1)
+          served=$(sha256sum testpypi/*.whl | cut -d' ' -f1)
+          echo "built: $built ; served: $served"
+          if [ "$built" != "$served" ]; then
+            echo "::error::TestPyPI serves a different wheel for this version"
+            exit 1
+          fi
 
       - name: Import the package
         run: |

@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [ master, main ]
 
+# A new push to a pull request cancels the run of the commit it replaces. A
+# push to a branch gets its own group, so every commit on master is tested.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: true
+
 jobs:
   data:
     # Download the test data once per OS (instead of once per matrix leg) and
@@ -20,25 +26,37 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Cache test data files
-      uses: actions/cache@v4
-      id: cache-data
+    - name: Look up the test data cache
+      # Downloads nothing; the cache is restored below only on a miss.
+      uses: actions/cache/restore@v4
+      id: probe
       with:
         path: |
           ~/.cache/astro-brutus/
           ~/Library/Caches/astro-brutus/
-        key: brutus-data-v3-${{ runner.os }}-${{ hashFiles('src/brutus/data/download.py') }}
+        # The test job restores this key; keep the two equal.
+        key: brutus-data-v4-${{ runner.os }}-${{ hashFiles('src/brutus/data/download.py', '.github/scripts/fetch_test_data.py') }}
+        lookup-only: true
+
+    - name: Cache test data files
+      if: steps.probe.outputs.cache-hit != 'true'
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/astro-brutus/
+          ~/Library/Caches/astro-brutus/
+        key: ${{ steps.probe.outputs.cache-primary-key }}
         restore-keys: |
-          brutus-data-v3-${{ runner.os }}-
+          brutus-data-v4-${{ runner.os }}-
 
     - name: Set up Python
-      if: steps.cache-data.outputs.cache-hit != 'true'
-      uses: actions/setup-python@v4
+      if: steps.probe.outputs.cache-hit != 'true'
+      uses: actions/setup-python@v5
       with:
         python-version: "3.12"
 
     - name: Download test data files
-      if: steps.cache-data.outputs.cache-hit != 'true'
+      if: steps.probe.outputs.cache-hit != 'true'
       run: |
         python -m pip install --upgrade pip
         pip install -e .
@@ -51,34 +69,36 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
-        # Default legs install unpinned dependencies and therefore exercise
-        # numpy 2.x -- the version users actually get. Python 3.8 dropped
-        # (EOL Oct 2024); Windows is unsupported via healpy (use WSL, see README).
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        # Windows is unsupported via healpy (use WSL, see README).
+        # The jit: false legs disable numba, as the coverage leg must so that
+        # coverage can see inside @jit functions. One extra leg runs the
+        # compiled code that users run.
+        jit: [false]
         include:
-          # numpy 1.x floor-compatibility check
           - os: ubuntu-latest
-            python-version: "3.11"
-            numpy_spec: "numpy>=1.19,<2.0"
+            python-version: "3.10"
+            jit: false
+            coverage: true
+          - os: ubuntu-latest
+            python-version: "3.13"
+            jit: true
 
     steps:
     - uses: actions/checkout@v4
 
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
+        # The key changes only with pyproject.toml, so new dependency
+        # releases are downloaded until it changes.
+        cache: pip
+        cache-dependency-path: pyproject.toml
 
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip setuptools wheel
-        # The numpy 1.x floor leg pins numpy (and a compatible numba) explicitly;
-        # all other legs install unpinned and resolve numpy 2.x. brutus is pure
-        # Python and the numeric dependencies ship wheels for 3.9-3.13, so no
-        # build-isolation gymnastics are required.
-        if [ -n "${{ matrix.numpy_spec }}" ]; then
-          pip install "${{ matrix.numpy_spec }}" "numba<0.60"
-        fi
+        python -m pip install --upgrade pip
         pip install -e ".[test]"
 
     - name: Restore test data files
@@ -89,35 +109,38 @@ jobs:
         path: |
           ~/.cache/astro-brutus/
           ~/Library/Caches/astro-brutus/
-        key: brutus-data-v3-${{ runner.os }}-${{ hashFiles('src/brutus/data/download.py') }}
+        key: brutus-data-v4-${{ runner.os }}-${{ hashFiles('src/brutus/data/download.py', '.github/scripts/fetch_test_data.py') }}
         fail-on-cache-miss: true
+
+    - name: Cache the EEPTracks pickle
+      # EEPTracks writes its pickle next to the track file, inside the data
+      # directory. Its own small cache saves each leg the rebuild without
+      # touching the data cache. The key holds the Python version (the pickle
+      # holds scipy objects), the code that sets its format, and the data key's
+      # inputs (EEPTracks rebuilds a pickle older than the track file).
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/astro-brutus/MIST_1.2_EEPtrk_*.pkl
+          ~/Library/Caches/astro-brutus/MIST_1.2_EEPtrk_*.pkl
+        key: eeptracks-v1-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('src/brutus/core/individual.py', 'src/brutus/data/download.py', '.github/scripts/fetch_test_data.py') }}
 
     - name: Verify test data files
       # Hash-checks the restored files and symlinks them into data/DATAFILES;
       # with the cache restored this makes no network requests.
       run: python .github/scripts/fetch_test_data.py --no-retry
 
-    - name: Lint with flake8
-      run: |
-        # Install flake8 if it's not in test dependencies
-        pip install flake8
-        # Stop the build if there are Python syntax errors or undefined names
-        flake8 src/brutus --count --select=E9,F63,F7,F82 --show-source --statistics
-        # Exit-zero treats all errors as warnings. Line length is handled by black.
-        flake8 src/brutus --count --exit-zero --max-complexity=10 --max-line-length=88 --statistics
-
     - name: Test with pytest
       env:
-        NUMBA_DISABLE_JIT: 1
-      run: |
-        pytest tests/ -v --cov=brutus --cov-report=xml
+        NUMBA_DISABLE_JIT: ${{ matrix.jit && '0' || '1' }}
+      run: pytest tests/ -v ${{ matrix.coverage && '--cov=brutus --cov-report=xml' || '' }}
 
     - name: Upload coverage reports to Codecov
-      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.9'
+      if: matrix.coverage
       uses: codecov/codecov-action@v5
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
-        file: ./coverage.xml
+        files: ./coverage.xml
         flags: unittests
         name: codecov-umbrella
 
@@ -128,29 +151,15 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
-        python-version: "3.9"
+        python-version: "3.12"
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -e ".[dev]"
-
-    - name: Check formatting with black
-      run: |
-        black --check --diff src/brutus tests/
-
-    - name: Check import sorting with isort
-      run: |
-        isort --check-only --diff src/brutus tests/
-
-    # Type checking is currently optional - mypy has many false positives
-    # with scientific Python code (numpy, scipy, etc.)
-    # - name: Type checking with mypy
-    #   run: |
-    #     mypy src/brutus --ignore-missing-imports
-    #   continue-on-error: true
+    - name: Run pre-commit
+      # The same hooks and pinned versions that contributors run locally.
+      uses: pre-commit/action@v3.0.1
+      with:
+        extra_args: --all-files --show-diff-on-failure
 
   build:
     runs-on: ubuntu-latest
@@ -159,22 +168,25 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
-        python-version: "3.9"
+        python-version: "3.10"
 
     - name: Install build dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install build twine
+        pip install build twine trove-classifiers
 
     - name: Build package
       run: |
         python -m build
 
-    - name: Check package with twine
+    - name: Check package metadata
+      # The same checks as release.yml, so a bad classifier or README fails
+      # here and not after the tag is public.
       run: |
-        twine check dist/*
+        twine check --strict dist/*
+        python .github/scripts/check_dist.py
 
     - name: Test install from wheel
       run: |

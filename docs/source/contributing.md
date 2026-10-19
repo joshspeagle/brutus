@@ -46,7 +46,7 @@ pytest -m "not slow"
 NUMBA_DISABLE_JIT=1 pytest --cov=brutus
 ```
 
-CI runs the tests with `NUMBA_DISABLE_JIT=1`, so it never runs the compiled code. Before you push a change to a jitted function, run its tests locally with JIT on.
+CI runs the tests with `NUMBA_DISABLE_JIT=1` for coverage, plus one Ubuntu leg (Python 3.13) with JIT on. Before you push a change to a jitted function, still run its tests locally with JIT on.
 
 ## Code Style
 

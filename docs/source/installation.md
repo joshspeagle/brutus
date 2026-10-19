@@ -1,6 +1,6 @@
 # Installation
 
-brutus needs Python 3.9 or later on Linux or macOS. It installs from PyPI as `astro-brutus`:
+brutus needs Python 3.10 or later on Linux or macOS. It installs from PyPI as `astro-brutus`:
 
 ```bash
 pip install astro-brutus

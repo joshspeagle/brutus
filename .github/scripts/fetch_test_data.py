@@ -45,7 +45,7 @@ def fetch_with_backoff(label, fetcher, kwargs, waits):
     for attempt in range(len(waits) + 1):
         try:
             return fetcher(target_dir=DATA_DIR, **kwargs)
-        except Exception as e:  # noqa: BLE001 - network/HTTP errors vary
+        except Exception as e:  # network and HTTP errors vary
             if attempt == len(waits):
                 raise
             print(
@@ -68,7 +68,7 @@ def main():
         try:
             path = fetch_with_backoff(label, fetcher, kwargs, waits)
             print(f"   ok: {path}", flush=True)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             print(f"   FAILED: {e}", flush=True)
             if required:
                 failed_required.append(label)

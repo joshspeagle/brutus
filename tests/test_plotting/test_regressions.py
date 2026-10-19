@@ -27,9 +27,6 @@ from brutus.plotting.binning import bin_pdfs_distred
 from brutus.plotting.corner import cornerplot
 from brutus.plotting.distance import dist_vs_red
 
-# np.trapezoid is NumPy 2.0+; fall back to np.trapz on NumPy 1.x.
-_trapezoid = getattr(np, "trapezoid", None) or np.trapz
-
 
 class TestScaleToDistanceJacobian:
     """The SAR regeneration paths draw from a Gaussian proposal in scale
@@ -56,11 +53,11 @@ class TestScaleToDistanceJacobian:
         like = np.exp(-0.5 * ((d**-2 - cls.S0) / cls.SIG_S) ** 2)
         prior = np.exp(-0.5 * ((d - cls.D_MU) / cls.D_SIG) ** 2)
         p = like * prior
-        mean_correct = _trapezoid(d * p, d) / _trapezoid(p, d)
+        mean_correct = np.trapezoid(d * p, d) / np.trapezoid(p, d)
         # Old code: draws land in d with density ~ like * d^-3 (from the
         # scale-space proposal) but are reweighted by the prior alone.
         p_biased = like * prior * d**-3.0
-        mean_biased = _trapezoid(d * p_biased, d) / _trapezoid(p_biased, d)
+        mean_biased = np.trapezoid(d * p_biased, d) / np.trapezoid(p_biased, d)
         return mean_correct, mean_biased
 
     def test_bin_pdfs_distred_sar_matches_analytic_distance_posterior(self):

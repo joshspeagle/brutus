@@ -208,10 +208,6 @@ class TestExtinctionPriors:
             logp_extinction(avs, "bayestar2019_v1.h5", coord, distance=1.0)
 
 
-# np.trapezoid is the NumPy 2.0 name for np.trapz; CI also tests NumPy 1.x
-_trapezoid = getattr(np, "trapezoid", None) or np.trapz
-
-
 class TestExtinctionAvlimValidation:
     """Degenerate avlim bounds must raise instead of silently corrupting
     the truncation normalization."""
@@ -292,7 +288,7 @@ class TestExtinctionTruncatedNormalization:
             lp = logp_extinction(
                 av_grid, self.map, None, distance=np.full_like(av_grid, d)
             )
-            integral = _trapezoid(np.exp(lp), av_grid)
+            integral = np.trapezoid(np.exp(lp), av_grid)
             assert np.isclose(integral, 1.0, rtol=1e-3)
 
     def test_avlim_none_gives_plain_gaussian(self):
@@ -321,7 +317,7 @@ class TestExtinctionTruncatedNormalization:
         dustmap.query.return_value = (0.05, 0.1)  # mu within 0.5 sigma of 0
         av_grid = np.linspace(0.0, 20.0, 200001)
         lp = logp_extinction(av_grid, dustmap, None)
-        integral = _trapezoid(np.exp(lp), av_grid)
+        integral = np.trapezoid(np.exp(lp), av_grid)
         assert np.isclose(integral, 1.0, rtol=1e-3)
 
 
