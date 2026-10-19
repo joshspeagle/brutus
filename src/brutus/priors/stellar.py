@@ -133,13 +133,21 @@ def logp_imf(
         Minimum mass for normalization (hydrogen burning limit).
         Default is 0.08 solar masses.
     mass_max : float, optional
-        Maximum mass for normalization. Default is 100.0 solar masses.
+        Maximum mass for normalization. It may be ``np.inf`` when
+        ``alpha_high > 1``. Default is 100.0 solar masses.
 
     Returns
     -------
     logp : array_like
         Normalized log-prior probability density for the input mass grid(s).
         Masses below mass_min or above mass_max get `LOG_ZERO` (-1e300).
+
+    Raises
+    ------
+    ValueError
+        If ``mass_min`` or ``mass_break`` is not finite and positive, if
+        ``mass_max`` does not exceed ``mass_min``, or if a slope is not
+        finite.
 
     See Also
     --------
@@ -162,6 +170,21 @@ def logp_imf(
     ----------
     Kroupa, P. (2001), MNRAS, 322, 231
     """
+    for name, value in (
+        ("mass_min", mass_min),
+        ("mass_break", mass_break),
+    ):
+        if not (np.isfinite(value) and value > 0):
+            raise ValueError(f"`{name}` must be finite and > 0; got {value}.")
+    if not mass_max > mass_min:
+        raise ValueError(
+            f"`mass_max` must exceed `mass_min`; got mass_min={mass_min}, "
+            f"mass_max={mass_max}."
+        )
+    for name, value in (("alpha_low", alpha_low), ("alpha_high", alpha_high)):
+        if not np.isfinite(value):
+            raise ValueError(f"`{name}` must be finite; got {value}.")
+
     logp = _log_imf_unnormalized(
         mgrid, alpha_low, alpha_high, mass_min, mass_break, mass_max
     )
@@ -171,11 +194,6 @@ def logp_imf(
     # high-mass piece carries the continuity factor
     # mass_break^(alpha_high - alpha_low) so the density is continuous at
     # mass_break.
-    if mass_min <= 0 or mass_max <= mass_min:
-        raise ValueError(
-            f"Invalid mass range: require 0 < mass_min < mass_max, "
-            f"got mass_min={mass_min}, mass_max={mass_max}."
-        )
     continuity_factor = mass_break ** (alpha_high - alpha_low)
     if mass_min < mass_break <= mass_max:
         # Range straddles the break: both regimes contribute

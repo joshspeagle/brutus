@@ -121,6 +121,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and age priors. A scalar distance with `labels` or `feh` now works. The
   fused kernels of the Galactic and extinction priors no longer catch every
   error and fall back to numpy with a warning.
+- `logp_imf` raises `ValueError` naming the argument for a `mass_min` or
+  `mass_break` that is not finite and positive, a `mass_max` that does not
+  exceed `mass_min`, or a slope that is not finite. A NaN `mass_break`
+  returned `-inf` everywhere.
 - `plotting.posterior_predictive` treats an integer 0/1 `data_mask` as a
   mask and raises `ValueError` for a mask of the wrong shape. It plotted
   band 0 and repeated band 1 in place of the unmasked bands.

@@ -334,3 +334,19 @@ class TestIMFNormalization:
             logp_imf(np.array([1.0]), mass_min=2.0, mass_max=1.0)
         with pytest.raises(ValueError):
             logp_imf(np.array([1.0]), mass_min=0.0)
+
+    @pytest.mark.parametrize(
+        "kwargs, name",
+        [
+            ({"mass_break": np.nan}, "mass_break"),
+            ({"mass_break": -0.5}, "mass_break"),
+            ({"alpha_low": np.nan}, "alpha_low"),
+            ({"alpha_high": np.inf}, "alpha_high"),
+        ],
+    )
+    def test_invalid_hyperparameter_raises_naming_it(self, kwargs, name):
+        with pytest.raises(ValueError, match=name):
+            logp_imf(np.array([0.1, 0.3, 1.0, 5.0]), **kwargs)
+
+    def test_infinite_mass_max_is_normalized(self):
+        assert np.isclose(self._integral(0.08, np.inf), 1.0)
