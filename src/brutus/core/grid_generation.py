@@ -265,7 +265,7 @@ class GridGenerator:
 
         afe_grid : numpy.ndarray, optional
             Grid of [α/Fe] alpha enhancement values. If None, defaults to
-            np.arange(-0.2, 0.6, 0.2).
+            np.arange(-0.2, 0.6 + 1e-5, 0.2), five values from -0.2 to +0.6.
 
         smf_grid : numpy.ndarray, optional
             Grid of secondary mass fractions for binaries. If None, defaults
