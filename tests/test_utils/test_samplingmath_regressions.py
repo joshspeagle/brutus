@@ -171,6 +171,41 @@ class TestInverse3RelativeThreshold:
         A = np.diag([1e10, 1e-10, 1.0])
         np.testing.assert_allclose(inverse3(A), np.diag([1e-10, 1e10, 1.0]), rtol=1e-12)
 
+    def test_batch_regularization_matches_single_matrix_path(self):
+        """Ill-conditioned correlation matrices: the batched min-eigenvalue
+        check cancelled and shifted matrices the single path left alone."""
+        from scipy.stats import special_ortho_group
+
+        from brutus.utils import inverse3
+
+        rng = np.random.default_rng(3)
+        N = 5000
+        Q = special_ortho_group.rvs(3, size=N, random_state=4)
+        lam = np.stack(
+            [10 ** rng.uniform(-9.5, -2, N), rng.uniform(0.1, 1, N), np.ones(N)], 1
+        )
+        P = np.einsum("nij,nj,nkj->nik", Q, lam, Q)
+        d = 1 / np.sqrt(np.diagonal(P, axis1=1, axis2=2))
+        P = P * d[:, :, None] * d[:, None, :]
+        single = np.stack([inverse3(p, regularize=True) for p in P])
+        np.testing.assert_allclose(inverse3(P, regularize=True), single, rtol=1e-6)
+
+    @pytest.mark.parametrize("regularize", [False, True])
+    @pytest.mark.parametrize("shape", [(3, 3), (2, 3, 3)])
+    def test_integer_input_gives_float_inverse(self, regularize, shape):
+        from brutus.utils import inverse3
+
+        A = np.broadcast_to(2 * np.eye(3, dtype=int), shape)
+        expected = np.broadcast_to(0.5 * np.eye(3), shape)
+        np.testing.assert_allclose(inverse3(A, regularize=regularize), expected)
+
+    @pytest.mark.parametrize("shape", [(3,), (2, 4, 3, 3), (2, 3, 4)])
+    def test_bad_shape_raises(self, shape):
+        from brutus.utils import inverse3
+
+        with pytest.raises(ValueError, match="`A`"):
+            inverse3(np.ones(shape))
+
 
 # ---------------------------------------------------------------------------
 # 3. PSD-safe Cholesky and singular covariances in the batched sampler

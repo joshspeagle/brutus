@@ -1647,7 +1647,7 @@ class BruteForce:
         # before inversion for numerical stability. Small alpha (e.g., 0.05)
         # regularizes the off-diagonal cross-terms which carry the most
         # inversion error at high condition numbers. Default: no shrinkage
-        # (alpha=0), relying on the exact eigvalsh regularization in _inverse3.
+        # (alpha=0), relying on the eigenvalue regularization in _inverse3.
         if precision_shrinkage > 0:
             off_diag_mask = ~np.eye(3, dtype=bool)
             icov_lnd[:, off_diag_mask] *= 1.0 - precision_shrinkage

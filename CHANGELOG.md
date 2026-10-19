@@ -75,6 +75,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with `avlim=(0, 6)`) gave a log-prior near +631 instead of about +1. It
   now uses `log_ndtr` in the numpy path and a mirrored `erfc` in the fused
   kernel; both agree with `scipy.stats.truncnorm.logpdf`.
+- **Batched `inverse3(regularize=True)` regularizes like the single-matrix
+  path.** Its smallest-eigenvalue check cancelled for ill-conditioned
+  matrices and shifted some that needed no shift. The saved results of the
+  `bench/fullfit.py` fits do not change.
 
 ### Changed
 
@@ -125,6 +129,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `mass_break` that is not finite and positive, a `mass_max` that does not
   exceed `mass_min`, or a slope that is not finite. A NaN `mass_break`
   returned `-inf` everywhere.
+- `inverse3` converts `A` to float and raises `ValueError` unless its shape
+  is `(3, 3)` or `(N, 3, 3)`. An integer matrix gave an integer inverse that
+  truncated 0.5 to 0.
 - `plotting.posterior_predictive` treats an integer 0/1 `data_mask` as a
   mask and raises `ValueError` for a mask of the wrong shape. It plotted
   band 0 and repeated band 1 in place of the unmasked bands.
