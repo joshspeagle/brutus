@@ -178,15 +178,18 @@ jobs:
     - name: Install build dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install build twine
+        pip install build twine trove-classifiers
 
     - name: Build package
       run: |
         python -m build
 
-    - name: Check package with twine
+    - name: Check package metadata
+      # The same checks as release.yml, so a bad classifier or README fails
+      # here and not after the tag is public.
       run: |
-        twine check dist/*
+        twine check --strict dist/*
+        python .github/scripts/check_dist.py
 
     - name: Test install from wheel
       run: |

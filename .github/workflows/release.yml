@@ -33,34 +33,12 @@ jobs:
 
       - name: Build and check distributions
         run: |
-          python -m pip install --upgrade pip build twine
+          python -m pip install --upgrade pip build twine trove-classifiers
           python -m build
           twine check --strict dist/*
 
-      # `twine check` does NOT validate classifiers against the trove list, but
-      # PyPI rejects unknown ones at upload time with a 400. An invalid
-      # "Operating System :: Microsoft :: Windows :: Windows Subsystem for Linux"
-      # classifier silently broke the 1.1.0 and 1.2.0 releases this way.
       - name: Validate trove classifiers
-        run: |
-          python -m pip install trove-classifiers
-          python - <<'PY'
-          import glob, sys, zipfile
-          from email.parser import BytesParser
-          from trove_classifiers import classifiers as VALID
-
-          whl = glob.glob("dist/*.whl")[0]
-          z = zipfile.ZipFile(whl)
-          meta_name = [n for n in z.namelist() if n.endswith(".dist-info/METADATA")][0]
-          meta = BytesParser().parsebytes(z.read(meta_name))
-          found = meta.get_all("Classifier") or []
-          bad = [c for c in found if c not in VALID]
-          for c in bad:
-              print(f"::error::invalid trove classifier: {c}")
-          if bad:
-              sys.exit(1)
-          print(f"all {len(found)} classifiers valid")
-          PY
+        run: python .github/scripts/check_dist.py
 
       - name: Verify the tag matches the package version
         run: |
