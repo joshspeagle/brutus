@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`BruteForce` passes `avlim` to the default dust prior**, so its
   truncation and uniform normalization match the fitted A(V) range (custom
   `lndustprior` functions keep the 4-argument signature).
+- **An integer 0/1 `data_mask` masks bands** in `BruteForce.fit` and
+  `loglike_grid`. It was used as an index array, so the fit used band 0 and
+  repeated band 1 in place of the masked selection. Boolean masks give the
+  same results as before. `loglike_grid` no longer changes the caller's
+  `data_mask`, `av_init` or `rv_init`.
 
 ### Changed
 

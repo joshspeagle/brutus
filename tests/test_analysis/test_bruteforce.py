@@ -1875,3 +1875,31 @@ class TestDustPriorGating:
                 dustfile=object(),
                 data_coords=None,
             )
+
+
+class TestMaskAndInputs:
+    def test_int_mask_gives_same_lnl_as_bool_mask(self, fitter, observation):
+        flux, flux_err, _ = observation
+        flux = flux.copy()
+        flux[0] *= 3.0  # corrupt the masked band
+        int_mask = np.array([0, 1, 1, 1, 1])
+        lnl_int, ndim_int, _ = fitter.loglike_grid(flux, flux_err, int_mask)
+        lnl_bool, ndim_bool, _ = fitter.loglike_grid(
+            flux, flux_err, int_mask.astype(bool)
+        )
+        assert ndim_int == ndim_bool == 4
+        np.testing.assert_array_equal(lnl_int, lnl_bool)
+
+    def test_loglike_grid_leaves_inputs_unchanged(self, fitter, observation):
+        flux, flux_err, _ = observation
+        flux = flux.copy()
+        flux[2] = np.nan
+        mask = np.ones(5, dtype=bool)
+        av_init = np.full(fitter.nmodels, 0.5)
+        rv_init = np.full(fitter.nmodels, 3.3)
+        fitter.loglike_grid(
+            flux, flux_err, mask, av_init=av_init, rv_init=rv_init, return_vals=True
+        )
+        assert mask.all()
+        np.testing.assert_array_equal(av_init, 0.5)
+        np.testing.assert_array_equal(rv_init, 3.3)

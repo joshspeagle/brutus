@@ -85,6 +85,26 @@ def _get_seds(mag_coeffs, av, rv, return_flux=False):
     return seds, rvecs, drvecs
 
 
+def _model_array(value, default, nmodels, name):
+    """Return `value` as a float64 array of shape (nmodels,).
+
+    None gives `default` for every model, and a scalar is broadcast. The numba
+    kernels index ``value[i]`` for ``i < nmodels`` with no bounds check, so a
+    wrong length raises here instead of reading out-of-bounds memory.
+    """
+    if value is None:
+        return np.full(nmodels, float(default))
+    value = np.asarray(value, dtype=np.float64)
+    if value.ndim == 0:
+        return np.full(nmodels, float(value))
+    if value.shape != (nmodels,):
+        raise ValueError(
+            f"`{name}` must be a scalar or have shape ({nmodels},), one value "
+            f"per model; got shape {value.shape}."
+        )
+    return np.ascontiguousarray(value)
+
+
 def get_seds(
     mag_coeffs,
     av=None,
@@ -179,27 +199,8 @@ def get_seds(
     """
     Nmodels, Nbands, Ncoef = mag_coeffs.shape
 
-    def _coerce(value, default, name):
-        # Coerce to a float64 (Nmodels,) array. The numba kernel indexes
-        # value[i] for i in range(Nmodels) with NO bounds checking, so a
-        # short array would silently read out-of-bounds memory; validate the
-        # length here. np.asarray also handles numpy scalars (np.float32,
-        # 0-d arrays) that the old isinstance(int, float) check rejected
-        # with an opaque numba TypingError.
-        if value is None:
-            return np.full(Nmodels, default)
-        value = np.asarray(value, dtype=np.float64)
-        if value.ndim == 0:
-            return np.full(Nmodels, float(value))
-        if value.shape != (Nmodels,):
-            raise ValueError(
-                f"`{name}` must be a scalar or have shape ({Nmodels},) to "
-                f"match `mag_coeffs`; got shape {value.shape}."
-            )
-        return np.ascontiguousarray(value)
-
-    av = _coerce(av, 0.0, "av")
-    rv = _coerce(rv, 3.3, "rv")
+    av = _model_array(av, 0.0, Nmodels, "av")
+    rv = _model_array(rv, 3.3, Nmodels, "rv")
 
     # Compute SEDs using the core function
     seds, rvecs, drvecs = _get_seds(mag_coeffs, av, rv, return_flux=return_flux)

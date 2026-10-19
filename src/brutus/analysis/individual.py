@@ -78,7 +78,7 @@ from scipy.special import logsumexp
 
 # Import StarGrid and SED utilities
 from ..core import StarGrid
-from ..core.sed_utils import _get_seds
+from ..core.sed_utils import _get_seds, _model_array
 from ..priors.astrometric import logp_parallax, logp_parallax_scale
 from ..priors.extinction import logp_extinction
 from ..priors.galactic import logp_galactic_structure
@@ -1152,7 +1152,7 @@ class BruteForce:
             Measurement errors.
 
         data_mask : `~numpy.ndarray` of shape `(Nfilt)`
-            Binary mask for valid data.
+            Boolean mask of valid bands (or 0/1 values, converted to bool).
 
         indices : array-like, optional
             Subset of model indices to use. If None, uses all models.
@@ -1222,12 +1222,16 @@ class BruteForce:
         # Implementation of grid-based likelihood computation
         Nmodels, Nfilt, Ncoef = mag_coeffs.shape
 
-        # Clean data
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+        # Clean data. A new mask, so the caller's array is left unchanged.
+        data_mask = np.asarray(data_mask, dtype=bool)
+        if data_mask.shape != (Nfilt,):
+            raise ValueError(
+                f"data_mask must have shape ({Nfilt},), got {data_mask.shape}"
+            )
+        with np.errstate(invalid="ignore"):
             clean = np.isfinite(data) & np.isfinite(data_err) & (data_err > 0.0)
-            data_mask[~clean] = False
-        Ndim = sum(data_mask)
+        data_mask = data_mask & clean
+        Ndim = int(data_mask.sum())
 
         if Ndim == 0:
             # Fail fast with a clear message. With zero valid bands the
@@ -1275,11 +1279,10 @@ class BruteForce:
             # in logpost_grid."  A huge sigma effectively removes the prior.
             rv_gauss = (3.32, 1e6)
 
-        # Initialize values
-        if av_init is None:
-            av_init = np.zeros(Nmodels) + av_gauss[0]
-        if rv_init is None:
-            rv_init = np.zeros(Nmodels) + rv_gauss[0]
+        # Initialize values. The optimizers update these arrays in place, so
+        # they are copies, never the caller's arrays.
+        av_init = _model_array(av_init, av_gauss[0], Nmodels, "av_init").copy()
+        rv_init = _model_array(rv_init, rv_gauss[0], Nmodels, "rv_init").copy()
 
         # Compute unreddened photometry and the initial data residual in a
         # single fused parallel pass (replaces _get_seds + `mags - models`).
@@ -1842,7 +1845,8 @@ class BruteForce:
             Associated errors on the flux densities.
 
         data_mask : numpy.ndarray of shape (Ndata, Nfilt)
-            Binary mask (0/1) indicating whether each measurement is valid.
+            Boolean mask of valid measurements (or 0/1 values, converted to
+            bool).
 
         data_labels : numpy.ndarray of shape (Ndata, Nlabels)
             Labels for each object to be stored in the output file.
@@ -2047,6 +2051,13 @@ class BruteForce:
             from ..dust import Bayestar
 
             dustfile = Bayestar(dustfile=dustfile)
+
+        data_mask = np.asarray(data_mask, dtype=bool)
+        if data_mask.shape != np.shape(data):
+            raise ValueError(
+                f"data_mask must have the shape of data {np.shape(data)}, "
+                f"got {data_mask.shape}"
+            )
 
         # Pre-process data and initialize priors
         setup_results = self._setup(
