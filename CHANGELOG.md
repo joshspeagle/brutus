@@ -62,6 +62,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   such an object (`Ndim - dof_reduction <= 0`, for example all bands NaN)
   `-inf`, which made the cluster log-likelihood `-inf` for every parameter.
   It now gets 0, the same as with `dim_prior=False`.
+- **`truncnorm_logpdf` and `logp_imf` return `LOG_ZERO` (-1e300)** for
+  zero probability, not `-inf`, as the rest of brutus does. The fused and
+  numpy paths of `logp_galactic_structure` now agree for ages above
+  `max_age` (they gave -1e300 and -inf). `truncnorm_logpdf` and
+  `truncnorm_pdf` accept numpy scalars and 0-d arrays, so
+  `logp_age_from_feh(5.0)` no longer raises `TypeError`. The value
+  `LOG_ZERO` lives in `brutus.utils.math`.
 
 ### Changed
 

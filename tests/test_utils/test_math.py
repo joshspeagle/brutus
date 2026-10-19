@@ -170,14 +170,20 @@ class TestStatisticalDistributions:
         """Test truncated normal log-PDF outside bounds."""
         from brutus.utils.math import truncnorm_logpdf
 
-        # Values outside bounds should have log-PDF = -inf
-        x = np.array([-5.0, 5.0])
-        a, b = -2.0, 2.0
+        # Values outside bounds get LOG_ZERO, not -inf
+        result = truncnorm_logpdf(np.array([-5.0, 5.0]), -2.0, 2.0)
+        np.testing.assert_array_equal(result, [-1e300, -1e300])
 
-        result = truncnorm_logpdf(x, a, b)
-        expected = np.array([-np.inf, -np.inf])
+    @pytest.mark.parametrize(
+        "x", [0.5, np.asarray(0.5), np.float32(0.5), np.float64(0.5), np.int64(0)]
+    )
+    def test_truncnorm_accepts_scalars(self, x):
+        from brutus.utils.math import truncnorm_logpdf, truncnorm_pdf
 
-        np.testing.assert_array_equal(result, expected)
+        lnp = truncnorm_logpdf(x, -1.0, 1.0)
+        assert np.ndim(lnp) == 0
+        assert lnp == truncnorm_logpdf(np.array([float(x)]), -1.0, 1.0)[0]
+        assert truncnorm_pdf(x, -1.0, 1.0) == np.exp(lnp)
 
 
 class TestMathEdgeCases:

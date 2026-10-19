@@ -511,3 +511,23 @@ class TestLegacyImportFallback:
         # The fact that this works means logsumexp was imported correctly
         assert np.all(np.isfinite(logp))
         assert len(logp) == 3
+
+
+class TestLogZeroBeyondMaxAge:
+    def test_fused_and_numpy_paths_agree_beyond_max_age(self):
+        # Arrays of more than 1000 distances take the fused kernel.
+        for n in (1000, 1001):
+            lnp = logp_galactic_structure(
+                np.full(n, 1.0),
+                (30.0, 10.0),
+                feh=np.zeros(n),
+                loga=np.full(n, 10.2),
+            )
+            np.testing.assert_array_equal(lnp, -1e300)
+
+    def test_age_prior_accepts_scalar_age(self):
+        from brutus.priors.galactic import logp_age_from_feh
+
+        lnp = logp_age_from_feh(5.0)
+        assert np.isfinite(lnp)
+        assert lnp == logp_age_from_feh(np.array([5.0]))[0]

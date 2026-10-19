@@ -61,6 +61,10 @@ import numpy as np
 from numba import jit, prange
 from scipy.special import log_ndtr
 
+# Proxy for log(0) in log-probabilities. It stays finite under arithmetic,
+# where -inf would give NaN (for example -inf - -inf).
+LOG_ZERO = -1e300
+
 __all__ = [
     "galactic_to_galactocentric_cyl",
     "inverse3",
@@ -553,27 +557,9 @@ def truncnorm_pdf(x, a, b, loc=0.0, scale=1.0):
     Returns
     -------
     ans : `~numpy.ndarray` of shape `(N)` or float
-        The PDF values.
+        The PDF values: 0 outside the bounds, and a scalar for scalar `x`.
     """
-    _a = scale * a + loc
-    _b = scale * b + loc
-    xi = (x - loc) / scale
-
-    # Exponentiate the log-density so the normalization shares the
-    # tail-stable log-space computation (a direct CDF difference underflows
-    # to 0 for same-side bounds beyond ~8 sigma, yielding inf here).
-    lnphi = -np.log(np.sqrt(2.0 * np.pi)) - 0.5 * np.square(xi)
-    lndenom = np.log(scale) + _truncnorm_lognorm(a, b)
-    ans = np.exp(lnphi - lndenom)
-
-    if not isinstance(x, (float, int)):
-        keys = np.logical_or(x < _a, x > _b)
-        ans[keys] = 0
-    else:
-        if x < _a or x > _b:
-            ans = 0
-
-    return ans
+    return np.exp(truncnorm_logpdf(x, a, b, loc=loc, scale=scale))
 
 
 def truncnorm_logpdf(x, a, b, loc=0.0, scale=1.0):
@@ -606,29 +592,19 @@ def truncnorm_logpdf(x, a, b, loc=0.0, scale=1.0):
     Returns
     -------
     ans : `~numpy.ndarray` of shape `(N)` or float
-        The natural log PDF values.
+        The natural log PDF values: `LOG_ZERO` (-1e300) outside the
+        bounds, and a scalar for scalar `x`.
     """
+    x = np.asarray(x, dtype=float)
     _a = scale * a + loc
     _b = scale * b + loc
-
     xi = (x - loc) / scale
 
     lnphi = -np.log(np.sqrt(2 * np.pi)) - 0.5 * np.square(xi)
-    # Tail-stable normalization: an erf difference underflows to 0 for
-    # same-side bounds beyond ~8 sigma, which (with the old 1e-300 clamp)
-    # returned wildly wrong finite values instead of the correct log-mass.
+    # The log-mass is tail-stable: an erf difference underflows to 0 for
+    # same-side bounds beyond about 8 sigma.
     lndenom = np.log(scale) + _truncnorm_lognorm(a, b)
-
-    ans = np.subtract(lnphi, lndenom)
-
-    if not isinstance(x, (float, int)):
-        keys = np.logical_or(x < _a, x > _b)
-        ans[keys] = -np.inf
-    else:
-        if x < _a or x > _b:
-            ans = -np.inf
-
-    return ans
+    return np.where((x < _a) | (x > _b), LOG_ZERO, lnphi - lndenom)[()]
 
 
 def galactic_to_galactocentric_cyl(dists, ell, b, R_solar=8.2, Z_solar=0.025):

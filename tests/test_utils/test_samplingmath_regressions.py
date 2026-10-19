@@ -82,9 +82,10 @@ class TestTruncnormTailStability:
             scipy.stats.truncnorm.pdf(x, -2.0, 2.0),
             rtol=1e-12,
         )
+        # brutus returns LOG_ZERO (-1e300) where scipy returns -inf
         np.testing.assert_allclose(
             truncnorm_logpdf(x, -2.0, 2.0),
-            scipy.stats.truncnorm.logpdf(x, -2.0, 2.0),
+            np.maximum(scipy.stats.truncnorm.logpdf(x, -2.0, 2.0), -1e300),
             rtol=1e-12,
         )
         # loc/scale

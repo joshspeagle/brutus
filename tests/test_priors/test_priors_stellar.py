@@ -32,7 +32,7 @@ class TestStellarPriors:
         # Below hydrogen burning limit
         low_masses = np.array([0.05, 0.07])
         logp_low = logp_imf(low_masses)
-        assert np.all(logp_low == -np.inf)
+        assert np.all(logp_low == -1e300)
 
         # Valid masses
         valid_masses = np.array([0.1, 0.5, 1.0, 10.0])
@@ -142,7 +142,7 @@ class TestNumericalStability:
         # Very large masses beyond default mass_max=100 should return -inf
         large_masses = np.array([1e6, 1e10])
         logp_imf_large = logp_imf(large_masses)
-        assert np.all(logp_imf_large == -np.inf)
+        assert np.all(logp_imf_large == -1e300)
 
         # Large masses within custom mass_max should be finite
         logp_imf_custom = logp_imf(large_masses, mass_max=1e11)

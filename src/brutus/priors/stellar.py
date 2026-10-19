@@ -64,6 +64,8 @@ Luminosity function prior:
 
 import numpy as np
 
+from ..utils.math import LOG_ZERO
+
 __all__ = ["logp_imf", "logp_ps1_luminosity_function"]
 
 
@@ -123,7 +125,7 @@ def logp_imf(
     -------
     logp : array_like
         Normalized log-prior probability density for the input mass grid(s).
-        Returns -inf for masses below mass_min or above mass_max.
+        Masses below mass_min or above mass_max get `LOG_ZERO` (-1e300).
 
     See Also
     --------
@@ -148,8 +150,8 @@ def logp_imf(
     """
     mgrid = np.asarray(mgrid)
 
-    # Initialize log-prior with -inf for invalid masses
-    logp = np.full_like(mgrid, -np.inf, dtype=float)
+    # Initialize log-prior with LOG_ZERO for invalid masses
+    logp = np.full_like(mgrid, LOG_ZERO, dtype=float)
 
     # Valid mass range
     valid_mass = (mgrid >= mass_min) & (mgrid <= mass_max)
@@ -201,7 +203,7 @@ def logp_imf(
         mgrid2 = np.asarray(mgrid2)
 
         # Compute prior for secondary
-        logp2 = np.full_like(mgrid2, -np.inf, dtype=float)
+        logp2 = np.full_like(mgrid2, LOG_ZERO, dtype=float)
 
         valid_mass2 = (mgrid2 >= mass_min) & (mgrid2 <= mass_max)
         low_mass2 = valid_mass2 & (mgrid2 <= mass_break)

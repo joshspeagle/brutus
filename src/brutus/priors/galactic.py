@@ -80,7 +80,7 @@ from numba import jit, prange
 
 # Import utility functions from brutus.utils
 from brutus.utils import truncnorm_logpdf
-from brutus.utils.math import galactic_to_galactocentric_cyl
+from brutus.utils.math import LOG_ZERO, galactic_to_galactocentric_cyl
 
 _LOG_2PI = log(2.0 * pi)
 _SQRT2 = sqrt(2.0)
@@ -305,7 +305,7 @@ def _galactic_prior_fused(
                 ln_w_halo = lnp_halo - logp_total
 
             # Compute truncated normal for each component
-            age_lnp_total = -1e300
+            age_lnp_total = LOG_ZERO
             for comp_idx in range(3):
                 if comp_idx == 0:
                     ln_w = ln_w_thin
@@ -320,7 +320,7 @@ def _galactic_prior_fused(
 
                 # Bounds check
                 if age_val < min_age or age_val > max_age:
-                    age_comp = -1e300
+                    age_comp = LOG_ZERO
 
                 # Accumulate logsumexp
                 if age_comp > age_lnp_total:

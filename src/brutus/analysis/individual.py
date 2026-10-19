@@ -88,6 +88,7 @@ from ..priors.galactic import logp_galactic_structure
 from ..priors.stellar import logp_imf, logp_ps1_luminosity_function
 
 # Import utility functions
+from ..utils.math import LOG_ZERO
 from ..utils.math import inverse3 as _inverse3
 from ..utils.photometry import magnitude
 from ..utils.sampling import sample_multivariate_normal
@@ -98,10 +99,6 @@ __all__ = ["BruteForce"]
 # ============================================================================
 # Numerical constants
 # ============================================================================
-
-# Proxy for log(0) or negative infinity in log-probability calculations.
-# Used instead of -np.inf to avoid numerical issues with arithmetic operations.
-LOG_ZERO = -1e300
 
 # Minimum allowed scale factor to prevent division by zero or log(0).
 MIN_SCALE = 1e-20
