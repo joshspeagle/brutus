@@ -1,162 +1,11 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
+"""Tests of load_models and load_offsets in brutus.data.loader."""
 
-"""
-Comprehensive tests for brutus data utilities.
-
-This test suite includes:
-1. Unit tests for data downloading and loading functions
-2. Comparison tests between old and new implementations
-3. Integration tests for realistic data workflows
-4. Mock tests that don't require actual downloads
-"""
-
-import os
-from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
 import pytest
 
-
-class TestDataDownloadFunctions:
-    """Unit tests for data downloading functions."""
-
-    @patch("brutus.data.download._fetch")
-    def test_fetch_isos_basic(self, mock_fetch):
-        """Test basic fetch_isos functionality."""
-        from brutus.data.download import fetch_isos
-
-        # Mock the _fetch function
-        mock_fetch.return_value = Path("/fake/path/MIST_1.2_iso_vvcrit0.0.h5")
-
-        # Test default parameters
-        result = fetch_isos()
-
-        mock_fetch.assert_called_once_with("MIST_1.2_iso_vvcrit0.0.h5", ".")
-        assert result == Path("/fake/path/MIST_1.2_iso_vvcrit0.0.h5")
-
-    @patch("brutus.data.download._fetch")
-    def test_fetch_isos_rotating(self, mock_fetch):
-        """Test fetch_isos with rotating models."""
-        from brutus.data.download import fetch_isos
-
-        mock_fetch.return_value = Path("/fake/path/MIST_1.2_iso_vvcrit0.4.h5")
-
-        result = fetch_isos(target_dir="/tmp", iso="MIST_1.2_vvcrit0.4")
-
-        mock_fetch.assert_called_once_with("MIST_1.2_iso_vvcrit0.4.h5", "/tmp")
-        assert result == Path("/fake/path/MIST_1.2_iso_vvcrit0.4.h5")
-
-    def test_fetch_isos_invalid(self):
-        """Test fetch_isos with invalid iso parameter."""
-        from brutus.data.download import fetch_isos
-
-        with pytest.raises(
-            ValueError, match="The specified isochrone file does not exist"
-        ):
-            fetch_isos(iso="invalid_iso")
-
-    @patch("brutus.data.download._fetch")
-    def test_fetch_tracks_basic(self, mock_fetch):
-        """Test basic fetch_tracks functionality."""
-        from brutus.data.download import fetch_tracks
-
-        mock_fetch.return_value = Path("/fake/path/MIST_1.2_EEPtrk.h5")
-
-        result = fetch_tracks(target_dir="/data")
-
-        mock_fetch.assert_called_once_with("MIST_1.2_EEPtrk.h5", "/data")
-        assert result == Path("/fake/path/MIST_1.2_EEPtrk.h5")
-
-    def test_fetch_tracks_invalid(self):
-        """Test fetch_tracks with invalid track parameter."""
-        from brutus.data.download import fetch_tracks
-
-        with pytest.raises(ValueError, match="The specified track file does not exist"):
-            fetch_tracks(track="invalid_track")
-
-    @patch("brutus.data.download._fetch")
-    def test_fetch_dustmaps_basic(self, mock_fetch):
-        """Test basic fetch_dustmaps functionality."""
-        from brutus.data.download import fetch_dustmaps
-
-        mock_fetch.return_value = Path("/fake/path/bayestar2019_v1.h5")
-
-        result = fetch_dustmaps()
-
-        mock_fetch.assert_called_once_with("bayestar2019_v1.h5", ".")
-
-    def test_fetch_dustmaps_invalid(self):
-        """Test fetch_dustmaps with invalid dustmap parameter."""
-        from brutus.data.download import fetch_dustmaps
-
-        with pytest.raises(
-            ValueError, match="The specified dustmap file does not exist"
-        ):
-            fetch_dustmaps(dustmap="invalid_dustmap")
-
-    @patch("brutus.data.download._fetch")
-    def test_fetch_grids_versions(self, mock_fetch):
-        """Test fetch_grids with different versions."""
-        from brutus.data.download import fetch_grids
-
-        # Test v9 (default)
-        mock_fetch.return_value = Path("/fake/path/grid_mist_v9.h5")
-        fetch_grids(grid="mist_v9")
-        mock_fetch.assert_called_with("grid_mist_v9.h5", ".")
-
-        # Test v8
-        mock_fetch.return_value = Path("/fake/path/grid_mist_v8.h5")
-        fetch_grids(grid="mist_v8")
-        mock_fetch.assert_called_with("grid_mist_v8.h5", ".")
-
-        # Test bayestar
-        mock_fetch.return_value = Path("/fake/path/grid_bayestar_v5.h5")
-        fetch_grids(grid="bayestar_v5")
-        mock_fetch.assert_called_with("grid_bayestar_v5.h5", ".")
-
-    def test_fetch_grids_invalid(self):
-        """Test fetch_grids with invalid grid parameter."""
-        from brutus.data.download import fetch_grids
-
-        with pytest.raises(ValueError, match="The specified grid file does not exist"):
-            fetch_grids(grid="invalid_grid")
-
-    @patch("brutus.data.download._fetch")
-    def test_fetch_offsets_versions(self, mock_fetch):
-        """Test fetch_offsets with different versions."""
-        from brutus.data.download import fetch_offsets
-
-        # Test v9 (default)
-        mock_fetch.return_value = Path("/fake/path/offsets_mist_v9.txt")
-        fetch_offsets(grid="mist_v9")
-        mock_fetch.assert_called_with("offsets_mist_v9.txt", ".")
-
-        # Test bayestar (note: uses bs_v9 filename)
-        mock_fetch.return_value = Path("/fake/path/offsets_bs_v9.txt")
-        fetch_offsets(grid="bayestar_v5")
-        mock_fetch.assert_called_with("offsets_bs_v9.txt", ".")
-
-    @patch("brutus.data.download._fetch")
-    def test_fetch_nns_basic(self, mock_fetch):
-        """Test basic fetch_nns functionality."""
-        from brutus.data.download import fetch_nns
-
-        mock_fetch.return_value = Path("/fake/path/nn_c3k.h5")
-
-        result = fetch_nns()
-
-        mock_fetch.assert_called_once_with("nn_c3k.h5", ".")
-
-    def test_fetch_nns_invalid(self):
-        """Test fetch_nns with invalid model parameter."""
-        from brutus.data.download import fetch_nns
-
-        with pytest.raises(
-            ValueError, match="The specified neural network file does not exist"
-        ):
-            fetch_nns(model="invalid_model")
+from brutus.data.loader import load_models, load_offsets
 
 
 class TestDataLoaderFunctions:
@@ -172,7 +21,6 @@ class TestDataLoaderFunctions:
 
     def test_load_models_comprehensive_real_data(self):
         """Comprehensive test of load_models with real MIST v9 data (single load for efficiency)."""
-        import pytest
         from conftest import find_brutus_data_file
 
         from brutus.data.loader import load_models
@@ -220,7 +68,6 @@ class TestDataLoaderFunctions:
 
     def test_load_models_filtering_options_fast(self):
         """Test load_models filtering options with minimal I/O."""
-        import os
 
         from conftest import find_brutus_data_file
 
@@ -258,7 +105,6 @@ class TestDataLoaderFunctions:
 
     def test_load_models_performance_no_scaling(self):
         """Test that load_models has minimal performance scaling with filter count."""
-        import os
 
         from conftest import find_brutus_data_file
 
@@ -288,7 +134,6 @@ class TestDataLoaderFunctions:
 
     def test_load_models_with_custom_labels(self):
         """Test load_models with custom label selection (fast version)."""
-        import os
 
         from conftest import find_brutus_data_file
 
@@ -318,7 +163,6 @@ class TestDataLoaderFunctions:
 
     def test_load_models_error_conditions_with_real_data(self):
         """Test load_models error conditions with real data."""
-        import os
 
         from conftest import find_brutus_data_file
 
@@ -343,7 +187,6 @@ class TestDataLoaderFunctions:
 
     def test_load_offsets_with_real_mist_v9_data(self):
         """Test load_offsets with real MIST v9 offset data."""
-        import os
 
         from conftest import find_brutus_data_file
 
@@ -472,60 +315,197 @@ class TestDataLoaderFunctions:
         assert "-5.0%" in output or "-5%" in output  # -5% offset for r filter
 
 
-class TestDataIntegration:
-    """Integration tests for data workflows."""
+def _write_grid(
+    path,
+    n_models=6,
+    filters=("PS_g", "PS_r", "PS_i"),
+    nan_coeff_rows=(),
+    nan_param_rows=(),
+    label_fields=("mini", "feh", "eep", "afe", "smf"),
+    param_fields=("loga", "logl", "logt", "logg", "agewt"),
+    afe_values=(0.0,),
+):
+    """Write a synthetic HDF5 grid in GridGenerator._save_grid format."""
+    import h5py
 
-    @patch("brutus.data.download._fetch")
-    def test_typical_data_workflow(self, mock_fetch):
-        """Test a typical data download and load workflow."""
-        # This test simulates a typical user workflow without actual downloads
+    rng = np.random.default_rng(42)
 
-        # Mock download functions
-        mock_fetch.side_effect = [
-            Path("/fake/grid_mist_v9.h5"),
-            Path("/fake/offsets_mist_v9.txt"),
-        ]
+    stype = np.dtype([(f, "f4", 3) for f in filters])
+    mag_coeffs = np.zeros(n_models, dtype=stype)
+    for f in filters:
+        mag_coeffs[f] = rng.uniform(5.0, 15.0, size=(n_models, 3)).astype("f4")
+    for i in nan_coeff_rows:
+        for f in filters:
+            mag_coeffs[f][i] = np.nan
 
-        from brutus.data import fetch_grids, fetch_offsets
+    ltype = np.dtype([(n, "f8") for n in label_fields])
+    labels = np.zeros(n_models, dtype=ltype)
+    if "mini" in label_fields:
+        labels["mini"] = np.linspace(0.6, 1.4, n_models)
+    if "eep" in label_fields:
+        labels["eep"] = np.linspace(300.0, 420.0, n_models)
+    if "afe" in label_fields:
+        labels["afe"] = np.resize(afe_values, n_models)
 
-        # Download model grid
-        grid_path = fetch_grids(target_dir="/data", grid="mist_v9")
-        assert grid_path == Path("/fake/grid_mist_v9.h5")
+    ptype = np.dtype([(n, "f8") for n in param_fields])
+    params = np.zeros(n_models, dtype=ptype)
+    for n in param_fields:
+        params[n] = rng.uniform(0.0, 10.0, n_models)
+    for i in nan_param_rows:
+        for n in param_fields:
+            params[n][i] = np.nan
 
-        # Download offsets
-        offset_path = fetch_offsets(target_dir="/data", grid="mist_v9")
-        assert offset_path == Path("/fake/offsets_mist_v9.txt")
+    with h5py.File(path, "w") as f:
+        f.create_dataset("mag_coeffs", data=mag_coeffs)
+        f.create_dataset("labels", data=labels)
+        f.create_dataset("parameters", data=params)
+    return path
 
-        # Verify expected calls
-        assert mock_fetch.call_count == 2
 
-    def test_documentation_examples(self):
-        """Test that documentation examples work (with mocking)."""
-        with patch("brutus.data.download._fetch") as mock_fetch:
-            mock_fetch.return_value = Path("/fake/MIST_1.2_iso_vvcrit0.0.h5")
+class TestLoadModelsRegressions:
+    """Regression tests for load_models robustness fixes."""
 
-            # Example from fetch_isos docstring
-            from brutus.data import fetch_isos
+    def test_drops_nonfinite_model_rows(self, tmp_path):
+        """NaN coefficient rows (invalid grid points) must not survive loading.
 
-            iso_path = fetch_isos(target_dir="./data/")
+        Old behavior passed them through, crashing BruteForce.loglike_grid
+        with 'zero-size array to reduction operation maximum' for EVERY star.
+        """
+        p = tmp_path / "grid_nan.h5"
+        _write_grid(p, n_models=8, nan_coeff_rows=(0, 3, 5))
 
-            assert iso_path == Path("/fake/MIST_1.2_iso_vvcrit0.0.h5")
+        models, labels, _ = load_models(
+            str(p), filters=["PS_g", "PS_r", "PS_i"], verbose=False
+        )
+        assert len(models) == 5
+        assert np.all(np.isfinite(models))
+        assert len(labels) == len(models)
 
-        with patch("numpy.loadtxt") as mock_loadtxt:
-            mock_loadtxt.return_value = (
-                np.array(["g", "r", "i"], dtype="str"),
-                np.array(["1.02", "0.98", "1.01"], dtype="str"),
+    def test_label_columns_survive_invalid_first_row(self, tmp_path):
+        """Label availability must be decided per-column, not from row 0.
+
+        Old behavior inspected only combined_labels[0]: a NaN-parameter first
+        row silently discarded loga/logl/... for the ENTIRE grid.
+        """
+        p = tmp_path / "grid_row0.h5"
+        _write_grid(p, n_models=5, nan_param_rows=(0,))
+
+        _, labels, _ = load_models(
+            str(p), filters=["PS_g", "PS_r", "PS_i"], verbose=False
+        )
+        for name in ("loga", "logl", "logt", "logg", "agewt"):
+            assert name in labels.dtype.names, f"{name} column was dropped"
+
+    def test_ms_cut_without_eep_column_keeps_models(self, tmp_path):
+        """A file lacking 'eep' must skip the MS/post-MS cut, not return 0 models.
+
+        Old behavior compared the all-NaN eep column (NaN <= 454 is False
+        elementwise) and silently returned an empty grid.
+        """
+        p = tmp_path / "grid_noeep.h5"
+        _write_grid(p, n_models=5, label_fields=("mini", "feh"))
+
+        models, _, _ = load_models(
+            str(p),
+            filters=["PS_g", "PS_r", "PS_i"],
+            include_postms=False,
+            verbose=False,
+        )
+        assert len(models) == 5
+
+        # And the labels argument omitting 'eep' must not raise either.
+        models, _, _ = load_models(
+            str(p),
+            filters=["PS_g", "PS_r", "PS_i"],
+            labels=["mini", "feh"],
+            include_postms=False,
+            verbose=False,
+        )
+        assert len(models) == 5
+
+    def test_warns_on_missing_filters(self, tmp_path):
+        """Requested filters absent from the file must be reported, and the
+        surviving column order must be recoverable from the warning."""
+        p = tmp_path / "grid_filt.h5"
+        _write_grid(p, n_models=4)
+
+        with pytest.warns(UserWarning, match="TYPO_x"):
+            models, _, _ = load_models(
+                str(p), filters=["PS_g", "TYPO_x", "PS_r"], verbose=False
             )
+        assert models.shape[1] == 2  # only the two real filters
 
-            # Example from load_offsets docstring
-            from brutus.data import load_offsets
+        # No warning when every requested filter exists.
+        import warnings as _warnings
 
-            with patch("brutus.data.loader.sys.stderr"):
-                offsets = load_offsets("./data/offsets_mist_v9.txt", verbose=False)
+        with _warnings.catch_warnings():
+            _warnings.simplefilter("error")
+            load_models(str(p), filters=["PS_g", "PS_r"], verbose=False)
 
-            assert len(offsets) > 0
-            assert np.all(np.isfinite(offsets))
+    def test_raises_when_no_filters_survive(self, tmp_path):
+        """If none of the requested filters exist, fail fast with a clear
+        error instead of returning a (Nmodel, 0, 3) array that breaks
+        StarGrid/BruteForce with an opaque shape error later."""
+        p = tmp_path / "grid_nofilt.h5"
+        _write_grid(p, n_models=4)
+
+        with pytest.raises(ValueError, match="None of the requested filters"):
+            load_models(str(p), filters=["TYPO_x", "TYPO_y"], verbose=False)
+
+    def test_default_labels_include_afe(self, tmp_path):
+        """Multi-afe grids must keep 'afe' so label tuples stay unique."""
+        p = tmp_path / "grid_afe.h5"
+        _write_grid(p, n_models=6, afe_values=(-0.2, 0.0, 0.4))
+
+        _, labels, _ = load_models(
+            str(p), filters=["PS_g", "PS_r", "PS_i"], verbose=False
+        )
+        assert "afe" in labels.dtype.names
+        assert len(np.unique(labels["afe"])) == 3
+
+    def test_constant_afe_dropped_from_default_labels(self, tmp_path):
+        """Single-afe grids drop the constant 'afe' column under default
+        labels (pre-existing schema preserved; mirrors the constant-'smf'
+        convention)."""
+        p = tmp_path / "grid_afe_const.h5"
+        _write_grid(p, n_models=6, afe_values=(0.0,))
+
+        _, labels, _ = load_models(
+            str(p), filters=["PS_g", "PS_r", "PS_i"], verbose=False
+        )
+        assert "afe" not in labels.dtype.names
+
+    def test_explicit_afe_kept_even_when_constant(self, tmp_path):
+        """An explicitly requested 'afe' label is honored even if constant."""
+        p = tmp_path / "grid_afe_expl.h5"
+        _write_grid(p, n_models=6, afe_values=(0.0,))
+
+        _, labels, _ = load_models(
+            str(p),
+            filters=["PS_g", "PS_r", "PS_i"],
+            labels=["mini", "feh", "eep", "afe"],
+            verbose=False,
+        )
+        assert "afe" in labels.dtype.names
+        assert np.all(labels["afe"] == 0.0)
 
 
-if __name__ == "__main__":
-    pytest.main([__file__])
+class TestLoadOffsetsSingleRow:
+    """Regression: a single-filter offsets file must not crash."""
+
+    def test_single_row_file(self, tmp_path):
+        # np.loadtxt collapses a one-row file to shape (2,); the old arr.T
+        # unpack then yielded 0-d scalars and a "nonzero on 0d arrays"
+        # ValueError downstream.
+        p = tmp_path / "offsets_single.txt"
+        p.write_text("PS_g 1.02\n")
+        out = load_offsets(str(p), filters=["PS_g"], verbose=False)
+        assert out.shape == (1,)
+        assert np.isclose(out[0], 1.02)
+
+    def test_single_row_missing_filter(self, tmp_path):
+        p = tmp_path / "offsets_single.txt"
+        p.write_text("PS_g 1.02\n")
+        out = load_offsets(str(p), filters=["PS_g", "PS_r"], verbose=False)
+        assert np.isclose(out[0], 1.02)
+        assert out[1] == 1.0  # not in file -> no-offset default

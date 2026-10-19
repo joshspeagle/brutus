@@ -1,14 +1,11 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
-"""
-Regression tests for ``brutus.data.download._fetch`` symlink handling.
-
-These use only tiny temporary files (no network, no large grids): the Pooch
-registry's ``fetch`` is monkeypatched to return a local stand-in file.
-"""
+"""Tests of the fetch functions in brutus.data.download."""
 
 import pathlib
+from pathlib import Path
+from unittest.mock import patch
+
+import numpy as np
+import pytest
 
 from brutus.data import download
 
@@ -190,3 +187,198 @@ def test_brutus_skip_hash_check_optin(tmp_path, monkeypatch):
     target_dir.mkdir()
     out = download._fetch("grid_mist_v9.h5", str(target_dir))
     assert pathlib.Path(out).read_text() == "data"
+
+
+class TestDataDownloadFunctions:
+    """Unit tests for data downloading functions."""
+
+    @patch("brutus.data.download._fetch")
+    def test_fetch_isos_basic(self, mock_fetch):
+        """Test basic fetch_isos functionality."""
+        from brutus.data.download import fetch_isos
+
+        # Mock the _fetch function
+        mock_fetch.return_value = Path("/fake/path/MIST_1.2_iso_vvcrit0.0.h5")
+
+        # Test default parameters
+        result = fetch_isos()
+
+        mock_fetch.assert_called_once_with("MIST_1.2_iso_vvcrit0.0.h5", ".")
+        assert result == Path("/fake/path/MIST_1.2_iso_vvcrit0.0.h5")
+
+    @patch("brutus.data.download._fetch")
+    def test_fetch_isos_rotating(self, mock_fetch):
+        """Test fetch_isos with rotating models."""
+        from brutus.data.download import fetch_isos
+
+        mock_fetch.return_value = Path("/fake/path/MIST_1.2_iso_vvcrit0.4.h5")
+
+        result = fetch_isos(target_dir="/tmp", iso="MIST_1.2_vvcrit0.4")
+
+        mock_fetch.assert_called_once_with("MIST_1.2_iso_vvcrit0.4.h5", "/tmp")
+        assert result == Path("/fake/path/MIST_1.2_iso_vvcrit0.4.h5")
+
+    def test_fetch_isos_invalid(self):
+        """Test fetch_isos with invalid iso parameter."""
+        from brutus.data.download import fetch_isos
+
+        with pytest.raises(
+            ValueError, match="The specified isochrone file does not exist"
+        ):
+            fetch_isos(iso="invalid_iso")
+
+    @patch("brutus.data.download._fetch")
+    def test_fetch_tracks_basic(self, mock_fetch):
+        """Test basic fetch_tracks functionality."""
+        from brutus.data.download import fetch_tracks
+
+        mock_fetch.return_value = Path("/fake/path/MIST_1.2_EEPtrk.h5")
+
+        result = fetch_tracks(target_dir="/data")
+
+        mock_fetch.assert_called_once_with("MIST_1.2_EEPtrk.h5", "/data")
+        assert result == Path("/fake/path/MIST_1.2_EEPtrk.h5")
+
+    def test_fetch_tracks_invalid(self):
+        """Test fetch_tracks with invalid track parameter."""
+        from brutus.data.download import fetch_tracks
+
+        with pytest.raises(ValueError, match="The specified track file does not exist"):
+            fetch_tracks(track="invalid_track")
+
+    @patch("brutus.data.download._fetch")
+    def test_fetch_dustmaps_basic(self, mock_fetch):
+        """Test basic fetch_dustmaps functionality."""
+        from brutus.data.download import fetch_dustmaps
+
+        mock_fetch.return_value = Path("/fake/path/bayestar2019_v1.h5")
+
+        result = fetch_dustmaps()
+
+        mock_fetch.assert_called_once_with("bayestar2019_v1.h5", ".")
+
+    def test_fetch_dustmaps_invalid(self):
+        """Test fetch_dustmaps with invalid dustmap parameter."""
+        from brutus.data.download import fetch_dustmaps
+
+        with pytest.raises(
+            ValueError, match="The specified dustmap file does not exist"
+        ):
+            fetch_dustmaps(dustmap="invalid_dustmap")
+
+    @patch("brutus.data.download._fetch")
+    def test_fetch_grids_versions(self, mock_fetch):
+        """Test fetch_grids with different versions."""
+        from brutus.data.download import fetch_grids
+
+        # Test v9 (default)
+        mock_fetch.return_value = Path("/fake/path/grid_mist_v9.h5")
+        fetch_grids(grid="mist_v9")
+        mock_fetch.assert_called_with("grid_mist_v9.h5", ".")
+
+        # Test v8
+        mock_fetch.return_value = Path("/fake/path/grid_mist_v8.h5")
+        fetch_grids(grid="mist_v8")
+        mock_fetch.assert_called_with("grid_mist_v8.h5", ".")
+
+        # Test bayestar
+        mock_fetch.return_value = Path("/fake/path/grid_bayestar_v5.h5")
+        fetch_grids(grid="bayestar_v5")
+        mock_fetch.assert_called_with("grid_bayestar_v5.h5", ".")
+
+    def test_fetch_grids_invalid(self):
+        """Test fetch_grids with invalid grid parameter."""
+        from brutus.data.download import fetch_grids
+
+        with pytest.raises(ValueError, match="The specified grid file does not exist"):
+            fetch_grids(grid="invalid_grid")
+
+    @patch("brutus.data.download._fetch")
+    def test_fetch_offsets_versions(self, mock_fetch):
+        """Test fetch_offsets with different versions."""
+        from brutus.data.download import fetch_offsets
+
+        # Test v9 (default)
+        mock_fetch.return_value = Path("/fake/path/offsets_mist_v9.txt")
+        fetch_offsets(grid="mist_v9")
+        mock_fetch.assert_called_with("offsets_mist_v9.txt", ".")
+
+        # Test bayestar (note: uses bs_v9 filename)
+        mock_fetch.return_value = Path("/fake/path/offsets_bs_v9.txt")
+        fetch_offsets(grid="bayestar_v5")
+        mock_fetch.assert_called_with("offsets_bs_v9.txt", ".")
+
+    @patch("brutus.data.download._fetch")
+    def test_fetch_nns_basic(self, mock_fetch):
+        """Test basic fetch_nns functionality."""
+        from brutus.data.download import fetch_nns
+
+        mock_fetch.return_value = Path("/fake/path/nn_c3k.h5")
+
+        result = fetch_nns()
+
+        mock_fetch.assert_called_once_with("nn_c3k.h5", ".")
+
+    def test_fetch_nns_invalid(self):
+        """Test fetch_nns with invalid model parameter."""
+        from brutus.data.download import fetch_nns
+
+        with pytest.raises(
+            ValueError, match="The specified neural network file does not exist"
+        ):
+            fetch_nns(model="invalid_model")
+
+
+class TestDataIntegration:
+    """Integration tests for data workflows."""
+
+    @patch("brutus.data.download._fetch")
+    def test_typical_data_workflow(self, mock_fetch):
+        """Test a typical data download and load workflow."""
+        # This test simulates a typical user workflow without actual downloads
+
+        # Mock download functions
+        mock_fetch.side_effect = [
+            Path("/fake/grid_mist_v9.h5"),
+            Path("/fake/offsets_mist_v9.txt"),
+        ]
+
+        from brutus.data import fetch_grids, fetch_offsets
+
+        # Download model grid
+        grid_path = fetch_grids(target_dir="/data", grid="mist_v9")
+        assert grid_path == Path("/fake/grid_mist_v9.h5")
+
+        # Download offsets
+        offset_path = fetch_offsets(target_dir="/data", grid="mist_v9")
+        assert offset_path == Path("/fake/offsets_mist_v9.txt")
+
+        # Verify expected calls
+        assert mock_fetch.call_count == 2
+
+    def test_documentation_examples(self):
+        """Test that documentation examples work (with mocking)."""
+        with patch("brutus.data.download._fetch") as mock_fetch:
+            mock_fetch.return_value = Path("/fake/MIST_1.2_iso_vvcrit0.0.h5")
+
+            # Example from fetch_isos docstring
+            from brutus.data import fetch_isos
+
+            iso_path = fetch_isos(target_dir="./data/")
+
+            assert iso_path == Path("/fake/MIST_1.2_iso_vvcrit0.0.h5")
+
+        with patch("numpy.loadtxt") as mock_loadtxt:
+            mock_loadtxt.return_value = (
+                np.array(["g", "r", "i"], dtype="str"),
+                np.array(["1.02", "0.98", "1.01"], dtype="str"),
+            )
+
+            # Example from load_offsets docstring
+            from brutus.data import load_offsets
+
+            with patch("brutus.data.loader.sys.stderr"):
+                offsets = load_offsets("./data/offsets_mist_v9.txt", verbose=False)
+
+            assert len(offsets) > 0
+            assert np.all(np.isfinite(offsets))

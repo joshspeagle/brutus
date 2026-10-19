@@ -1,20 +1,12 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
+"""Tests of brutus.core.neural_nets."""
 
-"""
-Tests for coverage gaps in brutus neural_nets module.
-
-Covers:
-1. FastNNPredictor initialization with filters=None (line 354)
-2. Out-of-bounds parameter handling returning NaN (line 505)
-"""
-
-import os
-
+import h5py
 import numpy as np
 import numpy.testing as npt
 import pytest
 from conftest import find_brutus_data_file
+
+from brutus.core.neural_nets import FastNN, FastNNPredictor
 
 
 def _find_nn_file():
@@ -26,6 +18,8 @@ def _find_nn_file():
 
 
 _nn_file = _find_nn_file()
+
+
 _has_nn_data = _nn_file is not None
 
 
@@ -246,3 +240,115 @@ class TestFastNNPredictorOutOfBounds:
         assert np.all(np.isfinite(seds[2]))
         # Second should be NaN (out of bounds)
         assert np.all(np.isnan(seds[1]))
+
+
+def _write_nn_file(path, per_filter_bounds, seed=42):
+    """Write a synthetic NN file in the FastNN HDF5 layout."""
+    rng = np.random.default_rng(seed)
+    with h5py.File(path, "w") as f:
+        for fname, (xmin, xmax) in per_filter_bounds.items():
+            g = f.create_group(fname)
+            g["w1"] = rng.random((16, 6))
+            g["b1"] = rng.random((16, 1))
+            g["w2"] = rng.random((16, 16))
+            g["b2"] = rng.random((16, 1))
+            g["w3"] = rng.random((1, 16))
+            g["b3"] = rng.random((1, 1))
+            g["xmin"] = np.asarray(xmin, dtype=float)
+            g["xmax"] = np.asarray(xmax, dtype=float)
+
+
+class TestLoadNNBoundsCheck:
+    """The bounds check must compare per-filter bounds elementwise."""
+
+    def test_coincident_bound_values_accepted(self, tmp_path):
+        """A consistent file where two parameters share a bound value
+        (afe_min == av_min == 0) must load; the old value-counting check
+        rejected it because len(np.unique(xmin)) < 6."""
+        path = str(tmp_path / "coincident.h5")
+        bounds = (
+            [2500.0, -1.0, -4.0, 0.0, 0.0, 2.0],  # afe_min == av_min == 0.0
+            [5.0e4, 5.5, 0.5, 0.6, 6.0, 5.0],
+        )
+        _write_nn_file(path, {"f1": bounds, "f2": bounds})
+        nn = FastNN(filters=["f1", "f2"], nnfile=path, verbose=False)
+        np.testing.assert_array_equal(nn.xmin, bounds[0])
+        np.testing.assert_array_equal(nn.xmax, bounds[1])
+
+    def test_permuted_bounds_rejected(self, tmp_path):
+        """Per-filter bounds that are permutations of the same six values
+        are inconsistent and must raise; the old check accepted them."""
+        path = str(tmp_path / "permuted.h5")
+        b1 = (
+            [2500.0, -1.0, -4.0, -0.2, 0.0, 2.0],
+            [5.0e4, 5.5, 0.5, 0.6, 6.0, 5.0],
+        )
+        # Teff/logg bounds swapped for the second filter
+        b2 = (
+            [-1.0, 2500.0, -4.0, -0.2, 0.0, 2.0],
+            [5.5, 5.0e4, 0.5, 0.6, 6.0, 5.0],
+        )
+        _write_nn_file(path, {"f1": b1, "f2": b2})
+        with pytest.raises(ValueError, match="different"):
+            FastNN(filters=["f1", "f2"], nnfile=path, verbose=False)
+
+    def test_real_file_still_loads(self):
+        nn_file = _nn_file
+        if nn_file is None:
+            pytest.skip("Neural network data file not available")
+        nn = FastNN(filters=["SDSS_g", "SDSS_r"], nnfile=nn_file, verbose=False)
+        assert nn.xmin.shape == (6,)
+
+
+class TestSedBatchSingleFilter:
+    """sed_batch must work when the predictor has a single filter."""
+
+    def test_single_filter_batch_matches_scalar(self):
+        nn_file = _nn_file
+        if nn_file is None:
+            pytest.skip("Neural network data file not available")
+        pred = FastNNPredictor(filters=["SDSS_g"], nnfile=nn_file, verbose=False)
+        n = 5
+        seds = pred.sed_batch(
+            logt=np.full(n, 3.76),
+            logg=np.full(n, 4.4),
+            feh_surf=np.zeros(n),
+            logl=np.zeros(n),
+            afe=np.zeros(n),
+            av=0.1,
+            rv=3.3,
+            dist=1000.0,
+        )
+        assert seds.shape == (n, 1)
+        assert np.all(np.isfinite(seds))
+        ref = pred.sed(
+            logt=3.76,
+            logg=4.4,
+            feh_surf=0.0,
+            logl=0.0,
+            afe=0.0,
+            av=0.1,
+            rv=3.3,
+            dist=1000.0,
+        )
+        np.testing.assert_allclose(seds[:, 0], ref[0], rtol=1e-12)
+
+    def test_single_valid_star_edge(self):
+        """n_valid == 1 (squeeze also drops the sample axis)."""
+        nn_file = _nn_file
+        if nn_file is None:
+            pytest.skip("Neural network data file not available")
+        pred = FastNNPredictor(filters=["SDSS_g"], nnfile=nn_file, verbose=False)
+        seds = pred.sed_batch(
+            logt=np.array([3.76, 99.0]),  # second star far out of bounds
+            logg=np.array([4.4, 4.4]),
+            feh_surf=np.zeros(2),
+            logl=np.zeros(2),
+            afe=np.zeros(2),
+            av=0.1,
+            rv=3.3,
+            dist=1000.0,
+        )
+        assert seds.shape == (2, 1)
+        assert np.isfinite(seds[0, 0])
+        assert np.isnan(seds[1, 0])

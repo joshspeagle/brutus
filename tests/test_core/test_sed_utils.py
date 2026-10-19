@@ -1,16 +1,4 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
-"""
-Comprehensive tests for brutus SED utilities.
-
-This test suite includes:
-1. Unit tests for _get_seds and get_seds functions
-2. Performance tests for numba-compiled functions
-3. Physical consistency tests
-4. Edge case handling
-5. Integration tests with other brutus components
-"""
+"""Tests of brutus.core.sed_utils."""
 
 import numpy as np
 import numpy.testing as npt
@@ -599,7 +587,3 @@ class TestSedIntegration:
 
         # Should be finite
         assert np.all(np.isfinite(seds))
-
-
-if __name__ == "__main__":
-    pytest.main([__file__])

@@ -1,20 +1,8 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
-"""
-Comprehensive tests for brutus mathematical utilities.
-
-This test suite includes:
-1. Unit tests for the new mathematical functions
-2. Comparison tests between old and new implementations
-3. Integration tests for matrix operations and statistical functions
-"""
+"""Tests of brutus.utils.math."""
 
 import numpy as np
 import pytest
 import scipy.stats
-
-from brutus.utils.math import truncnorm_logpdf
 
 
 class TestMatrixOperations:
@@ -408,7 +396,3 @@ class TestInternalFunctions:
         # Test with very small eigenvalue threshold
         inverted_strict = inverse3(batch, regularize=True, min_eigenval_threshold=1e-6)
         assert inverted_strict.shape == batch.shape
-
-
-if __name__ == "__main__":
-    pytest.main([__file__])

@@ -1,41 +1,12 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
+"""Tests of Isochrone and StellarPop in brutus.core.populations."""
 
-"""
-Comprehensive tests for brutus stellar populations module.
-
-This test suite covers:
-1. Isochrone class initialization and methods
-2. StellarPop class initialization and methods
-3. Parameter validation and error handling
-4. Edge cases and boundary conditions
-5. Integration between Isochrone and StellarPop
-"""
-
-from pathlib import Path
+import os
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-import numpy.testing as npt
 import pytest
 
-# Try importing from the reorganized structure first, fall back to original
-try:
-    from brutus.core.populations import Isochrone, StellarPop
-except ImportError:
-    raise  # Module should be available
-
-
-@pytest.fixture(scope="module")
-def real_isochrone():
-    """Load real MIST isochrone once for module tests."""
-    from conftest import find_brutus_data_file
-
-    iso_file = find_brutus_data_file("MIST_1.2_iso_vvcrit0.0.h5")
-
-    assert iso_file is not None, "iso_file should be found after downloading all data"
-
-    return Isochrone(mistfile=iso_file, verbose=False)
+from brutus.core.populations import Isochrone, StellarPop
 
 
 class TestIsochroneInitialization:
@@ -695,3 +666,179 @@ class TestPopulationsPerformance:
             params = iso.get_predictions(feh=feh, loga=9.0)
             assert isinstance(params, np.ndarray)
             assert np.all(np.isfinite(params))
+
+
+def _iso_file():
+    from conftest import find_brutus_data_file
+
+    return find_brutus_data_file("MIST_1.2_iso_vvcrit0.0.h5")
+
+
+def _nn_file():
+    from conftest import find_brutus_data_file
+
+    nn = find_brutus_data_file("nnMIST_BC.h5")
+    if nn is None:
+        nn = find_brutus_data_file("nn_c3k.h5")
+    return nn
+
+
+@pytest.fixture(scope="module")
+def real_isochrone():
+    iso_file = _iso_file()
+    if iso_file is None:
+        pytest.skip("MIST isochrone data file not available")
+    return Isochrone(mistfile=iso_file, verbose=False)
+
+
+@pytest.fixture(scope="module")
+def real_stellarpop(real_isochrone):
+    nn_file = _nn_file()
+    if nn_file is None:
+        pytest.skip("Neural network data file not available")
+    return StellarPop(
+        isochrone=real_isochrone,
+        filters=["SDSS_g", "SDSS_r", "SDSS_i"],
+        nnfile=nn_file,
+        verbose=False,
+    )
+
+
+class TestIsochronePredictionsArgument:
+    """`predictions` must select/reorder output columns, not just be stored."""
+
+    def test_subset_reorder_columns(self):
+        iso_file = _iso_file()
+        if iso_file is None:
+            pytest.skip("MIST isochrone data file not available")
+        iso_def = Isochrone(mistfile=iso_file, verbose=False)
+        iso_sub = Isochrone(
+            mistfile=iso_file, predictions=["logt", "mini"], verbose=False
+        )
+        ref = iso_def.get_predictions(feh=0.0, afe=0.0, loga=9.0, apply_corr=False)
+        sub = iso_sub.get_predictions(feh=0.0, afe=0.0, loga=9.0, apply_corr=False)
+        assert sub.shape[1] == 2
+        logt_idx = iso_def.pred_labels.index("logt")
+        mini_idx = iso_def.pred_labels.index("mini")
+        np.testing.assert_array_equal(sub[:, 0], ref[:, logt_idx])
+        np.testing.assert_array_equal(sub[:, 1], ref[:, mini_idx])
+
+    def test_corrections_applied_before_reordering(self):
+        """Empirical corrections index columns by pred_labels; they must land
+        on the right columns even when the output is reordered."""
+        iso_file = _iso_file()
+        if iso_file is None:
+            pytest.skip("MIST isochrone data file not available")
+        iso_def = Isochrone(mistfile=iso_file, verbose=False)
+        reordered = list(reversed(iso_def.pred_labels))
+        iso_rev = Isochrone(mistfile=iso_file, predictions=reordered, verbose=False)
+        ref = iso_def.get_predictions(feh=-0.3, afe=0.0, loga=9.5, apply_corr=True)
+        rev = iso_rev.get_predictions(feh=-0.3, afe=0.0, loga=9.5, apply_corr=True)
+        np.testing.assert_array_equal(rev, ref[:, ::-1])
+
+    def test_unknown_prediction_raises(self):
+        iso_file = _iso_file()
+        if iso_file is None:
+            pytest.skip("MIST isochrone data file not available")
+        with pytest.raises(ValueError, match="not available"):
+            Isochrone(
+                mistfile=iso_file, predictions=["mini", "not_a_label"], verbose=False
+            )
+
+
+class TestIsochroneDefaultPathFallback:
+    """Isochrone() must fall back to the pooch cache like EEPTracks does."""
+
+    def test_pooch_cache_used_when_repo_path_missing(self, tmp_path, monkeypatch):
+        import brutus.core.populations as bcp
+
+        cache_file = tmp_path / "MIST_1.2_iso_vvcrit0.0.h5"
+        real_exists = os.path.exists
+
+        def fake_exists(path):
+            if str(path) == str(cache_file):
+                return True
+            if str(path).endswith("MIST_1.2_iso_vvcrit0.0.h5"):
+                return False  # repo-relative default "missing"
+            return real_exists(path)
+
+        monkeypatch.setattr(os.path, "exists", fake_exists)
+        import pooch
+
+        monkeypatch.setattr(pooch, "os_cache", lambda name: str(tmp_path))
+
+        opened = {}
+
+        def fake_h5file(path, mode="r"):
+            opened["path"] = str(path)
+            raise OSError("stop here")
+
+        monkeypatch.setattr(bcp.h5py, "File", fake_h5file)
+
+        with pytest.raises(RuntimeError):
+            Isochrone(verbose=False)
+
+        # The loader must have been pointed at the pooch cache copy.
+        assert opened["path"] == str(cache_file)
+
+
+class TestIsochroneAfePaddingMemory:
+    """Singleton-afe padding must not materialize a duplicated grid."""
+
+    def test_padded_afe_layers_share_memory(self, real_isochrone):
+        iso = real_isochrone
+        if iso.pred_grid.shape[1] != 2:
+            pytest.skip("file is not singleton-afe")
+        assert np.shares_memory(iso.pred_grid[:, 0], iso.pred_grid[:, 1])
+        # zero-stride broadcast along the padded axis
+        assert iso.pred_grid.strides[1] == 0
+
+    def test_interpolation_still_works(self, real_isochrone):
+        preds = real_isochrone.get_predictions(feh=0.0, afe=0.0, loga=9.0)
+        assert np.isfinite(preds).any()
+        # out-of-tolerance afe still yields NaN (fill_value behavior)
+        preds_bad = real_isochrone.get_predictions(feh=0.0, afe=0.3, loga=9.0)
+        assert not np.isfinite(preds_bad).any()
+
+
+class TestGetSedsSmfGrid:
+    """get_seds_smf_grid must exactly match per-SMF get_seds calls."""
+
+    @pytest.mark.parametrize("return_dict", [True, False])
+    def test_matches_get_seds(self, real_stellarpop, return_dict):
+        pop = real_stellarpop
+        eep_grid = np.linspace(300.0, 500.0, 40)
+        smf_values = [0.0, 0.5, 1.0]
+        kw = dict(
+            feh=0.0,
+            loga=9.5,
+            av=0.1,
+            rv=3.1,
+            eep=eep_grid,
+            dist=1000.0,
+            mini_bound=0.08,
+            return_dict=return_dict,
+        )
+        results = pop.get_seds_smf_grid(smf_values, **kw)
+        assert len(results) == len(smf_values)
+        for smf, (sed_g, p_g, p2_g) in zip(smf_values, results):
+            sed_r, p_r, p2_r = pop.get_seds(binary_fraction=smf, **kw)
+            np.testing.assert_array_equal(sed_g, sed_r)
+            if return_dict:
+                assert set(p_g) == set(p_r)
+                for k in p_r:
+                    np.testing.assert_array_equal(p_g[k], p_r[k])
+                    np.testing.assert_array_equal(p2_g[k], p2_r[k])
+            else:
+                np.testing.assert_array_equal(p_g, p_r)
+                np.testing.assert_array_equal(p2_g, p2_r)
+
+    def test_slices_are_independent_copies(self, real_stellarpop):
+        """Mutating one slice's SEDs must not leak into another slice."""
+        pop = real_stellarpop
+        eep_grid = np.linspace(300.0, 400.0, 10)
+        r = pop.get_seds_smf_grid(
+            [0.0, 0.0], feh=0.0, loga=9.5, eep=eep_grid, mini_bound=0.08
+        )
+        r[0][0][:] = -99.0
+        assert not np.array_equal(r[0][0], r[1][0])

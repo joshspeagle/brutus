@@ -67,37 +67,61 @@ def make_stars(pop, nstars, seed=SEED):
 
 
 def total_loglike(pop, obs, err, smf_grid=None, eep_grid=None):
-    theta = [THETA["feh"], THETA["loga"], THETA["av"], THETA["rv"],
-             THETA["dist"], FIELD_FRAC]
+    theta = [
+        THETA["feh"],
+        THETA["loga"],
+        THETA["av"],
+        THETA["rv"],
+        THETA["dist"],
+        FIELD_FRAC,
+    ]
     return isochrone_population_loglike(
-        theta, pop, obs, err, cluster_prob=CLUSTER_PROB,
-        smf_grid=smf_grid, eep_grid=eep_grid,
+        theta,
+        pop,
+        obs,
+        err,
+        cluster_prob=CLUSTER_PROB,
+        smf_grid=smf_grid,
+        eep_grid=eep_grid,
     )
 
 
 def bench_stages(pop, obs, err, repeats):
-    print("\n== Pipeline stage breakdown "
-          f"({len(obs)} stars, default grid, min of {repeats}) ==")
+    print(
+        "\n== Pipeline stage breakdown "
+        f"({len(obs)} stars, default grid, min of {repeats}) =="
+    )
     t_grid, grid = timeit(
-        lambda: generate_isochrone_population_grid(pop, **THETA), repeats)
+        lambda: generate_isochrone_population_grid(pop, **THETA), repeats
+    )
     t_clus, lnl_c = timeit(
         lambda: compute_isochrone_cluster_loglike(
-            obs, err, grid, distance=THETA["dist"]), repeats)
+            obs, err, grid, distance=THETA["dist"]
+        ),
+        repeats,
+    )
     t_outl, lnl_o = timeit(
-        lambda: compute_isochrone_outlier_loglike(obs, err, grid), repeats)
+        lambda: compute_isochrone_outlier_loglike(obs, err, grid), repeats
+    )
     t_mix, lnl_m = timeit(
-        lambda: apply_isochrone_mixture_model(
-            lnl_c, lnl_o, CLUSTER_PROB, FIELD_FRAC), repeats)
+        lambda: apply_isochrone_mixture_model(lnl_c, lnl_o, CLUSTER_PROB, FIELD_FRAC),
+        repeats,
+    )
     t_marg, _ = timeit(
         lambda: marginalize_isochrone_grid(
-            lnl_m, grid["mass_jacobians"], grid["smf_jacobians"]), repeats)
+            lnl_m, grid["mass_jacobians"], grid["smf_jacobians"]
+        ),
+        repeats,
+    )
     t_tot, _ = timeit(lambda: total_loglike(pop, obs, err), repeats)
 
-    stages = [("Grid generation (fixed cost)", t_grid),
-              ("Cluster loglike", t_clus),
-              ("Outlier loglike", t_outl),
-              ("Mixture model", t_mix),
-              ("Marginalization", t_marg)]
+    stages = [
+        ("Grid generation (fixed cost)", t_grid),
+        ("Cluster loglike", t_clus),
+        ("Outlier loglike", t_outl),
+        ("Mixture model", t_mix),
+        ("Marginalization", t_marg),
+    ]
     ssum = sum(t for _, t in stages)
     for name, t in stages:
         print(f"  {name:32s} {t:8.1f} ms   {100 * t / ssum:4.0f}%")
@@ -121,52 +145,59 @@ def bench_nstars(pop, obs, err, counts, repeats):
 
 
 def bench_eep(pop, obs, err, sizes, ref_size, repeats):
-    print(f"\n== EEP convergence vs {ref_size}-point reference "
-          f"({len(obs)} stars, min of {repeats}) ==")
+    print(
+        f"\n== EEP convergence vs {ref_size}-point reference "
+        f"({len(obs)} stars, min of {repeats}) =="
+    )
     results = {}
     for n in sizes + [ref_size]:
         if n in results:
             continue
         eep = np.linspace(202.0, 808.0, n)
         grid = generate_isochrone_population_grid(pop, **THETA, eep_grid=eep)
-        t, lnl = timeit(
-            lambda e=eep: total_loglike(pop, obs, err, eep_grid=e), repeats)
+        t, lnl = timeit(lambda e=eep: total_loglike(pop, obs, err, eep_grid=e), repeats)
         results[n] = (len(grid["masses"]), lnl, t)
     ref_lnl = results[ref_size][1]
     for n in sizes + [ref_size]:
         size, lnl, t = results[n]
-        tag = " (reference)" if n == ref_size else (
-            " (default)" if n == 1000 else "")
-        print(f"  N_EEP={n:5d}{tag:13s} grid={size:6d}  "
-              f"dlnL={lnl - ref_lnl:+8.2f}  {t:8.1f} ms")
+        tag = " (reference)" if n == ref_size else (" (default)" if n == 1000 else "")
+        print(
+            f"  N_EEP={n:5d}{tag:13s} grid={size:6d}  "
+            f"dlnL={lnl - ref_lnl:+8.2f}  {t:8.1f} ms"
+        )
 
 
 def bench_smf(pop, obs, err, counts, ref_count, repeats):
-    print(f"\n== SMF convergence vs {ref_count}-point uniform reference "
-          f"({len(obs)} stars, min of {repeats}) ==")
+    print(
+        f"\n== SMF convergence vs {ref_count}-point uniform reference "
+        f"({len(obs)} stars, min of {repeats}) =="
+    )
     results = {}
     for n in counts + [ref_count]:
         if n in results:
             continue
         smf = np.array([0.0]) if n == 1 else np.linspace(0.0, 1.0, n)
         grid = generate_isochrone_population_grid(pop, **THETA, smf_grid=smf)
-        t, lnl = timeit(
-            lambda s=smf: total_loglike(pop, obs, err, smf_grid=s), repeats)
+        t, lnl = timeit(lambda s=smf: total_loglike(pop, obs, err, smf_grid=s), repeats)
         results[n] = (len(grid["masses"]), lnl, t)
     ref_lnl = results[ref_count][1]
     for n in counts + [ref_count]:
         size, lnl, t = results[n]
         label = "Singles only (N=1)" if n == 1 else f"{n} uniform"
-        tag = " (reference)" if n == ref_count else (
-            " (default)" if n == 21 else "")
-        print(f"  {label:18s}{tag:13s} grid={size:6d}  "
-              f"dlnL={lnl - ref_lnl:+8.2f}  {t:8.1f} ms")
+        tag = " (reference)" if n == ref_count else (" (default)" if n == 21 else "")
+        print(
+            f"  {label:18s}{tag:13s} grid={size:6d}  "
+            f"dlnL={lnl - ref_lnl:+8.2f}  {t:8.1f} ms"
+        )
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--smoke", action="store_true",
-                    help="small fast sanity run (numbers not publishable)")
+    ap.add_argument(
+        "--smoke",
+        action="store_true",
+        help="small fast sanity run (numbers not publishable)",
+    )
     args = ap.parse_args()
 
     print(f"filters={FILTERS}  theta={THETA}  seed={SEED}")

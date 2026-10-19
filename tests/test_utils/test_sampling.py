@@ -1,17 +1,6 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
-"""
-Comprehensive tests for brutus sampling utilities.
-
-This test suite includes:
-1. Unit tests for the new sampling functions
-2. Comparison tests between old and new implementations
-3. Integration tests for statistical properties and workflows
-"""
+"""Tests of brutus.utils.sampling."""
 
 import numpy as np
-import pytest
 
 
 class TestQuantileFunction:
@@ -362,7 +351,3 @@ class TestSamplingIntegration:
             assert (
                 iqr < 15.0
             )  # But not too much (relaxed tolerance for statistical variation)
-
-
-if __name__ == "__main__":
-    pytest.main([__file__])
