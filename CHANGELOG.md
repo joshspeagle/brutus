@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New SVG logo, with light and dark variants, and a favicon. The isochrone
   "S" is drawn as model-grid points coloured by temperature, over a faint
   posterior across the grid.
+- The documentation site moves to the Furo theme and Markdown (MyST) pages,
+  with a brutus colour style and a new landing page.
 
 ## [1.2.0] - 2026-07-17
 
