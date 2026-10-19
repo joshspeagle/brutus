@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   repeated band 1 in place of the masked selection. Boolean masks give the
   same results as before. `loglike_grid` no longer changes the caller's
   `data_mask`, `av_init` or `rv_init`.
+- **`loglike_grid` normalizes every model's `lnl`**. The Gaussian constant
+  `-0.5 * (Ndim * ln(2 pi) + sum(ln sigma^2))` went only to the models that
+  passed the initial cut, so the culled models sat that constant (about 90
+  log-units for fluxes in maggies) too low. Culled models keep their
+  magnitude-space fit of (scale, A(V), R(V)).
 
 ### Changed
 

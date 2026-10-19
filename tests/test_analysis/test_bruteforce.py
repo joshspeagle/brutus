@@ -1969,3 +1969,19 @@ class TestInputValidation:
         )
         without = fitter.loglike_grid(flux, flux_err, mask)
         np.testing.assert_array_equal(with_zero[0], without[0])
+
+
+class TestLikelihoodNormalization:
+    def test_culled_and_refined_models_share_the_normalization(self, mock_grid):
+        # Random colours, so that most models fail the initial cut.
+        models = mock_grid.models.copy()
+        models[:, :, 0] += np.random.RandomState(3).normal(0, 0.3, (27, 5))
+        fitter = BruteForce(
+            StarGrid(models, mock_grid.labels, mock_grid.params), verbose=False
+        )
+        flux = 10 ** (-0.4 * models[13, :, 0])
+        flux_err = 0.05 * flux
+        mask = np.ones(5, dtype=bool)
+        lnl, ndim, chi2 = fitter.loglike_grid(flux, flux_err, mask, dim_prior=False)
+        expected = -0.5 * (ndim * np.log(2 * np.pi) + np.sum(np.log(flux_err**2)))
+        np.testing.assert_allclose(lnl + 0.5 * chi2, expected, rtol=1e-12)

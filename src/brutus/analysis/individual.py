@@ -1410,11 +1410,13 @@ class BruteForce:
             stepsize[lnl_new < lnl_old] /= rescaling
             lnl_old = lnl_new
 
-        # Insert optimized models into initial array of results
-        lnl_new += -0.5 * (Ndim * np.log(2.0 * np.pi) + np.sum(np.log(tot_var)))
+        # Insert optimized models into initial array of results. Culled models
+        # keep their magnitude-space fit; the Gaussian normalization applies to
+        # every model, so that all of lnl shares one constant.
         lnl[init_sel], chi2[init_sel] = lnl_new, chi2_new
         scale[init_sel], av[init_sel], rv[init_sel] = scale_new, av_new, rv_new
         icov_sar[init_sel] = icov_sar_new
+        lnl += -0.5 * (Ndim * np.log(2.0 * np.pi) + np.sum(np.log(tot_var)))
 
         # Apply dimensional prior
         if dim_prior:
