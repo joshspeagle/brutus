@@ -69,6 +69,10 @@ class TestMatrixOperations:
         B = np.array([[1, 2], [2, 1]], dtype=float)  # Has negative eigenvalue
         assert isPSD(B) == False
 
+        # Non-symmetric matrix
+        C = np.array([[1, 1], [0, 1]], dtype=float)
+        assert isPSD(C) == False
+
 
 class TestStatisticalDistributions:
     """Unit tests for statistical distribution functions."""

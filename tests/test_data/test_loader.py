@@ -340,7 +340,7 @@ def _write_grid(
 class TestLoadModelsRegressions:
     """Regression tests for load_models robustness fixes."""
 
-    def test_drops_nonfinite_model_rows(self, tmp_path):
+    def test_drops_nonfinite_model_rows(self, tmp_path, capsys):
         """NaN coefficient rows (invalid grid points) must not survive loading.
 
         Old behavior passed them through, crashing BruteForce.loglike_grid
@@ -350,11 +350,14 @@ class TestLoadModelsRegressions:
         _write_grid(p, n_models=8, nan_coeff_rows=(0, 3, 5))
 
         models, labels, _ = load_models(
-            str(p), filters=["PS_g", "PS_r", "PS_i"], verbose=False
+            str(p), filters=["PS_g", "PS_r", "PS_i"], verbose=True
         )
         assert len(models) == 5
         assert np.all(np.isfinite(models))
         assert len(labels) == len(models)
+        err = capsys.readouterr().err
+        assert "Extracting 3 requested filters" in err
+        assert "Dropping 3 models with non-finite" in err
 
     def test_label_columns_survive_invalid_first_row(self, tmp_path):
         """Label availability must be decided per-column, not from row 0.

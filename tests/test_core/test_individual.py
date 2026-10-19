@@ -1,5 +1,6 @@
 """Tests of EEPTracks and StarEvolTrack in brutus.core.individual."""
 
+import os
 import pickle
 import warnings
 from unittest.mock import MagicMock
@@ -7,7 +8,7 @@ from unittest.mock import MagicMock
 import h5py
 import numpy as np
 import pytest
-from conftest import mock_nn_predictor, requires_data
+from conftest import mock_nn_predictor
 
 from brutus.core.individual import (
     _EEPTRACKS_CACHE_ATTRS,
@@ -21,11 +22,9 @@ from brutus.core.individual import (
 class TestEEPTracksInitialization:
     """Test EEPTracks class initialization."""
 
-    def test_eep_tracks_with_real_cached_data(self):
+    def test_eep_tracks_with_real_cached_data(self, eep_tracks):
         """The shipped tracks give finite predictions for a solar-mass star."""
-        v12_file = requires_data("MIST_1.2_EEPtrk.h5")
-
-        tracks = EEPTracks(mistfile=v12_file, verbose=False)
+        tracks = eep_tracks
         preds = tracks.get_predictions([[1.0, 300, 0.0, 0.0]])  # mini, eep, feh, afe
         assert preds.shape == (1, len(tracks.predictions))
         assert np.all(np.isfinite(preds))
@@ -472,6 +471,40 @@ class TestBuildFromFile:
     def test_missing_file_raises(self, tmp_path):
         with pytest.raises(RuntimeError, match="Failed to initialize EEPTracks"):
             EEPTracks(mistfile=tmp_path / "absent.h5", verbose=False)
+
+    def test_verbose_messages_report_build_cache_and_rebuild(self, tmp_path, capsys):
+        mistfile = _make_synthetic_mist_file(tmp_path / "tracks.h5")
+        EEPTracks(mistfile=mistfile, predictions=PREDICTIONS, verbose=True)
+        err = capsys.readouterr().err
+        assert "Loading evolutionary tracks" in err
+        assert "EEPTracks cached to" in err
+
+        EEPTracks(mistfile=mistfile, predictions=PREDICTIONS, verbose=True)
+        assert "Cached EEPTracks loaded successfully" in capsys.readouterr().err
+
+        cache_file = next(iter(tmp_path.glob("*.pkl")))
+        newer = cache_file.stat().st_mtime + 10.0
+        os.utime(mistfile, (newer, newer))
+        EEPTracks(mistfile=mistfile, predictions=PREDICTIONS, verbose=True)
+        assert "Cache is older than data file" in capsys.readouterr().err
+
+    def test_default_path_falls_back_to_pooch_cache(self, tmp_path, monkeypatch):
+        import pooch
+
+        cache_file = _make_synthetic_mist_file(tmp_path / "MIST_1.2_EEPtrk.h5")
+        real_exists = os.path.exists
+
+        def fake_exists(path):
+            if str(path) == str(cache_file):
+                return True
+            if str(path).endswith("MIST_1.2_EEPtrk.h5"):
+                return False  # the repository copy is "missing"
+            return real_exists(path)
+
+        monkeypatch.setattr(os.path, "exists", fake_exists)
+        monkeypatch.setattr(pooch, "os_cache", lambda name: str(tmp_path))
+        tracks = EEPTracks(predictions=PREDICTIONS, verbose=False, use_cache=False)
+        assert tracks.mistfile == cache_file
 
 
 class TestMakeLibSinglePass:

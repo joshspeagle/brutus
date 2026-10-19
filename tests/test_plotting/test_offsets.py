@@ -15,6 +15,12 @@ from brutus.plotting.offsets import photometric_offsets, photometric_offsets_2d
 from brutus.utils.photometry import inv_magnitude
 
 
+@pytest.fixture
+def no_tight_layout(monkeypatch):
+    """Skip text layout, which dominates the run time of the data checks."""
+    monkeypatch.setattr(plt, "tight_layout", lambda *args, **kwargs: None)
+
+
 def _offsets_dataset(nobj=30, nfilt=6, nsamps=8, seed=3):
     """Deterministic synthetic dataset exercised with the real (unmocked)
     get_seds / magnitude / phot_loglike stack."""
@@ -58,33 +64,21 @@ def _panel_hist_arrays(axes, nfilt):
     return out
 
 
+@pytest.mark.usefixtures("no_tight_layout")
 class TestPhotometricOffsetsFixes:
     """Magnitude-space offset arithmetic, integer masks, and finiteness
     selection in photometric_offsets / photometric_offsets_2d."""
 
-    SPANS = dict(xspan=None, yspan=None)
-
-    def _run(self, d, phot, err, mask, flux, **extra):
-        xspan = [(4.0, 9.0)] * d["nfilt"]
-        yspan = [(-3.0, 3.0)] * d["nfilt"]
-        fig, axes = photometric_offsets(
-            phot,
-            err,
-            mask,
-            d["models"],
-            d["idxs"],
-            d["reds"],
-            d["dreds"],
-            d["dists"],
+    @staticmethod
+    def _run(d, phot, err, mask, flux, **extra):
+        return _run_1d(
+            dict(d, flux=phot, fluxerr=err, mask=mask),
             flux=flux,
-            xspan=xspan,
-            yspan=yspan,
+            xspan=[(4.0, 9.0)] * d["nfilt"],
+            yspan=[(-3.0, 3.0)] * d["nfilt"],
             bins=20,
             **extra,
         )
-        arrays = _panel_hist_arrays(axes, d["nfilt"])
-        plt.close(fig)
-        return arrays
 
     def test_flux_false_matches_flux_true(self):
         """The same photometry passed as magnitudes (flux=False) or fluxes
@@ -118,7 +112,6 @@ class TestPhotometricOffsetsFixes:
         mask_bool = np.ones((d["nobj"], d["nfilt"]), dtype=bool)
         # Knock out one random band per object (>= 4 observed bands remain).
         mask_bool[np.arange(d["nobj"]), rng.randint(0, d["nfilt"], d["nobj"])] = False
-        # Give masked bands finite values so only mask semantics differ.
         arrays_bool = self._run(d, d["flux"], d["fluxerr"], mask_bool, flux=True)
         arrays_int = self._run(
             d, d["flux"], d["fluxerr"], mask_bool.astype(int), flux=True
@@ -153,27 +146,7 @@ class TestPhotometricOffsetsFixes:
         mask_bool[np.arange(d["nobj"]), rng.randint(0, d["nfilt"], d["nobj"])] = False
 
         def run(mask):
-            fig, axes = photometric_offsets_2d(
-                d["flux"],
-                d["fluxerr"],
-                mask,
-                d["models"],
-                d["idxs"],
-                d["reds"],
-                d["dreds"],
-                d["dists"],
-                x,
-                y,
-                bins=4,
-                plot_thresh=1.0,
-            )
-            ax = axes.flatten()
-            arrays = [
-                np.ma.filled(np.asanyarray(ax[i].images[0].get_array()), np.nan)
-                for i in range(d["nfilt"])
-            ]
-            plt.close(fig)
-            return arrays
+            return _run_2d(dict(d, mask=mask), x, y, bins=4)
 
         arrays_bool = run(mask_bool)
         arrays_int = run(mask_bool.astype(int))
@@ -193,6 +166,8 @@ def _panel_image_arrays(axes, nfilt):
 def _run_1d(d, **kwargs):
     kwargs.setdefault("xspan", [(-10.0, 20.0)] * d["nfilt"])
     kwargs.setdefault("yspan", [(-20.0, 20.0)] * d["nfilt"])
+    if "fig" not in kwargs:
+        kwargs["fig"] = plt.subplots(2, 3)
     fig, axes = photometric_offsets(
         d["flux"],
         d["fluxerr"],
@@ -212,6 +187,8 @@ def _run_1d(d, **kwargs):
 def _run_2d(d, x, y, **kwargs):
     kwargs.setdefault("bins", 3)
     kwargs.setdefault("plot_thresh", 1.0)
+    if "fig" not in kwargs:
+        kwargs["fig"] = plt.subplots(2, 3)
     fig, axes = photometric_offsets_2d(
         d["flux"],
         d["fluxerr"],
@@ -230,6 +207,7 @@ def _run_2d(d, x, y, **kwargs):
     return arrays
 
 
+@pytest.mark.usefixtures("no_tight_layout")
 class TestPhotometricOffsets1D:
     """Histogram weights and binning of `photometric_offsets`."""
 
@@ -278,6 +256,7 @@ class TestPhotometricOffsets1D:
         plt.close(fig)
 
 
+@pytest.mark.usefixtures("no_tight_layout")
 class TestPhotometricOffsets2D:
     """Offset maps of `photometric_offsets_2d`."""
 
@@ -321,3 +300,85 @@ class TestPhotometricOffsets2D:
         x, y = self._xy(d)
         for arr in _run_2d(d, x, y, bins=(4, 2)):
             assert arr.shape == (2, 4)  # imshow of offset2d.T
+
+    def test_magnitude_input_matches_flux_input(self):
+        d = _offsets_dataset()
+        x, y = self._xy(d)
+        flux_maps = _run_2d(d, x, y)
+        mag = dict(d, flux=d["mag"], fluxerr=d["magerr"])
+        mag_maps = _run_2d(mag, x, y, flux=False)
+        for a, b in zip(flux_maps, mag_maps):
+            np.testing.assert_allclose(a, b, rtol=1e-10, equal_nan=True)
+
+    def test_bins_per_filter_set_each_map_shape(self):
+        d = _offsets_dataset()
+        x, y = self._xy(d)
+        bins = [2, 3, 4, 2, 3, 4]
+        for arr, nbin in zip(_run_2d(d, x, y, bins=bins), bins):
+            assert arr.shape == (nbin, nbin)
+
+    def test_given_figure_is_returned(self):
+        d = _offsets_dataset()
+        x, y = self._xy(d)
+        figure = plt.subplots(2, 3)
+        fig, axes = photometric_offsets_2d(
+            d["flux"],
+            d["fluxerr"],
+            d["mask"],
+            d["models"],
+            d["idxs"],
+            d["reds"],
+            d["dreds"],
+            d["dists"],
+            x,
+            y,
+            bins=3,
+            fig=figure,
+        )
+        assert fig is figure[0] and axes is figure[1]
+        plt.close(fig)
+
+
+class TestDefaultFigure:
+    """The default figure and layout path, without the layout patch."""
+
+    def test_xlabel_labels_every_panel(self):
+        d = _offsets_dataset()
+        fig, axes = photometric_offsets(
+            d["flux"],
+            d["fluxerr"],
+            d["mask"],
+            d["models"],
+            d["idxs"],
+            d["reds"],
+            d["dreds"],
+            d["dists"],
+            x=np.zeros(d["nobj"]),
+            xlabel="Color",
+            bins=5,
+        )  # default figure: 2 x 5 panels, then tight_layout
+        labels = [ax.get_xlabel() for ax in axes.flatten()[: d["nfilt"]]]
+        plt.close(fig)
+        assert labels == ["Color"] * d["nfilt"]
+
+    def test_2d_default_figure_has_a_panel_per_filter(self):
+        d = _offsets_dataset()
+        rng = np.random.RandomState(5)
+        fig, axes = photometric_offsets_2d(
+            d["flux"],
+            d["fluxerr"],
+            d["mask"],
+            d["models"],
+            d["idxs"],
+            d["reds"],
+            d["dreds"],
+            d["dists"],
+            rng.uniform(-2, 2, d["nobj"]),
+            rng.uniform(-1, 1, d["nobj"]),
+            bins=3,
+            plot_thresh=1.0,
+        )
+        n_images = [len(ax.images) for ax in axes.flatten()]
+        plt.close(fig)
+        assert axes.shape == (2, 5)
+        assert n_images == [1] * d["nfilt"] + [0] * (10 - d["nfilt"])
