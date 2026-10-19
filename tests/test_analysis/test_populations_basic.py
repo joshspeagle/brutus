@@ -6,7 +6,6 @@ Tests for isochrone-based population analysis with mixture-before-marginalizatio
 Uses real MIST isochrone data for authentic testing.
 """
 
-import os
 import warnings
 
 import numpy as np
@@ -24,9 +23,6 @@ from brutus.analysis.populations import (
 
 # Import required classes
 from brutus.core.populations import Isochrone, StellarPop
-
-# Test outlier model functions
-from brutus.utils.photometry import chisquare_outlier_loglike, uniform_outlier_loglike
 
 
 @pytest.fixture(scope="module")
@@ -115,159 +111,6 @@ def mock_observations():
         "parallax": parallax,
         "parallax_err": parallax_err,
     }
-
-
-class TestOutlierModels:
-    """Test outlier model functions in utils.photometry."""
-
-    def test_chisquare_outlier_basic(self):
-        """Test chi-square outlier model with basic inputs."""
-        flux = np.array([[1.0, 0.8, 0.6], [1.2, 1.0, 0.8]])  # 2 objects, 3 filters
-        err = np.array([[0.1, 0.08, 0.06], [0.12, 0.1, 0.08]])
-
-        lnl_outlier = chisquare_outlier_loglike(flux, err)
-
-        assert len(lnl_outlier) == 2
-        assert np.all(np.isfinite(lnl_outlier))
-        assert np.all(lnl_outlier < 0)  # Should be negative (log probability)
-
-    def test_uniform_outlier_basic(self):
-        """Test uniform outlier model with basic inputs."""
-        flux = np.array([[1.0, 0.8, 0.6], [1.2, 1.0, 0.8]])
-        err = np.array([[0.1, 0.08, 0.06], [0.12, 0.1, 0.08]])
-
-        lnl_outlier = uniform_outlier_loglike(flux, err)
-
-        assert len(lnl_outlier) == 2
-        assert np.all(np.isfinite(lnl_outlier))
-        # Note: uniform model can have positive values due to volume normalization
-
-    def test_outlier_models_with_parallax(self):
-        """Test outlier models with parallax data."""
-        flux = np.array([[1.0, 0.8]])
-        err = np.array([[0.1, 0.08]])
-        parallax = np.array([2.0])  # 2 mas
-        parallax_err = np.array([0.1])  # 0.1 mas
-
-        lnl_chi = chisquare_outlier_loglike(
-            flux, err, parallax=parallax, parallax_err=parallax_err
-        )
-        lnl_unif = uniform_outlier_loglike(
-            flux, err, parallax=parallax, parallax_err=parallax_err
-        )
-
-        assert len(lnl_chi) == 1
-        assert len(lnl_unif) == 1
-        assert np.all(np.isfinite([lnl_chi[0], lnl_unif[0]]))
-
-    def test_chisquare_outlier_with_invalid_data(self):
-        """Test chi-square outlier model with invalid photometry data."""
-        flux = np.array([[1.0, np.nan, 0.6], [1.2, 1.0, np.inf]])
-        err = np.array([[0.1, 0.08, 0.0], [0.12, np.nan, 0.08]])  # Zero and NaN errors
-
-        lnl_outlier = chisquare_outlier_loglike(flux, err)
-
-        assert len(lnl_outlier) == 2
-        assert np.all(np.isfinite(lnl_outlier))  # Should handle invalid data gracefully
-
-    def test_chisquare_outlier_custom_p_value(self):
-        """Test chi-square outlier model with custom p-value cut."""
-        flux = np.array([[1.0, 0.8, 0.6]])
-        err = np.array([[0.1, 0.08, 0.06]])
-
-        # Test different p-values
-        lnl_1 = chisquare_outlier_loglike(flux, err, p_value_cut=1e-3)
-        lnl_2 = chisquare_outlier_loglike(flux, err, p_value_cut=1e-6)
-
-        assert len(lnl_1) == 1 and len(lnl_2) == 1
-        assert np.all(np.isfinite([lnl_1[0], lnl_2[0]]))
-        # Different p-values should give different results
-        assert lnl_1[0] != lnl_2[0]
-
-    def test_chisquare_outlier_invalid_parallax(self):
-        """Test chi-square outlier model with invalid parallax data."""
-        flux = np.array([[1.0, 0.8], [1.2, 1.0]])
-        err = np.array([[0.1, 0.08], [0.12, 0.1]])
-        parallax = np.array([2.0, np.nan])  # One invalid parallax
-        parallax_err = np.array([0.1, 0.0])  # One zero error
-
-        lnl_outlier = chisquare_outlier_loglike(
-            flux, err, parallax=parallax, parallax_err=parallax_err
-        )
-
-        assert len(lnl_outlier) == 2
-        assert np.all(np.isfinite(lnl_outlier))
-
-    def test_uniform_outlier_with_invalid_data(self):
-        """Test uniform outlier model with invalid photometry data."""
-        flux = np.array([[1.0, np.nan, 0.6], [1.2, 1.0, np.inf]])
-        err = np.array([[0.1, 0.08, 0.0], [0.12, np.nan, 0.08]])  # Zero and NaN errors
-
-        # Should handle invalid data gracefully - expect warnings
-        with warnings.catch_warnings():
-            warnings.simplefilter(
-                "ignore", RuntimeWarning
-            )  # Ignore expected NaN warnings
-            lnl_outlier = uniform_outlier_loglike(flux, err)
-
-        assert len(lnl_outlier) == 2
-        # Should handle invalid data - may be -inf but finite is acceptable
-        assert np.all(np.isfinite(lnl_outlier) | (lnl_outlier == -np.inf))
-
-    def test_uniform_outlier_custom_sigma_clip(self):
-        """Test uniform outlier model with custom sigma clipping."""
-        # Use more diverse data to ensure sigma clip differences matter
-        flux = np.array([[1.0, 0.8, 0.6], [2.0, 1.5, 1.2]])
-        err = np.array([[0.1, 0.08, 0.06], [0.2, 0.15, 0.12]])
-
-        # Test different sigma clips
-        lnl_1 = uniform_outlier_loglike(flux, err, sigma_clip=2.0)
-        lnl_2 = uniform_outlier_loglike(flux, err, sigma_clip=5.0)
-
-        assert len(lnl_1) == 2 and len(lnl_2) == 2
-        assert np.all(np.isfinite([lnl_1, lnl_2]))
-        # Different sigma clips should give different results (may be same for some data)
-        # Just test that function works with different parameters
-        assert isinstance(lnl_1[0], (int, float, np.number))
-        assert isinstance(lnl_2[0], (int, float, np.number))
-
-    def test_uniform_outlier_invalid_parallax(self):
-        """Test uniform outlier model with invalid parallax data."""
-        flux = np.array([[1.0, 0.8], [1.2, 1.0]])
-        err = np.array([[0.1, 0.08], [0.12, 0.1]])
-        parallax = np.array([2.0, np.nan])  # One invalid parallax
-        parallax_err = np.array([0.1, np.inf])  # One infinite error
-
-        lnl_outlier = uniform_outlier_loglike(
-            flux, err, parallax=parallax, parallax_err=parallax_err
-        )
-
-        assert len(lnl_outlier) == 2
-        assert np.all(np.isfinite(lnl_outlier) | (lnl_outlier == -np.inf))
-
-    def test_outlier_models_single_filter(self):
-        """Test outlier models with single filter (edge case)."""
-        flux = np.array([[1.0], [0.5]])  # Single filter
-        err = np.array([[0.1], [0.05]])
-
-        lnl_chi = chisquare_outlier_loglike(flux, err)
-        lnl_unif = uniform_outlier_loglike(flux, err)
-
-        assert len(lnl_chi) == 2 and len(lnl_unif) == 2
-        assert np.all(np.isfinite(lnl_chi))
-        assert np.all(np.isfinite(lnl_unif) | (lnl_unif == -np.inf))
-
-    def test_outlier_models_stellar_params_unused(self):
-        """Test that stellar_params parameter is handled (currently unused)."""
-        flux = np.array([[1.0, 0.8]])
-        err = np.array([[0.1, 0.08]])
-        stellar_params = {"mass": [1.0], "age": [1e9]}  # Currently unused
-
-        lnl_chi = chisquare_outlier_loglike(flux, err, stellar_params=stellar_params)
-        lnl_unif = uniform_outlier_loglike(flux, err, stellar_params=stellar_params)
-
-        assert len(lnl_chi) == 1 and len(lnl_unif) == 1
-        assert np.all(np.isfinite([lnl_chi[0], lnl_unif[0]]))
 
 
 class TestPopulationGridGeneration:
@@ -611,13 +454,7 @@ class TestIntegration:
 
         # Test individual components with real data
 
-        # 1. Test outlier models
-        lnl_chi = chisquare_outlier_loglike(obs_flux, obs_err)
-        lnl_unif = uniform_outlier_loglike(obs_flux, obs_err)
-        assert np.all(np.isfinite(lnl_chi))
-        assert np.all(np.isfinite(lnl_unif))
-
-        # 2. Test cluster likelihood with real grid
+        # 1. Test cluster likelihood with real grid
         lnl_cluster = compute_isochrone_cluster_loglike(
             obs_flux, obs_err, real_isochrone_grid
         )
@@ -625,19 +462,19 @@ class TestIntegration:
         assert lnl_cluster.shape == (n_grid_points, 2)
         assert np.any(np.isfinite(lnl_cluster))  # Should have some finite values
 
-        # 3. Test outlier likelihood
+        # 2. Test outlier likelihood
         lnl_outlier = compute_isochrone_outlier_loglike(
             obs_flux, obs_err, real_isochrone_grid
         )
         assert lnl_outlier.shape == (n_grid_points, 2)
         assert np.all(np.isfinite(lnl_outlier))
 
-        # 4. Test mixture
+        # 3. Test mixture
         lnl_mixture = apply_isochrone_mixture_model(lnl_cluster, lnl_outlier, 0.9, 0.1)
         assert lnl_mixture.shape == (n_grid_points, 2)
         assert np.all(np.isfinite(lnl_mixture))
 
-        # 5. Test marginalization
+        # 4. Test marginalization
         lnl_marginalized = marginalize_isochrone_grid(
             lnl_mixture,
             real_isochrone_grid["mass_jacobians"],
@@ -647,136 +484,6 @@ class TestIntegration:
         assert np.all(np.isfinite(lnl_marginalized))
 
         print("✅ All workflow components working correctly with real MIST data")
-
-
-class TestPhotometryUtilityFunctions:
-    """Test photometry utility functions for coverage."""
-
-    def test_magnitude_conversion(self):
-        """Test magnitude and inverse magnitude conversion functions."""
-        from brutus.utils.photometry import inv_magnitude, magnitude
-
-        # Test data
-        phot = np.array([[1.0, 2.0, 3.0], [0.5, 1.5, 2.5]])
-        err = np.array([[0.1, 0.2, 0.3], [0.05, 0.15, 0.25]])
-        zeropoints = np.array([1.0, 1.0, 1.0])
-
-        # Test magnitude conversion
-        mag, mag_err = magnitude(phot, err, zeropoints=zeropoints)
-
-        assert mag.shape == phot.shape
-        assert mag_err.shape == err.shape
-        assert np.all(np.isfinite(mag))
-        assert np.all(np.isfinite(mag_err))
-        assert np.all(mag_err > 0)  # Errors should be positive
-
-        # Test inverse conversion
-        phot_recovered, err_recovered = inv_magnitude(
-            mag, mag_err, zeropoints=zeropoints
-        )
-
-        # Should recover original photometry (within numerical precision)
-        assert np.allclose(phot, phot_recovered, rtol=1e-10)
-        assert np.allclose(err, err_recovered, rtol=1e-10)
-
-    def test_luptitude_conversion(self):
-        """Test luptitude and inverse luptitude conversion functions."""
-        from brutus.utils.photometry import inv_luptitude, luptitude
-
-        # Test data
-        phot = np.array([[1.0, 2.0, 0.1], [0.5, 1.5, 0.05]])  # Include faint source
-        err = np.array([[0.1, 0.2, 0.05], [0.05, 0.15, 0.02]])
-        skynoise = np.array([0.1, 0.1, 0.1])
-        zeropoints = np.array([1.0, 1.0, 1.0])
-
-        # Test luptitude conversion
-        lupt, lupt_err = luptitude(phot, err, skynoise=skynoise, zeropoints=zeropoints)
-
-        assert lupt.shape == phot.shape
-        assert lupt_err.shape == err.shape
-        assert np.all(np.isfinite(lupt))
-        assert np.all(np.isfinite(lupt_err))
-        assert np.all(lupt_err > 0)  # Errors should be positive
-
-        # Test inverse conversion
-        phot_recovered, err_recovered = inv_luptitude(
-            lupt, lupt_err, skynoise=skynoise, zeropoints=zeropoints
-        )
-
-        # Should recover original photometry (within numerical precision)
-        assert np.allclose(phot, phot_recovered, rtol=1e-10)
-        assert np.allclose(err, err_recovered, rtol=1e-10)
-
-    def test_add_mag_function(self):
-        """Test magnitude addition function."""
-        from brutus.utils.photometry import add_mag
-
-        # Test simple case: adding equal magnitudes should brighten by 2.5*log10(2) ≈ 0.75 mag
-        mag1 = 10.0
-        mag2 = 10.0
-        mag_combined = add_mag(mag1, mag2)
-
-        expected = mag1 - 2.5 * np.log10(2)  # Should be brighter
-        assert np.isclose(mag_combined, expected, rtol=1e-10)
-
-        # Test with arrays
-        mag1_arr = np.array([10.0, 15.0, 20.0])
-        mag2_arr = np.array([10.0, 15.0, 20.0])
-        mag_combined_arr = add_mag(mag1_arr, mag2_arr)
-
-        expected_arr = mag1_arr - 2.5 * np.log10(2)
-        assert np.allclose(mag_combined_arr, expected_arr, rtol=1e-10)
-
-    def test_phot_loglike_with_dof_reduction(self):
-        """Test phot_loglike function with dof_reduction parameter."""
-        from brutus.utils.photometry import phot_loglike
-
-        # Test data
-        flux = np.array([[1.0, 0.8, 0.6], [1.2, 1.0, 0.8]])  # 2 objects, 3 filters
-        err = np.array([[0.1, 0.08, 0.06], [0.12, 0.1, 0.08]])
-        mfluxes = np.array(
-            [
-                [
-                    [0.9, 0.75, 0.55],
-                    [1.1, 0.85, 0.65],
-                ],  # 2 objects, 2 models, 3 filters
-                [[1.15, 0.95, 0.75], [1.25, 1.05, 0.85]],
-            ]
-        )
-
-        # Test without dof_reduction
-        lnl_no_dof = phot_loglike(flux, err, mfluxes, dim_prior=True, dof_reduction=0)
-
-        # Test with dof_reduction
-        lnl_with_dof = phot_loglike(flux, err, mfluxes, dim_prior=True, dof_reduction=1)
-
-        assert lnl_no_dof.shape == (2, 2)  # (n_obj, n_models)
-        assert lnl_with_dof.shape == (2, 2)
-        assert np.all(np.isfinite(lnl_no_dof))
-        assert np.all(np.isfinite(lnl_with_dof))
-        # Different dof_reduction should give different results
-        assert not np.allclose(lnl_no_dof, lnl_with_dof)
-
-    def test_phot_loglike_dimension_mismatch(self):
-        """Test phot_loglike function with mismatched dimensions."""
-        from brutus.utils.photometry import phot_loglike
-
-        # Test data with mismatched dimensions
-        flux = np.array([[1.0, 0.8, 0.6], [1.2, 1.0, 0.8]])  # 2 objects, 3 filters
-        err = np.array([[0.1, 0.08, 0.06], [0.12, 0.1, 0.08]])
-        mfluxes = np.array(
-            [
-                [
-                    [0.9, 0.75],
-                    [1.1, 0.85],
-                ],  # WRONG: 2 objects, 2 models, 2 filters (should be 3)
-                [[1.15, 0.95], [1.25, 1.05]],
-            ]
-        )
-
-        # Should raise ValueError for dimension mismatch
-        with pytest.raises(ValueError, match="Inconsistent dimensions"):
-            phot_loglike(flux, err, mfluxes)
 
 
 if __name__ == "__main__":

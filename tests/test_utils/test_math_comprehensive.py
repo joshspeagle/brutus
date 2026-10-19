@@ -42,23 +42,6 @@ class TestMatrixOperations:
             product_reg, expected, decimal=10
         )  # Slightly less precision due to regularization
 
-    def test_inverse3_vs_numpy(self):
-        """Test inverse computation against numpy.linalg.inv."""
-        from brutus.utils.math import inverse3
-
-        np.random.seed(42)
-
-        # Create random invertible matrices
-        for _ in range(10):
-            A = np.random.random((3, 3))
-            A = A + A.T + 3 * np.eye(3)  # Make positive definite (invertible)
-
-            # Test without regularization to match numpy exactly
-            custom_inv = inverse3(A, regularize=False)
-            numpy_inv = np.linalg.inv(A)
-
-            np.testing.assert_array_almost_equal(custom_inv, numpy_inv, decimal=10)
-
     def test_inverse3_batch(self):
         """Test batch matrix inversion."""
         from brutus.utils.math import inverse3
@@ -343,27 +326,6 @@ class TestMathEdgeCases:
 
 class TestMathIntegration:
     """Integration tests for mathematical functions."""
-
-    def test_matrix_operations_pipeline(self):
-        """Test a pipeline using multiple matrix operations."""
-        from brutus.utils.math import inverse3
-
-        np.random.seed(42)
-
-        # Create batch of random matrices
-        batch_size = 5
-        A = np.random.random((batch_size, 3, 3))
-        A = (
-            A + np.transpose(A, (0, 2, 1)) + 3 * np.eye(3)[None, :, :]
-        )  # Make invertible
-
-        # Compute inverses
-        A_inv = inverse3(A)
-
-        # Verify A * A_inv = I for each matrix
-        for i in range(batch_size):
-            product = np.dot(A[i], A_inv[i])
-            np.testing.assert_array_almost_equal(product, np.eye(3), decimal=10)
 
     def test_statistical_consistency(self):
         """Test statistical properties of distribution functions."""

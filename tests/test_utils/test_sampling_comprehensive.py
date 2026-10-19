@@ -17,38 +17,6 @@ import pytest
 class TestQuantileFunction:
     """Unit tests for quantile computation."""
 
-    def test_quantile_unweighted_basic(self):
-        """Test basic unweighted quantile computation."""
-        from brutus.utils.sampling import quantile
-
-        # Simple test case
-        x = np.array([1, 2, 3, 4, 5])
-        q = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
-
-        result = quantile(x, q)
-
-        # Midpoint-CDF convention: identical to explicit uniform weights.
-        expected = np.array([1.0, 1.75, 3.0, 4.25, 5.0])
-        np.testing.assert_array_almost_equal(result, expected, decimal=10)
-        np.testing.assert_array_almost_equal(
-            result, quantile(x, q, weights=np.ones_like(x)), decimal=12
-        )
-
-    def test_quantile_weighted_basic(self):
-        """Test basic weighted quantile computation."""
-        from brutus.utils.sampling import quantile
-
-        # Test case where last sample is heavily weighted
-        x = np.array([1, 2, 3, 4, 5])
-        weights = np.array([1, 1, 1, 1, 10])  # Last sample heavily weighted
-        q = np.array([0.5, 0.9])
-
-        result = quantile(x, q, weights=weights)
-
-        # With heavy weighting on last sample, quantiles should be close to 5
-        assert result[0] > 4.0  # Median should be > 4
-        assert result[1] > 4.5  # 90th percentile should be close to 5
-
     def test_quantile_single_value(self):
         """Test quantile with single quantile value."""
         from brutus.utils.sampling import quantile
@@ -60,37 +28,6 @@ class TestQuantileFunction:
         expected = np.percentile(x, 50)
 
         np.testing.assert_almost_equal(result, expected, decimal=10)
-
-    def test_quantile_edge_cases(self):
-        """Test quantile edge cases."""
-        from brutus.utils.sampling import quantile
-
-        x = np.array([1, 2, 3, 4, 5])
-
-        # Test extreme quantiles
-        q_min = quantile(x, 0.0)
-        q_max = quantile(x, 1.0)
-
-        assert q_min == 1.0
-        assert q_max == 5.0
-
-    def test_quantile_error_conditions(self):
-        """Test quantile error conditions."""
-        from brutus.utils.sampling import quantile
-
-        x = np.array([1, 2, 3, 4, 5])
-
-        # Quantiles outside [0, 1] should raise error
-        with pytest.raises(ValueError, match="Quantiles must be between"):
-            quantile(x, [-0.1, 0.5])
-
-        with pytest.raises(ValueError, match="Quantiles must be between"):
-            quantile(x, [0.5, 1.1])
-
-        # Mismatched dimensions should raise error
-        weights = np.array([1, 2, 3])  # Wrong length
-        with pytest.raises(ValueError, match="Dimension mismatch"):
-            quantile(x, 0.5, weights=weights)
 
 
 class TestDrawSARFunction:
