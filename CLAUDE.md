@@ -18,7 +18,7 @@ brutus infers stellar properties, distances and extinctions from photometry and 
 - Test: `pytest`. Tests that need downloaded model data skip when it is absent; `python .github/scripts/fetch_test_data.py` downloads what CI uses.
 - Coverage: `NUMBA_DISABLE_JIT=1 pytest --cov=brutus`. Without that variable, coverage cannot see inside `@jit` functions. Run plain tests with JIT on, so the compiled parallel code is what runs.
 - Lint and format: `pre-commit run --all-files` (black, isort, flake8 and file hygiene).
-- Docs: `cd docs && make html`. The site builds into `docs/build/html/`.
+- Docs: `cd docs && make html SPHINXOPTS="-W --keep-going"`. Warnings are errors, as in CI. The site builds into `docs/build/html/`.
 - CI runs the tests on Ubuntu and macOS for Python 3.9 to 3.13, plus a numpy 1.x leg, and builds the docs, for every push to and pull request against `master`. CI tests with `NUMBA_DISABLE_JIT=1`, so it never runs the compiled code: before pushing a change to a jitted function, run its tests locally with JIT on.
 
 ## Plan

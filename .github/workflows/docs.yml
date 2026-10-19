@@ -31,7 +31,7 @@ jobs:
     - name: Build documentation
       run: |
         cd docs
-        make html
+        make html SPHINXOPTS="-W --keep-going"
 
     - name: Upload Pages artifact
       if: github.ref == 'refs/heads/master' && github.event_name == 'push'
