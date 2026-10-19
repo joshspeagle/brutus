@@ -1,34 +1,36 @@
-.. raw:: html
+```{raw} html
+<div class="hero-section">
+```
 
-   <div class="hero-section">
-
-brutus
-======
+# brutus
 
 *Et tu, Brute?*
 
 **"Brute-force" Bayesian inference for stellar photometry**
 
-.. image:: _static/brutus-logo-light.svg
-   :alt: brutus logo
-   :align: center
-   :width: 420px
-   :class: only-light
+```{image} _static/brutus-logo-light.svg
+:align: center
+:alt: brutus logo
+:class: only-light
+:width: 420px
+```
 
-.. image:: _static/brutus-logo-dark.svg
-   :alt: brutus logo
-   :align: center
-   :width: 420px
-   :class: only-dark
+```{image} _static/brutus-logo-dark.svg
+:align: center
+:alt: brutus logo
+:class: only-dark
+:width: 420px
+```
 
-.. raw:: html
+```{raw} html
+<p class="tagline">Derive distances, reddenings, and stellar properties from photometry</p>
+<p><span class="version-badge">v1.2.0</span></p>
+</div>
+```
 
-   <p class="tagline">Derive distances, reddenings, and stellar properties from photometry</p>
-   <p><span class="version-badge">v1.2.0</span></p>
-   </div>
+______________________________________________________________________
 
-----
-
+```{eval-rst}
 .. grid:: 1 2 2 4
    :gutter: 4
    :class-container: sd-text-center
@@ -84,12 +86,13 @@ brutus
 
       See the latest changes in v\ |version|.
       Release notes and migration guides.
+```
 
-----
+______________________________________________________________________
 
-Key Features
-------------
+## Key Features
 
+```{eval-rst}
 .. grid:: 1 1 2 2
    :gutter: 3
 
@@ -167,12 +170,13 @@ Key Features
 
          *Useful for simulations, testing, or understanding model predictions.*
          See :doc:`stellar_models`.
+```
 
-----
+______________________________________________________________________
 
-Code Examples
--------------
+## Code Examples
 
+```{eval-rst}
 .. tab-set::
 
    .. tab-item:: Install
@@ -270,55 +274,62 @@ Code Examples
              rv=3.3,         # Extinction law R(V)
              dist=2000.0     # Distance in parsecs
          )
+```
 
-----
+______________________________________________________________________
 
-.. toctree::
-   :maxdepth: 2
-   :caption: Getting Started
-   :hidden:
+```{toctree}
+:caption: Getting Started
+:hidden: true
+:maxdepth: 2
 
-   installation
-   quickstart
-   glossary
+installation
+quickstart
+glossary
+```
 
-.. toctree::
-   :maxdepth: 2
-   :caption: Scientific Background
-   :hidden:
+```{toctree}
+:caption: Scientific Background
+:hidden: true
+:maxdepth: 2
 
-   scientific_background
-   stellar_models
-   priors
-   grid_generation
-   population_modeling
-   photometric_offsets
+scientific_background
+stellar_models
+priors
+grid_generation
+population_modeling
+photometric_offsets
+```
 
-.. toctree::
-   :maxdepth: 2
-   :caption: Tutorials
-   :hidden:
+```{toctree}
+:caption: Tutorials
+:hidden: true
+:maxdepth: 2
 
-   tutorials/index
+tutorials/index
+```
 
-.. toctree::
-   :maxdepth: 2
-   :caption: User Guide
-   :hidden:
+```{toctree}
+:caption: User Guide
+:hidden: true
+:maxdepth: 2
 
-   understanding_results
+understanding_results
+```
 
-.. toctree::
-   :maxdepth: 2
-   :caption: API Reference
-   :hidden:
+```{toctree}
+:caption: API Reference
+:hidden: true
+:maxdepth: 2
 
-   api/index
+api/index
+```
 
-.. toctree::
-   :maxdepth: 1
-   :caption: Development
-   :hidden:
+```{toctree}
+:caption: Development
+:hidden: true
+:maxdepth: 1
 
-   changelog
-   contributing
+changelog
+contributing
+```

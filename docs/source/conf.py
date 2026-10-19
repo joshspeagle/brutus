@@ -71,6 +71,8 @@ extensions = [
 nb_execution_mode = "off"  # Use pre-rendered outputs, don't execute during build
 nb_custom_formats = {}
 suppress_warnings = ["mystnb.unknown_mime_type"]
+myst_enable_extensions = ["colon_fence", "deflist", "dollarmath"]
+myst_heading_anchors = 3
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]
@@ -118,6 +120,8 @@ napoleon_use_rtype = True
 napoleon_preprocess_types = False
 napoleon_type_aliases = None
 napoleon_attr_annotations = True
+# Module docstrings list their contents under these headings.
+napoleon_custom_sections = ["Classes", "Functions"]
 
 # autosummary settings
 autosummary_generate = True
