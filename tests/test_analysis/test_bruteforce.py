@@ -723,6 +723,7 @@ class TestBruteForceRealGrid:
             Nmc_prior=10,
             wt_thresh=0.1,
             coord=coord_galactic,  # Add galactic structure prior
+            dlabels=fitter.models_labels[indices],
             dustfile=None,
             parallax=None,
             rstate=np.random.RandomState(715),
@@ -742,6 +743,7 @@ class TestBruteForceRealGrid:
             wt_thresh=None,
             cdf_thresh=0.5,  # Select top 50% of models
             coord=coord_galactic,
+            dlabels=fitter.models_labels[indices],
             rstate=np.random.RandomState(732),
         )
 
@@ -1071,6 +1073,7 @@ class TestBruteForceMathematicalValidation:
             logpost_results = fitter.logpost_grid(
                 loglike_results,
                 coord=coord,  # Galactic coordinates for dust/galactic priors
+                dlabels=fitter.models_labels[test_indices],
                 Nmc_prior=10,  # Small for speed
                 wt_thresh=0.1,
                 rstate=np.random.RandomState(1058),
@@ -1875,3 +1878,305 @@ class TestDustPriorGating:
                 dustfile=object(),
                 data_coords=None,
             )
+
+
+class TestMaskAndInputs:
+    def test_int_mask_gives_same_lnl_as_bool_mask(self, fitter, observation):
+        flux, flux_err, _ = observation
+        flux = flux.copy()
+        flux[0] *= 3.0  # corrupt the masked band
+        int_mask = np.array([0, 1, 1, 1, 1])
+        lnl_int, ndim_int, _ = fitter.loglike_grid(flux, flux_err, int_mask)
+        lnl_bool, ndim_bool, _ = fitter.loglike_grid(
+            flux, flux_err, int_mask.astype(bool)
+        )
+        assert ndim_int == ndim_bool == 4
+        np.testing.assert_array_equal(lnl_int, lnl_bool)
+
+    def test_loglike_grid_leaves_inputs_unchanged(self, fitter, observation):
+        flux, flux_err, _ = observation
+        flux = flux.copy()
+        flux[2] = np.nan
+        mask = np.ones(5, dtype=bool)
+        av_init = np.full(fitter.nmodels, 0.5)
+        rv_init = np.full(fitter.nmodels, 3.3)
+        fitter.loglike_grid(
+            flux, flux_err, mask, av_init=av_init, rv_init=rv_init, return_vals=True
+        )
+        assert mask.all()
+        np.testing.assert_array_equal(av_init, 0.5)
+        np.testing.assert_array_equal(rv_init, 3.3)
+
+
+@pytest.fixture
+def batch(observation):
+    """fit() inputs for two copies of `observation`."""
+    flux, flux_err, mask = observation
+    return dict(
+        data=np.tile(flux, (2, 1)),
+        data_err=np.tile(flux_err, (2, 1)),
+        data_mask=np.tile(mask, (2, 1)),
+        data_labels=np.zeros(2, dtype=[("id", "i4")]),
+        data_coords=np.tile([120.0, 45.0], (2, 1)),
+    )
+
+
+class TestInputValidation:
+    @pytest.mark.parametrize(
+        "change, match",
+        [
+            (dict(parallax=np.array([5.0, 5.0])), "parallax_err"),
+            (dict(parallax_err=np.array([0.1, 0.1])), "parallax_err"),
+            (
+                dict(parallax=np.array([5.0]), parallax_err=np.array([0.1])),
+                "parallax must have shape",
+            ),
+            (dict(data_coords=np.zeros((2, 3))), "data_coords"),
+            (dict(data_labels=np.zeros(1, dtype=[("id", "i4")])), "data_labels"),
+            (dict(lnprior=np.zeros(5)), "lnprior"),
+            (dict(logl_initthresh=None), "logl_initthresh"),
+            (dict(logl_initthresh=0.0), "logl_initthresh"),
+            (dict(logl_initthresh=1.0), "logl_initthresh"),
+        ],
+    )
+    def test_fit_rejects_bad_input_before_creating_file(
+        self, fitter, batch, tmp_path, change, match
+    ):
+        path = tmp_path / "out.h5"
+        with pytest.raises(ValueError, match=match):
+            fitter.fit(save_file=str(path), verbose=False, **{**batch, **change})
+        assert not path.exists()
+
+    @pytest.mark.parametrize("key", ["data", "data_err", "data_mask"])
+    def test_fit_rejects_wrong_band_count(self, fitter, batch, tmp_path, key):
+        batch[key] = batch[key][:, :4]
+        with pytest.raises(ValueError, match=key):
+            fitter.fit(save_file=str(tmp_path / "out"), verbose=False, **batch)
+
+    @pytest.mark.parametrize(
+        "kwargs, match",
+        [
+            (dict(parallax=5.0), "parallax_err"),
+            (dict(init_thresh=2.0), "init_thresh"),
+        ],
+    )
+    def test_loglike_grid_rejects_bad_input(self, fitter, observation, kwargs, match):
+        flux, flux_err, mask = observation
+        with pytest.raises(ValueError, match=match):
+            fitter.loglike_grid(flux, flux_err, mask, **kwargs)
+
+    def test_zero_parallax_error_counts_as_no_parallax(self, fitter, observation):
+        flux, flux_err, mask = observation
+        with_zero = fitter.loglike_grid(
+            flux, flux_err, mask, parallax=5.0, parallax_err=0.0
+        )
+        without = fitter.loglike_grid(flux, flux_err, mask)
+        np.testing.assert_array_equal(with_zero[0], without[0])
+
+
+class TestLikelihoodNormalization:
+    def test_culled_and_refined_models_share_the_normalization(self, mock_grid):
+        # Random colours, so that most models fail the initial cut.
+        models = mock_grid.models.copy()
+        models[:, :, 0] += np.random.RandomState(3).normal(0, 0.3, (27, 5))
+        fitter = BruteForce(
+            StarGrid(models, mock_grid.labels, mock_grid.params), verbose=False
+        )
+        flux = 10 ** (-0.4 * models[13, :, 0])
+        flux_err = 0.05 * flux
+        mask = np.ones(5, dtype=bool)
+        lnl, ndim, chi2 = fitter.loglike_grid(flux, flux_err, mask, dim_prior=False)
+        expected = -0.5 * (ndim * np.log(2 * np.pi) + np.sum(np.log(flux_err**2)))
+        np.testing.assert_allclose(lnl + 0.5 * chi2, expected, rtol=1e-12)
+
+
+class TestTruncatedDraws:
+    def test_saved_av_draws_stay_off_the_bound(self, fitter, observation):
+        # An unreddened star: about half of the raw A(V) draws fall below 0.
+        flux, flux_err, mask = observation
+        out = fitter._fit(
+            flux,
+            flux_err,
+            mask,
+            coord=(120.0, 45.0),
+            Nmc_prior=50,
+            Ndraws=500,
+            rstate=np.random.RandomState(11),
+        )
+        reds = out[10]
+        assert np.all(reds > 0.0) and np.all(reds <= 20.0)
+
+    @pytest.mark.parametrize("param", ["dist", "av", "rv"])
+    def test_model_with_no_draw_inside_support_gets_zero_weight(self, fitter, param):
+        cov = np.diag([1e-4, 1e-4, 1e-4])
+        far = np.diag([1e-32, 1e-4, 1e-4])  # scale 1e-14 known to 1%
+        covs = [cov, far if param == "dist" else cov]
+        like = list(_make_loglike_results([1.0, 1.0], covs))
+        if param == "dist":
+            like[3][1] = 1e-14  # 1e7 kpc, beyond the 1e6 kpc limit
+        else:
+            like[4 if param == "av" else 5][1] = -5.0 if param == "av" else 20.0
+        sel, _, lnp, d_mc, a_mc, r_mc, _, mc_ess = fitter.logpost_grid(
+            tuple(like),
+            wt_thresh=None,
+            cdf_thresh=None,
+            Nmc_prior=20,
+            rstate=np.random.RandomState(5),
+        )
+        assert list(sel) == [0, 1]
+        assert np.all(np.isfinite(lnp)) and lnp[1] < -1e299 and lnp[0] > -1e299
+        assert mc_ess[1] == 0.0 and mc_ess[0] > 0.0
+        assert np.all(d_mc <= 1e6) and np.all(a_mc >= 0.0) and np.all(r_mc <= 8.0)
+
+    def test_model_with_zero_prior_everywhere_gets_zero_ess(self, fitter):
+        cov = np.diag([1e-4, 1e-4, 1e-4])
+        like = _make_loglike_results([1.0, 1.0], [cov, cov])
+        mc_ess = fitter.logpost_grid(
+            like,
+            coord=(120.0, 45.0),
+            lngalprior=lambda d, coord, labels=None: np.full(np.shape(d), -1e300),
+            dlabels=fitter.models_labels[:2],
+            lnprior=np.zeros(2),
+            wt_thresh=None,
+            cdf_thresh=None,
+            Nmc_prior=20,
+            rstate=np.random.RandomState(5),
+        )[7]
+        np.testing.assert_array_equal(mc_ess, 0.0)
+
+    def test_model_on_the_bound_loses_half_its_weight(self, fitter):
+        # Antithetic pairs put exactly half of the A(V) draws of a model at
+        # A(V) = 0 below the bound, so truncation lowers its lnp by ln 2.
+        cov = np.diag([1e-12, 1e-2, 1e-12])
+        like = list(_make_loglike_results([1.0, 1.0], [cov, cov]))
+        like[4] = np.array([0.5, 0.0])
+        _, _, lnp, *_ = fitter.logpost_grid(
+            tuple(like),
+            wt_thresh=None,
+            cdf_thresh=None,
+            Nmc_prior=20,
+            rstate=np.random.RandomState(5),
+        )
+        np.testing.assert_allclose(lnp[1] - lnp[0], np.log(0.5), atol=1e-6)
+
+
+class TestDustPriorPartial:
+    @pytest.fixture
+    def spy(self, monkeypatch):
+        import brutus.analysis.individual as individual
+
+        seen = []
+
+        def logp_extinction(avs, dustmap, coord, distance=None, **kwargs):
+            seen.append(kwargs)
+            return np.zeros_like(avs)
+
+        monkeypatch.setattr(individual, "logp_extinction", logp_extinction)
+        return logp_extinction, seen
+
+    @pytest.mark.parametrize(
+        "bound, expected",
+        [
+            ({"scatter": 0.3}, {"avlim": (0.0, 6.0)}),
+            ({"avlim": (0.0, 3.0)}, {}),
+        ],
+    )
+    def test_partial_gets_fit_avlim_unless_bound(
+        self, fitter, observation, spy, bound, expected
+    ):
+        from functools import partial
+
+        func, seen = spy
+        flux, flux_err, mask = observation
+        like = fitter.loglike_grid(flux, flux_err, mask, return_vals=True)
+        fitter.logpost_grid(
+            like,
+            coord=(120.0, 45.0),
+            dustfile=object(),
+            lndustprior=partial(func, **bound),
+            avlim=(0.0, 6.0),
+            Nmc_prior=5,
+            wt_thresh=0.1,
+            rstate=np.random.RandomState(0),
+        )
+        assert seen == [{**bound, **expected}]
+
+
+class TestSubsetResults:
+    def test_default_dlabels_with_subset_results_raises(self, fitter, observation):
+        flux, flux_err, mask = observation
+        like = fitter.loglike_grid(
+            flux, flux_err, mask, indices=np.arange(10, 20), return_vals=True
+        )
+        with pytest.raises(ValueError, match="dlabels"):
+            fitter.logpost_grid(like, coord=(120.0, 45.0), Nmc_prior=5)
+        with pytest.raises(ValueError, match="lnprior"):
+            fitter.logpost_grid(like, lnprior=np.zeros(27), dlabels=None, Nmc_prior=5)
+
+    def test_subset_labels_are_accepted(self, fitter, observation):
+        flux, flux_err, mask = observation
+        idx = np.arange(10, 20)
+        like = fitter.loglike_grid(flux, flux_err, mask, indices=idx, return_vals=True)
+        sel = fitter.logpost_grid(
+            like,
+            coord=(120.0, 45.0),
+            dlabels=fitter.models_labels[idx],
+            Nmc_prior=5,
+            rstate=np.random.RandomState(0),
+        )[0]
+        assert np.all(sel < len(idx))
+
+
+def test_get_sed_grid_rejects_wrong_length_av(fitter):
+    with pytest.raises(ValueError, match="av"):
+        fitter.get_sed_grid(av=np.zeros(2))
+
+
+class TestUnfittedObjects:
+    @pytest.mark.parametrize("running_io", [True, False])
+    def test_object_without_valid_bands_is_skipped(
+        self, fitter, batch, tmp_path, running_io
+    ):
+        batch["data_mask"][0] = False
+        with pytest.warns(RuntimeWarning, match="1 of 2 objects") as record:
+            path = fitter.fit(
+                save_file=str(tmp_path / "out"),
+                Ndraws=10,
+                Nmc_prior=10,
+                running_io=running_io,
+                rstate=np.random.RandomState(3),
+                verbose=False,
+                **batch,
+            )
+        assert sum("no valid bands" in str(w.message) for w in record) == 1
+        with h5py.File(path, "r") as f:
+            assert np.all(f["model_idx"][0] == -99)
+            assert f["obj_Nbands"][0] == 0
+            assert np.all(np.isnan(f["samps_dist"][0]))
+            assert np.isnan(f["obj_log_evid"][0])
+            assert np.all(f["model_idx"][1] >= 0)
+            assert f["obj_Nbands"][1] == 5
+
+    def test_output_file_closes_when_a_fit_raises(
+        self, fitter, batch, tmp_path, monkeypatch
+    ):
+        def fail(*args, **kwargs):
+            raise RuntimeError("fit failed")
+
+        monkeypatch.setattr(fitter, "_fit", fail)
+        path = tmp_path / "out.h5"
+        # Keeping the traceback keeps fit's frame alive, as Jupyter does.
+        with pytest.raises(RuntimeError, match="fit failed") as excinfo:
+            fitter.fit(save_file=str(path), verbose=False, **batch)
+        # HDF5 refuses to truncate a file that is still open.
+        h5py.File(path, "w").close()
+        assert excinfo.traceback
+
+
+def test_misspelled_keyword_raises(fitter, observation):
+    flux, flux_err, mask = observation
+    with pytest.raises(TypeError, match="av_gaus"):
+        fitter.loglike_grid(flux, flux_err, mask, av_gaus=(0.0, 0.01))
+    like = fitter.loglike_grid(flux, flux_err, mask, return_vals=True)
+    with pytest.raises(TypeError, match="Nmc"):
+        fitter.logpost_grid(like, Nmc=10)

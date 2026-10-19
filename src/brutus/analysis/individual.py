@@ -64,6 +64,7 @@ Basic usage with grid-based fitting:
 ... )
 """
 
+import numbers
 import os
 import sys
 import time
@@ -78,7 +79,7 @@ from scipy.special import logsumexp
 
 # Import StarGrid and SED utilities
 from ..core import StarGrid
-from ..core.sed_utils import _get_seds
+from ..core.sed_utils import _get_seds, _model_array, get_seds
 from ..priors.astrometric import logp_parallax, logp_parallax_scale
 from ..priors.extinction import logp_extinction
 from ..priors.galactic import logp_galactic_structure
@@ -104,6 +105,38 @@ LOG_ZERO = -1e300
 
 # Minimum allowed scale factor to prevent division by zero or log(0).
 MIN_SCALE = 1e-20
+
+
+def _has_parallax(parallax, parallax_err):
+    """Return True for a usable parallax, as the parallax priors define it."""
+    return (
+        parallax is not None
+        and np.isfinite(parallax)
+        and np.isfinite(parallax_err)
+        and parallax_err > 0
+    )
+
+
+def _clean_bands(data, data_err):
+    """Return True for bands with a finite flux and a finite, positive error."""
+    with np.errstate(invalid="ignore"):
+        return np.isfinite(data) & np.isfinite(data_err) & (data_err > 0.0)
+
+
+def _check_shape(name, arr, shape):
+    """Raise ValueError naming `name` unless `arr` has shape `shape`."""
+    if np.shape(arr) != shape:
+        raise ValueError(f"{name} must have shape {shape}, got {np.shape(arr)}")
+
+
+def _check_threshold(name, value):
+    """Raise ValueError naming `name` unless `value` is a real number in (0, 1).
+
+    Models within ``log(value)`` of the best one pass the cut, so 1 would
+    select none.
+    """
+    if not (isinstance(value, numbers.Real) and 0.0 < value < 1.0):
+        raise ValueError(f"{name} must be a number in (0, 1), got {value!r}")
 
 
 # ============================================================================
@@ -938,9 +971,14 @@ class BruteForce:
         drvecs : numpy.ndarray of shape (Nmodels, Nbands)
             Differential reddening vectors with respect to Rv.
 
+        Raises
+        ------
+        ValueError
+            If ``av`` or ``rv`` is an array whose shape is not ``(Nmodels,)``.
+
         See Also
         --------
-        brutus.core.sed_utils._get_seds : Underlying SED computation
+        brutus.core.sed_utils.get_seds : Underlying SED computation
         StarGrid.get_seds : Single star SED generation
 
         Notes
@@ -957,29 +995,15 @@ class BruteForce:
 
         where :math:`r_0` and :math:`dr` are the reddening vector components.
         """
-        if indices is not None:
-            mag_coeffs = self.models[indices]
-        else:
-            mag_coeffs = self.models
-
-        # Ensure av and rv are arrays
-        n_models = len(mag_coeffs)
-
-        if av is None:
-            av = np.zeros(n_models)
-        elif np.isscalar(av):
-            av = np.full(n_models, av)
-        else:
-            av = np.asarray(av)
-
-        if rv is None:
-            rv = np.full(n_models, 3.3)
-        elif np.isscalar(rv):
-            rv = np.full(n_models, rv)
-        else:
-            rv = np.asarray(rv)
-
-        return _get_seds(mag_coeffs, av, rv, return_flux=return_flux)
+        mag_coeffs = self.models if indices is None else self.models[indices]
+        return get_seds(
+            mag_coeffs,
+            av=av,
+            rv=rv,
+            return_flux=return_flux,
+            return_rvec=True,
+            return_drvec=True,
+        )
 
     def _setup(
         self,
@@ -1055,9 +1079,10 @@ class BruteForce:
             warnings.simplefilter("ignore")
             mags, merr = magnitude(data, data_err)
 
-        # Mask bad data
+        # Mask bad data. With _clean_bands this is the final mask, so fit()
+        # can tell which objects have no valid bands.
         mask_update = (mags < mag_max) & (merr < merr_max)
-        data_mask = data_mask & mask_update
+        data_mask = data_mask & mask_update & _clean_bands(data, data_err)
 
         # Initialize prior if not provided
         if lnprior is None:
@@ -1135,7 +1160,6 @@ class BruteForce:
         parallax_err=None,
         return_vals=False,
         indices=None,
-        **kwargs,
     ):
         """
         Compute log-likelihood over the stellar model grid.
@@ -1152,7 +1176,7 @@ class BruteForce:
             Measurement errors.
 
         data_mask : `~numpy.ndarray` of shape `(Nfilt)`
-            Binary mask for valid data.
+            Boolean mask of valid bands (or 0/1 values, converted to bool).
 
         indices : array-like, optional
             Subset of model indices to use. If None, uses all models.
@@ -1177,11 +1201,6 @@ class BruteForce:
 
         return_vals : bool, optional
             If True, return full results including covariances. Default is False.
-
-        Other Parameters
-        ----------------
-        **kwargs
-            Passed to optimization functions.
 
         Returns
         -------
@@ -1222,12 +1241,20 @@ class BruteForce:
         # Implementation of grid-based likelihood computation
         Nmodels, Nfilt, Ncoef = mag_coeffs.shape
 
-        # Clean data
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            clean = np.isfinite(data) & np.isfinite(data_err) & (data_err > 0.0)
-            data_mask[~clean] = False
-        Ndim = sum(data_mask)
+        if (parallax is None) != (parallax_err is None):
+            raise ValueError("parallax and parallax_err must be given together")
+        _check_threshold("init_thresh", init_thresh)
+
+        # Clean data. A new mask, so the caller's array is left unchanged.
+        data_mask = np.asarray(data_mask, dtype=bool)
+        for name, arr in [
+            ("data", data),
+            ("data_err", data_err),
+            ("data_mask", data_mask),
+        ]:
+            _check_shape(name, arr, (Nfilt,))
+        data_mask = data_mask & _clean_bands(data, data_err)
+        Ndim = int(data_mask.sum())
 
         if Ndim == 0:
             # Fail fast with a clear message. With zero valid bands the
@@ -1275,11 +1302,10 @@ class BruteForce:
             # in logpost_grid."  A huge sigma effectively removes the prior.
             rv_gauss = (3.32, 1e6)
 
-        # Initialize values
-        if av_init is None:
-            av_init = np.zeros(Nmodels) + av_gauss[0]
-        if rv_init is None:
-            rv_init = np.zeros(Nmodels) + rv_gauss[0]
+        # Initialize values. The optimizers update these arrays in place, so
+        # they are copies, never the caller's arrays.
+        av_init = _model_array(av_init, av_gauss[0], Nmodels, "av_init").copy()
+        rv_init = _model_array(rv_init, rv_gauss[0], Nmodels, "rv_init").copy()
 
         # Compute unreddened photometry and the initial data residual in a
         # single fused parallel pass (replaces _get_seds + `mags - models`).
@@ -1308,40 +1334,31 @@ class BruteForce:
         )
         models, rvecs, drvecs, scale, av, rv, icov_sar, resid = results
 
-        if init_thresh is not None:
-            # Cull initial bad fits before moving on
-            chi2 = _chi2_from_resid(resid, tot_var)
-            lnl = -0.5 * chi2
+        # Cull initial bad fits before moving on
+        chi2 = _chi2_from_resid(resid, tot_var)
+        lnl = -0.5 * chi2
 
-            # Add parallax to log-likelihood
-            lnl_p = lnl
-            if parallax is not None and parallax_err is not None:
-                if np.isfinite(parallax) and np.isfinite(parallax_err):
-                    with warnings.catch_warnings():
-                        warnings.simplefilter("ignore")
-                        par = np.sqrt(scale)  # sqrt(scale) = 1/d_kpc = parallax_mas
-                        chi2_p = (par - parallax) ** 2 / parallax_err**2
-                        lnl_p = lnl - 0.5 * chi2_p
+        # Add parallax to log-likelihood
+        lnl_p = lnl
+        if _has_parallax(parallax, parallax_err):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                par = np.sqrt(scale)  # sqrt(scale) = 1/d_kpc = parallax_mas
+                chi2_p = (par - parallax) ** 2 / parallax_err**2
+                lnl_p = lnl - 0.5 * chi2_p
 
-            # Subselect models using log-likelihood thresholding
-            lnl_sel = lnl_p > np.max(lnl_p) + np.log(init_thresh)
-            init_sel = np.where(lnl_sel)[0]
+        # Subselect models using log-likelihood thresholding
+        lnl_sel = lnl_p > np.max(lnl_p) + np.log(init_thresh)
+        init_sel = np.where(lnl_sel)[0]
 
-            # Subselect models (tot_var is 1D and data-only, no subselection needed)
-            models = models[init_sel]
-            rvecs = rvecs[init_sel]
-            drvecs = drvecs[init_sel]
-            av_new = av[init_sel]
-            rv_new = rv[init_sel]
-            mcoeffs = mcoeffs[init_sel]
-            resid = resid[init_sel]
-        else:
-            # Keep all models
-            init_sel = np.arange(Nmodels)
-            chi2 = np.ones(Nmodels) - LOG_ZERO  # Large positive value
-            lnl = np.ones(Nmodels) + LOG_ZERO  # Large negative value
-            av_new = np.array(av, order="F")
-            rv_new = np.array(rv, order="F")
+        # Subselect models (tot_var is 1D and data-only, no subselection needed)
+        models = models[init_sel]
+        rvecs = rvecs[init_sel]
+        drvecs = drvecs[init_sel]
+        av_new = av[init_sel]
+        rv_new = rv[init_sel]
+        mcoeffs = mcoeffs[init_sel]
+        resid = resid[init_sel]
 
         # Iterate until convergence
         lnl_old, lerr = LOG_ZERO, -LOG_ZERO  # -inf, +inf proxies
@@ -1383,17 +1400,16 @@ class BruteForce:
             stepsize[lnl_new < lnl_old] /= rescaling
             lnl_old = lnl_new
 
-        # Insert optimized models into initial array of results
-        lnl_new += -0.5 * (Ndim * np.log(2.0 * np.pi) + np.sum(np.log(tot_var)))
+        # Insert optimized models into initial array of results. Culled models
+        # keep their magnitude-space fit; the Gaussian normalization applies to
+        # every model, so that all of lnl shares one constant.
         lnl[init_sel], chi2[init_sel] = lnl_new, chi2_new
         scale[init_sel], av[init_sel], rv[init_sel] = scale_new, av_new, rv_new
         icov_sar[init_sel] = icov_sar_new
+        lnl += -0.5 * (Ndim * np.log(2.0 * np.pi) + np.sum(np.log(tot_var)))
 
         # Apply dimensional prior
-        if dim_prior and Ndim > 0:
-            # Guard against Ndim == 0 (fully-masked object): np.log(0) = -inf
-            # would inject +inf into every model's log-likelihood. For Ndim >= 1
-            # this is identical to the previous behaviour.
+        if dim_prior:
             lnl -= 0.5 * (3.0 - Ndim) * np.log(Ndim)
 
         if return_vals:
@@ -1425,7 +1441,6 @@ class BruteForce:
         apply_av_prior=True,
         R_solar=8.2,
         Z_solar=0.025,
-        **kwargs,
     ):
         """
         Compute log-posterior over the stellar model grid.
@@ -1437,7 +1452,10 @@ class BruteForce:
         Parameters
         ----------
         results : tuple
-            Results from loglike_grid with return_vals=True.
+            Results from loglike_grid with return_vals=True. If those were
+            computed with ``indices``, ``lnprior`` and ``dlabels`` must be
+            subset with the same indices, and the returned ``sel`` indexes
+            that subset.
 
         apply_av_prior : bool, optional
             Whether to apply the dust-map extinction prior when ``dustfile``
@@ -1466,6 +1484,17 @@ class BruteForce:
         # Unpack results (using plural names for consistency with original lnpost)
         lnlike, Ndim, chi2, scales, avs, rvs, icovs_sar = results
         Nmodels = len(lnlike)
+        # dlabels is read only by the Galactic prior, which needs coord.
+        checked = [("lnprior", lnprior)]
+        if coord is not None:
+            checked.append(("dlabels", dlabels))
+        for name, arr in checked:
+            if arr is not None and np.size(arr) != Nmodels:
+                raise ValueError(
+                    f"{name} has {np.size(arr)} entries but results has {Nmodels} "
+                    f"models. Results from loglike_grid(indices=...) need "
+                    f"{name} subset with the same indices."
+                )
 
         # Initialize random state
         if rstate is None:
@@ -1659,11 +1688,17 @@ class BruteForce:
         a_mc = samples_all[1]  # Shape: (Nmc, Nsel)
         r_mc = samples_all[2]  # Shape: (Nmc, Nsel)
 
-        # Convert ln(d) to distance
-        dist_mc = np.exp(eta_samples)
-        dist_mc = np.clip(dist_mc, 0.001, 1e6)
-        a_mc = np.clip(a_mc, avlim[0], avlim[1])
-        r_mc = np.clip(r_mc, rvlim[0], rvlim[1])
+        # Convert ln(d) to distance. Draws outside the support are truncated:
+        # they get zero weight below. Their values are clipped only so that
+        # the priors stay finite and no saved draw leaves the support.
+        dist_raw = np.exp(eta_samples)
+        dist_mc = np.clip(dist_raw, 0.001, 1e6)
+        outside = dist_mc != dist_raw
+        a_clip = np.clip(a_mc, avlim[0], avlim[1])
+        outside |= a_clip != a_mc
+        r_clip = np.clip(r_mc, rvlim[0], rvlim[1])
+        outside |= r_clip != r_mc
+        a_mc, r_mc = a_clip, r_clip
 
         # Initialize log-posterior from base (without parallax scale approx).
         # The exact parallax likelihood is added below via logp_parallax.
@@ -1741,9 +1776,14 @@ class BruteForce:
             # the extinction profile to each star's distance
             av_flat = a_mc.ravel()  # Shape: (Nmc * Nsel,)
             dist_flat = dist_mc.ravel()  # Shape: (Nmc * Nsel,)
-            # The built-in prior normalizes over the fitted A(V) support;
-            # custom priors keep the documented 4-argument signature.
-            dust_kw = {"avlim": avlim} if lndustprior is logp_extinction else {}
+            # The built-in prior, bare or a partial that leaves avlim free,
+            # normalizes over the fitted A(V) support; custom priors keep the
+            # documented 4-argument signature.
+            builtin = lndustprior is logp_extinction or (
+                getattr(lndustprior, "func", None) is logp_extinction
+                and "avlim" not in lndustprior.keywords
+            )
+            dust_kw = {"avlim": avlim} if builtin else {}
             lnp_dust_flat = lndustprior(
                 av_flat, dustfile, coord, distance=dist_flat, **dust_kw
             )
@@ -1755,6 +1795,8 @@ class BruteForce:
             par_mc = 1.0 / dist_mc  # Shape: (Nmc, Nsel)
             lnp_parallax_all = logp_parallax(par_mc, parallax, parallax_err)
             lnp_mc += lnp_parallax_all
+
+        lnp_mc[outside] = LOG_ZERO
 
         # Compute integrated posterior (VECTORIZED)
         lnp = logsumexp(lnp_mc, axis=0) - np.log(Nmc)
@@ -1780,7 +1822,9 @@ class BruteForce:
         w_sum = w.sum(axis=0, keepdims=True)  # (1, Nsel)
         w_normed = w / np.maximum(w_sum, 1e-300)  # (Nmc, Nsel)
         mc_ess = 1.0 / np.sum(w_normed**2, axis=0)  # (Nsel,)
-        mc_ess = np.where(w_sum.ravel() > 0, mc_ess, 0.0)
+        # A model with no draw of nonzero weight (lw_max = LOG_ZERO) gets 0;
+        # its weights above would be spuriously uniform.
+        mc_ess = np.where(lw_max.ravel() > LOG_ZERO, mc_ess, 0.0)
 
         return sel, cov_sar, lnp, dist_mc.T, a_mc.T, r_mc.T, lnp_mc.T, mc_ess
 
@@ -1842,7 +1886,8 @@ class BruteForce:
             Associated errors on the flux densities.
 
         data_mask : numpy.ndarray of shape (Ndata, Nfilt)
-            Binary mask (0/1) indicating whether each measurement is valid.
+            Boolean mask of valid measurements (or 0/1 values, converted to
+            bool).
 
         data_labels : numpy.ndarray of shape (Ndata, Nlabels)
             Labels for each object to be stored in the output file.
@@ -1993,6 +2038,16 @@ class BruteForce:
         str
             Path to the output HDF5 file.
 
+        Raises
+        ------
+        ValueError
+            If the shapes of ``data``, ``data_err``, ``data_mask``,
+            ``data_labels``, ``parallax``, ``parallax_err``, ``data_coords``
+            or ``lnprior`` disagree, if
+            only one of ``parallax`` and ``parallax_err`` is given, or if
+            ``logl_initthresh`` is not in (0, 1). These checks run before the
+            output file is created.
+
         Notes
         -----
         The output HDF5 file contains the following datasets:
@@ -2014,6 +2069,10 @@ class BruteForce:
           Because the MC draws are antithetic (correlated in pairs) this is a
           concentration diagnostic rather than a strict count of independent
           samples, and may read up to ~2x optimistic for well-mixed models.
+
+        An object with no valid bands is not fitted. Its row has
+        ``model_idx = -99``, ``obj_Nbands = 0`` and NaN in every float field,
+        and ``fit`` warns once with the number of such objects.
 
         If save_dar_draws=True, also includes:
 
@@ -2041,6 +2100,32 @@ class BruteForce:
         ...     data_coords=coords
         ... )
         """
+        data = np.asarray(data, dtype=float)
+        Ndata = len(data)
+        data_mask = np.asarray(data_mask, dtype=bool)
+        for name, arr in [
+            ("data", data),
+            ("data_err", data_err),
+            ("data_mask", data_mask),
+        ]:
+            _check_shape(name, arr, (Ndata, self.nfilters))
+        if (parallax is None) != (parallax_err is None):
+            raise ValueError("parallax and parallax_err must be given together")
+        for name, arr, shape in [
+            ("parallax", parallax, (Ndata,)),
+            ("parallax_err", parallax_err, (Ndata,)),
+            ("data_coords", data_coords, (Ndata, 2)),
+            ("lnprior", lnprior, (self.nmodels,)),
+        ]:
+            if arr is not None:
+                _check_shape(name, arr, shape)
+        if len(data_labels) != Ndata:
+            raise ValueError(
+                f"data_labels must have {Ndata} rows, one per object, "
+                f"got {len(data_labels)}"
+            )
+        _check_threshold("logl_initthresh", logl_initthresh)
+
         # Load dust map from file path (str or os.PathLike) if needed
         # (once for all objects)
         if dustfile is not None and isinstance(dustfile, (str, os.PathLike)):
@@ -2084,8 +2169,6 @@ class BruteForce:
             lndustprior_proc,
         ) = setup_results
 
-        Ndata, Nfilt = data.shape
-
         # Initialize random state
         if rstate is None:
             rstate = np.random.RandomState()
@@ -2097,229 +2180,136 @@ class BruteForce:
         # Get model labels for priors
         dlabels = self.models_labels if apply_dlabels else None
 
-        # Initialize results file
-        out = h5py.File(save_file, "w")
-        out.create_dataset("labels", data=data_labels)
+        # Output fields, in the order _fit returns them:
+        # name -> (shape per object, dtype, fill value)
+        fields = {
+            "model_idx": ((Ndraws,), "int32", -99),
+            "ml_scale": ((Ndraws,), "float32", 1.0),
+            "ml_av": ((Ndraws,), "float32", 0.0),
+            "ml_rv": ((Ndraws,), "float32", 0.0),
+            "ml_cov_sar": ((Ndraws, 3, 3), "float32", 0.0),
+            "obj_Nbands": ((), "int16", 0),
+            "obj_log_post": ((Ndraws,), "float32", 0.0),
+            "obj_log_evid": ((), "float32", 0.0),
+            "obj_chi2min": ((), "float32", 0.0),
+        }
+        if save_dar_draws:
+            for name in ["samps_dist", "samps_red", "samps_dred", "samps_logp"]:
+                fields[name] = ((Ndraws,), "float32", 1.0)
+        fields["mc_ess"] = ((Ndraws,), "float32", 0.0)
 
-        # TODO: Consolidate HDF5 dataset creation for streaming and batch modes
-        # into a shared specification dict to reduce duplication.
-        if running_io:
-            # Streaming mode: create datasets upfront, write as we go
-            out.create_dataset(
-                "model_idx", data=np.full((Ndata, Ndraws), -99, dtype="int32")
-            )
-            out.create_dataset(
-                "ml_scale", data=np.ones((Ndata, Ndraws), dtype="float32")
-            )
-            out.create_dataset("ml_av", data=np.zeros((Ndata, Ndraws), dtype="float32"))
-            out.create_dataset("ml_rv", data=np.zeros((Ndata, Ndraws), dtype="float32"))
-            out.create_dataset(
-                "ml_cov_sar", data=np.zeros((Ndata, Ndraws, 3, 3), dtype="float32")
-            )
-            out.create_dataset(
-                "obj_log_post", data=np.zeros((Ndata, Ndraws), dtype="float32")
-            )
-            out.create_dataset("obj_log_evid", data=np.zeros(Ndata, dtype="float32"))
-            out.create_dataset("obj_chi2min", data=np.zeros(Ndata, dtype="float32"))
-            out.create_dataset("obj_Nbands", data=np.zeros(Ndata, dtype="int16"))
-            out.create_dataset(
-                "mc_ess", data=np.zeros((Ndata, Ndraws), dtype="float32")
-            )
-            if save_dar_draws:
-                out.create_dataset(
-                    "samps_dist", data=np.ones((Ndata, Ndraws), dtype="float32")
-                )
-                out.create_dataset(
-                    "samps_red", data=np.ones((Ndata, Ndraws), dtype="float32")
-                )
-                out.create_dataset(
-                    "samps_dred", data=np.ones((Ndata, Ndraws), dtype="float32")
-                )
-                out.create_dataset(
-                    "samps_logp", data=np.ones((Ndata, Ndraws), dtype="float32")
-                )
-        else:
-            # Batch mode: accumulate in memory, write at end
-            idxs_arr = np.full((Ndata, Ndraws), -99, dtype="int32")
-            scale_arr = np.ones((Ndata, Ndraws), dtype="float32")
-            av_arr = np.zeros((Ndata, Ndraws), dtype="float32")
-            rv_arr = np.zeros((Ndata, Ndraws), dtype="float32")
-            cov_arr = np.zeros((Ndata, Ndraws, 3, 3), dtype="float32")
-            logpost_arr = np.zeros((Ndata, Ndraws), dtype="float32")
-            logevid_arr = np.zeros(Ndata, dtype="float32")
-            chi2best_arr = np.zeros(Ndata, dtype="float32")
-            nbands_arr = np.zeros(Ndata, dtype="int16")
-            mc_ess_arr = np.zeros((Ndata, Ndraws), dtype="float32")
-            if save_dar_draws:
-                dist_arr = np.ones((Ndata, Ndraws), dtype="float32")
-                red_arr = np.ones((Ndata, Ndraws), dtype="float32")
-                dred_arr = np.ones((Ndata, Ndraws), dtype="float32")
-                logp_arr = np.ones((Ndata, Ndraws), dtype="float32")
+        # An object with no valid bands is written as not fitted.
+        unfitted = dict.fromkeys(fields, np.nan) | {"model_idx": -99, "obj_Nbands": 0}
+        nbands_valid = data_mask_proc.sum(axis=1)
 
-        # Fit data
-        if verbose:
-            t1 = time.time()
-            t = 0.0
-            sys.stderr.write(f"\rFitting object 1/{Ndata}  ")
-            sys.stderr.flush()
-
-        for i in range(Ndata):
-            # Get parallax for this object
-            par_i = parallax[i] if parallax is not None else None
-            par_err_i = parallax_err[i] if parallax_err is not None else None
-            coord_i = data_coords[i] if data_coords is not None else None
-
-            # Fit individual object
-            results = self._fit(
-                data_proc[i],
-                data_err_proc[i],
-                data_mask_proc[i],
-                parallax=par_i,
-                parallax_err=par_err_i,
-                coord=coord_i,
-                Nmc_prior=Nmc_prior,
-                avlim=avlim,
-                av_gauss=av_gauss,
-                rvlim=rvlim,
-                rv_gauss=rv_gauss,
-                lnprior=lnprior_proc,
-                wt_thresh=wt_thresh,
-                cdf_thresh=cdf_thresh,
-                Ndraws=Ndraws,
-                lngalprior=lngalprior_proc,
-                lndustprior=lndustprior_proc,
-                dustfile=dustfile,
-                dlabels=dlabels,
-                logl_dim_prior=logl_dim_prior,
-                ltol=ltol,
-                ltol_subthresh=ltol_subthresh,
-                logl_initthresh=logl_initthresh,
-                mem_lim=mem_lim,
-                precision_shrinkage=precision_shrinkage,
-                max_models=max_models,
-                subsample_mode=subsample_mode,
-                rstate=rstate,
-                return_distreds=save_dar_draws,
-                R_solar=R_solar,
-                Z_solar=Z_solar,
-            )
-
-            # Unpack results
-            if save_dar_draws:
-                (
-                    idxs,
-                    scales,
-                    avs,
-                    rvs,
-                    covs_sar,
-                    Ndim,
-                    lpost,
-                    levid,
-                    chi2min,
-                    dists,
-                    reds,
-                    dreds,
-                    logwt,
-                    mc_ess_i,
-                ) = results
+        with h5py.File(save_file, "w") as out:
+            out.create_dataset("labels", data=data_labels)
+            if running_io:
+                # Streaming mode: create datasets upfront, write as we go
+                store = out
+                for name, (shape, dtype, fill) in fields.items():
+                    out.create_dataset(
+                        name, shape=(Ndata,) + shape, dtype=dtype, fillvalue=fill
+                    )
             else:
-                (
-                    idxs,
-                    scales,
-                    avs,
-                    rvs,
-                    covs_sar,
-                    Ndim,
-                    lpost,
-                    levid,
-                    chi2min,
-                    mc_ess_i,
-                ) = results
+                # Batch mode: accumulate in memory, write at end
+                store = {
+                    name: np.full((Ndata,) + shape, fill, dtype=dtype)
+                    for name, (shape, dtype, fill) in fields.items()
+                }
 
-            # Print progress
-            if verbose and i < Ndata - 1:
+            # Fit data
+            if verbose:
+                t1 = time.time()
+                t = 0.0
+                sys.stderr.write(f"\rFitting object 1/{Ndata}  ")
+                sys.stderr.flush()
+
+            for i in range(Ndata):
+                if nbands_valid[i] == 0:
+                    row = unfitted
+                else:
+                    results = self._fit(
+                        data_proc[i],
+                        data_err_proc[i],
+                        data_mask_proc[i],
+                        parallax=None if parallax is None else parallax[i],
+                        parallax_err=None if parallax_err is None else parallax_err[i],
+                        coord=None if data_coords is None else data_coords[i],
+                        Nmc_prior=Nmc_prior,
+                        avlim=avlim,
+                        av_gauss=av_gauss,
+                        rvlim=rvlim,
+                        rv_gauss=rv_gauss,
+                        lnprior=lnprior_proc,
+                        wt_thresh=wt_thresh,
+                        cdf_thresh=cdf_thresh,
+                        Ndraws=Ndraws,
+                        lngalprior=lngalprior_proc,
+                        lndustprior=lndustprior_proc,
+                        dustfile=dustfile,
+                        dlabels=dlabels,
+                        logl_dim_prior=logl_dim_prior,
+                        ltol=ltol,
+                        ltol_subthresh=ltol_subthresh,
+                        logl_initthresh=logl_initthresh,
+                        mem_lim=mem_lim,
+                        precision_shrinkage=precision_shrinkage,
+                        max_models=max_models,
+                        subsample_mode=subsample_mode,
+                        rstate=rstate,
+                        return_distreds=save_dar_draws,
+                        R_solar=R_solar,
+                        Z_solar=Z_solar,
+                    )
+                    row = dict(zip(fields, results, strict=True))
+
+                for name, value in row.items():
+                    store[name][i] = value
+
+                # Print progress
+                if verbose and i < Ndata - 1:
+                    t2 = time.time()
+                    dt = t2 - t1
+                    t1 = t2
+                    t += dt
+                    t_avg = t / (i + 1)
+                    t_est = t_avg * (Ndata - i - 1)
+                    sys.stderr.write(
+                        f"\rFitting object {i + 2}/{Ndata} "
+                        f"[chi2/n: {row['obj_chi2min']:.1f}/{row['obj_Nbands']}] "
+                        f"(mean time: {t_avg:.3f} s/obj, "
+                        f"est. remaining: {t_est:.3f} s)    "
+                    )
+                    sys.stderr.flush()
+
+            # Final progress update
+            if verbose:
                 t2 = time.time()
                 dt = t2 - t1
-                t1 = t2
                 t += dt
-                t_avg = t / (i + 1)
-                t_est = t_avg * (Ndata - i - 1)
+                t_avg = t / Ndata
                 sys.stderr.write(
-                    f"\rFitting object {i + 2}/{Ndata} "
-                    f"[chi2/n: {chi2min:.1f}/{Ndim}] "
+                    f"\rFitting object {Ndata}/{Ndata} "
+                    f"[chi2/n: {row['obj_chi2min']:.1f}/{row['obj_Nbands']}] "
                     f"(mean time: {t_avg:.3f} s/obj, "
-                    f"est. remaining: {t_est:.3f} s)    "
+                    f"total: {t:.3f} s)    \n"
                 )
                 sys.stderr.flush()
 
-            # Save results
-            if running_io:
-                out["model_idx"][i] = idxs
-                out["ml_scale"][i] = scales
-                out["ml_av"][i] = avs
-                out["ml_rv"][i] = rvs
-                out["ml_cov_sar"][i] = covs_sar
-                out["obj_Nbands"][i] = Ndim
-                out["obj_log_post"][i] = lpost
-                out["obj_log_evid"][i] = levid
-                out["obj_chi2min"][i] = chi2min
-                out["mc_ess"][i] = mc_ess_i
-                if save_dar_draws:
-                    out["samps_dist"][i] = dists
-                    out["samps_red"][i] = reds
-                    out["samps_dred"][i] = dreds
-                    out["samps_logp"][i] = logwt
-            else:
-                idxs_arr[i] = idxs
-                scale_arr[i] = scales
-                av_arr[i] = avs
-                rv_arr[i] = rvs
-                cov_arr[i] = covs_sar
-                logpost_arr[i] = lpost
-                logevid_arr[i] = levid
-                chi2best_arr[i] = chi2min
-                nbands_arr[i] = Ndim
-                mc_ess_arr[i] = mc_ess_i
-                if save_dar_draws:
-                    dist_arr[i] = dists
-                    red_arr[i] = reds
-                    dred_arr[i] = dreds
-                    logp_arr[i] = logwt
+            # Dump results to disk if using batch mode
+            if not running_io:
+                for name, arr in store.items():
+                    out.create_dataset(name, data=arr)
 
-        # Final progress update
-        if verbose:
-            t2 = time.time()
-            dt = t2 - t1
-            t += dt
-            t_avg = t / Ndata
-            sys.stderr.write(
-                f"\rFitting object {Ndata}/{Ndata} "
-                f"[chi2/n: {chi2min:.1f}/{Ndim}] "
-                f"(mean time: {t_avg:.3f} s/obj, "
-                f"total: {t:.3f} s)    \n"
+        nskipped = int(np.sum(nbands_valid == 0))
+        if nskipped:
+            warnings.warn(
+                f"{nskipped} of {Ndata} objects have no valid bands and were not "
+                "fitted: they are written with model_idx = -99 and NaN values.",
+                RuntimeWarning,
+                stacklevel=2,
             )
-            sys.stderr.flush()
-
-        # Dump results to disk if using batch mode
-        if not running_io:
-            out.create_dataset("model_idx", data=idxs_arr)
-            out.create_dataset("ml_scale", data=scale_arr)
-            out.create_dataset("ml_av", data=av_arr)
-            out.create_dataset("ml_rv", data=rv_arr)
-            out.create_dataset("ml_cov_sar", data=cov_arr)
-            out.create_dataset("obj_log_post", data=logpost_arr)
-            out.create_dataset("obj_log_evid", data=logevid_arr)
-            out.create_dataset("obj_chi2min", data=chi2best_arr)
-            out.create_dataset("obj_Nbands", data=nbands_arr)
-            out.create_dataset("mc_ess", data=mc_ess_arr)
-            if save_dar_draws:
-                out.create_dataset("samps_dist", data=dist_arr)
-                out.create_dataset("samps_red", data=red_arr)
-                out.create_dataset("samps_dred", data=dred_arr)
-                out.create_dataset("samps_logp", data=logp_arr)
-
-        # Close output file
-        out.close()
 
         return save_file
 
@@ -2504,15 +2494,12 @@ class BruteForce:
         # Add parallax contribution to chi2 and Ndim if provided
         Ndim_out = Ndim
         chi2_with_par = chi2.copy()
-        if parallax is not None and parallax_err is not None:
-            if np.isfinite(parallax) and np.isfinite(parallax_err):
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    par_pred = np.sqrt(
-                        scales_all
-                    )  # sqrt(scale) = 1/d_kpc = parallax_mas
-                    chi2_with_par += (par_pred - parallax) ** 2 / parallax_err**2
-                    Ndim_out += 1
+        if _has_parallax(parallax, parallax_err):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                par_pred = np.sqrt(scales_all)  # 1/d_kpc = parallax_mas
+                chi2_with_par += (par_pred - parallax) ** 2 / parallax_err**2
+            Ndim_out += 1
 
         # Compute goodness-of-fit metrics (over ALL models, not just posterior-selected)
         chi2min = np.min(chi2_with_par)

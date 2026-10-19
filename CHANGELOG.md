@@ -26,6 +26,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`BruteForce` passes `avlim` to the default dust prior**, so its
   truncation and uniform normalization match the fitted A(V) range (custom
   `lndustprior` functions keep the 4-argument signature).
+- **An integer 0/1 `data_mask` masks bands** in `BruteForce.fit` and
+  `loglike_grid`. It was used as an index array, so the fit used band 0 and
+  repeated band 1 in place of the masked selection. Boolean masks give the
+  same results as before. `loglike_grid` no longer changes the caller's
+  `data_mask`, `av_init` or `rv_init`.
+- **`loglike_grid` normalizes every model's `lnl`**. The Gaussian constant
+  `-0.5 * (Ndim * ln(2 pi) + sum(ln sigma^2))` went only to the models that
+  passed the initial cut, so the culled models sat that constant (about 90
+  log-units for fluxes in maggies) too low. Culled models keep their
+  magnitude-space fit of (scale, A(V), R(V)).
+- **`logpost_grid` truncates the Monte Carlo draws** of A(V), R(V) and
+  distance at `avlim`, `rvlim` and (0.001, 1e6) kpc. A draw outside the
+  support now gets zero weight. Before, it was clipped to the bound at full
+  weight: about half of the A(V) draws of an unreddened model sat at
+  exactly 0, and such a model gained up to ln 2 in `lnp`. This changes
+  `samps_red`, `samps_dred`, `samps_dist`, `obj_log_post`, `obj_log_evid`
+  and `mc_ess`; `mc_ess` is 0 for a model with no draw of nonzero weight.
+- **A `functools.partial` of `logp_extinction` gets the fit's `avlim`**, as
+  the bare function does, unless the partial binds `avlim` itself. A prior
+  such as `partial(logp_extinction, scatter=0.3)` was normalized over its
+  default (0, 20) instead of the fitted range.
+- **`BruteForce.fit` skips an object with no valid bands** instead of
+  stopping the whole run with `ValueError`. The object is written with
+  `model_idx = -99`, `obj_Nbands = 0` and NaN values, and `fit` warns once
+  with the number of such objects. The output file now closes on every exit
+  path.
 
 ### Changed
 
@@ -45,9 +71,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`License-Expression: MIT`) instead of a license table and classifier.
   Only `LICENSE` is packaged as a license file; `AUTHORS.md` stays in the
   source distribution. Building from source needs `setuptools>=77`.
+- `BruteForce.loglike_grid` and `logpost_grid` no longer accept unused
+  `**kwargs`, so a misspelled keyword such as `av_gaus` raises `TypeError`.
+  Before, it was dropped and the default applied.
 - Python 3.10 or later and numpy 2.0 or later are required (the floors were 3.9
   and 1.19). Python 3.9 is past its end of life, and no astropy release for
   Python 3.9 supports numpy 2.
+
+### Fixed
+
+- `plotting.posterior_predictive` treats an integer 0/1 `data_mask` as a
+  mask and raises `ValueError` for a mask of the wrong shape. It plotted
+  band 0 and repeated band 1 in place of the unmasked bands.
+- `BruteForce.fit` and `loglike_grid` check their input shapes and raise
+  `ValueError` that names the argument, before `fit` creates its output
+  file. A `parallax` given without `parallax_err`, which the fit silently
+  ignored, now raises. `logl_initthresh` (`init_thresh`) must be in (0, 1).
+  A parallax with an error of 0 or less counts as no parallax, as in the
+  parallax priors; it stopped the run with an unclear error.
+- `BruteForce.logpost_grid` raises `ValueError` when `lnprior` or `dlabels`
+  has a different length from the likelihood results. After
+  `loglike_grid(indices=...)`, the default `dlabels` gave the Galactic prior
+  the labels of the wrong models.
+- `BruteForce.get_sed_grid` raises `ValueError` for an `av` or `rv` array
+  whose length is not the number of models. With JIT on, it read past the
+  end of the array and returned garbage SEDs.
 
 ### Documentation
 

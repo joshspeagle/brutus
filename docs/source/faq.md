@@ -23,7 +23,7 @@ flux, flux_err = inv_magnitude(mag, mag_err)
 
 ### How many bands does a star need?
 
-At least 4: each model has 3 free parameters (scale, $A_V$, $R_V$), and the fit needs one more for a degree of freedom. With fewer than 4 valid bands, `fit()` warns and fits anyway. With none, it raises `ValueError` and stops the whole run. A band is valid when its mask is true, its flux is positive, its error is positive and finite, and its error is below 0.25 mag (`merr_max`). Select the stars before fitting:
+At least 4: each model has 3 free parameters (scale, $A_V$, $R_V$), and the fit needs one more for a degree of freedom. With fewer than 4 valid bands, `fit()` warns and fits anyway. A star with none is not fitted: `fit()` writes it with `model_idx = -99` and NaN values, warns once with the number of such stars, and fits the rest. A band is valid when its mask is true, its flux is positive, its error is positive and finite, and its error is below 0.25 mag (`merr_max`). Select the stars before fitting:
 
 ```python
 keep = (mask & np.isfinite(mag) & (mag_err < 0.25)).sum(axis=1) >= 4

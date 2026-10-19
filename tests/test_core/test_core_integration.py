@@ -80,7 +80,6 @@ class TestCoreIntegration:
             obs_err,
             obs_mask,
             ltol=5e-2,  # Moderate clipping for speed
-            verbose=False,
         )
 
         # Step 3: Verify results are sensible
@@ -137,7 +136,6 @@ class TestCoreIntegration:
                     obs_mask,
                     indices=indices,
                     ltol=5e-2,
-                    verbose=False,
                 )
             assert lnl.shape == (n_models,)
             assert np.all(np.isfinite(lnl))
@@ -201,31 +199,16 @@ class TestErrorHandling:
         obs_mask = ~np.isnan(obs)
 
         # Test with mismatched array sizes
-        with pytest.raises((ValueError, IndexError)):
-            fitter.loglike_grid(
-                obs[:-1], obs_err, obs_mask, verbose=False
-            )  # Wrong size
+        with pytest.raises(ValueError, match="data must have shape"):
+            fitter.loglike_grid(obs[:-1], obs_err, obs_mask)
 
         # Test with all NaN observations
         obs_bad = np.full(nfilters, np.nan)
         obs_err_bad = np.full(nfilters, np.nan)
         obs_mask_bad = ~np.isnan(obs_bad)
 
-        # Should handle gracefully (may error or return low likelihood)
-        import warnings
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            try:
-                result = fitter.loglike_grid(
-                    obs_bad, obs_err_bad, obs_mask_bad, verbose=False
-                )
-                # If it doesn't error, result should be valid
-                assert isinstance(result, tuple)
-                assert len(result) >= 3
-            except (ValueError, RuntimeError, ZeroDivisionError):
-                # Acceptable to raise an error for invalid input
-                pass
+        with pytest.raises(ValueError, match="No valid photometric bands"):
+            fitter.loglike_grid(obs_bad, obs_err_bad, obs_mask_bad)
 
 
 if __name__ == "__main__":
