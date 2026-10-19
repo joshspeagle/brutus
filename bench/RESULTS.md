@@ -23,8 +23,8 @@ medians.
 | **`_fit` (full per object)** | **~977 ms** | **~515 ms** | **~1.9×** |
 
 The wall-clock host is shared/noisy (±15%); the loglike/full-fit speedups are
-stable across repeated clean A/B runs (git-stash baseline vs working tree, numba
-cache cleared between, JIT enabled throughout).
+stable across repeated clean A/B runs (then a git-stash baseline vs the working
+tree, numba cache cleared between, JIT enabled throughout).
 
 ## Verification — results are *exact*, not merely "within MC noise"
 
@@ -198,7 +198,7 @@ the Orion field ships in `tutorials/`). Verification tooling:
 python bench/harness.py bench            # median per-object stage timings
 python bench/harness.py capture <tag>    # freeze deterministic loglike + draws
 python bench/harness.py compare a b      # regression compare two captures
-python bench/disteq.py   run <tag>       # multi-seed posterior summaries (cohort)
+python bench/disteq.py   run <tag>       # multi-seed posterior summaries (first 24 objects)
 python bench/disteq.py   cmp  a b        # distributional-equivalence z-scores
 python bench/mcvar.py                    # antithetic vs plain MC-integration std
 python bench/mcgold.py                   # antithetic accuracy vs high-Nmc gold
@@ -207,7 +207,8 @@ python bench/fullfit.py  cmp  a b        # bitwise-compare two fit() HDF5 output
 python bench/profile_cohort.py           # per-stage timing + aggregated cProfile
 ```
 
-The `*_ab.sh` wrappers (`ab.sh`, `fullfit_ab.sh`, `verify_cohort.sh`) A/B the
-current **working tree** against committed `HEAD` via `git stash`: make an
-uncommitted change, run the wrapper, and it reports the speedup and the
-regression/distributional deltas. (`bench/artifacts/` outputs are git-ignored.)
+The A/B wrappers (`ab.sh`, `fullfit_ab.sh`, `verify_cohort.sh`) compare the
+current **working tree** against committed `HEAD` (or `$BASE_REF`), which they
+check out in a temporary `git worktree`: make an uncommitted change, run the wrapper, and it
+reports the speedup and the regression/distributional deltas.
+(`bench/artifacts/` outputs are git-ignored.)

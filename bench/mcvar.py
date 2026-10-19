@@ -24,7 +24,7 @@ def measure(M=40, Nmc=50, nobj=6):
     s = H.load_setup()
     bf = s["bf"]
     phot_all, err_all = H._apply_offsets(s)
-    good = np.where(s["mask"].all(axis=1) & np.isfinite(s["parallax"]))[0][:nobj]
+    good = H.full_coverage_objects()[:nobj]
     H._warmup(
         bf,
         phot_all[good[0]],

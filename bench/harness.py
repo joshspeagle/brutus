@@ -22,7 +22,7 @@ are deterministic and must match the baseline. Pure code-reorganization
 (prange, loop fusion, precompute) is expected BITWISE identical; numeric
 changes are checked at a tight rtol. logpost_grid/_fit draw RNG; with a fixed
 per-object seed they are bit-identical iff the RNG draw sequence is preserved,
-otherwise distributional-equivalence is required (see dist_equiv.py).
+otherwise distributional-equivalence is required (see disteq.py).
 """
 
 import os
@@ -33,12 +33,13 @@ import time
 
 import numba
 import numpy as np
-import pooch
 import scipy
+
+from brutus.data.download import strato
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-CACHE = pooch.os_cache("astro-brutus")
+CACHE = strato.abspath  # the brutus.data download directory
 GRID = os.path.join(CACHE, "grid_mist_v9.h5")
 OFFSETS = os.path.join(CACHE, "offsets_mist_v9.txt")
 ORION = os.path.join(
@@ -50,14 +51,28 @@ os.makedirs(OUTDIR, exist_ok=True)
 _SETUP = None
 
 
+def full_coverage_objects():
+    """Return the indices of objects with every band and a parallax."""
+    s = load_setup()
+    return np.where(s["mask"].all(axis=1) & np.isfinite(s["parallax"]))[0]
+
+
 def print_setup():
-    """Print the commit, machine, thread settings and library versions."""
-    repo = os.path.dirname(os.path.abspath(__file__))
+    """Print the brutus source under test, machine, threads and library versions.
+
+    The commit is that of the imported brutus, which differs from the bench/
+    checkout when an A/B script points ``PYTHONPATH`` at a baseline tree.
+    """
+    import brutus
+
+    src = os.path.dirname(os.path.abspath(brutus.__file__))
     commit = subprocess.run(
-        ["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True
+        ["git", "-C", src, "rev-parse", "HEAD"], capture_output=True, text=True
     ).stdout.strip()
-    dirty = subprocess.run(["git", "-C", repo, "diff", "--quiet", "HEAD"]).returncode
-    print(f"commit={commit} dirty={'Y' if dirty else 'N'}")
+    status = ["git", "-C", src, "status", "--porcelain", "--", "."]
+    if commit and subprocess.run(status, capture_output=True, text=True).stdout:
+        commit += " dirty"
+    print(f"brutus={src} commit={commit or 'n/a'}")
     print(f"platform={platform.platform()} cpu_count={os.cpu_count()}")
     print(
         f"numba_threads={numba.get_num_threads()} "
@@ -163,8 +178,7 @@ def benchmark(obj_idx=None, repeats=5, Nmc_prior=50, Ndraws=250, wt_thresh=1e-3)
     bf = s["bf"]
     phot_all, err_all = _apply_offsets(s)
     if obj_idx is None:
-        good = np.where(s["mask"].all(axis=1) & np.isfinite(s["parallax"]))[0]
-        obj_idx = good[:30]
+        obj_idx = full_coverage_objects()[:30]
     obj_idx = [int(i) for i in obj_idx]
     i0 = obj_idx[0]
     _warmup(
@@ -228,8 +242,7 @@ def capture(tag, obj_idx=None, Nmc_prior=50, Ndraws=250, wt_thresh=1e-3):
     bf = s["bf"]
     phot_all, err_all = _apply_offsets(s)
     if obj_idx is None:
-        good = np.where(s["mask"].all(axis=1) & np.isfinite(s["parallax"]))[0]
-        obj_idx = good[:6]
+        obj_idx = full_coverage_objects()[:6]
     obj_idx = [int(i) for i in obj_idx]
     i0 = obj_idx[0]
     _warmup(
@@ -331,12 +344,16 @@ def compare(base_tag, cand_tag):
     draw_keys = ["idxs", "levid", "chi2min", "dists", "reds", "dreds", "scales"]
     worst_det = 0.0
     for k in range(nobj):
-        print(f"-- object {k} (idx {int(base['obj_idx'][k])}) --")
+        idx = int(base["obj_idx"][k])
+        print(f"-- object {k} (idx {idx}) --")
         print("  [deterministic loglike]")
+        worst_obj = 0.0
         for key in det_keys:
             line, worst = _stats(base[f"o{k}_{key}"], cand[f"o{k}_{key}"], key)
             print(line)
-            worst_det = max(worst_det, worst)
+            worst_obj = max(worst_obj, worst)
+        print(f"  WORST deterministic relative error, idx {idx}: {worst_obj:.3e}")
+        worst_det = max(worst_det, worst_obj)
         print("  [posterior draws, seed-matched]")
         for key in draw_keys:
             print(_stats(base[f"o{k}_{key}"], cand[f"o{k}_{key}"], key)[0])
@@ -347,11 +364,13 @@ def compare(base_tag, cand_tag):
 
 
 if __name__ == "__main__":
-    print_setup()
     cmd = sys.argv[1] if len(sys.argv) > 1 else "bench"
     if cmd == "bench":
+        print_setup()
         print(benchmark())
     elif cmd == "capture":
+        print_setup()
         capture(sys.argv[2])
     elif cmd == "compare":
-        compare(sys.argv[2], sys.argv[3])
+        # Exit 1 on a shape or NaN mismatch, so that the A/B scripts fail.
+        sys.exit(not np.isfinite(compare(sys.argv[2], sys.argv[3])))

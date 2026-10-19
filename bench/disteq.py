@@ -12,8 +12,8 @@ Protocol
 Run the full per-object `_fit` over a fixed object set with K independent RNG
 seeds, and reduce each object's 250 posterior draws to summary statistics
 (distance/Av/Rv medians + spreads, log-evidence, chi2min). Do this for both the
-baseline and the candidate code (separate processes via git stash). Then for each
-(object, statistic):
+baseline and the candidate code (separate processes, see verify_cohort.sh).
+Then for each (object, statistic):
 
     z = (mean_cand - mean_base) / SE_base ,   SE_base = std_base / sqrt(K)
 
@@ -36,22 +36,30 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(__file__))
 import harness as H  # noqa: E402
 
-STATS = ["dist_med", "dist_iqr", "av_med", "av_iqr", "rv_med", "levid", "chi2min"]
+STATS = [
+    "dist_med",
+    "dist_p16_84",
+    "av_med",
+    "av_p16_84",
+    "rv_med",
+    "levid",
+    "chi2min",
+]
 
 
 def _summarize(dists, reds, dreds, levid, chi2min):
     def med(x):
         return float(np.median(x))
 
-    def iqr(x):
+    def p16_84(x):
         return float(np.subtract(*np.percentile(x, [84, 16])))
 
     return np.array(
         [
             med(dists),
-            iqr(dists),
+            p16_84(dists),
             med(reds),
-            iqr(reds),
+            p16_84(reds),
             med(dreds),
             float(levid),
             float(chi2min),
@@ -73,7 +81,7 @@ def run(tag, K=8, Nobj=24, seed0=0, objs=None):
     if objs is not None:
         good = [int(i) for i in objs]
     else:
-        good = np.where(s["mask"].all(axis=1) & np.isfinite(s["parallax"]))[0][:Nobj]
+        good = H.full_coverage_objects()[:Nobj]
         good = [int(i) for i in good]
     i0 = good[0]
     H._warmup(
@@ -150,7 +158,7 @@ def cmp(base, cand):
         scatter_ratio = np.where(sb > 0, sc / sb, np.nan)
     print(f"=== distributional equivalence: {base} vs {cand}  (K={K} seeds) ===")
     print(
-        f"{'stat':9s} {'|z|.mean':>9s} {'|z|.max':>8s} {'|relshift|.max':>14s} "
+        f"{'stat':11s} {'|z|.mean':>9s} {'|z|.max':>8s} {'|relshift|.max':>14s} "
         f"{'scatter(cand/base)':>19s}"
     )
     for si, name in enumerate(STATS):
@@ -161,7 +169,7 @@ def cmp(base, cand):
         srmed = np.median(sr) if sr.size else np.nan
         det = "  (deterministic)" if deterministic[:, si].all() else ""
         print(
-            f"{name:9s} {zz.mean():9.2f} {zz.max():8.2f} {rr.max():14.3e} "
+            f"{name:11s} {zz.mean():9.2f} {zz.max():8.2f} {rr.max():14.3e} "
             f"{srmed:19.3f}{det}"
         )
     # Overall: fraction of |z|>3 (would-be outliers if truly equivalent ~0.3%)
@@ -175,8 +183,8 @@ def cmp(base, cand):
 
 
 if __name__ == "__main__":
-    H.print_setup()
     if sys.argv[1] == "run":
+        H.print_setup()
         run(
             sys.argv[2],
             int(sys.argv[3]) if len(sys.argv) > 3 else 8,

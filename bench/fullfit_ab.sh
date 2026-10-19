@@ -1,17 +1,11 @@
 #!/bin/bash
-set -e
-cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"  # repo root (bench/..)
-echo "=== run OPTIMIZED fit() ==="
-python bench/fullfit.py run opt 2>/dev/null
-echo "=== stash -> BASELINE ==="
-git stash >/dev/null 2>&1
-find . -name __pycache__ -path '*brutus*' -exec rm -rf {} + 2>/dev/null || true
-rm -rf /tmp/numba_cache
-# fullfit.py is untracked (in bench/), survives stash; harness too
-python bench/fullfit.py run base 2>/dev/null
-git stash pop >/dev/null 2>&1
-find . -name __pycache__ -path '*brutus*' -exec rm -rf {} + 2>/dev/null || true
-rm -rf /tmp/numba_cache
+# Compare fit() outputs of the working tree's src/ and $BASE_REF's (default
+# HEAD). Both runs use the working tree's bench/ tools.
+set -e -o pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/_baseline.sh"
+echo "=== CANDIDATE (working tree) fit() ==="
+PYTHONPATH=src python bench/fullfit.py run cand
+echo "=== BASELINE ($BASE_REF) fit() ==="
+PYTHONPATH="$BASE_SRC" python bench/fullfit.py run base
 echo "=== COMPARE ==="
-python bench/fullfit.py cmp base opt 2>/dev/null
-echo "=== DONE ==="
+python bench/fullfit.py cmp base cand
