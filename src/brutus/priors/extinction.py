@@ -54,9 +54,13 @@ _SQRT2 = sqrt(2.0)
 _DBL_MIN = 2.2250738585072014e-308  # smallest normal float64
 
 
-def _log_truncnorm_z(av_mean, av_err, av_lo, av_hi):
-    """Log of the Gaussian mass on [av_lo, av_hi], stable in both tails."""
-    return _truncnorm_lognorm((av_lo - av_mean) / av_err, (av_hi - av_mean) / av_err)
+def _log_truncnorm_pdf(avs, av_mean, av_err, av_lo, av_hi):
+    """Gaussian log-density of ``avs`` truncated to [av_lo, av_hi]."""
+    chi2 = (avs - av_mean) ** 2 / av_err**2
+    lnorm = np.log(2.0 * np.pi * av_err**2)
+    return -0.5 * (chi2 + lnorm) - _truncnorm_lognorm(
+        (av_lo - av_mean) / av_err, (av_hi - av_mean) / av_err
+    )
 
 
 @jit(nopython=True, cache=True)
@@ -384,11 +388,7 @@ def logp_extinction(
         if np.any(valid):
             # Use safe denominator to avoid division by zero
             av_err_safe = np.where(valid, av_err, 1.0)
-            chi2 = (avs - av_mean) ** 2 / av_err_safe**2
-            lnorm = np.log(2.0 * np.pi * av_err_safe**2)
-            lnprior = -0.5 * (chi2 + lnorm)
-            # Normalize over the physical support [av_lo, av_hi]
-            lnprior -= _log_truncnorm_z(av_mean, av_err_safe, av_lo, av_hi)
+            lnprior = _log_truncnorm_pdf(avs, av_mean, av_err_safe, av_lo, av_hi)
             lnprior = np.where(valid, lnprior, lnp_unif)
 
     # Handle simple dust maps returning (av_mean, av_std)
@@ -397,11 +397,7 @@ def logp_extinction(
         av_err = _add_scatter(av_err, scatter)
 
         if np.isfinite(av_mean) and np.isfinite(av_err) and av_err > 0:
-            chi2 = (avs - av_mean) ** 2 / av_err**2
-            lnorm = np.log(2.0 * np.pi * av_err**2)
-            lnprior = -0.5 * (chi2 + lnorm) - _log_truncnorm_z(
-                av_mean, av_err, av_lo, av_hi
-            )
+            lnprior = _log_truncnorm_pdf(avs, av_mean, av_err, av_lo, av_hi)
         else:
             lnprior = np.full_like(avs, lnp_unif, dtype=float)
             av_mean, av_err = np.nan, np.nan
