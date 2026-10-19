@@ -34,6 +34,8 @@ brutus fits stars against stellar models that ship separately from the code. Dow
 | `fetch_tracks()` | `MIST_1.2_EEPtrk.h5` | 1.1 GB | Individual stars off the grid |
 | `fetch_nns()` | `nn_c3k.h5` | 0.2 MB | Synthetic photometry for the two rows above |
 
+The files are also in the [astro-brutus collection](https://dataverse.harvard.edu/dataverse/astro-brutus) of the Harvard Dataverse, for a manual download.
+
 To fit individual stars, download the grid and the offsets:
 
 ```python
