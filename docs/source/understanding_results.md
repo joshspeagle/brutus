@@ -1,198 +1,125 @@
-# Understanding Results
+# Understanding results
 
-This page explains how to work with brutus output files.
+`BruteForce.fit` writes one HDF5 file. This page describes each field, how to turn the draws into stellar properties, and how to check each fit.
 
-## Output Structure
+## The output file
 
-`BruteForce.fit()` saves results to an HDF5 file:
+Each row is one star, in the order of the input. $N_d$ is the number of draws (`Ndraws`, 250 by default).
+
+| Field | Shape | Content |
+|---|---|---|
+| `labels` | as passed | the star IDs you passed as `data_labels` |
+| `samps_dist` | $(N, N_d)$ | posterior draws of distance, in kpc |
+| `samps_red` | $(N, N_d)$ | posterior draws of $A_V$, in mag |
+| `samps_dred` | $(N, N_d)$ | posterior draws of $R_V$ |
+| `samps_logp` | $(N, N_d)$ | log-weight of each draw's Monte Carlo point (diagnostic only) |
+| `model_idx` | $(N, N_d)$ | grid model of each draw |
+| `ml_scale`, `ml_av`, `ml_rv` | $(N, N_d)$ | best-fit scale factor, $A_V$ and $R_V$ of each draw's model |
+| `ml_cov_sar` | $(N, N_d, 3, 3)$ | covariance of (scale, $A_V$, $R_V$) of each draw's model |
+| `obj_log_post` | $(N, N_d)$ | log posterior weight of each draw's model |
+| `obj_log_evid` | $(N,)$ | log-{term}`evidence`: the log of the sum of the weights of the models kept by the selection |
+| `obj_chi2min` | $(N,)$ | smallest $\chi^2$ over all models, with the parallax term if given |
+| `obj_Nbands` | $(N,)$ | bands used, plus 1 if a parallax was given |
+| `mc_ess` | $(N, N_d)$ | concentration of the Monte Carlo weights of each draw's model |
+
+The `samps_*` fields are written only with `save_dar_draws=True` (the default). {doc}`scientific_background` describes how the draws are made.
+
+The draws are already drawn from the posterior: give each one equal weight. Do not reweight them by `samps_logp` or `obj_log_post`.
+
+With `running_io=True` (the default), each star is written as soon as it is fitted; rows not yet fitted hold `model_idx = -99`.
+
+## Summaries
+
+{func}`~brutus.utils.quantile` gives medians and intervals:
 
 ```python
 import h5py
 import numpy as np
 
-with h5py.File('results.h5', 'r') as f:
-    # Posterior draws - shape (Nstars, Ndraws), default Ndraws=250
-    distances = f['samps_dist'][:]    # Distance in kpc
-    av_values = f['samps_red'][:]     # A_V extinction (mag)
-    rv_values = f['samps_dred'][:]    # R_V values
-    log_posts = f['samps_logp'][:]    # Log-posterior values at the draws,
-                                      # for diagnostics only -- the draws
-                                      # are already resampled, so treat
-                                      # them as equally weighted (do NOT
-                                      # reweight by samps_logp)
+from brutus.utils import quantile
 
-    # Model indices into the grid
-    model_idx = f['model_idx'][:]     # Shape (Nstars, Ndraws)
+with h5py.File("results.h5", "r") as f:
+    dist = f["samps_dist"][:]
+    av = f["samps_red"][:]
 
-    # Per-object diagnostics
-    chi2_min = f['obj_chi2min'][:]    # Best-fit chi-squared (Nstars,)
-    n_bands = f['obj_Nbands'][:]      # Number of bands used (Nstars,)
+d16, d50, d84 = quantile(dist[0], [0.16, 0.5, 0.84])
 ```
 
-### Summary Statistics
+## Stellar properties
 
-```python
-# Posterior summaries for first star
-dist = distances[0]  # kpc
-print(f"Distance: {np.median(dist):.2f} kpc")
-print(f"68% interval: [{np.percentile(dist, 16):.2f}, {np.percentile(dist, 84):.2f}] kpc")
-```
-
-### Stellar Parameters
-
-Stellar parameters are accessed via the model grid using `model_idx`:
+`model_idx` points into the grid. The labels of the drawn models give the posterior of each stellar property:
 
 ```python
 from brutus.data import load_models
 
-models, grid_labels, label_mask = load_models('grid_mist_v9.h5')
+models, labels, label_mask = load_models("grid_mist_v9.h5", filters=filters)
 
-with h5py.File('results.h5', 'r') as f:
-    idx = f['model_idx'][0]  # First star
+with h5py.File("results.h5", "r") as f:
+    idx = f["model_idx"][0]
 
-# Available labels: mini, feh, eep, loga, logl, logt, logg, agewt
-masses = grid_labels['mini'][idx]      # Initial mass (Msun)
-fehs = grid_labels['feh'][idx]         # [Fe/H]
-log_ages = grid_labels['loga'][idx]    # log10(age/yr)
-log_teffs = grid_labels['logt'][idx]   # log10(Teff/K)
-log_Ls = grid_labels['logl'][idx]      # log10(L/Lsun)
-
-print(f"Mass: {np.median(masses):.2f} Msun")
-print(f"Teff: {10**np.median(log_teffs):.0f} K")
+mass = labels["mini"][idx]          # initial mass, M☉
+age = 10 ** labels["loga"][idx] / 1e9  # Gyr
+teff = 10 ** labels["logt"][idx]    # K
 ```
 
-### Cluster Fitting
+Load the grid with the same arguments as for the fit, so that the indices refer to the same models.
 
-Results from MCMC with `isochrone_population_loglike()` are stored in the sampler:
+## Checking a fit
+
+### Goodness of fit
+
+Do not use $\chi^2 / N_{\rm bands}$. Use the p-value of `obj_chi2min` with $N_{\rm bands} - 3$ degrees of freedom, since each fit has 3 free parameters (scale, $A_V$, $R_V$):
 
 ```python
-# theta = [feh, loga, av, rv, dist, field_frac]
-samples = sampler.get_chain(discard=1000, thin=10, flat=True)
+from scipy.stats import chi2
+
+with h5py.File("results.h5", "r") as f:
+    chi2min = f["obj_chi2min"][:]
+    nbands = f["obj_Nbands"][:]
+
+pvalue = chi2.sf(chi2min, np.maximum(nbands - 3, 1))
 ```
 
-## Visualization
+| p-value | Fit | Typical cause of a poor fit |
+|---|---|---|
+| $p > 10^{-3}$ | good | |
+| $10^{-6} < p \le 10^{-3}$ | marginal | errors slightly too small, one bad band |
+| $p \le 10^{-6}$ | poor | a binary, a young star, a white dwarf, blended or saturated photometry |
 
-brutus provides plotting utilities in {mod}`brutus.plotting`:
+The p-value is only as good as the errors. Without the systematic errors of the models ({doc}`photometric_offsets`), many good fits of bright stars look poor.
 
-- {func}`~brutus.plotting.cornerplot` - Corner plots from fitting outputs
-- {func}`~brutus.plotting.dist_vs_red` - Distance vs extinction posterior
-- {func}`~brutus.plotting.posterior_predictive` - Model vs data SED comparison
+### Posterior predictive check
 
-Example using the SED posterior predictive plot:
+Compare, band by band, the spread of the predicted fluxes across the draws with the measurement error:
 
 ```python
-from brutus.plotting import posterior_predictive
-from brutus.data import load_models
+from brutus.core import get_seds
 
-models, labels, label_mask = load_models('grid_mist_v9.h5')
+i = 0  # one star
+with h5py.File("results.h5", "r") as f:
+    idx, av, rv, dist = (f[k][i] for k in ("model_idx", "samps_red", "samps_dred", "samps_dist"))
 
-with h5py.File('results.h5', 'r') as f:
-    idxs = f['model_idx'][0]
-    reds = f['samps_red'][0]
-    dreds = f['samps_dred'][0]
-    dists = f['samps_dist'][0]
-
-fig = posterior_predictive(
-    models, idxs, reds, dreds, dists,
-    data=observed_flux, data_err=flux_err, data_mask=mask
-)
+pred = get_seds(models[idx], av=av, rv=rv, return_flux=True) / dist[:, None] ** 2
+ratio = pred.std(axis=0) / (flux_err[i] * offsets)  # the errors as fitted
 ```
 
-For quick visualization with external libraries:
+Here `models` must come from the grid loaded with the bands of the fit, in the same order, and `offsets` are the `phot_offsets` of the fit (1 if none). A ratio much above 1 in a band means the parameters are poorly constrained there. {func}`~brutus.plotting.posterior_predictive` plots the same comparison.
 
-```python
-import corner
+### Monte Carlo weights
 
-with h5py.File('results.h5', 'r') as f:
-    dist = f['samps_dist'][0]
-    av = f['samps_red'][0]
+`mc_ess` is $1 / \sum_j w_j^2$ over the normalized Monte Carlo weights of a model. It is at most the number of Monte Carlo draws per model: `Nmc_prior` (50), or fewer when `mem_lim` reduces it. A value of 0 means every weight underflowed. A value near 1 means one point carries the whole weight: the Gaussian around the best fit and the priors overlap poorly, and the weight of that model is noisy. The draws come in antithetic pairs, so `mc_ess` measures how concentrated the weights are, not a count of independent draws.
 
-fig = corner.corner(
-    np.column_stack([dist, av]),
-    labels=['Distance (kpc)', r'$A_V$']
-)
-```
+### Parallax and prior
 
-## Diagnostics
+If you gave a parallax, compare it with $1/d$ of the draws. A large difference points to a binary, a bad parallax (check the Gaia RUWE) or a model failure. For faint stars without a parallax, the priors can set the distance; {doc}`priors` shows how to test this.
 
-### Goodness of Fit
+## Plots
 
-Use a **p-value** to assess fit quality, not `chi2/Nbands`. The raw ratio is not
-variance-stabilizing across different numbers of bands and conflates the degrees of
-freedom with the band count. Instead, compare `obj_chi2min` to the chi-squared
-distribution with the proper degrees of freedom.
+{mod}`brutus.plotting` draws the common figures from the output:
 
-The fit has 3 free parameters (scale, A_V, R_V), so the degrees of freedom are
-`dof = obj_Nbands - 3`. When a parallax is provided, `obj_chi2min` includes the
-parallax contribution and `obj_Nbands` counts the parallax as an extra band (it adds
-1 band and 0 free parameters), so `dof = obj_Nbands - 3` in both cases.
-
-```python
-from scipy import stats
-
-with h5py.File('results.h5', 'r') as f:
-    chi2min = f['obj_chi2min'][:]    # (Nstars,)
-    n_bands = f['obj_Nbands'][:]     # (Nstars,)
-
-dof = np.maximum(n_bands - 3, 1)
-pvalue = 1.0 - stats.chi2.cdf(chi2min, dof)
-
-# Classify fits
-good = pvalue > 0.001
-marginal = (pvalue > 1e-6) & (pvalue <= 0.001)
-poor = pvalue <= 1e-6
-```
-
-Thresholds:
-
-- `p > 0.001`: Good fit
-- `1e-6 < p <= 0.001`: Marginal
-- `p <= 1e-6`: Poor fit (model inadequacy)
-
-Poor fits typically arise from:
-
-- Underestimated photometric errors
-- Bad photometry (outliers, saturation, blending)
-- Object outside model coverage (white dwarf, brown dwarf, unresolved binary, YSO)
-
-```{warning}
-The p-value depends on your error estimates being accurate. Underestimated errors
-inflate `obj_chi2min` and drive the p-value toward zero even for a correct model.
-```
-
-### Parallax Consistency
-
-If parallax was provided, check that the inferred distance is consistent:
-
-```python
-parallax_mas = 2.5
-parallax_dist_kpc = 1.0 / parallax_mas
-
-with h5py.File('results.h5', 'r') as f:
-    phot_dist_kpc = np.median(f['samps_dist'][0])
-
-print(f"Parallax implies: {parallax_dist_kpc:.2f} kpc")
-print(f"Photometry gives: {phot_dist_kpc:.2f} kpc")
-```
-
-Significant disagreement may indicate binary contamination, parallax issues (check Gaia RUWE), or model mismatch.
-
-### Prior Sensitivity
-
-To check if results are prior-dominated, compare fits with and without priors:
-
-```python
-# With Galactic prior
-fitter.fit(..., save_file='with_prior.h5', data_coords=coords)
-
-# Without Galactic prior. A custom prior receives an array of distances
-# (kpc) and must return an array of the same shape.
-fitter.fit(..., save_file='no_prior.h5',
-           lngalprior=lambda dist, coord, **kw: np.zeros_like(dist))
-```
-
-Large differences (>30%) indicate the prior strongly influences results, which is expected for faint stars with poor photometry.
-
-## See Also
-
-- {mod}`brutus.plotting` - Visualization utilities
+| Function | Figure |
+|---|---|
+| {func}`~brutus.plotting.cornerplot` | the posterior of the stellar properties, distance and extinction |
+| {func}`~brutus.plotting.dist_vs_red` | the joint posterior of distance and $A_V$ |
+| {func}`~brutus.plotting.posterior_predictive` | the predicted SED against the data |
+| {func}`~brutus.plotting.bin_pdfs_distred` | binned distance-extinction posteriors of many stars |

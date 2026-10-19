@@ -137,6 +137,7 @@ tutorials/index
 :hidden:
 
 understanding_results
+faq
 ```
 
 ```{toctree}
