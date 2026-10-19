@@ -41,29 +41,41 @@ Examples
 """
 
 import warnings
-from math import erf, log, pi, sqrt
+from math import erfc, log, pi, sqrt
 
 import numpy as np
 from numba import jit, prange
-from scipy.special import erf as _np_erf
+
+from ..utils.math import _truncnorm_lognorm
 
 __all__ = ["logp_extinction"]
 
 _SQRT2 = sqrt(2.0)
+_DBL_MIN = 2.2250738585072014e-308  # smallest normal float64
 
 
 def _log_truncnorm_z(av_mean, av_err, av_lo, av_hi):
-    """Log of the Gaussian mass on [av_lo, av_hi] (vectorized, erf-based).
+    """Log of the Gaussian mass on [av_lo, av_hi], stable in both tails."""
+    return _truncnorm_lognorm((av_lo - av_mean) / av_err, (av_hi - av_mean) / av_err)
 
-    Uses the same erf formulation as the fused numba kernel so both code
-    paths agree to floating-point roundoff. The mass is floored at 1e-300
-    to keep the log finite when the map mean is far outside the support.
+
+@jit(nopython=True, cache=True)
+def _log_mass_fused(lo, hi):
+    """Scalar log(Phi(hi) - Phi(lo)) for standardized bounds, for the kernel.
+
+    Mirroring to the lower tail keeps the erfc difference precise. Below
+    about -37.5 sigma the mass is subnormal or zero, with too few bits for
+    log; there the asymptotic series of log Phi(hi) takes over (lo is far
+    below hi); its terms beyond 1/x**8 are below rounding there.
     """
-    z = 0.5 * (
-        _np_erf((av_hi - av_mean) / (av_err * _SQRT2))
-        - _np_erf((av_lo - av_mean) / (av_err * _SQRT2))
-    )
-    return np.log(np.maximum(z, 1e-300))
+    if lo > 0.0:
+        lo, hi = -hi, -lo
+    mass = 0.5 * (erfc(-hi / _SQRT2) - erfc(-lo / _SQRT2))
+    if mass >= _DBL_MIN:
+        return log(mass)
+    u = 1.0 / (hi * hi)
+    series = 1.0 - u * (1.0 - u * (3.0 - u * (15.0 - 105.0 * u)))
+    return -0.5 / u - log(-hi) - 0.5 * log(2.0 * pi) + log(series)
 
 
 def _add_scatter(std, scatter):
@@ -79,18 +91,6 @@ def _add_scatter(std, scatter):
     return float(out) if out.ndim == 0 else out
 
 
-def _lnp_uniform(av_lo, av_hi, truncate):
-    """Log-density of the uniform A(V) prior used where the map is uninformative.
-
-    This is the *normalized* uniform density over the support ``avlim``,
-    so that distances where the map is masked or missing compete on equal
-    footing with distances that receive the normalized Gaussian. An
-    untruncated prior has no proper uniform, so 0 is returned (only valid
-    when the whole sightline is uninformative).
-    """
-    return -log(av_hi - av_lo) if truncate else 0.0
-
-
 @jit(nopython=True, parallel=True, cache=True)
 def _extinction_prior_3d_fused(
     avs,
@@ -100,7 +100,6 @@ def _extinction_prior_3d_fused(
     std_profile,
     av_lo,
     av_hi,
-    truncate,
     lnp_uniform,
 ):
     """Fused 3D dust prior: one binary search + Gaussian log-pdf per point.
@@ -155,15 +154,7 @@ def _extinction_prior_3d_fused(
             chi2 = (avs[i] - mu) ** 2 / sig**2
             lnorm = log(2.0 * pi * sig**2)
             lnp = -0.5 * (chi2 + lnorm)
-            if truncate:
-                z = 0.5 * (
-                    erf((av_hi - mu) / (sig * _SQRT2))
-                    - erf((av_lo - mu) / (sig * _SQRT2))
-                )
-                if z < 1e-300:
-                    z = 1e-300
-                lnp -= log(z)
-            out[i] = lnp
+            out[i] = lnp - _log_mass_fused((av_lo - mu) / sig, (av_hi - mu) / sig)
         else:
             out[i] = lnp_uniform
 
@@ -208,12 +199,12 @@ def logp_extinction(
     return_components : bool, optional
         If True, returns tuple ``(logp, (av_mean, av_err))`` including
         the dust map statistics used. Default is False.
-    avlim : tuple of 2 floats or None, optional
+    avlim : tuple of 2 floats, optional
         Support ``(av_min, av_max)`` over which the Gaussian prior is
-        normalized (truncated normal). Should match the ``avlim`` bounds
-        used to clip A(V) samples in the fitting pipeline. Default is
-        ``(0.0, 20.0)`` (the ``BruteForce.fit`` default). Pass ``None``
-        for an untruncated Gaussian normalized over the full real line.
+        normalized (truncated normal), and over which the uniform prior of
+        uninformative map bins is normalized. Should match the ``avlim``
+        of the fit. Default is ``(0.0, 20.0)`` (the ``BruteForce.fit``
+        default).
     scatter : float, optional
         Systematic scatter (in magnitudes) added in quadrature to the map's
         A(V) spread, ``sigma = sqrt(sigma_map**2 + scatter**2)``. Bayestar's
@@ -229,13 +220,15 @@ def logp_extinction(
         Log-prior probability density for the input extinction values.
         Where the map is uninformative (no coverage, or distance bins masked
         as unreliable), returns the normalized uniform density over
-        ``avlim``, ``-ln(avlim[1] - avlim[0])`` (0 if ``avlim`` is None).
+        ``avlim``, ``-ln(avlim[1] - avlim[0])``.
     components : tuple, optional
         If ``return_components=True``, returns ``(av_mean, av_err)``
         containing the dust map mean and standard deviation used.
 
     Raises
     ------
+    ValueError
+        If ``avlim`` is not two finite numbers with ``avlim[0] < avlim[1]``.
     TypeError
         If ``dustmap`` has no ``query`` method (e.g. a ``str`` or
         ``pathlib.Path`` that was never loaded into a dust map object).
@@ -284,21 +277,14 @@ def logp_extinction(
     """
     avs = np.asarray(avs, dtype=float)
 
-    if avlim is None:
-        truncate = False
-        av_lo, av_hi = 0.0, 0.0  # unused
-    else:
-        truncate = True
-        av_lo, av_hi = float(avlim[0]), float(avlim[1])
-        # Reversed or non-finite bounds would silently corrupt the
-        # truncation normalization (the log-mass floor turns it into a huge
-        # constant offset instead of an error).
-        if not (np.isfinite(av_lo) and np.isfinite(av_hi)) or av_lo >= av_hi:
-            raise ValueError(
-                f"avlim must be finite with avlim[0] < avlim[1]; got {avlim}"
-            )
-
-    lnp_unif = _lnp_uniform(av_lo, av_hi, truncate)
+    try:
+        av_lo, av_hi = (float(v) for v in avlim)
+    except (TypeError, ValueError):
+        raise ValueError(f"avlim must be (av_min, av_max); got {avlim!r}") from None
+    if not (np.isfinite(av_lo) and np.isfinite(av_hi)) or av_lo >= av_hi:
+        raise ValueError(f"avlim must be finite with avlim[0] < avlim[1]; got {avlim}")
+    # The uniform prior of uninformative bins, normalized like the Gaussian.
+    lnp_unif = -log(av_hi - av_lo)
 
     scatter = float(scatter)
     if not (np.isfinite(scatter) and scatter >= 0):
@@ -377,7 +363,6 @@ def logp_extinction(
                         std_p,
                         av_lo,
                         av_hi,
-                        truncate,
                         lnp_unif,
                     )
                 except Exception as e:
@@ -402,9 +387,8 @@ def logp_extinction(
                 chi2 = (avs - av_mean) ** 2 / av_err_safe**2
                 lnorm = np.log(2.0 * np.pi * av_err_safe**2)
                 lnprior = -0.5 * (chi2 + lnorm)
-                if truncate:
-                    # Normalize over the physical support [av_lo, av_hi]
-                    lnprior -= _log_truncnorm_z(av_mean, av_err_safe, av_lo, av_hi)
+                # Normalize over the physical support [av_lo, av_hi]
+                lnprior -= _log_truncnorm_z(av_mean, av_err_safe, av_lo, av_hi)
                 lnprior = np.where(valid, lnprior, lnp_unif)
 
     # Handle simple dust maps returning (av_mean, av_std)
@@ -415,9 +399,9 @@ def logp_extinction(
         if np.isfinite(av_mean) and np.isfinite(av_err) and av_err > 0:
             chi2 = (avs - av_mean) ** 2 / av_err**2
             lnorm = np.log(2.0 * np.pi * av_err**2)
-            lnprior = -0.5 * (chi2 + lnorm)
-            if truncate:
-                lnprior -= _log_truncnorm_z(av_mean, av_err, av_lo, av_hi)
+            lnprior = -0.5 * (chi2 + lnorm) - _log_truncnorm_z(
+                av_mean, av_err, av_lo, av_hi
+            )
         else:
             lnprior = np.full_like(avs, lnp_unif, dtype=float)
             av_mean, av_err = np.nan, np.nan

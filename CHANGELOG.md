@@ -69,6 +69,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `truncnorm_pdf` accept numpy scalars and 0-d arrays, so
   `logp_age_from_feh(5.0)` no longer raises `TypeError`. The value
   `LOG_ZERO` lives in `brutus.utils.math`.
+- **`logp_extinction` normalizes its truncated normal stably in the
+  tails.** It took the mass on `avlim` from an `erf` difference with a
+  `1e-300` floor, so a map mean far outside `avlim` (for example 9 mag
+  with `avlim=(0, 6)`) gave a log-prior near +631 instead of about +1. It
+  now uses `log_ndtr` in the numpy path and a mirrored `erfc` in the fused
+  kernel; both agree with `scipy.stats.truncnorm.logpdf`.
 
 ### Changed
 
@@ -84,6 +90,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `brutus.core` no longer exports the private `_get_seds`; import it from
   `brutus.core.sed_utils`. `brutus.dust.__version__` is removed.
 - `StarGrid` is in `brutus.core.individual.__all__`.
+- `logp_extinction` no longer accepts `avlim=None`, which gave masked map
+  bins an improper `ln p = 0` next to normalized Gaussians in reliable
+  bins. Pass the A(V) support of the fit instead; `None` raises
+  `ValueError`.
 - `brutus.utils` re-exports `chisquare_outlier_loglike` and
   `uniform_outlier_loglike`. The private, unused `_function_wrapper` is
   removed from `brutus.utils.math`.

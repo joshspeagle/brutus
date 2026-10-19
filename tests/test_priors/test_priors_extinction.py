@@ -137,10 +137,10 @@ class TestExtinctionPriors:
         dustmap = Mock()
         dustmap.query.return_value = (map_distances, av_profile, std_profile)
 
-        # avlim=None, scatter=0: plain (untruncated) Gaussian with the raw
-        # map spread for the manual check below
+        # A wide avlim and scatter=0: a plain Gaussian (the truncated mass
+        # is 1 to rounding) with the raw map spread, for the check below
         logp = logp_extinction(
-            avs, dustmap, coord, distance=distances, avlim=None, scatter=0.0
+            avs, dustmap, coord, distance=distances, avlim=(-50.0, 50.0), scatter=0.0
         )
 
         assert logp.shape == avs.shape
@@ -291,11 +291,15 @@ class TestExtinctionTruncatedNormalization:
             integral = np.trapezoid(np.exp(lp), av_grid)
             assert np.isclose(integral, 1.0, rtol=1e-3)
 
-    def test_avlim_none_gives_plain_gaussian(self):
+    def test_avlim_none_raises(self):
+        with pytest.raises(ValueError, match="avlim"):
+            logp_extinction(np.array([0.1]), self.map, None, distance=1.0, avlim=None)
+
+    def test_wide_avlim_gives_plain_gaussian(self):
         avs = np.array([0.1, 0.2])
         dist = np.array([1.0, 1.0])
         lp = logp_extinction(
-            avs, self.map, None, distance=dist, avlim=None, scatter=0.0
+            avs, self.map, None, distance=dist, avlim=(-50.0, 50.0), scatter=0.0
         )
         mu = np.interp(1.0, self.map.xp, self.map.mu)
         sig = np.interp(1.0, self.map.xp, self.map.sig)
@@ -308,7 +312,9 @@ class TestExtinctionTruncatedNormalization:
         avs = np.array([0.0, 0.0])
         dist = np.array([0.05, 5.0])
         lp_trunc = logp_extinction(avs, self.map, None, distance=dist)
-        lp_plain = logp_extinction(avs, self.map, None, distance=dist, avlim=None)
+        lp_plain = logp_extinction(
+            avs, self.map, None, distance=dist, avlim=(-50.0, 50.0)
+        )
         corr = lp_trunc - lp_plain
         assert corr[0] > corr[1] > 0.0
 
@@ -343,7 +349,12 @@ class TestExtinctionScatter:
     def test_scatter_matches_plain_gaussian(self, scatter):
         avs = np.array([0.0, 0.1, 0.4])
         lp = logp_extinction(
-            avs, self.map, None, distance=np.ones(3), avlim=None, scatter=scatter
+            avs,
+            self.map,
+            None,
+            distance=np.ones(3),
+            avlim=(-50.0, 50.0),
+            scatter=scatter,
         )
         mu = np.interp(1.0, self.map.xp, self.mu)
         sig = np.hypot(np.interp(1.0, self.map.xp, self.sig), scatter)

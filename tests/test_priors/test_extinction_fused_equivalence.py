@@ -28,8 +28,8 @@ class Fake3DMap:
 
 
 def _numpy_reference(avs, distance, xp, mu_p, sig_p, avlim, scatter=0.2):
-    """Reference: the numpy branch of logp_extinction, standalone."""
-    from scipy.special import erf
+    """Reference: scipy's truncated normal, uniform where the map is invalid."""
+    from scipy.stats import truncnorm
 
     sig_p = np.asarray(sig_p, dtype=float)
     with np.errstate(invalid="ignore"):
@@ -37,20 +37,11 @@ def _numpy_reference(avs, distance, xp, mu_p, sig_p, avlim, scatter=0.2):
     av_mean = np.interp(distance, xp, mu_p)
     av_err = np.interp(distance, xp, sig_p)
     valid = np.isfinite(av_mean) & np.isfinite(av_err) & (av_err > 0)
-    av_err_safe = np.where(valid, av_err, 1.0)
-    chi2 = (avs - av_mean) ** 2 / av_err_safe**2
-    lnorm = np.log(2.0 * np.pi * av_err_safe**2)
-    lnprior = -0.5 * (chi2 + lnorm)
-    if avlim is not None:
-        lo, hi = avlim
-        s2 = np.sqrt(2.0)
-        z = 0.5 * (
-            erf((hi - av_mean) / (av_err_safe * s2))
-            - erf((lo - av_mean) / (av_err_safe * s2))
-        )
-        lnprior = lnprior - np.log(np.maximum(z, 1e-300))
-    fallback = -np.log(avlim[1] - avlim[0]) if avlim is not None else 0.0
-    return np.where(valid, lnprior, fallback)
+    mu = np.where(valid, av_mean, 0.0)
+    sig = np.where(valid, av_err, 1.0)
+    lo, hi = avlim
+    lnprior = truncnorm.logpdf(avs, (lo - mu) / sig, (hi - mu) / sig, mu, sig)
+    return np.where(valid, lnprior, -np.log(hi - lo))
 
 
 class TestExtinctionFusedEquivalence:
@@ -91,8 +82,24 @@ class TestExtinctionFusedEquivalence:
     def test_clean_profile(self):
         self._compare(self.mu, self.sig)
 
-    def test_untruncated(self):
-        self._compare(self.mu, self.sig, avlim=None)
+    def test_map_mean_far_above_support_matches_scipy(self):
+        # A map mean of 9 mag with avlim=(0, 6): the mass on the support is
+        # about 1e-26, where an erf difference cancels to 0.
+        self._compare(
+            np.full_like(self.mu, 9.0), np.full_like(self.sig, 0.2), avlim=(0.0, 6.0)
+        )
+
+    def test_map_mean_beyond_erfc_underflow_matches_scipy(self):
+        # 40 sigma out, the mass underflows to 0 even with erfc.
+        self._compare(
+            np.full_like(self.mu, 14.0), np.full_like(self.sig, 0.0), avlim=(0.0, 6.0)
+        )
+
+    def test_map_mean_with_subnormal_mass_matches_scipy(self):
+        # 38 sigma out (spread 0.2 mag from the scatter), erfc is subnormal.
+        self._compare(
+            np.full_like(self.mu, 13.6), np.full_like(self.sig, 0.0), avlim=(0.0, 6.0)
+        )
 
     def test_nan_profile_segments(self):
         mu = self.mu.copy()
@@ -134,7 +141,7 @@ class TestExtinctionFusedEquivalence:
         avs = np.array([0.1, 0.1])
         dist = np.array([1e-6, 100.0])
         out = _extinction_prior_3d_fused(
-            avs, dist, self.xp, self.mu, self.sig, 0.0, 20.0, True, -np.log(20.0)
+            avs, dist, self.xp, self.mu, self.sig, 0.0, 20.0, -np.log(20.0)
         )
         expected = _numpy_reference(
             avs, dist, self.xp, self.mu, self.sig, (0.0, 20.0), scatter=0.0
