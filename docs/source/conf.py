@@ -63,8 +63,7 @@ extensions = [
 # myst-nb configuration
 nb_execution_mode = "off"  # Use pre-rendered outputs, don't execute during build
 suppress_warnings = ["mystnb.unknown_mime_type"]
-myst_enable_extensions = ["colon_fence", "dollarmath", "substitution"]
-myst_substitutions = {"version": version}
+myst_enable_extensions = ["colon_fence", "dollarmath"]
 myst_heading_anchors = 3
 
 # -- Options for HTML output -------------------------------------------------
