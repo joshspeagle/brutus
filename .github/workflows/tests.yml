@@ -71,6 +71,18 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13"]
         # Windows is unsupported via healpy (use WSL, see README).
+        # The jit: false legs disable numba, as the coverage leg must so that
+        # coverage can see inside @jit functions. One extra leg runs the
+        # compiled code that users run.
+        jit: [false]
+        include:
+          - os: ubuntu-latest
+            python-version: "3.10"
+            jit: false
+            coverage: true
+          - os: ubuntu-latest
+            python-version: "3.13"
+            jit: true
 
     steps:
     - uses: actions/checkout@v4
@@ -120,12 +132,11 @@ jobs:
 
     - name: Test with pytest
       env:
-        NUMBA_DISABLE_JIT: 1
-      run: |
-        pytest tests/ -v --cov=brutus --cov-report=xml
+        NUMBA_DISABLE_JIT: ${{ matrix.jit && '0' || '1' }}
+      run: pytest tests/ -v ${{ matrix.coverage && '--cov=brutus --cov-report=xml' || '' }}
 
     - name: Upload coverage reports to Codecov
-      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'
+      if: matrix.coverage
       uses: codecov/codecov-action@v5
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
