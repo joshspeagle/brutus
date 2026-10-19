@@ -57,6 +57,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [0.5, 0.9], weights=[1, 1, 0])` gave `[0.5, 60.4]` instead of
   `[0.5, 1.0]`. Negative or non-finite weights, or weights that sum to 0,
   raise `ValueError`.
+- **An object with no degrees of freedom adds 0 to a cluster fit.** With
+  `dim_prior=True`, `phot_loglike` and `chisquare_outlier_loglike` gave
+  such an object (`Ndim - dof_reduction <= 0`, for example all bands NaN)
+  `-inf`, which made the cluster log-likelihood `-inf` for every parameter.
+  It now gets 0, the same as with `dim_prior=False`.
 
 ### Changed
 

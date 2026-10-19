@@ -354,7 +354,9 @@ def phot_loglike(
     Returns
     -------
     lnl : `~numpy.ndarray` with shape (Nobj, Nmod)
-        Log-likelihood values.
+        Log-likelihood values. With `dim_prior=True`, an object with no
+        degrees of freedom (``Ndim - dof_reduction <= 0``) gets 0 for every
+        model, so it adds nothing to a sum over objects.
 
     See Also
     --------
@@ -472,8 +474,8 @@ def phot_loglike(
         a = 0.5 * dof[:, None]  # shape (Nobj, 1)
         mask_valid_dof = dof > 0  # shape (Nobj,)
 
-        # Broadcast chi2 to (Nobj, Nmod)
-        lnl_dim = np.full_like(lnl, -np.inf)
+        # An object with no degrees of freedom carries no information: 0.
+        lnl_dim = np.zeros_like(lnl)
         valid_idx = np.where(mask_valid_dof)[0]
         if valid_idx.size > 0:
             chi2_valid = chi2[valid_idx]
@@ -538,7 +540,7 @@ def chisquare_outlier_loglike(
     -------
     lnl_outlier : array-like, shape (Nobj,)
         Log-likelihood for outlier model for each object. Objects with no
-        usable bands (DOF <= 0) get -inf.
+        degrees of freedom (DOF <= 0) get 0, as in `phot_loglike`.
     """
     from scipy.stats import chi2 as chisquare
 
@@ -567,7 +569,7 @@ def chisquare_outlier_loglike(
     # where the chi-square distribution is undefined and scipy returns NaN).
     dof_safe = np.where(dof > 0, dof, 1)
     chi2_threshold = chisquare.ppf(1.0 - p_value_cut, dof_safe)
-    lnl_outlier = np.where(dof > 0, chisquare.logpdf(chi2_threshold, dof_safe), -np.inf)
+    lnl_outlier = np.where(dof > 0, chisquare.logpdf(chi2_threshold, dof_safe), 0.0)
 
     return lnl_outlier
 

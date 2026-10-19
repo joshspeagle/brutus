@@ -319,15 +319,12 @@ class TestPhotLoglike:
         small_errors = flux_errors[:, :2]
         small_models = model_fluxes[:, :, :2]
 
-        # With dof_reduction=3, dof = 2 - 3 = -1 (should give -inf)
+        # With dof_reduction=3, dof = 2 - 3 = -1: no information, so 0
         lnl_small = phot_loglike(
             small_fluxes, small_errors, small_models, dim_prior=True, dof_reduction=3
         )
         assert lnl_small.shape == (nobjs, nmods)
-        # Should be -inf when dof <= 0
-        assert np.all(
-            lnl_small == -np.inf
-        ), "Should be -inf when degrees of freedom <= 0"
+        np.testing.assert_array_equal(lnl_small, 0.0)
 
     def test_phot_loglike_with_dof_reduction(self):
         """Test phot_loglike function with dof_reduction parameter."""
