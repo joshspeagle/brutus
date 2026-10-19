@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   posterior across the grid.
 - The documentation site moves to the Furo theme and Markdown (MyST) pages,
   with a brutus colour style and a new landing page.
+- Rewritten getting-started pages and method overview, with schematics of
+  the forward model, the fit and the distance-extinction degeneracy, and a
+  References page.
 
 ## [1.2.0] - 2026-07-17
 

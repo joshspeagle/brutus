@@ -58,6 +58,7 @@ extensions = [
     "sphinx_design",
     "sphinx_copybutton",
     "myst_nb",
+    "sphinxcontrib.bibtex",
 ]
 
 # myst-nb configuration
@@ -65,6 +66,8 @@ nb_execution_mode = "off"  # Use pre-rendered outputs, don't execute during buil
 suppress_warnings = ["mystnb.unknown_mime_type"]
 myst_enable_extensions = ["colon_fence", "dollarmath"]
 myst_heading_anchors = 3
+bibtex_bibfiles = ["references.bib"]
+bibtex_reference_style = "author_year"
 
 # -- Options for HTML output -------------------------------------------------
 

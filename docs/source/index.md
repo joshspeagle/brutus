@@ -144,6 +144,7 @@ understanding_results
 :hidden:
 
 api/index
+references
 changelog
 contributing
 ```
