@@ -8,6 +8,12 @@ the **real** Orion field data (207 stars w/ Gaia parallaxes), the realistic
 Orion-tutorial filter set (Pan-STARRS *grizy* + 2MASS *JHKs*, 8 bands), and the
 real photometric offsets. Host: 4 physical cores.
 
+The figures in this record were recorded on 2026-06-27, before `CLAUDE.md`
+required each benchmark to record its setup. They have no record of the
+commit, thread settings or library versions, and the timings are minima over
+repeats, not medians. `harness.py bench` now prints the setup and reports
+medians.
+
 ## Headline (min-of-N estimator, real data)
 
 | Stage          | Baseline | Optimized | Speedup |
@@ -17,8 +23,8 @@ real photometric offsets. Host: 4 physical cores.
 | **`_fit` (full per object)** | **~977 ms** | **~515 ms** | **~1.9×** |
 
 The wall-clock host is shared/noisy (±15%); the loglike/full-fit speedups are
-stable across repeated clean A/B runs (git-stash baseline vs working tree, numba
-cache cleared between, JIT enabled throughout).
+stable across repeated clean A/B runs (then a git-stash baseline vs the working
+tree, numba cache cleared between, JIT enabled throughout).
 
 ## Verification — results are *exact*, not merely "within MC noise"
 
@@ -91,9 +97,16 @@ Each sample is still marginally N(mean,cov), so the estimator is unbiased, but:
   cohort spanning the full selected-model range (Nsel = 4 … 50000-cap), the
   antithetic-vs-plain z-profile (frac|z|>3 = 0.07) is no larger than the
   plain-vs-plain null (0.08), and output scatter drops (log-evidence 0.76×).
-- Benefit concentrates in well-constrained stars (where MC-integration variance
-  dominates); for poorly-constrained stars that hit the `max_models` subsampling
-  cap the subsampling variance dominates and antithetic is neutral (no harm).
+- The `mcvar.py` and `mcgold.py` figures above come from objects below the
+  `max_models` subsampling cap. An earlier version of this record concluded
+  that for stars at the cap the subsampling variance dominates and antithetic
+  is neutral. The data do not support that conclusion: the tools then compared different model
+  subsets across seeds (#212). The audit verification in #212 aligned the
+  models for cohort objects 9, 29, 39 and 52 (seeds 0 and 1, Nmc=50). The
+  median seed-to-seed difference in `lnp` fell from 1.02-1.27 unaligned to
+  1.3e-5-5.5e-5 aligned. The antithetic-vs-plain ratio at the cap has not been
+  re-measured. Both tools now pass `subsample_mode="topk"`, so every seed keeps
+  the same models.
 
   *Adversarial review (resolved).* A reviewer initially objected that antithetic
   increases variance for even-symmetric integrands. Reconciliation: the brutus
@@ -182,10 +195,10 @@ Requires the real grid + data locally (`fetch_grids()`, `fetch_offsets('mist_v9'
 the Orion field ships in `tutorials/`). Verification tooling:
 
 ```bash
-python bench/harness.py bench            # min-of-N per-object stage timings
+python bench/harness.py bench            # median per-object stage timings
 python bench/harness.py capture <tag>    # freeze deterministic loglike + draws
 python bench/harness.py compare a b      # regression compare two captures
-python bench/disteq.py   run <tag>       # multi-seed posterior summaries (cohort)
+python bench/disteq.py   run <tag>       # multi-seed posterior summaries (first 24 objects)
 python bench/disteq.py   cmp  a b        # distributional-equivalence z-scores
 python bench/mcvar.py                    # antithetic vs plain MC-integration std
 python bench/mcgold.py                   # antithetic accuracy vs high-Nmc gold
@@ -194,7 +207,8 @@ python bench/fullfit.py  cmp  a b        # bitwise-compare two fit() HDF5 output
 python bench/profile_cohort.py           # per-stage timing + aggregated cProfile
 ```
 
-The `*_ab.sh` wrappers (`ab.sh`, `fullfit_ab.sh`, `verify_cohort.sh`) A/B the
-current **working tree** against committed `HEAD` via `git stash`: make an
-uncommitted change, run the wrapper, and it reports the speedup and the
-regression/distributional deltas. (`bench/artifacts/` outputs are git-ignored.)
+The A/B wrappers (`ab.sh`, `fullfit_ab.sh`, `verify_cohort.sh`) compare the
+current **working tree** against committed `HEAD` (or `$BASE_REF`), which they
+check out in a temporary `git worktree`: make an uncommitted change, run the wrapper, and it
+reports the speedup and the regression/distributional deltas.
+(`bench/artifacts/` outputs are git-ignored.)

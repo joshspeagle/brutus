@@ -13,7 +13,8 @@ individual-star fitter performance pass (v1.1.1). Its job is to prove that
 performance changes to `loglike_grid` / `logpost_grid` / `_fit` either leave the
 saved results **bitwise-identical** or are **provably more accurate**, and to
 measure the speedups — all on the **real** MIST grid and **real** Orion data
-rather than toy inputs.
+rather than toy inputs. `bench_populations.py` separately measures the
+isochrone population-fitting pipeline.
 
 ## Prerequisites (why it's not in CI)
 
@@ -39,9 +40,20 @@ set `NUMBA_DISABLE_JIT=1`) so the real parallel codegen is exercised.
 | `mcvar.py` | direct measurement of MC-integration variance, antithetic vs plain |
 | `mcgold.py` | accuracy of antithetic vs plain against a high-`Nmc` gold standard |
 | `profile_cohort.py` | per-stage timings + aggregated `cProfile` over the cohort |
-| `*_ab.sh` | A/B the current **working tree** against committed `HEAD` via `git stash` (make an uncommitted change, run, read the speedup + regression/distributional deltas) |
+| `bench_populations.py` | stage timings, scaling with star count, and EEP / SMF grid convergence of the isochrone population likelihood |
+| `ab.sh` | A/B stage timings (`harness.benchmark`) of the current **working tree** against committed `HEAD` |
+| `fullfit_ab.sh` | A/B `fullfit.py` runs of the working tree against `HEAD`, then `cmp` |
+| `verify_cohort.sh` | A/B `capture` + `disteq.run` on the cohort against `HEAD`, then `compare` + `disteq.cmp` |
 | `RESULTS.md` | the dated findings record: methodology, per-change results, and the investigated-but-deferred ideas |
 | `artifacts/` | generated outputs (git-ignored) |
+
+The three A/B scripts source `_baseline.sh`, which checks out the baseline ref
+in a temporary `git worktree`: `HEAD` by default, or `$BASE_REF` (use
+`BASE_REF=origin/master` for a pull request). Both sides run the working
+tree's `bench/` tools. Each script exits with an error when `src/` has no
+changes against the baseline, and `fullfit.py cmp` and `harness.py compare`
+exit with an error on a shape or NaN mismatch. `ab.sh` alternates the two
+sides for `$ROUNDS` rounds (default 3).
 
 See `RESULTS.md` for the full methodology and numbers, and
 `docs/superpowers/specs/` for the project's other dated work-records.

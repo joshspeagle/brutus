@@ -24,7 +24,7 @@ def measure(M=40, Nmc=50, nobj=6):
     s = H.load_setup()
     bf = s["bf"]
     phot_all, err_all = H._apply_offsets(s)
-    good = np.where(s["mask"].all(axis=1) & np.isfinite(s["parallax"]))[0][:nobj]
+    good = H.full_coverage_objects()[:nobj]
     H._warmup(
         bf,
         phot_all[good[0]],
@@ -75,6 +75,7 @@ def measure(M=40, Nmc=50, nobj=6):
                     coord=tuple(s["coords"][i]),
                     Nmc_prior=Nmc,
                     wt_thresh=1e-3,
+                    subsample_mode="topk",  # same models for every seed
                     rstate=np.random.RandomState(m),
                 )
                 lnps.append(r[2])  # lnp per selected model
@@ -107,4 +108,5 @@ def measure(M=40, Nmc=50, nobj=6):
 
 
 if __name__ == "__main__":
+    H.print_setup()
     measure()

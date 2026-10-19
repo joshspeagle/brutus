@@ -2,12 +2,11 @@
 """
 Benchmark for the isochrone population-fitting pipeline.
 
-Reproduces the four tables in ``docs/source/population_modeling.rst``
-("Performance Considerations"): the pipeline-stage breakdown, the scaling
-with number of stars, and the EEP / SMF convergence studies. Run on an
-otherwise-idle machine; wall-clock numbers are min-of-N over repeats.
+Measures the pipeline-stage breakdown, the scaling with number of stars,
+and the EEP / SMF convergence studies. Run on an otherwise-idle machine;
+wall-clock numbers are medians over repeats.
 
-Methodology (matching the documented setup):
+Methodology:
 - 3 Gaia bands (G, BP, RP), synthetic coeval cluster at 1 kpc drawn from
   the population grid itself (feh=0.0, loga=9.0, A_V=0.2, R_V=3.3) with
   2% flux errors, fixed RNG seed.
@@ -21,6 +20,7 @@ Usage:
 """
 
 import argparse
+import os
 import sys
 import time
 
@@ -36,6 +36,9 @@ from brutus.analysis.populations import (
 )
 from brutus.core import Isochrone, StellarPop
 
+sys.path.insert(0, os.path.dirname(__file__))
+import harness as H  # noqa: E402
+
 FILTERS = ["Gaia_G_MAW", "Gaia_BP_MAWf", "Gaia_RP_MAW"]
 THETA = dict(feh=0.0, loga=9.0, av=0.2, rv=3.3, dist=1000.0)
 FIELD_FRAC = 0.05
@@ -44,13 +47,13 @@ SEED = 42
 
 
 def timeit(fn, repeats=5):
-    """Min-of-N wall-clock time in ms (min is robust to scheduling noise)."""
+    """Return the median wall-clock time in ms over `repeats` calls, and the output."""
     times = []
     for _ in range(repeats):
         t0 = time.perf_counter()
         out = fn()
         times.append((time.perf_counter() - t0) * 1e3)
-    return min(times), out
+    return float(np.median(times)), out
 
 
 def make_stars(pop, nstars, seed=SEED):
@@ -89,7 +92,7 @@ def total_loglike(pop, obs, err, smf_grid=None, eep_grid=None):
 def bench_stages(pop, obs, err, repeats):
     print(
         "\n== Pipeline stage breakdown "
-        f"({len(obs)} stars, default grid, min of {repeats}) =="
+        f"({len(obs)} stars, default grid, median of {repeats}) =="
     )
     t_grid, grid = timeit(
         lambda: generate_isochrone_population_grid(pop, **THETA), repeats
@@ -132,7 +135,7 @@ def bench_stages(pop, obs, err, repeats):
 
 
 def bench_nstars(pop, obs, err, counts, repeats):
-    print(f"\n== Scaling with number of stars (min of {repeats}) ==")
+    print(f"\n== Scaling with number of stars (median of {repeats}) ==")
     rng = np.random.default_rng(SEED + 1)
     for n in counts:
         if n <= len(obs):
@@ -147,7 +150,7 @@ def bench_nstars(pop, obs, err, counts, repeats):
 def bench_eep(pop, obs, err, sizes, ref_size, repeats):
     print(
         f"\n== EEP convergence vs {ref_size}-point reference "
-        f"({len(obs)} stars, min of {repeats}) =="
+        f"({len(obs)} stars, median of {repeats}) =="
     )
     results = {}
     for n in sizes + [ref_size]:
@@ -170,7 +173,7 @@ def bench_eep(pop, obs, err, sizes, ref_size, repeats):
 def bench_smf(pop, obs, err, counts, ref_count, repeats):
     print(
         f"\n== SMF convergence vs {ref_count}-point uniform reference "
-        f"({len(obs)} stars, min of {repeats}) =="
+        f"({len(obs)} stars, median of {repeats}) =="
     )
     results = {}
     for n in counts + [ref_count]:
@@ -200,6 +203,7 @@ def main():
     )
     args = ap.parse_args()
 
+    H.print_setup()
     print(f"filters={FILTERS}  theta={THETA}  seed={SEED}")
     iso = Isochrone(verbose=False)
     pop = StellarPop(iso, filters=FILTERS, verbose=False)

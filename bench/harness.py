@@ -22,19 +22,26 @@ are deterministic and must match the baseline. Pure code-reorganization
 (prange, loop fusion, precompute) is expected BITWISE identical; numeric
 changes are checked at a tight rtol. logpost_grid/_fit draw RNG; with a fixed
 per-object seed they are bit-identical iff the RNG draw sequence is preserved,
-otherwise distributional-equivalence is required (see dist_equiv.py).
+otherwise distributional-equivalence is required (see disteq.py).
 """
 
 import os
+import platform
+import subprocess
 import sys
 import time
 
+import numba
 import numpy as np
+import scipy
+
+from brutus.data.download import strato
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-GRID = os.path.expanduser("~/.cache/astro-brutus/grid_mist_v9.h5")
-OFFSETS = os.path.expanduser("~/.cache/astro-brutus/offsets_mist_v9.txt")
+CACHE = strato.abspath  # the brutus.data download directory
+GRID = os.path.join(CACHE, "grid_mist_v9.h5")
+OFFSETS = os.path.join(CACHE, "offsets_mist_v9.txt")
 ORION = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "tutorials", "Orion_l209.1_b-19.9.h5"
 )
@@ -42,6 +49,40 @@ OUTDIR = os.path.join(os.path.dirname(__file__), "artifacts")
 os.makedirs(OUTDIR, exist_ok=True)
 
 _SETUP = None
+
+
+def full_coverage_objects():
+    """Return the indices of objects with every band and a parallax."""
+    s = load_setup()
+    return np.where(s["mask"].all(axis=1) & np.isfinite(s["parallax"]))[0]
+
+
+def print_setup():
+    """Print the brutus source under test, machine, threads and library versions.
+
+    The commit is that of the imported brutus, which differs from the bench/
+    checkout when an A/B script points ``PYTHONPATH`` at a baseline tree.
+    """
+    import brutus
+
+    src = os.path.dirname(os.path.abspath(brutus.__file__))
+    commit = subprocess.run(
+        ["git", "-C", src, "rev-parse", "HEAD"], capture_output=True, text=True
+    ).stdout.strip()
+    status = ["git", "-C", src, "status", "--porcelain", "--", "."]
+    if commit and subprocess.run(status, capture_output=True, text=True).stdout:
+        commit += " dirty"
+    print(f"brutus={src} commit={commit or 'n/a'}")
+    print(f"platform={platform.platform()} cpu_count={os.cpu_count()}")
+    print(
+        f"numba_threads={numba.get_num_threads()} "
+        f"NUMBA_NUM_THREADS={os.environ.get('NUMBA_NUM_THREADS')} "
+        f"OMP_NUM_THREADS={os.environ.get('OMP_NUM_THREADS')}"
+    )
+    print(
+        f"numpy={np.__version__} scipy={scipy.__version__} "
+        f"numba={numba.__version__}"
+    )
 
 
 def load_setup():
@@ -128,19 +169,16 @@ def _warmup(bf, phot, err, mask, par, parerr, coord):
 
 
 def benchmark(obj_idx=None, repeats=5, Nmc_prior=50, Ndraws=250, wt_thresh=1e-3):
-    """Per-object timings using a MIN-of-repeats estimator per object.
+    """Per-object timings using a median-of-repeats estimator per object.
 
-    On a shared/noisy host the minimum over repeats is the cleanest estimate of
-    true compute time (least contaminated by co-tenant interference). We time
-    each object `repeats` times and keep the min per object, then average the
-    per-object minima across the object sample.
+    We time each object `repeats` times and keep the median per object, then
+    average the per-object medians across the object sample.
     """
     s = load_setup()
     bf = s["bf"]
     phot_all, err_all = _apply_offsets(s)
     if obj_idx is None:
-        good = np.where(s["mask"].all(axis=1) & np.isfinite(s["parallax"]))[0]
-        obj_idx = good[:30]
+        obj_idx = full_coverage_objects()[:30]
     obj_idx = [int(i) for i in obj_idx]
     i0 = obj_idx[0]
     _warmup(
@@ -153,9 +191,9 @@ def benchmark(obj_idx=None, repeats=5, Nmc_prior=50, Ndraws=250, wt_thresh=1e-3)
         tuple(s["coords"][i0]),
     )
 
-    ll = {i: np.inf for i in obj_idx}
-    lp = {i: np.inf for i in obj_idx}
-    ft = {i: np.inf for i in obj_idx}
+    ll = {i: [] for i in obj_idx}
+    lp = {i: [] for i in obj_idx}
+    ft = {i: [] for i in obj_idx}
     for rep in range(repeats):
         for i in obj_idx:
             ph, er, mk = phot_all[i], err_all[i], s["mask"][i]
@@ -164,7 +202,7 @@ def benchmark(obj_idx=None, repeats=5, Nmc_prior=50, Ndraws=250, wt_thresh=1e-3)
             lr = bf.loglike_grid(
                 ph, er, mk, return_vals=True, parallax=par, parallax_err=pe
             )
-            ll[i] = min(ll[i], time.perf_counter() - t)
+            ll[i].append(time.perf_counter() - t)
             t = time.perf_counter()
             bf.logpost_grid(
                 lr,
@@ -175,7 +213,7 @@ def benchmark(obj_idx=None, repeats=5, Nmc_prior=50, Ndraws=250, wt_thresh=1e-3)
                 wt_thresh=wt_thresh,
                 rstate=np.random.RandomState(i),
             )
-            lp[i] = min(lp[i], time.perf_counter() - t)
+            lp[i].append(time.perf_counter() - t)
             t = time.perf_counter()
             bf._fit(
                 ph,
@@ -189,13 +227,12 @@ def benchmark(obj_idx=None, repeats=5, Nmc_prior=50, Ndraws=250, wt_thresh=1e-3)
                 wt_thresh=wt_thresh,
                 rstate=np.random.RandomState(i),
             )
-            ft[i] = min(ft[i], time.perf_counter() - t)
-    n = len(obj_idx)
+            ft[i].append(time.perf_counter() - t)
     return dict(
-        n=n,
-        loglike_ms=1e3 * sum(ll.values()) / n,
-        logpost_ms=1e3 * sum(lp.values()) / n,
-        fit_ms=1e3 * sum(ft.values()) / n,
+        n=len(obj_idx),
+        loglike_ms=1e3 * np.mean([np.median(t) for t in ll.values()]),
+        logpost_ms=1e3 * np.mean([np.median(t) for t in lp.values()]),
+        fit_ms=1e3 * np.mean([np.median(t) for t in ft.values()]),
     )
 
 
@@ -205,8 +242,7 @@ def capture(tag, obj_idx=None, Nmc_prior=50, Ndraws=250, wt_thresh=1e-3):
     bf = s["bf"]
     phot_all, err_all = _apply_offsets(s)
     if obj_idx is None:
-        good = np.where(s["mask"].all(axis=1) & np.isfinite(s["parallax"]))[0]
-        obj_idx = good[:6]
+        obj_idx = full_coverage_objects()[:6]
     obj_idx = [int(i) for i in obj_idx]
     i0 = obj_idx[0]
     _warmup(
@@ -277,19 +313,26 @@ def capture(tag, obj_idx=None, Nmc_prior=50, Ndraws=250, wt_thresh=1e-3):
 
 
 def _stats(a, b, name):
+    """Return a summary line and the worst relative error of two arrays.
+
+    The worst error is inf when the shapes differ or when the non-finite
+    entries differ (NaN equals NaN).
+    """
     a, b = np.asarray(a, float), np.asarray(b, float)
+    if a.shape != b.shape:
+        return f"  {name}: shape {a.shape} vs {b.shape}", np.inf
     fin = np.isfinite(a) & np.isfinite(b)
-    if not fin.any():
-        return f"  {name}: all-nonfinite"
+    nan_mismatch = int((~fin & (a != b) & ~(np.isnan(a) & np.isnan(b))).sum())
     da = np.abs(a[fin] - b[fin])
-    denom = np.maximum(np.abs(a[fin]), 1e-300)
-    rel = da / denom
-    nan_mismatch = int((np.isfinite(a) != np.isfinite(b)).sum())
-    return (
-        f"  {name}: max|abs|={da.max():.3e} max|rel|={rel.max():.3e} "
-        f"bitwise={'Y' if np.array_equal(a, b) or (np.array_equal(a[fin], b[fin]) and nan_mismatch == 0) else 'N'} "
+    rel = da / np.maximum(np.abs(a[fin]), 1e-300)
+    worst = np.inf if nan_mismatch else rel.max(initial=0.0)
+    line = (
+        f"  {name}: max|abs|={da.max(initial=0.0):.3e} "
+        f"max|rel|={rel.max(initial=0.0):.3e} "
+        f"bitwise={'Y' if np.array_equal(a, b, equal_nan=True) else 'N'} "
         f"nanmis={nan_mismatch}"
     )
+    return line, worst
 
 
 def compare(base_tag, cand_tag):
@@ -301,19 +344,19 @@ def compare(base_tag, cand_tag):
     draw_keys = ["idxs", "levid", "chi2min", "dists", "reds", "dreds", "scales"]
     worst_det = 0.0
     for k in range(nobj):
-        print(f"-- object {k} (idx {int(base['obj_idx'][k])}) --")
+        idx = int(base["obj_idx"][k])
+        print(f"-- object {k} (idx {idx}) --")
         print("  [deterministic loglike]")
+        worst_obj = 0.0
         for key in det_keys:
-            a, b = base[f"o{k}_{key}"], cand[f"o{k}_{key}"]
-            line = _stats(a, b, key)
+            line, worst = _stats(base[f"o{k}_{key}"], cand[f"o{k}_{key}"], key)
             print(line)
-            fin = np.isfinite(a) & np.isfinite(b)
-            if fin.any():
-                rel = np.abs(a[fin] - b[fin]) / np.maximum(np.abs(a[fin]), 1e-300)
-                worst_det = max(worst_det, rel.max())
+            worst_obj = max(worst_obj, worst)
+        print(f"  WORST deterministic relative error, idx {idx}: {worst_obj:.3e}")
+        worst_det = max(worst_det, worst_obj)
         print("  [posterior draws, seed-matched]")
         for key in draw_keys:
-            print(_stats(base[f"o{k}_{key}"], cand[f"o{k}_{key}"], key))
+            print(_stats(base[f"o{k}_{key}"], cand[f"o{k}_{key}"], key)[0])
     print(
         f"\n=== WORST deterministic relative error across all objects: {worst_det:.3e} ==="
     )
@@ -323,8 +366,11 @@ def compare(base_tag, cand_tag):
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "bench"
     if cmd == "bench":
+        print_setup()
         print(benchmark())
     elif cmd == "capture":
+        print_setup()
         capture(sys.argv[2])
     elif cmd == "compare":
-        compare(sys.argv[2], sys.argv[3])
+        # Exit 1 on a shape or NaN mismatch, so that the A/B scripts fail.
+        sys.exit(not np.isfinite(compare(sys.argv[2], sys.argv[3])))

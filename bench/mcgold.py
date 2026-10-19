@@ -35,6 +35,7 @@ def lnp_for(bf, lr, s, i, Nmc, seed, force):
         coord=tuple(s["coords"][i]),
         Nmc_prior=Nmc,
         wt_thresh=1e-3,
+        subsample_mode="topk",  # same models for every seed
         rstate=np.random.RandomState(seed),
     )
     ind.sample_multivariate_normal = orig
@@ -48,7 +49,7 @@ def main(nobj=6, Nmc=50, Ngold=4000, ngoldseeds=6, ntrial=12, objs=None):
     if objs is not None:
         good = np.array([int(i) for i in objs])
     else:
-        good = np.where(s["mask"].all(axis=1) & np.isfinite(s["parallax"]))[0][:nobj]
+        good = H.full_coverage_objects()[:nobj]
     H._warmup(
         bf,
         phot_all[good[0]],
@@ -110,4 +111,5 @@ def main(nobj=6, Nmc=50, Ngold=4000, ngoldseeds=6, ntrial=12, objs=None):
 
 
 if __name__ == "__main__":
+    H.print_setup()
     main()
