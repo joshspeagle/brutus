@@ -723,6 +723,7 @@ class TestBruteForceRealGrid:
             Nmc_prior=10,
             wt_thresh=0.1,
             coord=coord_galactic,  # Add galactic structure prior
+            dlabels=fitter.models_labels[indices],
             dustfile=None,
             parallax=None,
             rstate=np.random.RandomState(715),
@@ -742,6 +743,7 @@ class TestBruteForceRealGrid:
             wt_thresh=None,
             cdf_thresh=0.5,  # Select top 50% of models
             coord=coord_galactic,
+            dlabels=fitter.models_labels[indices],
             rstate=np.random.RandomState(732),
         )
 
@@ -1071,6 +1073,7 @@ class TestBruteForceMathematicalValidation:
             logpost_results = fitter.logpost_grid(
                 loglike_results,
                 coord=coord,  # Galactic coordinates for dust/galactic priors
+                dlabels=fitter.models_labels[test_indices],
                 Nmc_prior=10,  # Small for speed
                 wt_thresh=0.1,
                 rstate=np.random.RandomState(1058),
@@ -2097,3 +2100,28 @@ class TestDustPriorPartial:
             rstate=np.random.RandomState(0),
         )
         assert seen == [{**bound, **expected}]
+
+
+class TestSubsetResults:
+    def test_default_dlabels_with_subset_results_raises(self, fitter, observation):
+        flux, flux_err, mask = observation
+        like = fitter.loglike_grid(
+            flux, flux_err, mask, indices=np.arange(10, 20), return_vals=True
+        )
+        with pytest.raises(ValueError, match="dlabels"):
+            fitter.logpost_grid(like, coord=(120.0, 45.0), Nmc_prior=5)
+        with pytest.raises(ValueError, match="lnprior"):
+            fitter.logpost_grid(like, lnprior=np.zeros(27), dlabels=None, Nmc_prior=5)
+
+    def test_subset_labels_are_accepted(self, fitter, observation):
+        flux, flux_err, mask = observation
+        idx = np.arange(10, 20)
+        like = fitter.loglike_grid(flux, flux_err, mask, indices=idx, return_vals=True)
+        sel = fitter.logpost_grid(
+            like,
+            coord=(120.0, 45.0),
+            dlabels=fitter.models_labels[idx],
+            Nmc_prior=5,
+            rstate=np.random.RandomState(0),
+        )[0]
+        assert np.all(sel < len(idx))

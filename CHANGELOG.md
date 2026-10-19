@@ -81,6 +81,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ignored, now raises. `logl_initthresh` (`init_thresh`) must be in (0, 1).
   A parallax with an error of 0 or less counts as no parallax, as in the
   parallax priors; it stopped the run with an unclear error.
+- `BruteForce.logpost_grid` raises `ValueError` when `lnprior` or `dlabels`
+  has a different length from the likelihood results. After
+  `loglike_grid(indices=...)`, the default `dlabels` gave the Galactic prior
+  the labels of the wrong models.
 
 ### Documentation
 

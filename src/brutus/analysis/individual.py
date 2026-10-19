@@ -1463,7 +1463,10 @@ class BruteForce:
         Parameters
         ----------
         results : tuple
-            Results from loglike_grid with return_vals=True.
+            Results from loglike_grid with return_vals=True. If those were
+            computed with ``indices``, ``lnprior`` and ``dlabels`` must be
+            subset with the same indices, and the returned ``sel`` indexes
+            that subset.
 
         apply_av_prior : bool, optional
             Whether to apply the dust-map extinction prior when ``dustfile``
@@ -1492,6 +1495,17 @@ class BruteForce:
         # Unpack results (using plural names for consistency with original lnpost)
         lnlike, Ndim, chi2, scales, avs, rvs, icovs_sar = results
         Nmodels = len(lnlike)
+        # dlabels is read only by the Galactic prior, which needs coord.
+        checked = [("lnprior", lnprior)]
+        if coord is not None:
+            checked.append(("dlabels", dlabels))
+        for name, arr in checked:
+            if arr is not None and np.size(arr) != Nmodels:
+                raise ValueError(
+                    f"{name} has {np.size(arr)} entries but results has {Nmodels} "
+                    f"models. Results from loglike_grid(indices=...) need "
+                    f"{name} subset with the same indices."
+                )
 
         # Initialize random state
         if rstate is None:
