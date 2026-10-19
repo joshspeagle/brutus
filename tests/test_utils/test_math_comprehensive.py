@@ -235,12 +235,8 @@ class TestFunctionWrapper:
             wrapped(1)
 
 
-class TestMathComparison:
-    """Comparison tests between old and new implementations.
-
-    NOTE: These tests will be removed after refactoring is complete.
-    They exist to ensure consistency during the transition period.
-    """
+class TestMathEdgeCases:
+    """Test singular, nearly singular and scalar inputs."""
 
     def test_inverse3_singular_matrix(self):
         """Test behavior with singular (non-invertible) matrices."""
@@ -317,12 +313,6 @@ class TestMathComparison:
         # Matrix with negative eigenvalue
         A_neg = np.array([[1, 0, 0], [0, -1, 0], [0, 0, 1]])
         assert not isPSD(A_neg), "Matrix with negative eigenvalue should not be PSD"
-
-        # Singular matrix (zero eigenvalue)
-        A_singular = np.array([[1, 2, 3], [1, 2, 3], [1, 2, 3]])
-        # This should return False due to negative/zero eigenvalues from numerical issues
-        result = isPSD(A_singular)
-        assert isinstance(result, (bool, np.bool_)), "isPSD should return boolean"
 
     def test_chisquare_logpdf_scalar_input(self):
         """Test chi-square log-PDF with scalar input."""

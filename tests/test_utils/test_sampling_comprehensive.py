@@ -257,12 +257,8 @@ class TestSampleMultivariateNormal:
         assert np.all(np.isfinite(samples))
 
 
-class TestSamplingComparison:
-    """Comparison tests between old and new implementations.
-
-    NOTE: These tests will be removed after refactoring is complete.
-    They exist to ensure consistency during the transition period.
-    """
+class TestSamplingEdgeCases:
+    """Test single samples, tight limits and 1-D inputs."""
 
     def test_quantile_single_sample(self):
         """Test quantile with single sample."""

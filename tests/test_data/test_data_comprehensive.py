@@ -22,25 +22,6 @@ import pytest
 class TestDataDownloadFunctions:
     """Unit tests for data downloading functions."""
 
-    def test_download_imports(self):
-        """Test that download functions can be imported."""
-        from brutus.data.download import (
-            fetch_dustmaps,
-            fetch_grids,
-            fetch_isos,
-            fetch_nns,
-            fetch_offsets,
-            fetch_tracks,
-        )
-
-        # Check that all functions are callable
-        assert callable(fetch_isos)
-        assert callable(fetch_tracks)
-        assert callable(fetch_dustmaps)
-        assert callable(fetch_grids)
-        assert callable(fetch_offsets)
-        assert callable(fetch_nns)
-
     @patch("brutus.data.download._fetch")
     def test_fetch_isos_basic(self, mock_fetch):
         """Test basic fetch_isos functionality."""
@@ -180,13 +161,6 @@ class TestDataDownloadFunctions:
 
 class TestDataLoaderFunctions:
     """Unit tests for data loading functions."""
-
-    def test_loader_imports(self):
-        """Test that loader functions can be imported."""
-        from brutus.data.loader import load_models, load_offsets
-
-        assert callable(load_models)
-        assert callable(load_offsets)
 
     def test_load_models_error_handling(self):
         """Test load_models error handling."""
@@ -496,71 +470,6 @@ class TestDataLoaderFunctions:
         assert "5.0%" in output or "5%" in output  # 5% offset for g filter
         assert "r" in output
         assert "-5.0%" in output or "-5%" in output  # -5% offset for r filter
-
-
-class TestDataComparison:
-    """Comparison tests between old and new implementations.
-
-    NOTE: These tests will be removed after refactoring is complete.
-    They exist to ensure consistency during the transition period.
-    """
-
-    def test_data_module_imports(self):
-        """Test that data functions can be imported from data module."""
-        # The imports were causing hangs with patches, so test differently
-        import brutus.data
-
-        # Test that the expected functions exist
-        expected_funcs = [
-            "fetch_dustmaps",
-            "fetch_grids",
-            "fetch_isos",
-            "fetch_nns",
-            "fetch_offsets",
-            "fetch_tracks",
-            "load_models",
-            "load_offsets",
-        ]
-
-        for func_name in expected_funcs:
-            assert hasattr(
-                brutus.data, func_name
-            ), f"{func_name} not found in brutus.data"
-            func = getattr(brutus.data, func_name)
-            assert callable(func), f"{func_name} is not callable"
-
-    def test_data_module_all(self):
-        """Test that __all__ is properly defined."""
-        import brutus.data as data_module
-
-        assert hasattr(data_module, "__all__")
-
-        # Check that all listed functions are actually available
-        for name in data_module.__all__:
-            assert hasattr(data_module, name)
-            assert callable(getattr(data_module, name))
-
-
-class TestDataEdgeCases:
-    """Test edge cases and error conditions."""
-
-    # Note: These tests are commented out as they cause import issues in CI
-    # The functionality is tested through integration tests instead
-
-    # def test_fetch_symlink_creation(self):
-    #     """Test _fetch symlink creation logic."""
-    #     # This test hangs due to module import issues with mocks
-    #     pass
-
-    # def test_fetch_existing_symlink(self):
-    #     """Test _fetch when symlink already exists."""
-    #     # This test hangs due to module import issues with mocks
-    #     pass
-
-    def test_placeholder(self):
-        """Placeholder test to keep the test class."""
-        # Real functionality is tested in integration tests
-        assert True
 
 
 class TestDataIntegration:

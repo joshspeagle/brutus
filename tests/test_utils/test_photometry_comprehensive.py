@@ -184,12 +184,8 @@ class TestPhotometryFunctions:
         np.testing.assert_array_almost_equal(mag, expected_mag, decimal=10)
 
 
-class TestPhotometryComparison:
-    """Comparison tests between old and new implementations.
-
-    NOTE: These tests will be removed after refactoring is complete.
-    They exist to ensure consistency during the transition period.
-    """
+class TestPhotometryEdgeCases:
+    """Test zero, negative and zero-error fluxes, and bad shapes."""
 
     def test_zero_flux_magnitude(self):
         """Test handling of zero flux (should give infinite magnitude)."""
