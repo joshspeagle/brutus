@@ -72,8 +72,8 @@ def bin_pdfs_distred(
         Default is `'distance_modulus`.
 
     lndistprior : func, optional
-        The log-distsance prior function used. If not provided, the galactic
-        model from Green et al. (2014) will be assumed.
+        The log-distance prior function used. If not provided,
+        `~brutus.priors.logp_galactic_structure` is assumed.
 
     coord : 2-tuple or `~numpy.ndarray` of shape `(Nobj, 2)`, optional
         The galactic `(l, b)` coordinates passed to `lndistprior` when
