@@ -66,6 +66,9 @@ from numba import jit, prange
 
 __all__ = ["quantile", "draw_sar", "sample_multivariate_normal"]
 
+# draw_sar pads a distribution with no accepted draw after this many passes.
+_DRAW_SAR_EMPTY_PASSES = 100
+
 
 def quantile(x, q, weights=None):
     """
@@ -151,7 +154,7 @@ def draw_sar(
     rvs,
     covs_sar,
     ndraws=500,
-    avlim=(0.0, 6.0),
+    avlim=(0.0, 20.0),
     rvlim=(1.0, 8.0),
     rstate=None,
     max_attempts=10000,
@@ -182,7 +185,8 @@ def draw_sar(
         The number of desired random draws. Default is `500`.
 
     avlim : 2-tuple, optional
-        The A_V limits used to truncate results. Default is `(0., 6.)`.
+        The A_V limits used to truncate results. Default is `(0., 20.)`,
+        the `BruteForce.fit` default.
 
     rvlim : 2-tuple, optional
         The R_V limits used to truncate results. Default is `(1., 8.)`.
@@ -196,7 +200,8 @@ def draw_sar(
     max_attempts : int, optional
         Maximum number of rejection-sampling passes per posterior sample
         before the remaining slots are padded with the mean values (with a
-        warning). Default is `10000`.
+        warning). A sample with no accepted draw after 100 passes is padded
+        at once. Default is `10000`.
 
     Returns
     -------
@@ -213,8 +218,9 @@ def draw_sar(
     -----
     The function samples from multivariate normal distributions defined by
     the means (scales, avs, rvs) and covariances (covs_sar), then applies
-    rejection sampling to ensure all samples fall within the specified
-    limits for A_V and R_V.
+    rejection sampling to keep the samples within the specified limits for
+    A_V and R_V. A sample that cannot fill `ndraws` this way is padded with
+    its mean, which can lie outside the limits.
 
     All `Nsamps` distributions are drawn in a single batched
     `sample_multivariate_normal` call per rejection pass (rather than one
@@ -283,15 +289,14 @@ def draw_sar(
                 rdraws[i, fill] = r_mc[k, sel]
                 nfilled[i] += take
         active = active[nfilled[active] < ndraws]
+        if n_attempts == _DRAW_SAR_EMPTY_PASSES:
+            # A mean far outside the limits, or a NaN, accepts nothing.
+            active = active[nfilled[active] > 0]
 
-    # Any distribution still deficient after `max_attempts` passes gets its
-    # remaining slots padded with the mean values (matching the historical
-    # per-sample fallback).
-    for i in active:
+    for i in np.flatnonzero(nfilled < ndraws):
         warnings.warn(
             f"draw_sar: only collected {nfilled[i]}/{ndraws} "
-            f"in-bounds samples after {max_attempts} attempts for "
-            f"sample {i}. Padding with mean values.",
+            f"in-bounds samples for sample {i}. Padding with mean values.",
             RuntimeWarning,
             stacklevel=2,
         )

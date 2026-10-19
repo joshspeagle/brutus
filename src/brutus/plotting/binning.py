@@ -31,7 +31,7 @@ def bin_pdfs_distred(
     dist_type="distance_modulus",
     lndistprior=None,
     coord=None,
-    avlim=(0.0, 6.0),
+    avlim=(0.0, 20.0),
     rvlim=(1.0, 8.0),
     weights=None,
     parallaxes=None,
@@ -56,7 +56,9 @@ def bin_pdfs_distred(
         `(dists, reds, dreds)` that were saved, or a collection of
         `(scales, avs, rvs, covs_sar)` that will be used to regenerate
         `(dists, reds)` in conjunction with any applied distance
-        and/or parallax priors.
+        and/or parallax priors. Prefer the saved draws: regeneration applies
+        only the distance and parallax priors, not the dust-map and
+        label-dependent priors of the fit.
 
     cdf : bool, optional
         Whether to compute the CDF along the reddening axis instead of the
@@ -81,7 +83,9 @@ def bin_pdfs_distred(
         all objects; otherwise provide one pair per object.
 
     avlim : 2-tuple, optional
-        The Av limits used to truncate results. Default is `(0., 6.)`.
+        The Av limits used to truncate regenerated draws. Without `span`,
+        they also set the A(V) range of the bins and of the smoothing.
+        Default is `(0., 20.)`, the `BruteForce.fit` default.
 
     rvlim : 2-tuple, optional
         The Rv limits used to truncate results. Default is `(1., 8.)`.

@@ -22,7 +22,7 @@ def dist_vs_red(
     dist_type="distance_modulus",
     lndistprior=None,
     coord=None,
-    avlim=(0.0, 6.0),
+    avlim=(0.0, 20.0),
     rvlim=(1.0, 8.0),
     weights=None,
     parallax=None,
@@ -48,7 +48,9 @@ def dist_vs_red(
         `(dists, reds, dreds)` that were saved, or a collection of
         `(scales, avs, rvs, covs_sar)` that will be used to regenerate
         `(dists, reds)` in conjunction with any applied distance
-        and/or parallax priors. Arrays of shape `(Nobj, Nsamps)` are also
+        and/or parallax priors. Prefer the saved draws: regeneration applies
+        only the distance and parallax priors, not the dust-map and
+        label-dependent priors of the fit. Arrays of shape `(Nobj, Nsamps)` are also
         accepted; the plotted histogram is then the average of the
         per-object 2-D PDFs.
 
@@ -71,7 +73,9 @@ def dist_vs_red(
         a list with one pair per object is also accepted.
 
     avlim : 2-tuple, optional
-        The Av limits used to truncate results. Default is `(0., 6.)`.
+        The Av limits used to truncate regenerated draws. Without `span`,
+        they also set the A(V) range of the bins and of the smoothing.
+        Default is `(0., 20.)`, the `BruteForce.fit` default.
 
     rvlim : 2-tuple, optional
         The Rv limits used to truncate results. Default is `(1., 8.)`.

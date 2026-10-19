@@ -462,6 +462,7 @@ class TestDrawSarBatched:
             self.rvs,
             self.covs,
             ndraws=ndraws,
+            avlim=(0.0, 6.0),
             rstate=np.random.RandomState(4321),
         )
         qgrid = np.array([0.05, 0.16, 0.5, 0.84, 0.95])
@@ -493,6 +494,7 @@ class TestDrawSarBatched:
             self.rvs,
             self.covs,
             ndraws=2000,
+            avlim=(0.0, 6.0),
             rstate=np.random.RandomState(5),
         )
         assert np.all(s >= 0.0)
@@ -531,6 +533,46 @@ class TestDrawSarBatched:
         np.testing.assert_array_equal(r[1], np.full(10, 3.1))
         assert np.all((a[0] >= 0.0) & (a[0] <= 6.0))
         assert len(np.unique(a[0])) > 1
+
+    def test_default_limits_sample_high_extinction(self):
+        """The old default avlim=(0, 6) padded an A(V) = 8 star with its mean."""
+        from brutus.utils.sampling import draw_sar
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            s, a, r = draw_sar(
+                [1.0],
+                [8.0],
+                [3.3],
+                np.diag([0.01, 0.04, 0.01])[None],
+                ndraws=500,
+                rstate=np.random.RandomState(2),
+            )
+        # The standard error of the mean is 0.2 / sqrt(500) = 0.009.
+        assert abs(a.mean() - 8.0) < 0.05
+        assert abs(a.std() - 0.2) < 0.02
+
+    def test_hopeless_distribution_stops_after_100_passes(self):
+        from brutus.utils.sampling import draw_sar
+
+        class CountingState(np.random.RandomState):
+            calls = 0
+
+            def normal(self, *args, **kwargs):
+                CountingState.calls += 1
+                return super().normal(*args, **kwargs)
+
+        with pytest.warns(RuntimeWarning, match="only collected 0/10"):
+            s, a, r = draw_sar(
+                [1.0],
+                [50.0],
+                [3.1],
+                np.diag([0.01, 0.01, 0.01])[None],
+                ndraws=10,
+                rstate=CountingState(0),
+            )
+        assert CountingState.calls == 100
+        np.testing.assert_array_equal(a, 50.0)
 
     def test_rstate_compatibility(self):
         """np.random module, RandomState, and Generator must all work."""

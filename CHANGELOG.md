@@ -79,6 +79,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path.** Its smallest-eigenvalue check cancelled for ill-conditioned
   matrices and shifted some that needed no shift. The saved results of the
   `bench/fullfit.py` fits do not change.
+- **`draw_sar` and the plots that regenerate draws use `avlim=(0, 20)`**,
+  the `BruteForce.fit` default, not `(0, 6)`. This affects `cornerplot`,
+  `dist_vs_red` and `bin_pdfs_distred`. A star with A(V) above 6 mag got
+  every draw replaced by its mean. Without `span`, the A(V) axis of
+  `dist_vs_red` and `bin_pdfs_distred` now covers 0 to 20 mag, also for
+  saved draws, so the default bins and smoothing are 3.3 times wider; pass
+  `span` for a narrower range. `draw_sar` pads a distribution with its mean after
+  100 passes with no accepted draw, instead of after `max_attempts`.
 
 ### Changed
 
