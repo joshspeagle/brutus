@@ -33,6 +33,7 @@ IMF
 Initial Mass Function
    The probability distribution of stellar masses at birth. brutus uses the Kroupa IMF: P(M) ∝ M⁻¹·³ for 0.08-0.5 M☉, P(M) ∝ M⁻²·³ above 0.5 M☉ (normalized over 0.08-100 M☉ by default).
 ```
+
 ## Chemical Abundances
 
 ```{glossary}
@@ -44,6 +45,7 @@ alpha enhancement
 [α/Fe]
    The abundance of alpha-process elements (O, Mg, Si, Ca, Ti) relative to iron, compared to solar. Old halo and thick disk stars typically have [α/Fe] ~ +0.3. *Note: brutus model interfaces accept alpha enhancement (the afe argument to get_seds and a grid label in load_models), but the shipped MIST data files are computed at [α/Fe] = 0, so models are effectively solar-scaled unless you supply alpha-enhanced grids.*
 ```
+
 ## Photometry
 
 ```{glossary}
@@ -51,7 +53,8 @@ magnitude
    Logarithmic brightness scale: m = -2.5 log₁₀(F/F_ref). Fainter objects have larger (more positive) magnitudes. A difference of 5 magnitudes corresponds to a factor of 100 in brightness.
 
 flux density
-   Linear brightness measurement. brutus uses "maggies" internally, where 1 maggie is the flux of a 0th magnitude source. Convert from magnitudes: flux = 10^(-0.4 × mag).
+maggie
+   Linear brightness measurement. brutus works in "maggies": 1 maggie is the flux of a source of magnitude 0 in the survey's own system, so flux = 10^(-0.4 × mag). {func}`brutus.utils.inv_magnitude` converts magnitudes and their errors.
 
 SED
 Spectral Energy Distribution
@@ -62,7 +65,11 @@ parallax
 
 distance modulus
    The difference between apparent and absolute magnitude: μ = m - M = 5 log₁₀(d / 10 pc). A star at 1 kpc has μ = 10 mag.
+
+photometric offset
+   A multiplicative correction to the flux in one band that removes a systematic difference between the models and the data. {func}`brutus.data.load_offsets` reads them; `BruteForce.fit` applies them through `phot_offsets`. See {doc}`photometric_offsets`.
 ```
+
 ## Extinction & Dust
 
 ```{glossary}
@@ -77,7 +84,14 @@ R_V
 
 reddening vector
    The direction a star moves in color-color or color-magnitude space due to dust extinction. Depends on the extinction law and stellar spectrum.
+
+line of sight
+   The direction from the observer toward a point on the sky. Extinction accumulates along it with distance, so stars at different distances in one direction trace the dust in 3D.
+
+Bayestar
+   The 3D dust map of Green et al. (2019), from Pan-STARRS and 2MASS photometry, covering the sky north of declination -30°. brutus can use it as a prior on extinction; see {doc}`priors`.
 ```
+
 ## Statistical Inference
 
 ```{glossary}
@@ -90,17 +104,27 @@ prior
 likelihood
    The probability of observing the data given model parameters: P(data|θ). Measures how well a model matches observations.
 
+evidence
+   The likelihood times the prior, integrated over all parameters: P(data). brutus saves an estimate per star (`obj_log_evid`), summed over the models it keeps and with unnormalized grid weights. Compare it only between fits that use the same grid and priors.
+
 marginalization
    Integrating over nuisance parameters to obtain distributions for parameters of interest. For example, marginalizing over stellar mass to get the distance posterior.
 
 brute force
    The grid-based inference approach that gives brutus its name: systematically evaluate the likelihood at all pre-computed grid points, apply priors, then marginalize. Avoids MCMC convergence issues and guarantees complete parameter space coverage.
 ```
+
 ## brutus Classes
 
 ```{glossary}
+model grid
+   A set of stellar models at fixed points in initial mass, {term}`EEP` and metallicity (and, in some grids, alpha enhancement and binary mass ratio), each with its {term}`SED` and stellar properties. The default `grid_mist_v9` has 613,530 models.
+
+scale factor
+   The flux ratio between the observed star and its model at 1 kpc: scale = (1 kpc / d)², with d the distance. brutus fits it for each model with the extinction.
+
 StarGrid
-   A pre-computed grid of stellar models optimized for fast fitting. Stores absolute magnitudes at a 1 kpc reference distance plus reddening coefficients for each model.
+   A pre-computed {term}`model grid` optimized for fast fitting. Stores magnitudes at a reference distance of 1 kpc plus reddening coefficients for each model.
 
 BruteForce
    The main fitting class for individual stars. Takes a {term}`StarGrid` and observed photometry, returns posterior samples for distance, extinction, and stellar parameters.
