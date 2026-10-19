@@ -7,7 +7,7 @@ brutus infers stellar properties, distances and extinctions from photometry and 
 - `src/brutus/`: the package. `core/` holds the stellar models (`EEPTracks`, `StarGrid`, `Isochrone`, `StellarPop`) and SED generation, `analysis/` the fitting (`BruteForce`, cluster and line-of-sight fitting, photometric offsets), `priors/` the IMF, Galactic and extinction priors, `dust/` the 3D dust maps, `data/` downloading (Pooch, Harvard Dataverse) and loading, `plotting/` the figures, and `utils/` math, photometry and sampling.
 - `tests/`: the test suite, one directory per subpackage.
 - `tutorials/`: Jupyter notebooks numbered 00 to 11. They need downloaded model data. The docs build copies them into `docs/source/tutorials/`.
-- `docs/source/`: the documentation site (Sphinx, reStructuredText, `sphinx-book-theme`). Read the Docs builds it at https://brutus.readthedocs.io, the address that `README.md` and `pyproject.toml` give; the docs workflow also deploys it to GitHub Pages from `master`.
+- `docs/source/`: the documentation site (Sphinx with the Furo theme, Markdown pages through MyST). `_static/brutus.css` holds the brutus style; the theme colours are in `conf.py`. Read the Docs builds it at https://brutus.readthedocs.io, the address that `README.md` and `pyproject.toml` give; the docs workflow also deploys it to GitHub Pages from `master`.
 - `bench/`: manual benchmark and verification tools for the `BruteForce` hot path, described in `bench/README.md`. Not packaged, not run in CI.
 - `.github/scripts/fetch_test_data.py`: downloads the data the CI tests use.
 - `CHANGELOG.md`: user-visible changes, in Keep a Changelog format.
