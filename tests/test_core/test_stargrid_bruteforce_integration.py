@@ -57,65 +57,41 @@ def multi_star_observations():
 class TestStarGridBruteForceIntegration:
     """Test integration between StarGrid and BruteForce."""
 
-    def test_complete_workflow(self, mist_grid):
-        """Test complete workflow from grid to fitting."""
+    def test_fit_recovers_injected_model_distance_and_extinction(self, mist_grid):
+        """A noiseless SED from a grid model, reddened and placed at 100 pc,
+        is fit best by that model, with the injected distance and A(V)
+        inside the central 95% of the posterior draws."""
         grid = mist_grid
         fitter = BruteForce(grid, verbose=False)
+        true_idx = 24
+        true_labels = grid.labels[true_idx]
+        dist_kpc, av = 0.1, 0.2
 
-        # Create synthetic observation from known model
-        true_idx = 24  # Middle model
-        true_params = {
-            "mini": grid.labels["mini"][true_idx],
-            "eep": grid.labels["eep"][true_idx],
-            "feh": grid.labels["feh"][true_idx],
-        }
-
-        # Generate SED through StarGrid
-        true_sed, true_params_out, true_params2 = grid.get_seds(
-            **true_params, av=0.2, rv=3.1, dist=100.0, return_flux=True
+        flux, _, _ = grid.get_seds(
+            **{name: true_labels[name] for name in ("mini", "eep", "feh")},
+            av=av,
+            rv=3.1,
+            dist=1000.0 * dist_kpc,
+            return_flux=True,
         )
-
-        # Use true SED with error bars but no added noise
-        flux = true_sed
-        flux_err = true_sed * 0.03
-        mask = np.ones(5, dtype=bool)
-
-        # Fit through BruteForce
-        results = fitter._fit(
+        # Without a parallax or a Galactic prior, the flat distance prior
+        # favours distant giants with the same colours.
+        idxs, _, _, _, _, _, lnprob, _, _, dists, reds, _, _, _ = fitter._fit(
             flux,
-            flux_err,
-            mask,
+            flux * 0.03,
+            np.ones(5, dtype=bool),
+            parallax=1.0 / dist_kpc,
+            parallax_err=0.05 / dist_kpc,
             Nmc_prior=20,
             wt_thresh=0.05,
             rstate=np.random.RandomState(84),
         )
 
-        # _fit returns 14 values with return_distreds=True (default)
-        (
-            idxs,
-            scales,
-            avs,
-            rvs,
-            covs_sar,
-            Ndim,
-            lnprob,
-            levid,
-            chi2min,
-            dists,
-            reds,
-            dreds,
-            logwts,
-            mc_ess,
-        ) = results
-
-        # Check results are reasonable
-        assert len(idxs) > 0
-        assert np.all(np.isfinite(lnprob))
-
-        # BruteForce does model selection, so just check that we get reasonable results
-        # Check that we sampled valid model indices
-        assert len(idxs) > 0
-        assert np.all(np.isfinite(lnprob))
+        assert grid.labels[idxs[np.argmax(lnprob)]] == true_labels
+        dist_lo, dist_hi = np.percentile(dists, [2.5, 97.5])
+        assert dist_lo < dist_kpc < dist_hi
+        av_lo, av_hi = np.percentile(reds, [2.5, 97.5])
+        assert av_lo < av < av_hi
 
     def test_interpolation_vs_grid_points(self, mist_grid):
         """Compare interpolated SEDs vs exact grid points."""
