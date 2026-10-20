@@ -609,12 +609,9 @@ class StellarPop:
             filters=filters, nnfile=nnfile, verbose=verbose
         )
 
-    def _evaluate_seds(self, params, valid_mask, av, rv, dist, label=""):
+    def _evaluate_seds(self, params, valid_mask, av, rv, dist):
         """
-        Evaluate SEDs using batch method with scalar fallback.
-
-        Attempts vectorized evaluation via ``sed_batch`` first. If that fails
-        (or is unavailable), falls back to a per-star ``sed()`` loop.
+        Evaluate SEDs with ``sed_batch`` on the rows in `valid_mask`.
 
         Parameters
         ----------
@@ -635,63 +632,23 @@ class StellarPop:
         dist : float
             Distance in parsecs.
 
-        label : str, optional
-            Descriptive label used in warning messages (e.g., ``"primary"``
-            or ``"secondary"``). Default is ``""``.
-
         Returns
         -------
         seds : numpy.ndarray of shape (N, Nfilt)
             SED array with predictions for valid stars and NaN elsewhere.
         """
-        N = len(params["mini"])
-        seds = np.full((N, self.predictor.NFILT), np.nan)
-        n_valid = np.sum(valid_mask)
-
-        if n_valid > 0 and hasattr(self.predictor, "sed_batch"):
-            try:
-                seds[valid_mask] = self.predictor.sed_batch(
-                    logt=params["logt"][valid_mask],
-                    logg=params["logg"][valid_mask],
-                    feh_surf=params["feh_surf"][valid_mask],
-                    logl=params["logl"][valid_mask],
-                    afe=params["afe_surf"][valid_mask],
-                    av=av,
-                    rv=rv,
-                    dist=dist,
-                )
-            except Exception as e:
-                warnings.warn(
-                    f"Batch {label}SED generation failed, falling back to "
-                    f"loop: {e}",
-                    RuntimeWarning,
-                    stacklevel=3,
-                )
-                # Fall through to scalar loop below
-                n_valid = 0
-
-        if n_valid == 0 or not hasattr(self.predictor, "sed_batch"):
-            for i in range(N):
-                if valid_mask[i]:
-                    try:
-                        seds[i] = self.predictor.sed(
-                            logl=params["logl"][i],
-                            logt=params["logt"][i],
-                            logg=params["logg"][i],
-                            feh_surf=params["feh_surf"][i],
-                            afe=params["afe_surf"][i],
-                            av=av,
-                            rv=rv,
-                            dist=dist,
-                        )
-                    except Exception as e:
-                        warnings.warn(
-                            f"{label.capitalize()}SED generation failed for "
-                            f"index {i} (mini={params['mini'][i]:.3f}): {e}",
-                            RuntimeWarning,
-                            stacklevel=3,
-                        )
-
+        seds = np.full((len(params["mini"]), self.predictor.NFILT), np.nan)
+        if np.any(valid_mask):
+            seds[valid_mask] = self.predictor.sed_batch(
+                logt=params["logt"][valid_mask],
+                logg=params["logg"][valid_mask],
+                feh_surf=params["feh_surf"][valid_mask],
+                logl=params["logl"][valid_mask],
+                afe=params["afe_surf"][valid_mask],
+                av=av,
+                rv=rv,
+                dist=dist,
+            )
         return seds
 
     def get_seds(
@@ -1009,7 +966,7 @@ apply_corr, corr_params, return_dict
 
         # Generate primary component SEDs using vectorized evaluation
         mass_valid = params["mini"] >= mini_bound
-        seds = self._evaluate_seds(params, mass_valid, av, rv, dist, label="primary ")
+        seds = self._evaluate_seds(params, mass_valid, av, rv, dist)
 
         return seds, params_arr, params
 
@@ -1023,7 +980,7 @@ apply_corr, corr_params, return_dict
         feh,
         afe,
         loga,
-        eep_used,
+        eep,
         mini_bound,
         eep_binary_max,
         av,
@@ -1066,16 +1023,14 @@ apply_corr, corr_params, return_dict
                 dist,
                 apply_corr,
                 corr_params,
-                eep_used,
+                eep,
             )
         elif binary_fraction == 1.0:
             # Equal-mass binary: flux doubles -> magnitude decreases by
             # 2.5*log10(2). Binaries are only modeled on the main sequence
             # (eep <= eep_binary_max), matching _add_binary_components:
             # post-MS stars keep their primary-only SED and get no secondary.
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")  # NaN comparisons
-                is_binary = (eep_used <= eep_binary_max) & ~np.isnan(seds[:, 0])
+            is_binary = (eep <= eep_binary_max) & ~np.isnan(seds[:, 0])
             seds[is_binary] -= 2.5 * np.log10(2.0)
             # np.where already returns fresh arrays, so no copies are needed;
             # keep params_arr2 in the same (Neep, Npred) orientation as the
@@ -1123,33 +1078,21 @@ apply_corr, corr_params, return_dict
             eep2 = np.full(np.shape(eep), np.nan)
 
         # Restrict binaries to main sequence
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            eep2[(eep2 > eep_binary_max) | (eep > eep_binary_max)] = np.nan
+        eep2[(eep2 > eep_binary_max) | (eep > eep_binary_max)] = np.nan
 
         # Generate secondary parameters
-        try:
-            params_arr2[:] = self.isochrone.get_predictions(
-                feh=feh,
-                afe=afe,
-                loga=loga,
-                eep=eep2,
-                apply_corr=apply_corr,
-                corr_params=corr_params,
-            )
-            params2.update(dict(zip(self.isochrone.predictions, params_arr2.T)))
-        except Exception as e:
-            warnings.warn(
-                f"Secondary parameter generation failed for binary population: {e}",
-                RuntimeWarning,
-                stacklevel=2,
-            )
+        params_arr2[:] = self.isochrone.get_predictions(
+            feh=feh,
+            afe=afe,
+            loga=loga,
+            eep=eep2,
+            apply_corr=apply_corr,
+            corr_params=corr_params,
+        )
 
         # Generate secondary SEDs using vectorized evaluation
         sec_valid = (params2["mini"] >= mini_bound) & np.isfinite(params2["mini"])
-        seds2 = self._evaluate_seds(
-            params2, sec_valid, av, rv, dist, label="secondary "
-        )
+        seds2 = self._evaluate_seds(params2, sec_valid, av, rv, dist)
 
         # Combine primary and secondary SEDs only where a valid secondary
         # exists. A star without a resolvable companion (post-MS primary,

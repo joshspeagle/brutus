@@ -255,6 +255,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ValueError` when `isochrone.predictions` lacks mini, logl, logt, logg,
   feh_surf or afe_surf, and `StarEvolTrack` when `tracks.predictions`
   lacks loga, logl, logt, logg, feh_surf or afe_surf.
+- `StellarPop.get_seds` computes SEDs only with `FastNNPredictor.sed_batch`.
+  The per-star `sed` fallback, which ran when `sed_batch` raised, is
+  removed; such an error now propagates, as does an error in the
+  companions' parameters, which gave single-star SEDs with a warning.
 
 ### Fixed
 
