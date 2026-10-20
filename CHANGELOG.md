@@ -169,6 +169,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has no companion**, for all binary fractions. For `0 < binary_fraction
   < 1`, it also returned the parameters of companions that it left out of
   the SED (below `mini_bound`, or with no valid SED).
+- **`los_clouds_loglike_samples` averages each star's likelihood over its
+  finite draws only.** It divided by the count of all draws, so NaN draws
+  lowered the star's inlier term against the outlier term, and a star with
+  only NaN draws added `ln(pb) - ln(area)`, which pulled the outlier
+  fraction `pb` upward. A draw with a NaN or infinite distance or
+  reddening is now left out, a finite distance outside [0, 1e10) still
+  counts as a zero-likelihood draw, and a star with no finite draw is left
+  out of the sum. With 5 stars, 25 draws each, and one star all NaN, the
+  log-likelihood at `pb` = 0.01, 0.1 and 0.5 was -8.25, -6.22 and -6.14;
+  it is now -1.85, -2.13 and -3.66, the values without that star.
 
 ### Changed
 

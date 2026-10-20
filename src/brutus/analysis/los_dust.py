@@ -377,10 +377,15 @@ def los_clouds_loglike_samples(
 
     dsamps : array_like, shape (Nobj, Nsamps)
         Distance samples for each object. Follows the units used in `theta`.
+        Non-finite draws are handled as described for `rsamps`.
 
     rsamps : array_like, shape (Nobj, Nsamps)
         Reddening samples for each object. Follows the units in `theta`.
-        Non-finite samples are ignored (treated as carrying zero weight).
+        Each star's likelihood is the average of the kernel over its finite
+        draws (finite distance and reddening); a draw with a NaN or infinite
+        value is left out. A finite distance outside [0, 1e10) counts as a
+        draw with zero likelihood. A star with no finite draw is left out of
+        the sum.
 
     kernel : str or callable, optional
         The kernel used to weight the samples along the LOS. If a string is
@@ -524,7 +529,7 @@ def los_clouds_loglike_samples(
     if Ndraws > dsamps.shape[1]:
         Ndraws = dsamps.shape[1]  # Use all available samples
     ds, rs = dsamps[:, :Ndraws], rsamps[:, :Ndraws]
-    Nobj, Nsamps = ds.shape
+    Nobj = ds.shape[0]
 
     if template_reds is not None:
         template_reds = np.asarray(template_reds)
@@ -559,10 +564,11 @@ def los_clouds_loglike_samples(
 
     kmean, ksig = per_sample(seg_mean), seg_sig[idx]
 
-    # Samples with distances outside [0, 1e10) fall in no segment, and
-    # non-finite reddening samples carry no information: both get zero
-    # weight (a NaN in rsamps would otherwise poison the whole sightline)
-    valid = (ds >= 0) & (ds < 1e10) & np.isfinite(rs)
+    # Draws with a non-finite distance or reddening carry no information and
+    # are left out of each star's average. Finite distances outside
+    # [0, 1e10) fall in no segment and count as zero-likelihood draws.
+    finite = np.isfinite(ds) & np.isfinite(rs)
+    valid = finite & (ds >= 0) & (ds < 1e10)
 
     # Compute log-weights by evaluating each reddening sample against the
     # kernel centered on its own segment's extinction level
@@ -581,8 +587,11 @@ def los_clouds_loglike_samples(
             logw = kern(rs, (kmean, ksig))
         logw = np.where(valid, logw, -np.inf)
 
-    # Compute log-likelihoods across all samples
-    logls = logsumexp(logw, axis=1) - np.log(Nsamps)
+    # Average each star's likelihood over its finite draws; a star without
+    # any carries no information and is left out of the sum.
+    nfinite = finite.sum(axis=1)
+    has_draws = nfinite > 0
+    logls = logsumexp(logw, axis=1)[has_draws] - np.log(nfinite[has_draws])
 
     # Add in outlier mixture model
     logls = logsumexp(
