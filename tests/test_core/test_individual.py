@@ -42,6 +42,13 @@ class TestEEPTracksInitialization:
             EEPTracks(mistfile="/non/existent.h5", predictions=predictions)
 
 
+def test_get_corrections_rejects_malformed_corr_params():
+    tracks = MagicMock()
+    tracks.mini_idx, tracks.eep_idx, tracks.feh_idx = 0, 1, 2
+    with pytest.raises(ValueError, match="corr_params"):
+        EEPTracks.get_corrections(tracks, [0.8, 350.0, 0.0, 0.0], (0.09, -0.09))
+
+
 class TestStarEvolTrackInitialization:
     """Test StarEvolTrack class initialization."""
 

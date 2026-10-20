@@ -269,6 +269,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The per-star `sed` fallback, which ran when `sed_batch` raised, is
   removed; such an error now propagates, as does an error in the
   companions' parameters, which gave single-star SEDs with a warning.
+- `Isochrone.get_predictions` and `EEPTracks.get_corrections` share one
+  correction function, with bitwise-identical results. `Isochrone` raises
+  `ValueError` for a `corr_params` without 4 entries, and at construction
+  for a file without the mini, logt, logl or logg label; it warned and
+  returned uncorrected predictions. `StellarPop` passes errors of
+  `Isochrone.get_predictions` through, not as `RuntimeError`.
 
 ### Fixed
 

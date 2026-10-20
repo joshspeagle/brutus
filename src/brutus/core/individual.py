@@ -152,6 +152,39 @@ rename = {
 }
 
 
+def _mass_corrections(mini, eep, feh, corr_params=None):
+    """
+    Return the empirical (dlogt, dlogr) corrections of low-mass stars.
+
+    `EEPTracks.get_corrections` documents the formula. `corr_params` is
+    (dtdm, drdm, msto_smooth, feh_scale), by default (0.09, -0.09, 30.0, 0.5).
+    """
+    if corr_params is None:
+        corr_params = (0.09, -0.09, 30.0, 0.5)
+    if len(corr_params) != 4:
+        raise ValueError(
+            "corr_params must be (dtdm, drdm, msto_smooth, feh_scale); "
+            f"got {corr_params}"
+        )
+    dtdm, drdm, msto_smooth, feh_scale = corr_params
+
+    # Clip the log arguments away from zero for extreme masses
+    mass_offset = mini - 1.0
+    eps = 1e-10
+    dlogt = np.log10(np.maximum(1.0 + mass_offset * dtdm, eps))
+    dlogr = np.log10(np.maximum(1.0 + mass_offset * drdm, eps))
+
+    # EEP and metallicity dependence
+    ecorr = 1.0 - 1.0 / (1.0 + np.exp(-(eep - 454.0) / msto_smooth))
+    fcorr = np.exp(feh_scale * feh)
+    dlogt = dlogt * (ecorr * fcorr)
+    dlogr = dlogr * (ecorr * fcorr)
+
+    # No corrections at solar mass and above
+    solar = mini >= 1.0
+    return np.where(solar, 0.0, dlogt), np.where(solar, 0.0, dlogr)
+
+
 class EEPTracks:
     """
     Stellar parameter predictions for individual stars using evolutionary tracks.
@@ -770,6 +803,12 @@ class EEPTracks:
             Corrections to [log(Teff), log(R)]. These are added to the
             base predictions from the interpolator.
 
+        Raises
+        ------
+        ValueError
+            If `labels` is not 1-D or 2-D, or `corr_params` does not have 4
+            entries.
+
         See Also
         --------
         get_predictions : Applies these corrections to stellar parameters
@@ -815,44 +854,7 @@ class EEPTracks:
         else:
             raise ValueError("Input `labels` must be 1-D or 2-D array.")
 
-        # Set correction parameters
-        if corr_params is not None:
-            dtdm, drdm, msto_smooth, feh_scale = corr_params
-        else:
-            dtdm, drdm, msto_smooth, feh_scale = 0.09, -0.09, 30.0, 0.5
-
-        # Compute corrections with safeguards
-        mass_offset = mini - 1.0
-        eps = 1e-10
-        temp_arg = np.maximum(1.0 + mass_offset * dtdm, eps)
-        radius_arg = np.maximum(1.0 + mass_offset * drdm, eps)
-
-        dlogt = np.log10(temp_arg)
-        dlogr = np.log10(radius_arg)
-
-        # EEP and metallicity dependence
-        ecorr = 1.0 - 1.0 / (1.0 + np.exp(-(eep - 454.0) / msto_smooth))
-        fcorr = np.exp(feh_scale * feh)
-
-        dlogt *= ecorr * fcorr
-        dlogr *= ecorr * fcorr
-
-        # Zero corrections for solar mass and above
-        if ndim == 1:
-            if mini >= 1.0:
-                dlogt, dlogr = 0.0, 0.0
-        elif ndim == 2:
-            mask = mini >= 1.0
-            dlogt[mask] = 0.0
-            dlogr[mask] = 0.0
-
-        # Format output
-        if ndim == 1:
-            corrs = np.array([dlogt, dlogr])
-        elif ndim == 2:
-            corrs = np.c_[dlogt, dlogr]
-
-        return corrs
+        return np.stack(_mass_corrections(mini, eep, feh, corr_params), axis=-1)
 
 
 class StarEvolTrack:

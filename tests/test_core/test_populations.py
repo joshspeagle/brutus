@@ -697,6 +697,30 @@ class TestIsochronePredictionsArgument:
             )
 
 
+class TestIsochroneCorrections:
+    """Isochrone and EEPTracks share one correction function (#138)."""
+
+    def test_malformed_corr_params_raises(self, real_isochrone, real_stellarpop):
+        with pytest.raises(ValueError, match="corr_params"):
+            real_isochrone.get_predictions(loga=9.5, corr_params=(0.09, -0.09))
+        # StellarPop passes the ValueError through unchanged.
+        with pytest.raises(ValueError, match="corr_params"):
+            real_stellarpop.get_seds(loga=9.5, corr_params=(0.09, -0.09))
+
+    def test_file_without_correction_labels_raises(self, tmp_path):
+        import h5py
+
+        path = tmp_path / "iso.h5"
+        with h5py.File(path, "w") as f:
+            for name in ("feh", "afe", "loga"):
+                f[name] = np.array([0.0])
+            f["eep"] = np.array([200.0, 300.0])
+            preds = f.create_dataset("predictions", data=np.ones((1, 1, 1, 2, 3)))
+            preds.attrs["labels"] = ["mini", "logt", "logl"]
+        with pytest.raises(ValueError, match=r"iso.h5 lacks the labels \['logg'\]"):
+            Isochrone(mistfile=str(path), predictions=["mini"], verbose=False)
+
+
 class TestIsochroneDefaultPathFallback:
     """Isochrone() finds its default file in the brutus data directory."""
 

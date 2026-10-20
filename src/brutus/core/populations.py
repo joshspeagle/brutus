@@ -80,7 +80,6 @@ References
 """
 
 import sys
-import warnings
 from pathlib import Path
 
 import h5py
@@ -94,6 +93,7 @@ from ..data.filters import FILTERS
 
 # Import from utils (to be reorganized)
 from ..utils.photometry import add_mag
+from .individual import _mass_corrections
 
 # Import neural network predictor
 from .neural_nets import FastNNPredictor
@@ -134,6 +134,8 @@ class Isochrone:
         download directory (the Pooch cache, or ``$ASTRO_BRUTUS_DATA_DIR``
         when set), then in ``data/DATAFILES`` in the repository; a
         `FileNotFoundError` names `brutus.data.fetch_isos` when it is absent.
+        The file must hold the mini, logt, logl and logg labels, which the
+        empirical corrections need; a missing one raises a `ValueError`.
 
     predictions : list of str, optional
         The names of stellar parameters to predict. Must be a subset of the
@@ -234,6 +236,16 @@ class Isochrone:
         )
         self._pred_identity = list(self.predictions) == list(self.pred_labels)
 
+        # Columns that the empirical corrections read and shift
+        corr_labels = ["mini", "logt", "logl", "logg"]
+        missing = [p for p in corr_labels if p not in self.pred_labels]
+        if missing:
+            raise ValueError(
+                f"{mistfile} lacks the labels {missing} that the empirical "
+                "corrections need"
+            )
+        self._corr_idxs = [self.pred_labels.index(p) for p in corr_labels]
+
         # Initialize interpolator
         self._build_interpolator()
 
@@ -286,27 +298,18 @@ class Isochrone:
                     sel = np.all(np.isfinite(self.pred_grid[i, j, k]), axis=1)
 
                     if np.sum(sel) > 1:  # Need at least 2 points
-                        try:
-                            # Linearly interpolate over EEP grid
-                            pnew = [
-                                np.interp(
-                                    self.eep_u,
-                                    self.eep_u[sel],
-                                    par,
-                                    left=np.nan,
-                                    right=np.nan,
-                                )
-                                for par in self.pred_grid[i, j, k, sel].T
-                            ]
-                            self.pred_grid[i, j, k] = np.array(pnew).T
-                        except Exception as e:
-                            warnings.warn(
-                                f"Gap filling failed for grid cell "
-                                f"(feh={self.feh_u[i]}, afe={self.afe_u[j]}, "
-                                f"loga={self.loga_u[k]}): {e}",
-                                RuntimeWarning,
-                                stacklevel=2,
+                        # Linearly interpolate over EEP grid
+                        pnew = [
+                            np.interp(
+                                self.eep_u,
+                                self.eep_u[sel],
+                                par,
+                                left=np.nan,
+                                right=np.nan,
                             )
+                            for par in self.pred_grid[i, j, k, sel].T
+                        ]
+                        self.pred_grid[i, j, k] = np.array(pnew).T
 
         # Handle singular alpha enhancement dimension
         if self.grid_dims[1] == 1:
@@ -356,6 +359,8 @@ class Isochrone:
 
         corr_params : tuple, optional
             Correction parameters (dtdm, drdm, msto_smooth, feh_scale).
+            Default is (0.09, -0.09, 30.0, 0.5), as in
+            `EEPTracks.get_corrections`.
 
         Returns
         -------
@@ -363,6 +368,11 @@ class Isochrone:
             Stellar parameter predictions for each EEP value. The columns
             correspond to the parameters listed in `self.predictions`
             (a subset/reordering of the file's `self.pred_labels`).
+
+        Raises
+        ------
+        ValueError
+            If `corr_params` does not have 4 entries.
 
         See Also
         --------
@@ -407,29 +417,16 @@ class Isochrone:
         except Exception as e:
             raise RuntimeError(f"Interpolation failed: {e}")
 
-        # Apply empirical corrections if requested
-        if apply_corr and hasattr(self, "_apply_corrections"):
-            try:
-                # Extract parameters needed for corrections
-                mini_idx = list(self.pred_labels).index("mini")
-                logt_idx = list(self.pred_labels).index("logt")
-                logl_idx = list(self.pred_labels).index("logl")
-                logg_idx = list(self.pred_labels).index("logg")
-
-                mini = preds[:, mini_idx]
-
-                # Apply corrections
-                corrs = self._apply_corrections(
-                    mini=mini, feh=feh_arr, eep=eep, corr_params=corr_params
-                )
-
-                dlogt, dlogr = corrs.T
-                preds[:, logt_idx] += dlogt
-                preds[:, logl_idx] += 2.0 * dlogr  # L ∝ R^2
-                preds[:, logg_idx] -= 2.0 * dlogr  # g ∝ M/R^2
-
-            except Exception as e:
-                warnings.warn(f"Correction application failed: {e}")
+        # Apply empirical corrections if requested (the same effective map
+        # as EEPTracks.get_predictions; see EEPTracks.get_corrections)
+        if apply_corr:
+            mini_idx, logt_idx, logl_idx, logg_idx = self._corr_idxs
+            dlogt, dlogr = _mass_corrections(
+                preds[:, mini_idx], eep, feh_arr, corr_params
+            )
+            preds[:, logt_idx] += dlogt
+            preds[:, logl_idx] += 2.0 * dlogr  # L ∝ R^2
+            preds[:, logg_idx] -= 2.0 * dlogr  # g ∝ M/R^2
 
         # Subset/reorder the interpolator output (file `pred_labels` order)
         # into the order the user requested via `self.predictions`. The
@@ -439,64 +436,6 @@ class Isochrone:
             preds = preds[:, self._pred_idxs]
 
         return preds
-
-    def _apply_corrections(self, mini, feh, eep, corr_params=None):
-        """
-        Apply empirical corrections to stellar parameters.
-
-        Computes corrections to effective temperature and radius based on
-        stellar mass, evolutionary phase, and metallicity. This method
-        parallels the corrections in EEPTracks but adapted for isochrone data.
-
-        Parameters
-        ----------
-        mini : array_like
-            Initial stellar masses in solar masses
-        feh : array_like
-            Metallicities [Fe/H]
-        eep : array_like
-            Equivalent evolutionary points
-        corr_params : tuple, optional
-            Correction parameters (dtdm, drdm, msto_smooth, feh_scale).
-            Default is (0.09, -0.09, 30.0, 0.5).
-
-        Returns
-        -------
-        corrs : numpy.ndarray of shape (N, 2)
-            Corrections to [log(Teff), log(R)]
-
-        See Also
-        --------
-        brutus.core.EEPTracks.get_corrections : Individual star corrections
-        get_predictions : Applies these corrections to predictions
-        """
-        if corr_params is not None:
-            dtdm, drdm, msto_smooth, feh_scale = corr_params
-        else:
-            dtdm, drdm, msto_smooth, feh_scale = 0.09, -0.09, 30.0, 0.5
-
-        # Safeguarded corrections computation
-        mass_offset = mini - 1.0
-        eps = 1e-10
-        temp_arg = np.maximum(1.0 + mass_offset * dtdm, eps)
-        radius_arg = np.maximum(1.0 + mass_offset * drdm, eps)
-
-        dlogt = np.log10(temp_arg)
-        dlogr = np.log10(radius_arg)
-
-        # EEP and metallicity dependence
-        ecorr = 1.0 - 1.0 / (1.0 + np.exp(-(eep - 454.0) / msto_smooth))
-        fcorr = np.exp(feh_scale * feh)
-
-        dlogt *= ecorr * fcorr
-        dlogr *= ecorr * fcorr
-
-        # Zero corrections for solar mass and above
-        mask = mini >= 1.0
-        dlogt[mask] = 0.0
-        dlogr[mask] = 0.0
-
-        return np.c_[dlogt, dlogr]
 
 
 class StellarPop:
@@ -949,17 +888,14 @@ apply_corr, corr_params, return_dict
             ``params_arr`` keyed by prediction name (column views).
         """
         # Generate stellar parameters using isochrone
-        try:
-            params_arr = self.isochrone.get_predictions(
-                feh=feh,
-                afe=afe,
-                loga=loga,
-                eep=eep,
-                apply_corr=apply_corr,
-                corr_params=corr_params,
-            )
-        except Exception as e:
-            raise RuntimeError(f"Failed to generate stellar parameters: {e}")
+        params_arr = self.isochrone.get_predictions(
+            feh=feh,
+            afe=afe,
+            loga=loga,
+            eep=eep,
+            apply_corr=apply_corr,
+            corr_params=corr_params,
+        )
 
         # Convert to dictionary format
         params = dict(zip(self.isochrone.predictions, params_arr.T))
