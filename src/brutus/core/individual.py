@@ -1800,11 +1800,15 @@ class StarGrid:
         n_missing = 0
 
         for combo in itertools.product(*axis_brackets):
+            # Weight is product of all dimension weights; a query on a grid
+            # node gives its neighbours weight 0, which need no model
+            weight = float(np.prod([c[1] for c in combo]))
+            if weight == 0.0:
+                continue
             model_idx = self._lookup_corner(tuple(c[0] for c in combo))
             if model_idx >= 0:
                 indices.append(model_idx)
-                # Weight is product of all dimension weights
-                weights.append(float(np.prod([c[1] for c in combo])))
+                weights.append(weight)
             else:
                 n_missing += 1
 

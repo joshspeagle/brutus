@@ -191,6 +191,19 @@ class TestMissingCornerFallback:
         assert wmap.get(4, 0.0) > 0.99
 
 
+class TestZeroWeightCorners:
+    """Corners with zero weight are not looked up."""
+
+    def test_query_on_a_node_next_to_a_missing_corner_does_not_warn(self):
+        # The (0.5, 300) corner is missing; a query on the (1.0, 300) node
+        # gives it weight 0
+        grid = _make_grid([(0.5, 200.0, 0.0), (1.0, 200.0, 0.0), (1.0, 300.0, 0.0)])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            idx, w = grid._find_neighbors_multilinear(mini=1.0, eep=300.0, feh=0.0)
+        assert _as_weight_map(idx, w) == {2: 1.0}
+
+
 class TestZeroWeightNormalization:
     """Finding: zero surviving weight must not produce NaN weights/SEDs."""
 
@@ -306,7 +319,8 @@ class TestMultilinearEquivalence:
             ref = _reference_multilinear(grid, **q)
             assert ref is not None
             new_map = _as_weight_map(*new)
-            ref_map = _as_weight_map(*ref)
+            # Corners with zero weight are skipped
+            ref_map = {k: v for k, v in _as_weight_map(*ref).items() if v > 0}
             assert set(new_map) == set(ref_map), q
             for k in ref_map:
                 assert np.isclose(new_map[k], ref_map[k], atol=1e-12), q

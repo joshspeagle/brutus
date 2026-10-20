@@ -324,6 +324,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dropped unknown names silently; it now warns with the skipped names and
   raises `ValueError` when none exists. For an unstructured `models`
   array, a `filters` list of the wrong length raises `ValueError`.
+- `StarGrid` no longer warns about missing grid corners that carry zero
+  weight. On `grid_mist_v9.h5`, 96 of 3000 queries on grid nodes warned;
+  the SEDs do not change.
 - `find_nn_file`, `EEPTracks` and `Isochrone` look for their default data
   files in the brutus download directory (`strato.path`, which
   `ASTRO_BRUTUS_DATA_DIR` sets) first, then in `data/DATAFILES`. They
