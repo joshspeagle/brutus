@@ -395,6 +395,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   objects without parallax smoothing. `bin_pdfs_distred` accepts a tuple
   `span` for every `dist_type`, and raises `ValueError` unless `span` has
   shape `(2, 2)`; `dist_type='scale'` and `'parallax'` raised `TypeError`.
+- `plotting.photometric_offsets` leaves the panel of a band that no object
+  qualifies for blank and draws the other bands; it raised `IndexError`. It
+  raises `ValueError` that names `bins` unless `bins` is an int or one int
+  per band; a length-2 `bins` raised `TypeError`. `photometric_offsets_2d`
+  reads a `bins` of length `Nfilt` as one entry per band, also with 2 bands.
+  Both raise `ValueError` that names `weights` unless it has shape `(Nobj,)`
+  or `(Nobj, Nsamps)`; a `(Nsamps,)` array was read as per-object weights
+  when `Nsamps == Nobj`. The titles of `photometric_offsets_2d` give the
+  offset in fixed point (`+12.0%`, not `1.2e+01%`).
 
 ### Performance
 

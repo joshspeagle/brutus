@@ -82,7 +82,7 @@ def photometric_offsets(
     dists : `~numpy.ndarray` of shape `(Nobj, Nsamps)`
         Distance samples (in kpc) associated with the model indices.
 
-    x : `~numpy.ndarray` with shape `(Nobj)` or `(Nobj, Nsamps)`, optional
+    x : `~numpy.ndarray` with shape `(Nobj,)` or `(Nobj, Nsamps)`, optional
         Corresponding values to be plotted on the `x` axis. If not provided,
         the default behavior is to plot as a function of observed magnitude.
 
@@ -90,21 +90,23 @@ def photometric_offsets(
         Whether the photometry provided is in fluxes (instead of magnitudes).
         Default is `True`.
 
-    weights : `~numpy.ndarray` of shape `(Nobj)` or `(Nobj, Nsamps)`, optional
-        An optional set of importance weights used to reweight the samples.
+    weights : `~numpy.ndarray` of shape `(Nobj,)` or `(Nobj, Nsamps)`, optional
+        Importance weights of the objects or of their samples. Any other
+        shape raises `ValueError`.
 
-    bins : single value or iterable of length `Nfilt`, optional
-        The number of bins to use. Passed to `~matplotlib.pyplot.hist2d`.
+    bins : int or sequence of `Nfilt` ints, optional
+        The number of bins along both axes of each panel, for all bands or
+        one value per band. Any other input raises `ValueError`.
         Default is `100`.
 
     offset : `~numpy.ndarray` of shape `(Nfilt)`, optional
-        Multiplicative photometric offsets that will be applied to
-        the data (i.e. `data_new = data * phot_offsets`) and errors
-        when provided.
+        Multiplicative flux offsets. They shift the plotted residuals by
+        `2.5 log10(offset)` and do not change the weights.
 
     plot_thresh : float, optional
-        The threshold used to threshold the colormap when plotting.
-        Default is `0.`.
+        The minimum summed weight of a bin to be colored, passed to
+        `~matplotlib.axes.Axes.hist2d` as `cmin`. The draws of each object
+        sum to 1 in each band. Default is `0.`.
 
     cmap : colormap, optional
         The colormap used when plotting results. Default is `'viridis'`.
@@ -122,11 +124,11 @@ def photometric_offsets(
         If not provided `Band #` will be used.
 
     xlabel : str, optional
-        Labels for the x-axis of each subplot. If not provided,
-        these will default to the titles.
+        Label for the x-axis of each subplot. If not provided, it is the
+        title of the subplot when `x` is not given, and `'Label'` otherwise.
 
     plot_kwargs : kwargs, optional
-        Keyword arguments to be passed to `~matplotlib.pyplot.imshow`.
+        Keyword arguments to be passed to `~matplotlib.axes.Axes.hist2d`.
 
     fig : (`~matplotlib.figure.Figure`, `~matplotlib.axes.Axes`), optional
         If provided, overplot the traces and marginalized 1-D posteriors
@@ -148,18 +150,12 @@ def photometric_offsets(
     mask = np.asarray(mask, dtype=bool)
     if plot_kwargs is None:
         plot_kwargs = dict()
-    if weights is None:
-        weights = np.ones((nobj, nsamps))
-    elif weights.shape != (nobj, nsamps):
-        weights = np.repeat(weights, nsamps).reshape(nobj, nsamps)
-    try:
-        nbins = len(bins)
-        if nbins != 2:
-            bins = [b for b in bins]
-        else:
-            bins = [bins for i in range(nfilt)]
-    except TypeError:
-        bins = [bins for i in range(nfilt)]
+    weights = _sample_weights(weights, nobj, nsamps)
+    bins = np.asarray(bins)
+    if bins.ndim == 0:
+        bins = np.full(nfilt, bins)
+    if bins.shape != (nfilt,) or not np.issubdtype(bins.dtype, np.integer):
+        raise ValueError(f"`bins` must be an int or {nfilt} ints; got {bins.tolist()}.")
     if titles is None:
         titles = ["Band {0}".format(i) for i in range(nfilt)]
     if xlabel is None:
@@ -212,6 +208,11 @@ def photometric_offsets(
             & (np.all(np.isfinite(magobs) | ~mask, axis=1))
             & (weights.sum(axis=1) > 0)
         )
+        ax[i].set_xlabel(xlabel[i])
+        ax[i].set_title(titles[i])
+        ax[i].set_ylabel(r"$\Delta\,$mag")
+        if not np.any(s):
+            continue  # no object qualifies: leave the panel blank
         wt = _loo_weights(
             fobs[s, i], feobs[s, i], 10 ** (-0.4 * mpred[s, :, i]), weights[s]
         )
@@ -247,9 +248,6 @@ def photometric_offsets(
             cmap=cmap,
             **plot_kwargs,
         )
-        ax[i].set_xlabel(xlabel[i])
-        ax[i].set_title(titles[i])
-        ax[i].set_ylabel(r"$\Delta\,$mag")
     # Clear other axes.
     for i in range(nfilt, nrows * ncols):
         ax[i].set_frame_on(False)
@@ -327,31 +325,32 @@ def photometric_offsets_2d(
     dists : `~numpy.ndarray` of shape `(Nobj, Nsamps)`
         Distance samples (in kpc) associated with the model indices.
 
-    x : `~numpy.ndarray` with shape `(Nobj)` or `(Nobj, Nsamps)`
+    x : `~numpy.ndarray` with shape `(Nobj,)`
         Values to be plotted on the `x` axis. Required.
 
-    y : `~numpy.ndarray` with shape `(Nobj)` or `(Nobj, Nsamps)`
+    y : `~numpy.ndarray` with shape `(Nobj,)`
         Values to be plotted on the `y` axis. Required.
 
     flux : bool, optional
         Whether the photometry provided is in fluxes (instead of magnitudes).
         Default is `True`.
 
-    weights : `~numpy.ndarray` of shape `(Nobj)` or `(Nobj, Nsamps)`, optional
-        An optional set of importance weights used to reweight the samples.
+    weights : `~numpy.ndarray` of shape `(Nobj,)` or `(Nobj, Nsamps)`, optional
+        Importance weights of the objects or of their samples. Any other
+        shape raises `ValueError`.
 
-    bins : single value or iterable of length `Nfilt`, optional
-        The number of bins to use. Passed to `~matplotlib.pyplot.hist2d`.
-        Default is `100`.
+    bins : int, (int, int) or sequence of `Nfilt` of these, optional
+        The number of bins of each map: one int for both axes, an
+        `(nx, ny)` pair, or one of these per band. A sequence of length
+        `Nfilt` is read as one entry per band. Default is `100`.
 
     offset : `~numpy.ndarray` of shape `(Nfilt)`, optional
-        Multiplicative photometric offsets that will be applied to
-        the data (i.e. `data_new = data * phot_offsets`) and errors
-        when provided.
+        Multiplicative flux offsets. They shift the plotted residuals by
+        `2.5 log10(offset)` and do not change the weights.
 
     plot_thresh : float, optional
-        The threshold used to threshold the colormap when plotting.
-        Default is `10.`.
+        The minimum number of objects in a bin. Bins with fewer objects, or
+        with zero total weight, are masked. Default is `10.`.
 
     cmap : colormap, optional
         The colormap used when plotting results. Default is `'coolwarm'`.
@@ -383,7 +382,7 @@ def photometric_offsets_2d(
         this will default to `Y`.
 
     plot_kwargs : kwargs, optional
-        Keyword arguments to be passed to `~matplotlib.pyplot.imshow`.
+        Keyword arguments to be passed to `~matplotlib.axes.Axes.imshow`.
 
     fig : (`~matplotlib.figure.Figure`, `~matplotlib.axes.Axes`), optional
         If provided, overplot the traces and marginalized 1-D posteriors
@@ -405,23 +404,14 @@ def photometric_offsets_2d(
     mask = np.asarray(mask, dtype=bool)
     if plot_kwargs is None:
         plot_kwargs = dict()
-    if weights is None:
-        weights = np.ones((nobj, nsamps))
-    elif weights.shape != (nobj, nsamps):
-        weights = np.repeat(weights, nsamps).reshape(nobj, nsamps)
-    try:
-        nbins = len(bins)
-        if nbins != 2:
-            bins = [b for b in bins]
-        else:
-            bins = [bins for i in range(nfilt)]
-    except TypeError:
-        bins = [bins for i in range(nfilt)]
+    weights = _sample_weights(weights, nobj, nsamps)
+    if np.ndim(bins) == 0 or len(bins) != nfilt:
+        bins = [bins] * nfilt
     if titles is None:
         titles = ["Band {0}".format(i) for i in range(nfilt)]
     if show_off and offset is not None:
         titles = [
-            t + " ({:2.2}% offset)".format(100.0 * (off - 1.0))
+            t + " ({:+.1f}% offset)".format(100.0 * (off - 1.0))
             for t, off in zip(titles, offset)
         ]
     if xlabel is None:
@@ -529,6 +519,21 @@ def photometric_offsets_2d(
     plt.tight_layout()
 
     return fig, axes
+
+
+def _sample_weights(weights, nobj, nsamps):
+    """Return `weights` of shape `(nobj,)` or `(nobj, nsamps)` as `(nobj, nsamps)`."""
+    if weights is None:
+        return np.ones((nobj, nsamps))
+    weights = np.asarray(weights, dtype=float)
+    if weights.shape == (nobj,):
+        return np.broadcast_to(weights[:, None], (nobj, nsamps))
+    if weights.shape != (nobj, nsamps):
+        raise ValueError(
+            f"`weights` must have shape ({nobj},) or ({nobj}, {nsamps}); "
+            f"got {weights.shape}."
+        )
+    return weights
 
 
 __all__ = ["photometric_offsets", "photometric_offsets_2d"]

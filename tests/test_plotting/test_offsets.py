@@ -271,6 +271,47 @@ class TestPhotometricOffsets1D:
         for arr, nbin in zip(_run_1d(d, bins=bins), bins):
             assert arr.size == nbin * nbin
 
+    def test_two_bins_for_many_bands_raise(self):
+        """Regression (#170): a length-2 `bins` raised TypeError."""
+        with pytest.raises(ValueError, match="`bins`"):
+            _run_1d(_offsets_dataset(), bins=(10, 12))
+
+    def test_band_that_no_object_observes_is_left_blank(self):
+        """Regression (#170): an empty band raised IndexError."""
+        d = _offsets_dataset()
+        d["mask"][:, 5] = False
+        fig, axes = plt.subplots(2, 3)
+        photometric_offsets(
+            d["flux"],
+            d["fluxerr"],
+            d["mask"],
+            d["models"],
+            d["idxs"],
+            d["reds"],
+            d["dreds"],
+            d["dists"],
+            bins=5,
+            titles=list("abcdef"),
+            fig=(fig, axes),
+        )
+        panel = axes.flatten()[5]
+        plt.close(fig)
+        assert panel.get_title() == "f"
+        assert len(panel.collections) == 0
+        assert all(len(ax.collections) == 1 for ax in axes.flatten()[:5])
+
+    @pytest.mark.parametrize("plot", ["1d", "2d"])
+    def test_per_sample_weights_without_objects_raise(self, plot):
+        """Regression (#170): `(Nsamps,)` weights were read as per-object
+        weights when Nsamps == Nobj, and failed in `reshape` otherwise."""
+        d = _offsets_dataset()
+        weights = np.ones(d["idxs"].shape[1])
+        with pytest.raises(ValueError, match="`weights`"):
+            if plot == "1d":
+                _run_1d(d, weights=weights)
+            else:
+                _run_2d(d, np.zeros(d["nobj"]), np.zeros(d["nobj"]), weights=weights)
+
     def test_given_figure_is_returned(self):
         d = _offsets_dataset()
         figure = plt.subplots(2, 3)
@@ -362,6 +403,39 @@ class TestPhotometricOffsets2D:
         x, y = self._xy(d)
         for arr in _run_2d(d, x, y, bins=(4, 2)):
             assert arr.shape == (2, 4)  # imshow of offset2d.T
+
+    def test_titles_give_the_offset_in_fixed_point(self):
+        """Regression (#170): a 12% offset was titled `1.2e+01%`."""
+        d = _offsets_dataset()
+        x, y = self._xy(d)
+        offset = np.ones(d["nfilt"])
+        offset[0] = 1.12
+        fig, axes = plt.subplots(2, 3)
+        photometric_offsets_2d(
+            d["flux"],
+            d["fluxerr"],
+            d["mask"],
+            d["models"],
+            d["idxs"],
+            d["reds"],
+            d["dreds"],
+            d["dists"],
+            x,
+            y,
+            bins=3,
+            offset=offset,
+            fig=(fig, axes),
+        )
+        titles = [ax.get_title() for ax in axes.flatten()[:2]]
+        plt.close(fig)
+        assert titles == ["Band 0 (+12.0% offset)", "Band 1 (+0.0% offset)"]
+
+    def test_bins_of_length_nfilt_are_per_band_with_two_bands(self):
+        """Regression (#170): with 2 bands, per-band `bins` became a pair."""
+        d = _offsets_dataset(nfilt=2)
+        x, y = self._xy(d)
+        shapes = [arr.shape for arr in _run_2d(d, x, y, bins=[2, 3])]
+        assert shapes == [(2, 2), (3, 3)]
 
     def test_magnitude_input_matches_flux_input(self):
         d = _offsets_dataset()
