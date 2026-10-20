@@ -344,6 +344,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `logpost_grid` raises `ValueError` when only one of `parallax` and
+  `parallax_err` is given, as `loglike_grid` and `fit` do. It ignored the
+  parallax.
 - `logpost_grid` raises `ValueError` that names `dlabels` when the default
   Galactic prior gets a plain, not structured, `dlabels` array. It raised a
   `TypeError` about `NoneType`.

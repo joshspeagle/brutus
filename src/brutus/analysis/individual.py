@@ -1375,6 +1375,15 @@ class BruteForce:
             ``max_models`` subsampling; 0 when there was none. Use
             ``lnp - ln_incl`` as the log-weights to sum (evidence) or to
             resample models.
+
+        Raises
+        ------
+        ValueError
+            If only one of ``parallax`` and ``parallax_err`` is given, if
+            ``dustfile`` is given with ``apply_av_prior`` but without
+            ``coord``, if ``max_models`` is neither None nor a positive
+            integer, or if ``lnprior`` or ``dlabels`` (with ``coord``) does
+            not have one entry per model in ``results``.
         """
         # The dust-map prior is a function of sky position; without one it
         # would crash deep inside the map query with an opaque IndexError.
@@ -1385,6 +1394,8 @@ class BruteForce:
                 "to fit())."
             )
 
+        if (parallax is None) != (parallax_err is None):
+            raise ValueError("parallax and parallax_err must be given together")
         _check_max_models(max_models)
         if dlabels is _GRID_LABELS:
             dlabels = self.models_labels
