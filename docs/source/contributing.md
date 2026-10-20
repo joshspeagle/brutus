@@ -59,7 +59,7 @@ pre-commit run --all-files
 
 ## Documentation
 
-Every public module, class and function has a NumPy-style docstring. The site is Sphinx with MyST Markdown pages in `docs/source/`. Build it as CI does, with warnings as errors:
+Every public module, class and function has a NumPy-style docstring. A name you add to a package's `__all__` also needs an entry on its page in `docs/source/api/`; `tests/test_init.py` checks this. The site is Sphinx with MyST Markdown pages in `docs/source/`. Build it as CI does, with warnings as errors:
 
 ```bash
 cd docs
