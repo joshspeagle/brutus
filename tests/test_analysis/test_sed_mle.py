@@ -937,3 +937,58 @@ class TestLogpostGridDistancePosterior:
         npt.assert_array_equal(mc_ess[:2], 0.0)
         for draws in (dist_mc, a_mc, r_mc, lnp_mc, mc_ess):
             assert not np.any(np.isnan(draws))
+
+
+# ============================================================================
+# Part 8 -- logpost_grid: max_models subsampling
+# ============================================================================
+
+
+class TestLogpostGridSubsampling:
+    """Test the max_models subsampling of the models above the threshold."""
+
+    max_models = 5
+
+    def _results(self):
+        # 20 models with ln L = -0.5 * rank, in shuffled order. With
+        # wt_thresh=1e-3, ranks 0-13 pass the cut (0.5 * 13 < ln 1e3 = 6.9).
+        rank = np.random.RandomState(228).permutation(20)
+        icovs = [_sar_precision(0.01, 0.1, 0.2, SAR_CORR)] * 20
+        lnlike = -0.5 * rank
+        results = _results_tuple(lnlike, [0.25] * 20, [1.0] * 20, [3.3] * 20, icovs)
+        return results, rank
+
+    def _logpost(self, fitter, results, mode):
+        return fitter.logpost_grid(
+            results,
+            Nmc_prior=10,
+            max_models=self.max_models,
+            subsample_mode=mode,
+            rstate=np.random.RandomState(1581),
+        )
+
+    def test_topk_keeps_the_models_with_the_highest_log_probability(
+        self, logpost_fitter
+    ):
+        """subsample_mode="topk" keeps the max_models best models."""
+        results, rank = self._results()
+        sel, _, lnp, *_ = self._logpost(logpost_fitter, results, "topk")
+        npt.assert_array_equal(np.sort(rank[sel]), np.arange(self.max_models))
+        assert lnp.shape == (self.max_models,)
+
+    def test_representative_keeps_max_models_distinct_models_above_threshold(
+        self, logpost_fitter
+    ):
+        """subsample_mode="representative" keeps max_models distinct models,
+        all from the models that pass the threshold."""
+        results, rank = self._results()
+        sel, _, lnp, *_ = self._logpost(logpost_fitter, results, "representative")
+        assert np.unique(sel).size == self.max_models
+        assert np.all(rank[sel] <= 13)
+        assert lnp.shape == (self.max_models,)
+
+    def test_unknown_subsample_mode_raises(self, logpost_fitter):
+        """An unknown subsample_mode raises ValueError naming the argument."""
+        results, _ = self._results()
+        with pytest.raises(ValueError, match="subsample_mode"):
+            self._logpost(logpost_fitter, results, "random")
