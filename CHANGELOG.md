@@ -139,6 +139,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   saved draws, so the default bins are 3.3 times wider; pass `span` for a
   narrower range. `draw_sar` pads a distribution with its mean after 100
   passes with no accepted draw, instead of after `max_attempts`.
+- **`analysis.photometric_offsets` weights the draws of a fitted band by
+  the Gaussian leave-one-out ratio**, `ln w = chi2_b / 2`. The old default
+  (`dim_prior=True`) used a ratio of chi-square densities, which does not
+  match the posterior `BruteForce` samples, with or without
+  `logl_dim_prior`. The default offsets change. With a 10% offset injected
+  into a fitted band (400 stars, 1000 draws, 8 seeds), the mean bias fell
+  from 0.0026 to 0.0008.
 - **`dist_vs_red` and `bin_pdfs_distred` smooth A(V) by 0.005 of its range
   by default** (0.1 mag over the default `avlim`): the default `smooth` is
   `(0.015, 0.005)` and `(0.01, 0.005)`.
@@ -154,6 +161,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every model.
 - **`ltol_subthresh` is removed** from `loglike_grid`, `fit` and `_fit`.
   Each model's fit now checks its own convergence. `ltol` must be positive.
+- **`dim_prior` is removed** from `analysis.photometric_offsets`, which
+  always uses the Gaussian leave-one-out weights. Passing it raises
+  `TypeError`. `old_offsets` must be finite and > 0.
 - `logpost_grid` takes `return_precision=True` to return the precision
   matrices of the selected models in place of their covariances. `fit`
   uses it to invert only the resampled models.

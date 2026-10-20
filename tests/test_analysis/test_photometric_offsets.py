@@ -6,7 +6,7 @@ import pytest
 from brutus.analysis.offsets import (
     PhotometricOffsetsConfig,
     _generate_seds,
-    _loo_log_weights,
+    _loo_weights,
     _validate_inputs,
     _vectorized_bootstrap_median,
     photometric_offsets,
@@ -544,39 +544,81 @@ class TestLeaveOneOutReweighting:
     """Corrected importance weights (w = L_-i / L_full) and their one-pass
     computation."""
 
-    @pytest.mark.parametrize("dim_prior", [True, False])
-    def test_loo_log_weights_match_phot_loglike_reference(self, dim_prior):
-        """One-pass weights equal softmax(lnl_loo - lnl_full) computed with
-        two full phot_loglike passes (the reference formulation)."""
+    def test_loo_weights_match_phot_loglike_reference(self):
+        """For the objects that observe the band, the weights equal
+        softmax(lnl_loo - lnl_full) computed with two Gaussian phot_loglike
+        passes (the reference formulation)."""
         rng = np.random.default_rng(5)
         n, nsamps, nfilt = 40, 30, 6
         phot = rng.uniform(0.5, 2.0, (n, nfilt))
         err = rng.uniform(0.05, 0.2, (n, nfilt))
         seds = phot[:, None, :] * rng.uniform(0.8, 1.2, (n, nsamps, nfilt))
         mask = rng.random((n, nfilt)) < 0.7
-        mask[:, :4] = True  # ndim >= 4 so LOO dof stays positive
         band = 2
 
         mask_full = mask.astype(float)
         mask_loo = mask_full.copy()
         mask_loo[:, band] = 0.0
-        lnl_full = phot_loglike(
-            phot, err, seds, mask=mask_full, dim_prior=dim_prior, dof_reduction=1
-        )
-        lnl_loo = phot_loglike(
-            phot, err, seds, mask=mask_loo, dim_prior=dim_prior, dof_reduction=1
-        )
+        lnl_full = phot_loglike(phot, err, seds, mask=mask_full)
+        lnl_loo = phot_loglike(phot, err, seds, mask=mask_loo)
         ref_weights = _softmax_rows(lnl_loo - lnl_full)
 
-        var = err**2
-        contrib = (phot[:, None, :] - seds) ** 2 / var[:, None, :] * mask[:, None, :]
-        chi2_full = contrib.sum(axis=2)
-        lnw = _loo_log_weights(
-            chi2_full, contrib[:, :, band], mask.sum(axis=1), dim_prior
+        obs = mask[:, band]
+        new_weights = _loo_weights(
+            phot[obs, band],
+            err[obs, band],
+            seds[obs, :, band],
+            np.ones((obs.sum(), nsamps)),
         )
-        new_weights = _softmax_rows(lnw)
+        new_weights /= new_weights.sum(axis=1, keepdims=True)
 
-        assert np.allclose(new_weights, ref_weights, rtol=1e-9, atol=1e-12)
+        assert np.allclose(new_weights, ref_weights[obs], rtol=1e-9, atol=1e-12)
+
+    def test_default_offsets_use_gaussian_loo_weights(self):
+        """With default arguments, each fitted band's offset is the
+        bootstrap median of the ratios under w = exp(+chi2_i / 2) times the
+        sample weights, computed here directly with the same random stream.
+
+        Regression: the default used to weight by a ratio of chi-square
+        densities, which does not match the BruteForce posterior.
+        """
+        phot, err, mask, models, idxs, reds, dreds, dists = self._make_recovery_data(
+            0.1, fit_band0=True, n_obj=40, nsamps=50
+        )
+        old_offsets = np.array([1.02, 0.98, 1.0, 1.01, 0.99])
+        weights = np.random.default_rng(4).uniform(0.5, 1.5, idxs.shape)
+        config = PhotometricOffsetsConfig(n_bootstrap=30)
+        offsets, _, _ = photometric_offsets(
+            phot,
+            err,
+            mask,
+            models,
+            idxs,
+            reds,
+            dreds,
+            dists,
+            weights=weights,
+            old_offsets=old_offsets,
+            config=config,
+            verbose=False,
+            rng=np.random.default_rng(7),
+        )
+
+        seds = _generate_seds(models, idxs, reds, dreds, dists)
+        rng = np.random.default_rng(7)
+        n = len(phot)
+        expected = np.empty(phot.shape[1])
+        for i in range(phot.shape[1]):
+            var_i = err[:, i] ** 2 * old_offsets[i] ** 2
+            chi2_i = (phot[:, None, i] * old_offsets[i] - seds[:, :, i]) ** 2
+            lnw = 0.5 * chi2_i / var_i[:, None] + np.log(weights)
+            w = np.exp(lnw - lnw.max(axis=1, keepdims=True))
+            w /= w.sum(axis=1, keepdims=True)
+            medians = _vectorized_bootstrap_median(
+                seds[:, :, i] / phot[:, None, i], w, np.full(n, 1.0 / n), 30, rng
+            )
+            expected[i] = np.median(medians)
+        np.testing.assert_allclose(offsets, expected, rtol=1e-12)
 
     @staticmethod
     def _make_recovery_data(delta, fit_band0, seed=17, n_obj=150, nsamps=500):
@@ -622,14 +664,13 @@ class TestLeaveOneOutReweighting:
         dists = np.ones((n_obj, nsamps))
         return phot, err, mask, models, idxs, reds, dreds, dists
 
-    @pytest.mark.parametrize("dim_prior,tol", [(False, 0.006), (True, 0.008)])
-    def test_injected_offset_recovered_fitted_band(self, dim_prior, tol):
+    def test_injected_offset_recovered_fitted_band(self):
         """A band used in fitting: draws come from the contaminated full
         posterior, so recovery requires the corrected importance weights.
 
         Regression: the pre-fix weighting (w = L_-i) removes only ~2/3 of
         the circularity and misses the true correction by ~0.011-0.012 here,
-        outside these tolerances.
+        outside the tolerance.
         """
         delta = 0.10
         true_corr = 1.0 / (1.0 + delta)
@@ -638,10 +679,10 @@ class TestLeaveOneOutReweighting:
             n_bootstrap=100, progress_interval=0, random_seed=99
         )
         offsets, errors, n_used = photometric_offsets(
-            *data, dim_prior=dim_prior, config=config, verbose=False
+            *data, config=config, verbose=False
         )
         assert n_used[0] == len(data[0])
-        assert abs(offsets[0] - true_corr) < tol
+        assert abs(offsets[0] - true_corr) < 0.006
 
     def test_injected_offset_recovered_unfitted_band(self):
         """A band NOT used in fitting: draws already target the correct
@@ -655,7 +696,7 @@ class TestLeaveOneOutReweighting:
             n_bootstrap=100, progress_interval=0, random_seed=99
         )
         offsets, errors, n_used = photometric_offsets(
-            *data, mask_fit=mask_fit, dim_prior=False, config=config, verbose=False
+            *data, mask_fit=mask_fit, config=config, verbose=False
         )
         assert n_used[0] == len(data[0])
         assert abs(offsets[0] - true_corr) < 0.005
@@ -781,28 +822,11 @@ class TestDegenerateWeightHandling:
     """Objects with collapsed weights must be excluded, not fabricated."""
 
     def test_collapsed_weights_reported_not_fabricated(self):
-        """When every selected object's LOO weights collapse (dof <= 0 under
-        the dimensionality prior), the filter must report n_used = 0 and the
+        """When every object's leave-one-out weights are undefined (an
+        infinite band chi-square), the filter must report n_used = 0 and the
         placeholder offset, instead of the median of posterior draw 0."""
-        rng = np.random.default_rng(2)
-        n_obj, nfilt, nsamps, n_models = 12, 4, 8, 20
-        models = np.zeros((n_models, nfilt, 3))
-        models[:, :, 0] = rng.uniform(15, 18, (n_models, nfilt))
-        models[:, :, 1] = 1.0
-        models[:, :, 2] = 0.1
-        idxs = rng.integers(0, n_models, (n_obj, nsamps))
-        reds = rng.uniform(0.0, 1.0, (n_obj, nsamps))
-        dreds = np.full((n_obj, nsamps), 3.1)
-        dists = np.ones((n_obj, nsamps))
-        phot = np.abs(rng.uniform(0.5, 2.0, (n_obj, nfilt)))
-        err = 0.05 * phot
-        # every object observes exactly bands {0, 1}: LOO dof = 2 - 1 - 1 = 0
-        mask = np.zeros((n_obj, nfilt), dtype=int)
-        mask[:, :2] = 1
-
-        config = PhotometricOffsetsConfig(
-            n_bootstrap=10, min_bands_used=1, progress_interval=0, random_seed=3
-        )
+        phot, err, mask, models, idxs, reds, dreds, dists = _small_setup()
+        err = 1e-200 * phot  # err**2 underflows to 0: chi2 is infinite
         offsets, errors, n_used = photometric_offsets(
             phot,
             err,
@@ -812,14 +836,46 @@ class TestDegenerateWeightHandling:
             reds,
             dreds,
             dists,
-            dim_prior=True,
-            config=config,
+            config=PhotometricOffsetsConfig(n_bootstrap=10),
             verbose=False,
+            rng=np.random.default_rng(3),
         )
         assert n_used[0] == 0
         assert offsets[0] == 1.0
         # collapsed weights leave no measurement: infinite uncertainty
         assert np.isinf(errors[0])
+
+    def test_only_weighted_draw_survives_a_large_chi2(self):
+        """A draw that holds all the sample weight keeps its weight even
+        when other draws have far larger leave-one-out weights.
+
+        Regression: the importance weights were scaled by their row maximum
+        before the sample weights multiplied them, so the product underflowed
+        to 0 and the object was dropped as degenerate.
+        """
+        phot, err, mask, models, idxs, reds, dreds, dists = _small_setup()
+        err = 1e-3 * phot  # band chi-squares of order 1e4: exp(-chi2/2) = 0
+        weights = np.zeros(idxs.shape)
+        weights[:, 0] = 1.0
+        seds = _generate_seds(models, idxs, reds, dreds, dists)
+        phot = phot.copy()
+        phot[:, 0] = seds[:, 0, 0]  # draw 0 fits band 0 exactly
+        offsets, _, n_used = photometric_offsets(
+            phot,
+            err,
+            mask,
+            models,
+            idxs,
+            reds,
+            dreds,
+            dists,
+            weights=weights,
+            config=PhotometricOffsetsConfig(n_bootstrap=10),
+            verbose=False,
+            rng=np.random.default_rng(3),
+        )
+        assert n_used[0] == len(phot)
+        assert offsets[0] == 1.0
 
 
 class TestBandCountThresholds:

@@ -25,7 +25,7 @@ photometric_offsets : Compute offsets
     Main function for computing multiplicative photometric offsets
 _vectorized_bootstrap_median : Bootstrap implementation
     Vectorized bootstrap for performance
-_loo_log_weights : Leave-one-out importance weights
+_loo_weights : Leave-one-out importance weights
     Reweight full-posterior draws to the leave-one-out posterior
 _generate_seds : Chunked model SED generation
     Bounds peak memory for large samples
@@ -102,7 +102,6 @@ Advanced usage with configuration:
 from typing import Optional, Tuple
 
 import numpy as np
-from scipy.special import xlogy
 
 from ..core.sed_utils import get_seds
 
@@ -168,9 +167,8 @@ class PhotometricOffsetsConfig:
     The configuration defaults are chosen to balance statistical robustness
     with computational efficiency:
 
-    - min_bands_used=4: Ensures the leave-one-out reweighting retains at
-      least 4 bands (positive degrees of freedom under the default
-      dimensionality prior)
+    - min_bands_used=4: Keeps at least 4 bands without the band being
+      calibrated, enough for a fit of 3 parameters with 1 degree of freedom
     - min_bands_unused=3: Minimum for meaningful photometric constraints
     - n_bootstrap=300: Sufficient for stable uncertainty estimates
     - bootstrap_iqr: More robust to outliers than standard deviation
@@ -331,72 +329,52 @@ def _generate_seds(
     return seds
 
 
-def _loo_log_weights(
-    chi2_full: np.ndarray,
-    band_chi2: np.ndarray,
-    ndim: np.ndarray,
-    dim_prior: bool,
-    dof_reduction: int = 1,
+def _loo_weights(
+    flux: np.ndarray,
+    flux_err: np.ndarray,
+    model_flux: np.ndarray,
+    sample_weights: np.ndarray,
 ) -> np.ndarray:
     r"""
-    Importance log-weights reweighting full-posterior draws to the
-    leave-one-out (LOO) posterior.
+    Importance weights reweighting full-posterior draws to the
+    leave-one-out (LOO) posterior of one band.
 
     The posterior draws supplied to `photometric_offsets` target the
     full-data posterior :math:`P(M|D)`, while the offset for a fitted band
     i must be estimated under :math:`P(M|D_{-i})`. The importance weight is
     therefore the likelihood ratio :math:`w = L_{-i}/L_{\rm full}`
-    evaluated at each draw — weighting by :math:`L_{-i}` alone would target
+    evaluated at each draw. Weighting by :math:`L_{-i}` alone would target
     :math:`\propto L_{\rm full} \cdot L_{-i}` and only partially remove the
-    circular dependence on band i. Terms constant across draws of the same
-    object (Gaussian normalizations, log-determinants, gamma functions)
-    cancel under the per-object weight normalization and are omitted.
+    circular dependence on band i. `BruteForce` draws follow
+    :math:`\exp(-\chi^2/2)` (its normalization and `logl_dim_prior` term
+    are constant for one object), so with Gaussian likelihoods
+
+    .. math::
+        \ln w = \ln L_{-i} - \ln L_{\rm full} = \chi^2_i / 2 + {\rm const},
+
+    where the constant cancels under the per-object weight normalization.
 
     Parameters
     ----------
-    chi2_full : np.ndarray of shape (n_objects, n_samples)
-        Chi-square summed over all observed bands (band i included).
-    band_chi2 : np.ndarray of shape (n_objects, n_samples)
-        Band i's chi-square contribution (0 where band i is masked).
-    ndim : np.ndarray of shape (n_objects,)
-        Number of observed bands per object (band i included).
-    dim_prior : bool
-        If True, likelihoods follow the chi-square dimensional log-PDF
-        convention of `phot_loglike(dim_prior=True)`; if False, the
-        Gaussian log-likelihood convention.
-    dof_reduction : int, optional
-        Degrees of freedom subtracted from the effective dimensionality
-        (matching the phot_loglike convention used by this module).
-        Default is 1.
+    flux, flux_err : np.ndarray of shape (n_objects,)
+        Observed flux and error of band i, with the offsets the fit applied.
+    model_flux : np.ndarray of shape (n_objects, n_samples)
+        Model flux of band i for each draw.
+    sample_weights : np.ndarray of shape (n_objects, n_samples)
+        Weights of the draws, >= 0. They multiply the importance weights in
+        log space, so a large chi-square cannot underflow the product.
 
     Returns
     -------
-    lnw : np.ndarray of shape (n_objects, n_samples)
-        Unnormalized importance log-weights; -inf where the LOO target is
-        undefined (non-positive degrees of freedom).
+    w : np.ndarray of shape (n_objects, n_samples)
+        Unnormalized weights, scaled so that each row's largest weight is 1.
+        A row is NaN when all its sample weights are 0 or its chi-square is
+        infinite.
     """
-    chi2_loo = chi2_full - band_chi2
-    np.clip(chi2_loo, 0.0, None, out=chi2_loo)  # guard cancellation error
-    if dim_prior:
-        # ln w = ln chi2pdf(chi2_loo; dof_loo) - ln chi2pdf(chi2_full; dof_full)
-        # with per-object gamma/log-2 normalizations dropped.
-        dof_full = ndim - dof_reduction
-        dof_loo = dof_full - 1  # band i removed from the data
-        a_full = 0.5 * dof_full[:, None]
-        a_loo = 0.5 * dof_loo[:, None]
-        with np.errstate(divide="ignore", invalid="ignore"):
-            lnw = (
-                xlogy(a_loo - 1.0, chi2_loo)
-                - 0.5 * chi2_loo
-                - xlogy(a_full - 1.0, chi2_full)
-                + 0.5 * chi2_full
-            )
-        lnw[dof_loo <= 0] = -np.inf
-        lnw[np.isnan(lnw)] = -np.inf
-    else:
-        # Gaussian likelihoods: ln L_{-i} - ln L_full = +0.5 * chi2_i (+ const).
-        lnw = 0.5 * band_chi2
-    return lnw
+    with np.errstate(divide="ignore", invalid="ignore"):
+        lnw = 0.5 * (flux[:, None] - model_flux) ** 2 / flux_err[:, None] ** 2
+        lnw += np.log(sample_weights)
+        return np.exp(lnw - np.max(lnw, axis=1, keepdims=True))
 
 
 def _vectorized_bootstrap_median(
@@ -475,7 +453,6 @@ def photometric_offsets(
     weights: Optional[np.ndarray] = None,
     mask_fit: Optional[np.ndarray] = None,
     old_offsets: Optional[np.ndarray] = None,
-    dim_prior: bool = True,
     prior_mean: Optional[np.ndarray] = None,
     prior_std: Optional[np.ndarray] = None,
     verbose: bool = True,
@@ -532,14 +509,9 @@ def photometric_offsets(
         Default assumes all filters were used.
 
     old_offsets : np.ndarray of shape (n_filters), optional
-        Previous offsets to remove before computing new ones.
-        Default is no previous offsets.
-
-    dim_prior : bool, optional
-        Whether the likelihoods entering the leave-one-out importance
-        ratio follow the chi-square dimensionality-prior convention of
-        `phot_loglike(dim_prior=True, dof_reduction=1)` (True) or the
-        Gaussian log-likelihood convention (False). Default is True.
+        Offsets the fit applied, finite and > 0. They multiply the fluxes
+        and errors in the leave-one-out weights, so the weights use the
+        fluxes of the fit. Default is no previous offsets.
 
     prior_mean : np.ndarray of shape (n_filters), optional
         Gaussian prior means for offsets, finite. Must be provided with
@@ -616,11 +588,11 @@ def photometric_offsets(
     The photometric offset for each band is computed as:
 
     1. **Generate model SEDs** for all fitted objects and posterior samples
-    2. **Scale by distance**: :math:`F_{\\rm model} = F_0 / d^2`
-    3. **Compute flux ratios**: :math:`r = F_{\\rm model} / F_{\\rm obs}`
+    2. **Scale by distance**: :math:`F_{\rm model} = F_0 / d^2`
+    3. **Compute flux ratios**: :math:`r = F_{\rm model} / F_{\rm obs}`
     4. **Reweight samples**: For bands used in fitting, importance-reweight
        the full-posterior draws to :math:`P(M|D_{-i})` (band i excluded)
-       with weights :math:`w \\propto L_{-i}/L_{\\rm full}` to avoid
+       with weights :math:`w \propto L_{-i}/L_{\rm full}` to avoid
        circularity
     5. **Bootstrap**: Resample objects and models with weights, compute median
     6. **Uncertainty**: From bootstrap distribution (IQR or std)
@@ -629,17 +601,18 @@ def photometric_offsets(
     The reweighting in step 4 is critical: if a band was used in the original
     fit, including it in offset computation would create a circular dependency.
     The input draws target the full posterior :math:`P(M|D)`, so each draw is
-    weighted by the likelihood ratio :math:`L_{-i}/L_{\\rm full}` (band i's
+    weighted by the likelihood ratio :math:`L_{-i}/L_{\rm full}` (band i's
     inverse likelihood, up to normalization); weighting by :math:`L_{-i}`
-    alone would only partially remove the circularity. Since the chi-square
-    is additive over bands, all per-band leave-one-out likelihoods derive
-    from a single precomputed pass rather than one full likelihood
-    evaluation per band.
+    alone would only partially remove the circularity. With Gaussian
+    likelihoods, :math:`\ln w = \chi^2_i / 2` up to a per-object
+    constant, where :math:`\chi^2_i` is band i's chi-square. This holds
+    for fits with and without `logl_dim_prior`, whose term is constant for
+    one object. The parallax does not enter the weights.
 
     The offsets should be applied as:
 
     .. math::
-        F_{\\rm corrected} = F_{\\rm observed} \\times {\\rm offset}
+        F_{\rm corrected} = F_{\rm observed} \times {\rm offset}
 
     For iterative refinement, provide old_offsets from previous iteration.
 
@@ -705,6 +678,8 @@ def photometric_offsets(
         raise ValueError(
             f"old_offsets must have shape ({nfilt},), got {old_offsets.shape}"
         )
+    if not np.all(np.isfinite(old_offsets) & (old_offsets > 0)):
+        raise ValueError("old_offsets must be finite and > 0")
     # Priors are a pair: silently ignoring a lone prior_mean/prior_std would
     # discard information the caller clearly intended to supply.
     if (prior_mean is None) != (prior_std is None):
@@ -735,31 +710,6 @@ def photometric_offsets(
 
     ndim = mask_bool.sum(axis=1)
     sample_weight_sums = np.sum(weights, axis=1)
-
-    # One-pass precompute for leave-one-out reweighting: chi-square is
-    # additive over bands, so each band's leave-one-out chi-square is the
-    # total minus that band's contribution (no per-band likelihood pass).
-    # Masked bands contribute 0 (their flux/error placeholders never enter).
-    # Only the 2-D running total is stored; each band's 2-D contribution is
-    # recomputed on demand in the filter loop below, so no second
-    # (nobj, nsamps, nfilt) array is kept alive alongside `seds` (which
-    # would double peak memory for large calibration samples).
-    if np.any(mask_fit):
-        phot_adj = np.where(mask_bool, phot, 0.0) * old_offsets
-        var_adj = np.where(mask_bool, err, 1.0) ** 2 * old_offsets**2
-        var_safe = np.where(var_adj > 0, var_adj, np.inf)
-
-        def _band_chi2(b, rows=slice(None)):
-            """Band b's chi-square contribution, shape (nrows, nsamps)."""
-            resid = phot_adj[rows, b][:, None] - seds[rows, :, b]
-            np.square(resid, out=resid)
-            resid /= var_safe[rows, b][:, None]
-            resid *= mask_bool[rows, b][:, None]
-            return resid
-
-        chi2_full = np.zeros((nobj, nsamps))
-        for b in range(nfilt):
-            chi2_full += _band_chi2(b)
 
     # Process each filter
     for i in range(nfilt):
@@ -807,27 +757,19 @@ def photometric_offsets(
             continue
 
         # Compute model/data ratios
-        ratios = seds[obj_indices, :, i] / phot[obj_indices, None, i]
+        seds_i = seds[obj_indices, :, i]
+        ratios = seds_i / phot[obj_indices, None, i]
 
         # Compute weights (importance-reweight if band was used in fit)
         if mask_fit[i]:
-            lnw = _loo_log_weights(
-                chi2_full[obj_indices],
-                _band_chi2(i, obj_indices),
-                ndim[obj_indices],
-                dim_prior,
+            model_weights = _loo_weights(
+                phot[obj_indices, i] * old_offsets[i],
+                err[obj_indices, i] * old_offsets[i],
+                seds_i,
+                weights[obj_indices],
             )
-            # Per-object softmax; rows that are entirely -inf collapse to 0.
-            lnw_max = np.max(lnw, axis=1, keepdims=True)
-            lnw_max = np.where(np.isfinite(lnw_max), lnw_max, 0.0)
-            with np.errstate(over="ignore"):
-                model_weights = np.exp(lnw - lnw_max)
         else:
-            # Use uniform weights
-            model_weights = np.ones((n, nsamps))
-
-        # Apply sample weights
-        model_weights = model_weights * weights[obj_indices]
+            model_weights = weights[obj_indices]
 
         # Objects whose weights collapsed (all zero or non-finite) carry no
         # information about this band; exclude them rather than silently
