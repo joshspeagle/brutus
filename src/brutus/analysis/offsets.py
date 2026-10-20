@@ -90,12 +90,11 @@ Advanced usage with configuration:
 ...     min_bands_used=5,
 ...     n_bootstrap=500,
 ...     uncertainty_method='bootstrap_std',
-...     random_seed=42
 ... )
 >>>
 >>> offsets, errors, n_used = photometric_offsets(
 ...     phot, err, mask, models, idxs, avs, rvs, dists,
-...     config=config
+...     config=config, rng=np.random.default_rng(42)
 ... )
 """
 
@@ -144,20 +143,6 @@ class PhotometricOffsetsConfig:
         - 'bootstrap_iqr': Scaled interquartile range of bootstrap medians
         Default is 'bootstrap_iqr'.
 
-    progress_interval : int, optional
-        Print progress every N iterations. Set to 0 for no progress.
-        Default is 10.
-
-    use_vectorized_bootstrap : bool, optional
-        Use vectorized bootstrap implementation for better performance.
-        Default is True.
-
-    random_seed : int, optional
-        Random seed for reproducible results. Default is None.
-
-    validate_inputs : bool, optional
-        Perform input validation. Default is True.
-
     See Also
     --------
     photometric_offsets : Main function using this configuration
@@ -175,14 +160,10 @@ class PhotometricOffsetsConfig:
 
     Examples
     --------
-    >>> config = PhotometricOffsetsConfig(
-    ...     min_bands_used=5,
-    ...     n_bootstrap=500,
-    ...     random_seed=42
-    ... )
+    >>> config = PhotometricOffsetsConfig(min_bands_used=5, n_bootstrap=500)
     >>> offsets, errors, n_used = photometric_offsets(
     ...     phot, err, mask, models, idxs, avs, rvs, dists,
-    ...     config=config
+    ...     config=config, rng=np.random.default_rng(42)
     ... )
     """
 
@@ -192,19 +173,11 @@ class PhotometricOffsetsConfig:
         min_bands_unused: int = 3,
         n_bootstrap: int = 300,
         uncertainty_method: str = "bootstrap_iqr",
-        progress_interval: int = 10,
-        use_vectorized_bootstrap: bool = True,
-        random_seed: Optional[int] = None,
-        validate_inputs: bool = True,
     ):
         self.min_bands_used = min_bands_used
         self.min_bands_unused = min_bands_unused
         self.n_bootstrap = n_bootstrap
         self.uncertainty_method = uncertainty_method
-        self.progress_interval = progress_interval
-        self.use_vectorized_bootstrap = use_vectorized_bootstrap
-        self.random_seed = random_seed
-        self.validate_inputs = validate_inputs
 
         # Validate configuration
         self._validate_config()
@@ -222,8 +195,6 @@ class PhotometricOffsetsConfig:
             "bootstrap_iqr",
         ]:
             raise ValueError(f"Unknown uncertainty_method: {self.uncertainty_method}")
-        if self.progress_interval < 0:
-            raise ValueError("progress_interval must be >= 0")
 
 
 def _validate_inputs(
@@ -528,8 +499,9 @@ def photometric_offsets(
         Default uses standard configuration.
 
     rng : np.random.Generator, optional
-        Random number generator for reproducible results.
-        Default creates new generator.
+        Random number generator, the only source of randomness. Pass a
+        seeded one for reproducible results. Default is an unseeded
+        generator.
 
     Returns
     -------
@@ -626,13 +598,10 @@ def photometric_offsets(
     if config is None:
         config = PhotometricOffsetsConfig()
 
-    # Set up random number generator
     if rng is None:
-        rng = np.random.default_rng(config.random_seed)
+        rng = np.random.default_rng()
 
-    # Validate inputs
-    if config.validate_inputs:
-        _validate_inputs(phot, err, mask, models, idxs, reds, dreds, dists)
+    _validate_inputs(phot, err, mask, models, idxs, reds, dreds, dists)
 
     # Initialize parameters
     nobj, nfilt = phot.shape
@@ -698,7 +667,7 @@ def photometric_offsets(
             raise ValueError("prior_std must be finite and > 0")
 
     # Generate model SEDs (chunked to bound peak memory)
-    if verbose and config.progress_interval > 0:
+    if verbose:
         print("Generating model SEDs...")
 
     seds = _generate_seds(models, idxs, reds, dreds, dists)
@@ -713,7 +682,7 @@ def photometric_offsets(
 
     # Process each filter
     for i in range(nfilt):
-        if verbose and config.progress_interval > 0:
+        if verbose:
             print(f"Processing filter {i+1}/{nfilt}...")
 
         # Select objects with sufficient coverage
@@ -800,42 +769,9 @@ def photometric_offsets(
         # Object weights for bootstrap (uniform over surviving objects)
         obj_weights = np.full(n, 1.0 / n)
 
-        # Bootstrap uncertainty estimation
-        if config.use_vectorized_bootstrap:
-            bootstrap_medians = _vectorized_bootstrap_median(
-                ratios, model_weights, obj_weights, config.n_bootstrap, rng
-            )
-        else:
-            # Original bootstrap implementation
-            bootstrap_medians = []
-            for j in range(config.n_bootstrap):
-                if (
-                    verbose
-                    and config.progress_interval > 0
-                    and j % config.progress_interval == 0
-                ):
-                    print(f"  Bootstrap {j+1}/{config.n_bootstrap}")
-
-                # Sample objects
-                obj_sample = rng.choice(n, size=n, p=obj_weights)
-
-                # Sample models
-                model_sample = np.array(
-                    [
-                        (
-                            rng.choice(nsamps, p=model_weights[k])
-                            if np.sum(model_weights[k]) > 0
-                            else 0
-                        )
-                        for k in obj_sample
-                    ]
-                )
-
-                # Compute median
-                sample_ratios = ratios[obj_sample, model_sample]
-                bootstrap_medians.append(np.median(sample_ratios))
-
-            bootstrap_medians = np.array(bootstrap_medians)
+        bootstrap_medians = _vectorized_bootstrap_median(
+            ratios, model_weights, obj_weights, config.n_bootstrap, rng
+        )
 
         # Compute offset and uncertainty
         offsets[i] = np.median(bootstrap_medians)

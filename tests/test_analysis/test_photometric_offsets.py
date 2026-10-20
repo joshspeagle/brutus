@@ -104,48 +104,15 @@ class TestPhotometricOffsetsConfig:
     """Test the configuration class."""
 
     def test_default_config(self):
-        """Test default configuration values."""
-        from brutus.analysis.offsets import PhotometricOffsetsConfig
-
         config = PhotometricOffsetsConfig()
 
         assert config.min_bands_used == 4
         assert config.min_bands_unused == 3
         assert config.n_bootstrap == 300
         assert config.uncertainty_method == "bootstrap_iqr"
-        assert config.progress_interval == 10
-        assert config.use_vectorized_bootstrap == True
-        assert config.random_seed is None
-        assert config.validate_inputs == True
-
-    def test_custom_config(self):
-        """Test custom configuration values."""
-        from brutus.analysis.offsets import PhotometricOffsetsConfig
-
-        config = PhotometricOffsetsConfig(
-            min_bands_used=5,
-            min_bands_unused=4,
-            n_bootstrap=100,
-            uncertainty_method="bootstrap_std",
-            progress_interval=5,
-            use_vectorized_bootstrap=False,
-            random_seed=42,
-            validate_inputs=False,
-        )
-
-        assert config.min_bands_used == 5
-        assert config.min_bands_unused == 4
-        assert config.n_bootstrap == 100
-        assert config.uncertainty_method == "bootstrap_std"
-        assert config.progress_interval == 5
-        assert config.use_vectorized_bootstrap == False
-        assert config.random_seed == 42
-        assert config.validate_inputs == False
 
     def test_config_validation(self):
         """Test configuration validation."""
-        from brutus.analysis.offsets import PhotometricOffsetsConfig
-
         # Test invalid min_bands_used
         with pytest.raises(ValueError, match="min_bands_used must be >= 1"):
             PhotometricOffsetsConfig(min_bands_used=0)
@@ -158,39 +125,22 @@ class TestPhotometricOffsetsConfig:
         with pytest.raises(ValueError, match="n_bootstrap must be >= 1"):
             PhotometricOffsetsConfig(n_bootstrap=0)
 
-        # Test invalid progress_interval
-        with pytest.raises(ValueError, match="progress_interval must be >= 0"):
-            PhotometricOffsetsConfig(progress_interval=-1)
-
 
 class TestPhotometricOffsetsCore:
     """photometric_offsets recovers offsets injected into synthetic data."""
 
     @staticmethod
-    def _run(
-        data,
-        uncertainty_method="bootstrap_iqr",
-        use_vectorized_bootstrap=True,
-        **kwargs,
-    ):
+    def _run(data, uncertainty_method="bootstrap_iqr", **kwargs):
         config = PhotometricOffsetsConfig(
-            n_bootstrap=50,
-            progress_interval=0,
-            uncertainty_method=uncertainty_method,
-            use_vectorized_bootstrap=use_vectorized_bootstrap,
+            n_bootstrap=50, uncertainty_method=uncertainty_method
         )
         return photometric_offsets(
             **data, config=config, verbose=False, rng=np.random.default_rng(1), **kwargs
         )
 
     @pytest.mark.parametrize("method", ["bootstrap_std", "bootstrap_iqr"])
-    @pytest.mark.parametrize("vectorized", [True, False])
-    def test_injected_offsets_are_recovered(self, injected_offsets, method, vectorized):
-        offsets, errors, n_used = self._run(
-            injected_offsets,
-            uncertainty_method=method,
-            use_vectorized_bootstrap=vectorized,
-        )
+    def test_injected_offsets_are_recovered(self, injected_offsets, method):
+        offsets, errors, n_used = self._run(injected_offsets, uncertainty_method=method)
         _assert_recovered(offsets)
         assert np.all((errors > 0) & (errors < RECOVERY_ATOL))
         np.testing.assert_array_equal(n_used, len(injected_offsets["phot"]))
@@ -390,8 +340,6 @@ class TestParameterRecovery:
             n_bootstrap=20,
             min_bands_used=3,
             min_bands_unused=2,
-            validate_inputs=False,
-            progress_interval=0,
         )
 
         offsets, errors, n_used = photometric_offsets(
@@ -405,6 +353,7 @@ class TestParameterRecovery:
             dists,
             config=config,
             verbose=False,
+            rng=np.random.default_rng(1),
         )
 
         # Check unity recovery
@@ -444,8 +393,6 @@ class TestEdgeCases:
         config = PhotometricOffsetsConfig(
             n_bootstrap=5,
             min_bands_used=3,
-            progress_interval=0,
-            validate_inputs=False,
         )
 
         offsets, errors, n_used = photometric_offsets(
@@ -459,6 +406,7 @@ class TestEdgeCases:
             dists,
             config=config,
             verbose=False,
+            rng=np.random.default_rng(1),
         )
 
         # Should handle gracefully
@@ -675,11 +623,9 @@ class TestLeaveOneOutReweighting:
         delta = 0.10
         true_corr = 1.0 / (1.0 + delta)
         data = self._make_recovery_data(delta, fit_band0=True)
-        config = PhotometricOffsetsConfig(
-            n_bootstrap=100, progress_interval=0, random_seed=99
-        )
+        config = PhotometricOffsetsConfig(n_bootstrap=100)
         offsets, errors, n_used = photometric_offsets(
-            *data, config=config, verbose=False
+            *data, config=config, rng=np.random.default_rng(99), verbose=False
         )
         assert n_used[0] == len(data[0])
         assert abs(offsets[0] - true_corr) < 0.006
@@ -692,11 +638,13 @@ class TestLeaveOneOutReweighting:
         true_corr = 1.0 / (1.0 + delta)
         data = self._make_recovery_data(delta, fit_band0=False)
         mask_fit = np.array([False, True, True, True, True])
-        config = PhotometricOffsetsConfig(
-            n_bootstrap=100, progress_interval=0, random_seed=99
-        )
+        config = PhotometricOffsetsConfig(n_bootstrap=100)
         offsets, errors, n_used = photometric_offsets(
-            *data, mask_fit=mask_fit, config=config, verbose=False
+            *data,
+            mask_fit=mask_fit,
+            config=config,
+            rng=np.random.default_rng(99),
+            verbose=False,
         )
         assert n_used[0] == len(data[0])
         assert abs(offsets[0] - true_corr) < 0.005
@@ -739,9 +687,7 @@ class TestInputHandlingFixes:
 
         _validate_inputs(phot, err, mask, models, idxs, reds, dreds, dists)
 
-        config = PhotometricOffsetsConfig(
-            n_bootstrap=20, progress_interval=0, random_seed=1
-        )
+        config = PhotometricOffsetsConfig(n_bootstrap=20)
         offsets, errors, n_used = photometric_offsets(
             phot,
             err,
@@ -752,6 +698,7 @@ class TestInputHandlingFixes:
             dreds,
             dists,
             config=config,
+            rng=np.random.default_rng(1),
             verbose=False,
         )
         assert np.all(np.isfinite(offsets))
@@ -773,9 +720,7 @@ class TestInputHandlingFixes:
         on bitwise ops."""
         phot, err, _, models, idxs, reds, dreds, dists = _small_setup()
         mask = np.ones(phot.shape)  # float64
-        config = PhotometricOffsetsConfig(
-            n_bootstrap=10, progress_interval=0, random_seed=1
-        )
+        config = PhotometricOffsetsConfig(n_bootstrap=10)
         offsets, errors, n_used = photometric_offsets(
             phot,
             err,
@@ -786,6 +731,7 @@ class TestInputHandlingFixes:
             dreds,
             dists,
             config=config,
+            rng=np.random.default_rng(1),
             verbose=False,
         )
         assert np.all(np.isfinite(offsets))
@@ -798,9 +744,7 @@ class TestInputHandlingFixes:
         phot = phot.copy()
         phot[:8, 0] = 0.0
         phot[8:12, 0] = -0.5
-        config = PhotometricOffsetsConfig(
-            n_bootstrap=20, progress_interval=0, random_seed=1
-        )
+        config = PhotometricOffsetsConfig(n_bootstrap=20)
         offsets, errors, n_used = photometric_offsets(
             phot,
             err,
@@ -811,6 +755,7 @@ class TestInputHandlingFixes:
             dreds,
             dists,
             config=config,
+            rng=np.random.default_rng(1),
             verbose=False,
         )
         assert np.all(np.isfinite(offsets))
@@ -890,9 +835,7 @@ class TestBandCountThresholds:
         mask = np.ones((n_obj, nfilt), dtype=int)
         mask[:10, 4] = 0  # first 10 objects observe only 4 bands (incl. band 0)
 
-        config = PhotometricOffsetsConfig(
-            n_bootstrap=10, progress_interval=0, random_seed=1
-        )
+        config = PhotometricOffsetsConfig(n_bootstrap=10)
         offsets, errors, n_used = photometric_offsets(
             phot,
             err,
@@ -903,6 +846,7 @@ class TestBandCountThresholds:
             dreds,
             dists,
             config=config,
+            rng=np.random.default_rng(1),
             verbose=False,
         )
         assert n_used[0] == n_obj - 10
@@ -921,9 +865,7 @@ class TestPriorHandling:
         prior_mean = np.full(phot.shape[1], 1.05)
         prior_std = np.full(phot.shape[1], 0.02)
 
-        config = PhotometricOffsetsConfig(
-            n_bootstrap=20, progress_interval=0, random_seed=1
-        )
+        config = PhotometricOffsetsConfig(n_bootstrap=20)
         offsets, errors, n_used = photometric_offsets(
             phot,
             err,
@@ -936,6 +878,7 @@ class TestPriorHandling:
             prior_mean=prior_mean,
             prior_std=prior_std,
             config=config,
+            rng=np.random.default_rng(1),
             verbose=False,
         )
         assert n_used[0] == 0
@@ -956,8 +899,6 @@ class TestPriorHandling:
         # with one band masked (the small fixture has few filters).
         config = PhotometricOffsetsConfig(
             n_bootstrap=20,
-            progress_interval=0,
-            random_seed=1,
             min_bands_used=3,
             min_bands_unused=3,
         )
@@ -972,6 +913,7 @@ class TestPriorHandling:
             dists,
             config=config,
             verbose=False,
+            rng=np.random.default_rng(1),
         )
         assert n_used[0] == 0
         assert offsets[0] == 1.0

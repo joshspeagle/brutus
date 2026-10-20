@@ -167,6 +167,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`dim_prior` is removed** from `plotting.photometric_offsets` and
   `plotting.photometric_offsets_2d`, which use the weights of
   `analysis.photometric_offsets`.
+- **`PhotometricOffsetsConfig` loses four switches.**
+  `use_vectorized_bootstrap` and the per-object bootstrap loop it selected
+  are removed. `validate_inputs` is removed, so input validation always
+  runs. `random_seed` is removed: pass a seeded `rng` to
+  `photometric_offsets` instead (`rng=np.random.default_rng(seed)` gives
+  the old results of `random_seed=seed`). `progress_interval` is removed,
+  and `verbose` alone controls the progress messages.
 - `logpost_grid` takes `return_precision=True` to return the precision
   matrices of the selected models in place of their covariances. `fit`
   uses it to invert only the resampled models.
