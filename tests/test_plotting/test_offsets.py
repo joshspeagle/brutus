@@ -1,7 +1,7 @@
 """Tests of `photometric_offsets` and `photometric_offsets_2d`.
 
-The data are synthetic but run through the real `get_seds`, `magnitude` and
-`phot_loglike`, so the tests check the plotted numbers.
+The data are synthetic but run through the real `get_seds` and `magnitude`,
+so the tests check the plotted numbers.
 """
 
 import matplotlib
@@ -11,6 +11,7 @@ import pytest
 matplotlib.use("Agg")  # Use non-interactive backend for testing
 import matplotlib.pyplot as plt
 
+from brutus.analysis import photometric_offsets as analysis_photometric_offsets
 from brutus.plotting.offsets import photometric_offsets, photometric_offsets_2d
 from brutus.utils.photometry import inv_magnitude
 
@@ -23,7 +24,7 @@ def no_tight_layout(monkeypatch):
 
 def _offsets_dataset(nobj=30, nfilt=6, nsamps=8, seed=3):
     """Deterministic synthetic dataset exercised with the real (unmocked)
-    get_seds / magnitude / phot_loglike stack."""
+    get_seds and magnitude."""
     rng = np.random.RandomState(seed)
     nmodels = 40
     models = np.zeros((nmodels, nfilt, 3))
@@ -51,6 +52,39 @@ def _offsets_dataset(nobj=30, nfilt=6, nsamps=8, seed=3):
         mask=mask,
         nobj=nobj,
         nfilt=nfilt,
+    )
+
+
+def _contaminated_band0_dataset(delta=0.10, n_obj=200, nsamps=300, seed=17):
+    """Posterior draws fitted to all 5 bands, with a flux offset of
+    1 + delta injected into band 0.
+
+    The models form a 1-D family in overall brightness, and the draws of
+    each object are exact samples from its Gaussian likelihood.
+    """
+    rng = np.random.default_rng(seed)
+    nfilt, n_models = 5, 121
+    base = np.array([16.0, 15.5, 15.2, 15.0, 14.8])
+    models = np.zeros((n_models, nfilt, 3))
+    models[:, :, 0] = base + np.linspace(-0.3, 0.3, n_models)[:, None]
+    models[:, :, 1] = 1.0
+    models[:, :, 2] = 0.1
+    fluxes = 10 ** (-0.4 * models[:, :, 0])  # at 1 kpc with A(V) = 0
+    err = np.tile(0.02 * 10 ** (-0.4 * base), (n_obj, 1))
+    phot = 10 ** (-0.4 * base) + err * rng.standard_normal((n_obj, nfilt))
+    phot[:, 0] *= 1.0 + delta
+    lnp = -0.5 * np.sum(((phot[:, None] - fluxes) / err[:, None]) ** 2, axis=2)
+    p = np.exp(lnp - lnp.max(axis=1, keepdims=True))
+    idxs = np.array([rng.choice(n_models, nsamps, p=pk / pk.sum()) for pk in p])
+    return (
+        phot,
+        err,
+        np.ones((n_obj, nfilt), dtype=bool),
+        models,
+        idxs,
+        np.zeros((n_obj, nsamps)),
+        np.full((n_obj, nsamps), 3.1),
+        np.ones((n_obj, nsamps)),
     )
 
 
@@ -266,11 +300,8 @@ class TestPhotometricOffsets2D:
         return rng.uniform(-2, 2, d["nobj"]), rng.uniform(-1, 1, d["nobj"])
 
     def test_offset_in_one_band_shifts_only_its_map(self):
-        """A flux offset c in band 0 adds 2.5 log10(c) to that band's map.
-
-        The weights for band 0 use only the other bands, so they do not
-        change.
-        """
+        """A flux offset c in band 0 adds 2.5 log10(c) to that band's map
+        and leaves the others unchanged: the weights use the data as given."""
         d = _offsets_dataset()
         x, y = self._xy(d)
         offset = np.ones(d["nfilt"])
@@ -280,6 +311,29 @@ class TestPhotometricOffsets2D:
         np.testing.assert_allclose(
             shifted[0], base[0] + 2.5 * np.log10(1.1), rtol=1e-10, equal_nan=True
         )
+        np.testing.assert_array_equal(shifted[1], base[1])
+
+    def test_plotted_median_matches_analysis_offset(self):
+        """With one bin, the map of a fitted band is the weighted median of
+        mag_pred - mag_obs. It equals -2.5 log10 of the offset from
+        `brutus.analysis.photometric_offsets` within the bootstrap error.
+
+        Regression: weighting by L_-i alone, as the plots did, keeps part of
+        the pull of band 0 on the draws and misses by about 0.01 mag here.
+        """
+        data = _contaminated_band0_dataset()
+        offsets, errors, _ = analysis_photometric_offsets(
+            *data, verbose=False, rng=np.random.default_rng(1)
+        )
+        x = np.linspace(0.0, 1.0, len(data[0]))
+        d = dict(
+            zip(["flux", "fluxerr", "mask", "models", "idxs", "reds", "dreds"], data)
+        )
+        d.update(dists=data[7], nfilt=data[0].shape[1])
+        maps = _run_2d(d, x, x, bins=1)
+        expected = -2.5 * np.log10(offsets[0])
+        tol = 3 * 2.5 / np.log(10) * errors[0] / offsets[0]
+        assert abs(maps[0][0, 0] - expected) < tol
 
     def test_shared_1d_weights_match_per_sample_weights(self):
         d = _offsets_dataset()

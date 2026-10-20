@@ -6,7 +6,7 @@ import pytest
 from brutus.analysis.offsets import (
     PhotometricOffsetsConfig,
     _generate_seds,
-    _loo_log_weights,
+    _loo_weights,
     _validate_inputs,
     _vectorized_bootstrap_median,
     photometric_offsets,
@@ -104,48 +104,15 @@ class TestPhotometricOffsetsConfig:
     """Test the configuration class."""
 
     def test_default_config(self):
-        """Test default configuration values."""
-        from brutus.analysis.offsets import PhotometricOffsetsConfig
-
         config = PhotometricOffsetsConfig()
 
         assert config.min_bands_used == 4
         assert config.min_bands_unused == 3
         assert config.n_bootstrap == 300
         assert config.uncertainty_method == "bootstrap_iqr"
-        assert config.progress_interval == 10
-        assert config.use_vectorized_bootstrap == True
-        assert config.random_seed is None
-        assert config.validate_inputs == True
-
-    def test_custom_config(self):
-        """Test custom configuration values."""
-        from brutus.analysis.offsets import PhotometricOffsetsConfig
-
-        config = PhotometricOffsetsConfig(
-            min_bands_used=5,
-            min_bands_unused=4,
-            n_bootstrap=100,
-            uncertainty_method="bootstrap_std",
-            progress_interval=5,
-            use_vectorized_bootstrap=False,
-            random_seed=42,
-            validate_inputs=False,
-        )
-
-        assert config.min_bands_used == 5
-        assert config.min_bands_unused == 4
-        assert config.n_bootstrap == 100
-        assert config.uncertainty_method == "bootstrap_std"
-        assert config.progress_interval == 5
-        assert config.use_vectorized_bootstrap == False
-        assert config.random_seed == 42
-        assert config.validate_inputs == False
 
     def test_config_validation(self):
         """Test configuration validation."""
-        from brutus.analysis.offsets import PhotometricOffsetsConfig
-
         # Test invalid min_bands_used
         with pytest.raises(ValueError, match="min_bands_used must be >= 1"):
             PhotometricOffsetsConfig(min_bands_used=0)
@@ -158,39 +125,22 @@ class TestPhotometricOffsetsConfig:
         with pytest.raises(ValueError, match="n_bootstrap must be >= 1"):
             PhotometricOffsetsConfig(n_bootstrap=0)
 
-        # Test invalid progress_interval
-        with pytest.raises(ValueError, match="progress_interval must be >= 0"):
-            PhotometricOffsetsConfig(progress_interval=-1)
-
 
 class TestPhotometricOffsetsCore:
     """photometric_offsets recovers offsets injected into synthetic data."""
 
     @staticmethod
-    def _run(
-        data,
-        uncertainty_method="bootstrap_iqr",
-        use_vectorized_bootstrap=True,
-        **kwargs,
-    ):
+    def _run(data, uncertainty_method="bootstrap_iqr", **kwargs):
         config = PhotometricOffsetsConfig(
-            n_bootstrap=50,
-            progress_interval=0,
-            uncertainty_method=uncertainty_method,
-            use_vectorized_bootstrap=use_vectorized_bootstrap,
+            n_bootstrap=50, uncertainty_method=uncertainty_method
         )
         return photometric_offsets(
             **data, config=config, verbose=False, rng=np.random.default_rng(1), **kwargs
         )
 
     @pytest.mark.parametrize("method", ["bootstrap_std", "bootstrap_iqr"])
-    @pytest.mark.parametrize("vectorized", [True, False])
-    def test_injected_offsets_are_recovered(self, injected_offsets, method, vectorized):
-        offsets, errors, n_used = self._run(
-            injected_offsets,
-            uncertainty_method=method,
-            use_vectorized_bootstrap=vectorized,
-        )
+    def test_injected_offsets_are_recovered(self, injected_offsets, method):
+        offsets, errors, n_used = self._run(injected_offsets, uncertainty_method=method)
         _assert_recovered(offsets)
         assert np.all((errors > 0) & (errors < RECOVERY_ATOL))
         np.testing.assert_array_equal(n_used, len(injected_offsets["phot"]))
@@ -390,8 +340,6 @@ class TestParameterRecovery:
             n_bootstrap=20,
             min_bands_used=3,
             min_bands_unused=2,
-            validate_inputs=False,
-            progress_interval=0,
         )
 
         offsets, errors, n_used = photometric_offsets(
@@ -405,6 +353,7 @@ class TestParameterRecovery:
             dists,
             config=config,
             verbose=False,
+            rng=np.random.default_rng(1),
         )
 
         # Check unity recovery
@@ -444,8 +393,6 @@ class TestEdgeCases:
         config = PhotometricOffsetsConfig(
             n_bootstrap=5,
             min_bands_used=3,
-            progress_interval=0,
-            validate_inputs=False,
         )
 
         offsets, errors, n_used = photometric_offsets(
@@ -459,6 +406,7 @@ class TestEdgeCases:
             dists,
             config=config,
             verbose=False,
+            rng=np.random.default_rng(1),
         )
 
         # Should handle gracefully
@@ -504,10 +452,8 @@ class TestBootstrapVectorization:
         n_objects, nsamps = 100, 25
         ratios = rng_data.lognormal(0.0, 0.15, (n_objects, nsamps))
         weights = rng_data.random((n_objects, nsamps)) ** 3
-        weights[5] = 0.0  # zero-weight row exercises the sample-0 fallback
-        sums = weights.sum(axis=1)
-        nz = sums > 0
-        weights[nz] /= sums[nz, None]
+        weights[5, 1:] = 0.0  # zero-weight samples are never drawn
+        weights /= weights.sum(axis=1, keepdims=True)
         obj_weights = np.full(n_objects, 1.0 / n_objects)
 
         n_bootstrap = 500
@@ -528,55 +474,117 @@ class TestBootstrapVectorization:
         iqr_new = np.subtract(*np.percentile(new, [75, 25]))
         assert abs(iqr_ref - iqr_new) < 0.25 * max(abs(iqr_ref), abs(iqr_new))
 
-    def test_zero_weight_rows_fall_back_to_sample_zero(self):
-        """Rows with zero total weight deterministically yield sample 0,
-        matching the legacy per-object behavior."""
-        ratios = np.array([[1.0, 2.0, 3.0], [10.0, 20.0, 30.0]])
-        weights = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
-        obj_weights = np.array([1.0, 0.0])  # always resample object 0
-        medians = _vectorized_bootstrap_median(
-            ratios, weights, obj_weights, 20, np.random.default_rng(0)
+    def test_searchsorted_draws_match_comparison_count(self):
+        """The per-row searchsorted draws give bitwise the medians of the
+        former comparison count, ``sum(cdf[rows] < u[:, None], axis=1)``,
+        on the same random stream. Zero-weight samples give tied CDF
+        entries, where the side of the search matters."""
+        rng_data = np.random.default_rng(8)
+        n_objects, nsamps, n_bootstrap = 300, 40, 50
+        ratios = rng_data.lognormal(0.0, 0.15, (n_objects, nsamps))
+        weights = rng_data.random((n_objects, nsamps)) ** 3
+        weights[rng_data.random((n_objects, nsamps)) < 0.3] = 0.0
+        weights[:, 0] += 1e-300  # every row has a positive sum
+        weights /= weights.sum(axis=1, keepdims=True)
+        obj_weights = np.full(n_objects, 1.0 / n_objects)
+
+        rng = np.random.default_rng(42)
+        obj_indices = rng.choice(
+            n_objects, size=(n_bootstrap, n_objects), p=obj_weights
         )
-        assert np.all(medians == 1.0)
+        cdf = np.cumsum(weights, axis=1)
+        cdf /= cdf[:, -1:].copy()
+        expected = np.empty(n_bootstrap)
+        for i in range(n_bootstrap):
+            rows = obj_indices[i]
+            draws = np.sum(cdf[rows] < rng.random(n_objects)[:, None], axis=1)
+            expected[i] = np.median(ratios[rows, draws])
+
+        new = _vectorized_bootstrap_median(
+            ratios, weights, obj_weights, n_bootstrap, np.random.default_rng(42)
+        )
+        np.testing.assert_array_equal(new, expected)
 
 
 class TestLeaveOneOutReweighting:
     """Corrected importance weights (w = L_-i / L_full) and their one-pass
     computation."""
 
-    @pytest.mark.parametrize("dim_prior", [True, False])
-    def test_loo_log_weights_match_phot_loglike_reference(self, dim_prior):
-        """One-pass weights equal softmax(lnl_loo - lnl_full) computed with
-        two full phot_loglike passes (the reference formulation)."""
+    def test_loo_weights_match_phot_loglike_reference(self):
+        """For the objects that observe the band, the weights equal
+        softmax(lnl_loo - lnl_full) computed with two Gaussian phot_loglike
+        passes (the reference formulation)."""
         rng = np.random.default_rng(5)
         n, nsamps, nfilt = 40, 30, 6
         phot = rng.uniform(0.5, 2.0, (n, nfilt))
         err = rng.uniform(0.05, 0.2, (n, nfilt))
         seds = phot[:, None, :] * rng.uniform(0.8, 1.2, (n, nsamps, nfilt))
         mask = rng.random((n, nfilt)) < 0.7
-        mask[:, :4] = True  # ndim >= 4 so LOO dof stays positive
         band = 2
 
         mask_full = mask.astype(float)
         mask_loo = mask_full.copy()
         mask_loo[:, band] = 0.0
-        lnl_full = phot_loglike(
-            phot, err, seds, mask=mask_full, dim_prior=dim_prior, dof_reduction=1
-        )
-        lnl_loo = phot_loglike(
-            phot, err, seds, mask=mask_loo, dim_prior=dim_prior, dof_reduction=1
-        )
+        lnl_full = phot_loglike(phot, err, seds, mask=mask_full)
+        lnl_loo = phot_loglike(phot, err, seds, mask=mask_loo)
         ref_weights = _softmax_rows(lnl_loo - lnl_full)
 
-        var = err**2
-        contrib = (phot[:, None, :] - seds) ** 2 / var[:, None, :] * mask[:, None, :]
-        chi2_full = contrib.sum(axis=2)
-        lnw = _loo_log_weights(
-            chi2_full, contrib[:, :, band], mask.sum(axis=1), dim_prior
+        obs = mask[:, band]
+        new_weights = _loo_weights(
+            phot[obs, band],
+            err[obs, band],
+            seds[obs, :, band],
+            np.ones((obs.sum(), nsamps)),
         )
-        new_weights = _softmax_rows(lnw)
+        new_weights /= new_weights.sum(axis=1, keepdims=True)
 
-        assert np.allclose(new_weights, ref_weights, rtol=1e-9, atol=1e-12)
+        assert np.allclose(new_weights, ref_weights[obs], rtol=1e-9, atol=1e-12)
+
+    def test_default_offsets_use_gaussian_loo_weights(self):
+        """With default arguments, each fitted band's offset is the
+        bootstrap median of the ratios under w = exp(+chi2_i / 2) times the
+        sample weights, computed here directly with the same random stream.
+
+        Regression: the default used to weight by a ratio of chi-square
+        densities, which does not match the BruteForce posterior.
+        """
+        phot, err, mask, models, idxs, reds, dreds, dists = self._make_recovery_data(
+            0.1, fit_band0=True, n_obj=40, nsamps=50
+        )
+        old_offsets = np.array([1.02, 0.98, 1.0, 1.01, 0.99])
+        weights = np.random.default_rng(4).uniform(0.5, 1.5, idxs.shape)
+        config = PhotometricOffsetsConfig(n_bootstrap=30)
+        offsets, _, _ = photometric_offsets(
+            phot,
+            err,
+            mask,
+            models,
+            idxs,
+            reds,
+            dreds,
+            dists,
+            weights=weights,
+            old_offsets=old_offsets,
+            config=config,
+            verbose=False,
+            rng=np.random.default_rng(7),
+        )
+
+        seds = _generate_seds(models, idxs, reds, dreds, dists)
+        rng = np.random.default_rng(7)
+        n = len(phot)
+        expected = np.empty(phot.shape[1])
+        for i in range(phot.shape[1]):
+            var_i = err[:, i] ** 2 * old_offsets[i] ** 2
+            chi2_i = (phot[:, None, i] * old_offsets[i] - seds[:, :, i]) ** 2
+            lnw = 0.5 * chi2_i / var_i[:, None] + np.log(weights)
+            w = np.exp(lnw - lnw.max(axis=1, keepdims=True))
+            w /= w.sum(axis=1, keepdims=True)
+            medians = _vectorized_bootstrap_median(
+                seds[:, :, i] / phot[:, None, i], w, np.full(n, 1.0 / n), 30, rng
+            )
+            expected[i] = np.median(medians)
+        np.testing.assert_allclose(offsets, expected, rtol=1e-12)
 
     @staticmethod
     def _make_recovery_data(delta, fit_band0, seed=17, n_obj=150, nsamps=500):
@@ -622,26 +630,23 @@ class TestLeaveOneOutReweighting:
         dists = np.ones((n_obj, nsamps))
         return phot, err, mask, models, idxs, reds, dreds, dists
 
-    @pytest.mark.parametrize("dim_prior,tol", [(False, 0.006), (True, 0.008)])
-    def test_injected_offset_recovered_fitted_band(self, dim_prior, tol):
+    def test_injected_offset_recovered_fitted_band(self):
         """A band used in fitting: draws come from the contaminated full
         posterior, so recovery requires the corrected importance weights.
 
         Regression: the pre-fix weighting (w = L_-i) removes only ~2/3 of
         the circularity and misses the true correction by ~0.011-0.012 here,
-        outside these tolerances.
+        outside the tolerance.
         """
         delta = 0.10
         true_corr = 1.0 / (1.0 + delta)
         data = self._make_recovery_data(delta, fit_band0=True)
-        config = PhotometricOffsetsConfig(
-            n_bootstrap=100, progress_interval=0, random_seed=99
-        )
+        config = PhotometricOffsetsConfig(n_bootstrap=100)
         offsets, errors, n_used = photometric_offsets(
-            *data, dim_prior=dim_prior, config=config, verbose=False
+            *data, config=config, rng=np.random.default_rng(99), verbose=False
         )
         assert n_used[0] == len(data[0])
-        assert abs(offsets[0] - true_corr) < tol
+        assert abs(offsets[0] - true_corr) < 0.006
 
     def test_injected_offset_recovered_unfitted_band(self):
         """A band NOT used in fitting: draws already target the correct
@@ -651,11 +656,13 @@ class TestLeaveOneOutReweighting:
         true_corr = 1.0 / (1.0 + delta)
         data = self._make_recovery_data(delta, fit_band0=False)
         mask_fit = np.array([False, True, True, True, True])
-        config = PhotometricOffsetsConfig(
-            n_bootstrap=100, progress_interval=0, random_seed=99
-        )
+        config = PhotometricOffsetsConfig(n_bootstrap=100)
         offsets, errors, n_used = photometric_offsets(
-            *data, mask_fit=mask_fit, dim_prior=False, config=config, verbose=False
+            *data,
+            mask_fit=mask_fit,
+            config=config,
+            rng=np.random.default_rng(99),
+            verbose=False,
         )
         assert n_used[0] == len(data[0])
         assert abs(offsets[0] - true_corr) < 0.005
@@ -698,9 +705,7 @@ class TestInputHandlingFixes:
 
         _validate_inputs(phot, err, mask, models, idxs, reds, dreds, dists)
 
-        config = PhotometricOffsetsConfig(
-            n_bootstrap=20, progress_interval=0, random_seed=1
-        )
+        config = PhotometricOffsetsConfig(n_bootstrap=20)
         offsets, errors, n_used = photometric_offsets(
             phot,
             err,
@@ -711,6 +716,7 @@ class TestInputHandlingFixes:
             dreds,
             dists,
             config=config,
+            rng=np.random.default_rng(1),
             verbose=False,
         )
         assert np.all(np.isfinite(offsets))
@@ -732,9 +738,7 @@ class TestInputHandlingFixes:
         on bitwise ops."""
         phot, err, _, models, idxs, reds, dreds, dists = _small_setup()
         mask = np.ones(phot.shape)  # float64
-        config = PhotometricOffsetsConfig(
-            n_bootstrap=10, progress_interval=0, random_seed=1
-        )
+        config = PhotometricOffsetsConfig(n_bootstrap=10)
         offsets, errors, n_used = photometric_offsets(
             phot,
             err,
@@ -745,6 +749,7 @@ class TestInputHandlingFixes:
             dreds,
             dists,
             config=config,
+            rng=np.random.default_rng(1),
             verbose=False,
         )
         assert np.all(np.isfinite(offsets))
@@ -757,9 +762,7 @@ class TestInputHandlingFixes:
         phot = phot.copy()
         phot[:8, 0] = 0.0
         phot[8:12, 0] = -0.5
-        config = PhotometricOffsetsConfig(
-            n_bootstrap=20, progress_interval=0, random_seed=1
-        )
+        config = PhotometricOffsetsConfig(n_bootstrap=20)
         offsets, errors, n_used = photometric_offsets(
             phot,
             err,
@@ -770,6 +773,7 @@ class TestInputHandlingFixes:
             dreds,
             dists,
             config=config,
+            rng=np.random.default_rng(1),
             verbose=False,
         )
         assert np.all(np.isfinite(offsets))
@@ -781,28 +785,11 @@ class TestDegenerateWeightHandling:
     """Objects with collapsed weights must be excluded, not fabricated."""
 
     def test_collapsed_weights_reported_not_fabricated(self):
-        """When every selected object's LOO weights collapse (dof <= 0 under
-        the dimensionality prior), the filter must report n_used = 0 and the
+        """When every object's leave-one-out weights are undefined (an
+        infinite band chi-square), the filter must report n_used = 0 and the
         placeholder offset, instead of the median of posterior draw 0."""
-        rng = np.random.default_rng(2)
-        n_obj, nfilt, nsamps, n_models = 12, 4, 8, 20
-        models = np.zeros((n_models, nfilt, 3))
-        models[:, :, 0] = rng.uniform(15, 18, (n_models, nfilt))
-        models[:, :, 1] = 1.0
-        models[:, :, 2] = 0.1
-        idxs = rng.integers(0, n_models, (n_obj, nsamps))
-        reds = rng.uniform(0.0, 1.0, (n_obj, nsamps))
-        dreds = np.full((n_obj, nsamps), 3.1)
-        dists = np.ones((n_obj, nsamps))
-        phot = np.abs(rng.uniform(0.5, 2.0, (n_obj, nfilt)))
-        err = 0.05 * phot
-        # every object observes exactly bands {0, 1}: LOO dof = 2 - 1 - 1 = 0
-        mask = np.zeros((n_obj, nfilt), dtype=int)
-        mask[:, :2] = 1
-
-        config = PhotometricOffsetsConfig(
-            n_bootstrap=10, min_bands_used=1, progress_interval=0, random_seed=3
-        )
+        phot, err, mask, models, idxs, reds, dreds, dists = _small_setup()
+        err = 1e-200 * phot  # err**2 underflows to 0: chi2 is infinite
         offsets, errors, n_used = photometric_offsets(
             phot,
             err,
@@ -812,14 +799,46 @@ class TestDegenerateWeightHandling:
             reds,
             dreds,
             dists,
-            dim_prior=True,
-            config=config,
+            config=PhotometricOffsetsConfig(n_bootstrap=10),
             verbose=False,
+            rng=np.random.default_rng(3),
         )
         assert n_used[0] == 0
         assert offsets[0] == 1.0
         # collapsed weights leave no measurement: infinite uncertainty
         assert np.isinf(errors[0])
+
+    def test_only_weighted_draw_survives_a_large_chi2(self):
+        """A draw that holds all the sample weight keeps its weight even
+        when other draws have far larger leave-one-out weights.
+
+        Regression: the importance weights were scaled by their row maximum
+        before the sample weights multiplied them, so the product underflowed
+        to 0 and the object was dropped as degenerate.
+        """
+        phot, err, mask, models, idxs, reds, dreds, dists = _small_setup()
+        err = 1e-3 * phot  # band chi-squares of order 1e4: exp(-chi2/2) = 0
+        weights = np.zeros(idxs.shape)
+        weights[:, 0] = 1.0
+        seds = _generate_seds(models, idxs, reds, dreds, dists)
+        phot = phot.copy()
+        phot[:, 0] = seds[:, 0, 0]  # draw 0 fits band 0 exactly
+        offsets, _, n_used = photometric_offsets(
+            phot,
+            err,
+            mask,
+            models,
+            idxs,
+            reds,
+            dreds,
+            dists,
+            weights=weights,
+            config=PhotometricOffsetsConfig(n_bootstrap=10),
+            verbose=False,
+            rng=np.random.default_rng(3),
+        )
+        assert n_used[0] == len(phot)
+        assert offsets[0] == 1.0
 
 
 class TestBandCountThresholds:
@@ -834,9 +853,7 @@ class TestBandCountThresholds:
         mask = np.ones((n_obj, nfilt), dtype=int)
         mask[:10, 4] = 0  # first 10 objects observe only 4 bands (incl. band 0)
 
-        config = PhotometricOffsetsConfig(
-            n_bootstrap=10, progress_interval=0, random_seed=1
-        )
+        config = PhotometricOffsetsConfig(n_bootstrap=10)
         offsets, errors, n_used = photometric_offsets(
             phot,
             err,
@@ -847,6 +864,7 @@ class TestBandCountThresholds:
             dreds,
             dists,
             config=config,
+            rng=np.random.default_rng(1),
             verbose=False,
         )
         assert n_used[0] == n_obj - 10
@@ -865,9 +883,7 @@ class TestPriorHandling:
         prior_mean = np.full(phot.shape[1], 1.05)
         prior_std = np.full(phot.shape[1], 0.02)
 
-        config = PhotometricOffsetsConfig(
-            n_bootstrap=20, progress_interval=0, random_seed=1
-        )
+        config = PhotometricOffsetsConfig(n_bootstrap=20)
         offsets, errors, n_used = photometric_offsets(
             phot,
             err,
@@ -880,6 +896,7 @@ class TestPriorHandling:
             prior_mean=prior_mean,
             prior_std=prior_std,
             config=config,
+            rng=np.random.default_rng(1),
             verbose=False,
         )
         assert n_used[0] == 0
@@ -900,8 +917,6 @@ class TestPriorHandling:
         # with one band masked (the small fixture has few filters).
         config = PhotometricOffsetsConfig(
             n_bootstrap=20,
-            progress_interval=0,
-            random_seed=1,
             min_bands_used=3,
             min_bands_unused=3,
         )
@@ -916,6 +931,7 @@ class TestPriorHandling:
             dists,
             config=config,
             verbose=False,
+            rng=np.random.default_rng(1),
         )
         assert n_used[0] == 0
         assert offsets[0] == 1.0
@@ -975,6 +991,49 @@ class TestPerFilterInputValidation:
                 old_offsets=1.0,
                 verbose=False,
             )
+
+    def test_integer_sel_of_zeros_and_ones_acts_as_a_bool_mask(self):
+        sel = np.arange(40) % 3 > 0
+        results = [
+            photometric_offsets(
+                *_small_setup(),
+                sel=s,
+                config=PhotometricOffsetsConfig(n_bootstrap=5),
+                verbose=False,
+                rng=np.random.default_rng(0),
+            )
+            for s in (sel, sel.astype(int))
+        ]
+        for a, b in zip(*results):
+            np.testing.assert_array_equal(a, b)
+
+    @pytest.mark.parametrize(
+        "kwargs, match",
+        [
+            ({"sel": np.full(40, 2)}, "sel must be a bool or 0/1 array"),
+            ({"sel": np.array([0, 3, 7])}, "sel must be a bool or 0/1 array"),
+            ({"weights": np.ones((40, 3))}, "weights must have shape"),
+            ({"weights": -np.ones((40, 15))}, "weights must be finite"),
+            ({"prior_mean": 1.0, "prior_std": 0.1}, "must have shape"),
+            (
+                {"prior_mean": np.ones(5), "prior_std": np.zeros(5)},
+                "prior_std must be finite and > 0",
+            ),
+        ],
+    )
+    def test_invalid_sel_weights_and_priors_raise_before_seds(
+        self, monkeypatch, kwargs, match
+    ):
+        """Bad `sel`, `weights` or priors raise a ValueError that names the
+        argument, before any model SED is generated."""
+        import brutus.analysis.offsets as mod
+
+        def fail(*args, **kwargs):
+            raise AssertionError("validation ran after SED generation")
+
+        monkeypatch.setattr(mod, "_generate_seds", fail)
+        with pytest.raises(ValueError, match=match):
+            photometric_offsets(*_small_setup(), verbose=False, **kwargs)
 
 
 class TestChunkedSedGeneration:

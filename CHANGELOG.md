@@ -139,6 +139,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   saved draws, so the default bins are 3.3 times wider; pass `span` for a
   narrower range. `draw_sar` pads a distribution with its mean after 100
   passes with no accepted draw, instead of after `max_attempts`.
+- **`analysis.photometric_offsets` weights the draws of a fitted band by
+  the Gaussian leave-one-out ratio**, `ln w = chi2_b / 2`. The old default
+  (`dim_prior=True`) used a ratio of chi-square densities, which does not
+  match the posterior `BruteForce` samples, with or without
+  `logl_dim_prior`. The default offsets change. With a 10% offset injected
+  into a fitted band (400 stars, 1000 draws, 8 seeds), the mean bias fell
+  from 0.0026 to 0.0008.
 - **`dist_vs_red` and `bin_pdfs_distred` smooth A(V) by 0.005 of its range
   by default** (0.1 mag over the default `avlim`): the default `smooth` is
   `(0.015, 0.005)` and `(0.01, 0.005)`.
@@ -154,6 +161,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every model.
 - **`ltol_subthresh` is removed** from `loglike_grid`, `fit` and `_fit`.
   Each model's fit now checks its own convergence. `ltol` must be positive.
+- **`dim_prior` is removed** from `analysis.photometric_offsets`, which
+  always uses the Gaussian leave-one-out weights. Passing it raises
+  `TypeError`. `old_offsets` must be finite and > 0.
+- **`dim_prior` is removed** from `plotting.photometric_offsets` and
+  `plotting.photometric_offsets_2d`, which use the weights of
+  `analysis.photometric_offsets`.
+- **`PhotometricOffsetsConfig` loses four switches.**
+  `use_vectorized_bootstrap` and the per-object bootstrap loop it selected
+  are removed. `validate_inputs` is removed, so input validation always
+  runs. `random_seed` is removed: pass a seeded `rng` to
+  `photometric_offsets` instead (`rng=np.random.default_rng(seed)` gives
+  the old results of `random_seed=seed`). `progress_interval` is removed,
+  and `verbose` alone controls the progress messages.
 - `logpost_grid` takes `return_precision=True` to return the precision
   matrices of the selected models in place of their covariances. `fit`
   uses it to invert only the resampled models.
@@ -233,6 +253,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `BruteForce.get_sed_grid` raises `ValueError` for an `av` or `rv` array
   whose length is not the number of models. With JIT on, it read past the
   end of the array and returned garbage SEDs.
+- `analysis.photometric_offsets` checks `sel`, `weights`, `prior_mean` and
+  `prior_std` before it generates the model SEDs, and raises `ValueError`
+  that names the argument. `sel` must be a bool or 0/1 array of shape `(Nobj,)`:
+  an index array excluded objects with no error. `weights` must be
+  finite and >= 0, and `prior_std` finite and > 0. A scalar prior failed
+  only after the full computation.
+- `plotting.photometric_offsets` and `photometric_offsets_2d` weight the
+  draws of each band with the leave-one-out weights of
+  `analysis.photometric_offsets`, computed in flux space. They weighted by
+  the likelihood of the other bands alone, which keeps part of the pull of
+  the band on the draws. With a 10% offset injected into a fitted band, the
+  plotted offset differed from the analysis offset by 0.013 mag; it now
+  agrees to 0.0001 mag.
+
+### Performance
+
+- The bootstrap of `analysis.photometric_offsets` draws each sample by a
+  per-row binary search of the weight CDF, in a jitted helper, instead of
+  comparing every CDF entry. The medians are bitwise identical. With 20,000
+  objects, 500 draws and 30 replicates, a bootstrap takes 0.33 s instead of
+  1.66 s (medians of 7 interleaved runs, 4 CPUs).
 
 ### Documentation
 

@@ -12,10 +12,10 @@ import warnings
 
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.special import logsumexp
 
+from ..analysis.offsets import _loo_weights
 from ..core.sed_utils import get_seds
-from ..utils.photometry import magnitude, phot_loglike
+from ..utils.photometry import inv_magnitude, magnitude
 from ..utils.sampling import quantile
 
 
@@ -33,7 +33,6 @@ def photometric_offsets(
     weights=None,
     bins=100,
     offset=None,
-    dim_prior=True,
     plot_thresh=0.0,
     cmap="viridis",
     xspan=None,
@@ -43,8 +42,14 @@ def photometric_offsets(
     plot_kwargs=None,
     fig=None,
 ):
-    """
+    r"""
     Plot photometric offsets (`mag_pred - mag_obs`).
+
+    The draws of each object are weighted, band by band, with the
+    leave-one-out weights of `brutus.analysis.photometric_offsets`,
+    :math:`w \propto \exp(\chi^2_i / 2)` times `weights`, where
+    :math:`\chi^2_i` is the flux-space chi-square of band i. They use `phot`
+    and `err` as given; `offset` only shifts the plotted residuals.
 
     Parameters
     ----------
@@ -96,12 +101,6 @@ def photometric_offsets(
         Multiplicative photometric offsets that will be applied to
         the data (i.e. `data_new = data * phot_offsets`) and errors
         when provided.
-
-    dim_prior : bool, optional
-        Whether to apply a dimensional-based correction (prior) to the
-        log-likelihood when reweighting the data while cycling through each
-        band. Transforms the likelihood to a chi2 distribution
-        with `Nfilt - 3` degrees of freedom. Default is `True`.
 
     plot_thresh : float, optional
         The threshold used to threshold the colormap when plotting.
@@ -181,12 +180,16 @@ def photometric_offsets(
     # Convert observed data to magnitudes.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")  # ignore bad values
+        # The leave-one-out weights use the data of the fit; `offset` only
+        # shifts the plotted residuals.
         if flux:
-            magobs, mageobs = magnitude(phot * offset, err * offset)
+            fobs, feobs = phot, err
+            magobs = magnitude(phot * offset, err * offset)[0]
         else:
             # `offset` is a multiplicative *flux* correction; in magnitude
             # space it is applied as -2.5 log10(offset).
-            magobs, mageobs = phot - 2.5 * np.log10(offset), err
+            fobs, feobs = inv_magnitude(phot, err)
+            magobs = phot - 2.5 * np.log10(offset)
 
     # Generate figure.
     if fig is None:
@@ -199,35 +202,20 @@ def photometric_offsets(
     ax = axes.flatten()
     # Plot offsets.
     for i in range(nfilt):
-        # Compute selection ignoring current band.
-        mtemp = np.array(mask)
-        mtemp[:, i] = False
-        # Require finite magnitudes only in *observed* bands: unobserved
+        # Require at least 4 observed bands besides band i, and finite
+        # magnitudes only in *observed* bands: unobserved
         # (masked) bands routinely hold nonpositive/NaN fluxes that map to
         # non-finite magnitudes and must not disqualify the object.
         s = (
             mask[:, i]
-            & (np.sum(mtemp, axis=1) > 3)
+            & (np.sum(mask, axis=1) > 4)
             & (np.all(np.isfinite(magobs) | ~mask, axis=1))
+            & (weights.sum(axis=1) > 0)
         )
-        # Compute weights from ignoring current band.
-        # TODO: vectorize this loop over objects for performance
-        lnl = np.array(
-            [
-                phot_loglike(
-                    mo[None, :],
-                    me[None, :],
-                    mp[None, :, :],
-                    mask=mt[None, :],
-                    dim_prior=dim_prior,
-                ).squeeze(0)
-                for mo, me, mt, mp in zip(magobs[s], mageobs[s], mtemp[s], mpred[s])
-            ]
+        wt = _loo_weights(
+            fobs[s, i], feobs[s, i], 10 ** (-0.4 * mpred[s, :, i]), weights[s]
         )
-        levid = logsumexp(lnl, axis=1)
-        logwt = lnl - levid[:, None]
-        wt = np.exp(logwt)
-        wt /= wt.sum(axis=1)[:, None]
+        wt /= wt.sum(axis=1, keepdims=True)
         # Repeat to match up with `nsamps`.
         mobs = np.repeat(magobs[s, i], nsamps)
         if x is None:
@@ -239,7 +227,7 @@ def photometric_offsets(
                 xp = np.repeat(x[s], nsamps)
         # Plot 2-D histogram.
         mp = mpred[s, :, i].flatten()
-        w = weights[s].flatten() * wt.flatten()
+        w = wt.flatten()
         if xspan is None:
             xlow, xhigh = quantile(xp, [0.02, 0.98], weights=w)
             bx = np.linspace(xlow, xhigh, bins[i] + 1)
@@ -287,7 +275,6 @@ def photometric_offsets_2d(
     weights=None,
     bins=100,
     offset=None,
-    dim_prior=True,
     plot_thresh=10.0,
     cmap="coolwarm",
     clims=(-0.05, 0.05),
@@ -300,8 +287,14 @@ def photometric_offsets_2d(
     plot_kwargs=None,
     fig=None,
 ):
-    """
+    r"""
     Plot photometric offsets (`mag_pred - mag_obs`).
+
+    The draws of each object are weighted, band by band, with the
+    leave-one-out weights of `brutus.analysis.photometric_offsets`,
+    :math:`w \propto \exp(\chi^2_i / 2)` times `weights`, where
+    :math:`\chi^2_i` is the flux-space chi-square of band i. They use `phot`
+    and `err` as given; `offset` only shifts the plotted residuals.
 
     Parameters
     ----------
@@ -355,12 +348,6 @@ def photometric_offsets_2d(
         Multiplicative photometric offsets that will be applied to
         the data (i.e. `data_new = data * phot_offsets`) and errors
         when provided.
-
-    dim_prior : bool, optional
-        Whether to apply a dimensional-based correction (prior) to the
-        log-likelihood when reweighting the data while cycling through each
-        band. Transforms the likelihood to a chi2 distribution
-        with `Nfilt - 3` degrees of freedom. Default is `True`.
 
     plot_thresh : float, optional
         The threshold used to threshold the colormap when plotting.
@@ -452,12 +439,16 @@ def photometric_offsets_2d(
     # Convert observed data to magnitudes.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")  # ignore bad values
+        # The leave-one-out weights use the data of the fit; `offset` only
+        # shifts the plotted residuals.
         if flux:
-            magobs, mageobs = magnitude(phot * offset, err * offset)
+            fobs, feobs = phot, err
+            magobs = magnitude(phot * offset, err * offset)[0]
         else:
             # `offset` is a multiplicative *flux* correction; in magnitude
             # space it is applied as -2.5 log10(offset).
-            magobs, mageobs = phot - 2.5 * np.log10(offset), err
+            fobs, feobs = inv_magnitude(phot, err)
+            magobs = phot - 2.5 * np.log10(offset)
 
         # Magnitude offsets.
         dm = mpred - magobs[:, None]
@@ -483,43 +474,27 @@ def photometric_offsets_2d(
         bounds = [xcent[0], xcent[-1], ycent[0], ycent[-1]]  # default size
         # Digitize values.
         xloc, yloc = np.digitize(x, xbins) - 1, np.digitize(y, ybins) - 1
-        # Compute selection ignoring current band.
-        mtemp = np.array(mask)
-        mtemp[:, i] = False
-        # Require finite magnitudes only in *observed* bands: unobserved
+        # Require at least 4 observed bands besides band i, and finite
+        # magnitudes only in *observed* bands: unobserved
         # (masked) bands routinely hold nonpositive/NaN fluxes that map to
         # non-finite magnitudes and must not disqualify the object.
         s = (
             mask[:, i]
-            & (np.sum(mtemp, axis=1) > 3)
+            & (np.sum(mask, axis=1) > 4)
             & (np.all(np.isfinite(magobs) | ~mask, axis=1))
+            & (weights.sum(axis=1) > 0)
         )
-        # Compute weights from ignoring current band.
-        # TODO: vectorize this loop over objects for performance
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")  # ignore bad values
-            lnl = np.array(
-                [
-                    phot_loglike(
-                        mo[None, :],
-                        me[None, :],
-                        mp[None, :, :],
-                        mask=mt[None, :],
-                        dim_prior=dim_prior,
-                    ).squeeze(0)
-                    for mo, me, mt, mp in zip(magobs, mageobs, mtemp, mpred)
-                ]
-            )
-            levid = logsumexp(lnl, axis=1)
-            logwt = lnl - levid[:, None]
-            wt = np.exp(logwt)
-            wt /= wt.sum(axis=1)[:, None]
+        wt = np.zeros((nobj, nsamps))
+        wt_s = _loo_weights(
+            fobs[s, i], feobs[s, i], 10 ** (-0.4 * mpred[s, :, i]), weights[s]
+        )
+        wt[s] = wt_s / wt_s.sum(axis=1, keepdims=True)
         # Compute weighted median offsets.
         offset2d = np.zeros((len(xbins) - 1, len(ybins) - 1))
         for xidx in range(len(xbins) - 1):
             for yidx in range(len(ybins) - 1):
                 bsel = np.where((xloc == xidx) & (yloc == yidx) & s)[0]
-                off, w = dm[bsel, :, i], wt[bsel] * weights[bsel]
+                off, w = dm[bsel, :, i], wt[bsel]
                 if len(bsel) >= plot_thresh and w.sum() > 0:
                     # If we have enough weighted objects, compute the median.
                     off_med = quantile(off.flatten(), [0.5], w.flatten())[0]

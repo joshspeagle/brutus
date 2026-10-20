@@ -75,7 +75,7 @@ $$
 w \propto \frac{\mathcal{L}_{-b}}{\mathcal{L}},
 $$
 
-where $\mathcal{L}_{-b}$ is the likelihood of the other bands. `mask_fit` marks the bands that were used in the fit; the others need no reweighting. `old_offsets` gives the offsets that the fit applied, so the reweighting uses the same fluxes as the fit. The result is the full offset relative to the uncorrected data. The likelihoods follow the $\chi^2$-density convention of the fit's default; pass `dim_prior=False` if the fit used `logl_dim_prior=False`. They include the photometry only, not the parallax.
+where $\mathcal{L}_{-b}$ is the likelihood of the other bands. The likelihoods are Gaussian, as in the fit, so $\ln w = \chi^2_b / 2$ up to a constant per star, where $\chi^2_b$ is the $\chi^2$ of band $b$. This holds with and without `logl_dim_prior`, whose term is the same for every draw of a star. The weights include the photometry only, not the parallax. `mask_fit` marks the bands that were used in the fit; the others need no reweighting. `old_offsets` gives the offsets that the fit applied, so the reweighting uses the same fluxes as the fit. The result is the full offset relative to the uncorrected data.
 
 The uncertainty comes from a bootstrap over stars and draws. `prior_mean` and `prior_std` combine the result with a Gaussian prior per band; they must be given together. A band that no star constrains (`n_used == 0`) gets `prior_mean` ± `prior_std`, or 1 with an infinite uncertainty if there is no prior.
 
