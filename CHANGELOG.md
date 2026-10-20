@@ -164,6 +164,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`dim_prior` is removed** from `analysis.photometric_offsets`, which
   always uses the Gaussian leave-one-out weights. Passing it raises
   `TypeError`. `old_offsets` must be finite and > 0.
+- **`dim_prior` is removed** from `plotting.photometric_offsets` and
+  `plotting.photometric_offsets_2d`, which use the weights of
+  `analysis.photometric_offsets`.
 - `logpost_grid` takes `return_precision=True` to return the precision
   matrices of the selected models in place of their covariances. `fit`
   uses it to invert only the resampled models.
@@ -249,6 +252,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an index array excluded objects with no error. `weights` must be
   finite and >= 0, and `prior_std` finite and > 0. A scalar prior failed
   only after the full computation.
+- `plotting.photometric_offsets` and `photometric_offsets_2d` weight the
+  draws of each band with the leave-one-out weights of
+  `analysis.photometric_offsets`, computed in flux space. They weighted by
+  the likelihood of the other bands alone, which keeps part of the pull of
+  the band on the draws. With a 10% offset injected into a fitted band, the
+  plotted offset differed from the analysis offset by 0.013 mag; it now
+  agrees to 0.0001 mag.
 
 ### Documentation
 
