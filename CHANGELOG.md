@@ -422,6 +422,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reddening over `rlims`, independent of distance, and that `s_params`
   sets the kernel width as a fraction of the `rlims` range, not in
   percent.
+- Tutorial 1 and the `Isochrone.get_predictions` docstring use the MIST
+  primary EEPs: the main sequence is EEP 202 to 454, the subgiant and red
+  giant branches 454 to 605, and core helium burning 631 to 707.
+- The population docstrings give units (distance in pc), allow a
+  per-star `cluster_prob`, describe the grid's model selection as the code
+  does it, name `EEPTracks`, and use `afe=0.0` in their examples: the
+  shipped isochrone file has only [α/Fe] = 0, and other values give NaN.
 
 ## [1.2.0] - 2026-07-17
 

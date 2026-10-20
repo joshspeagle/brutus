@@ -158,7 +158,8 @@ def generate_isochrone_population_grid(
     stellarpop : StellarPop object
         StellarPop model from core.populations module with get_seds method
     feh, loga, av, rv, dist : float
-        Stellar population parameters (metallicity, log age, extinction, distance)
+        Stellar population parameters: metallicity [Fe/H] (dex), log10(age/yr),
+        extinction A(V) (mag), R(V) (dimensionless) and distance (pc)
     smf_grid : array-like, optional
         Secondary mass fraction grid. Default is 21 uniform points from 0.0 to 1.0
     eep_grid : array-like, optional
@@ -203,7 +204,9 @@ def generate_isochrone_population_grid(
     2. For each SMF, computing isochrone along EEP dimension
     3. Extracting masses from the isochrone
     4. Computing geometric jacobians (grid spacings) for proper integration
-    5. Filtering invalid models (NaN photometry from impossible binaries)
+    5. Keeping the models with positive mass spacing, storing the
+       post-main-sequence block once with the full SMF measure (see below),
+       and leaving non-finite SEDs to the likelihood
 
     The jacobians are critical for proper marginalization - they represent
     the geometric factors :math:`dm` and :math:`d({\\rm SMF})` in the integral:
@@ -658,7 +661,7 @@ def apply_isochrone_mixture_model(
         Cluster membership likelihoods
     lnl_outlier : array-like, shape (N_grid_points, N_objects)
         Outlier model likelihoods
-    cluster_prob : float
+    cluster_prob : float or array-like of shape (N_objects,)
         Prior probability of cluster membership (external)
     field_fraction : float
         Fraction of cluster stars that are field contaminants (fitted parameter)
@@ -846,8 +849,9 @@ def isochrone_population_loglike(
     Parameters
     ----------
     theta : array-like, shape (6,)
-        Population parameters: [feh, loga, av, rv, dist, field_frac]
-        where field_frac is the field contamination fraction (0 to 1).
+        Population parameters: [feh, loga, av, rv, dist, field_frac],
+        with `dist` in pc and field_frac the field contamination fraction
+        (0 to 1).
     stellarpop : StellarPop object
         StellarPop model from core.populations module with get_seds method
     obs_phot : array-like, shape (N_objects, N_filters)
@@ -858,7 +862,7 @@ def isochrone_population_loglike(
         Parallax measurements (mas)
     parallax_err : array-like, shape (N_objects,), optional
         Parallax errors (mas)
-    cluster_prob : float, optional
+    cluster_prob : float or array-like of shape (N_objects,), optional
         Prior probability of cluster membership. Default 0.95
     dim_prior : bool, optional
         Use chi-square (True) or normal (False) likelihood. Default True

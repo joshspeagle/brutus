@@ -13,7 +13,7 @@ The module follows a clean separation of concerns:
 - StellarPop: SED/photometry generation for populations
 
 This design is consistent with the individual star modeling pattern:
-- EEPtracks: Stellar parameter predictions for individuals
+- EEPTracks: Stellar parameter predictions for individuals
 - StarEvolTrack: SED/photometry generation for individuals
 
 Classes
@@ -49,7 +49,7 @@ Advanced usage with binary populations:
 
 >>> # Model binary stellar populations
 >>> seds, params, params2 = pop_synth.get_seds(
-...     feh=-0.5, afe=0.3, loga=10.0,
+...     feh=-0.5, afe=0.0, loga=10.0,
 ...     binary_fraction=0.4,  # 40% mass ratio binaries
 ...     av=0.2, dist=2000.0
 ... )
@@ -120,8 +120,8 @@ class Isochrone:
     parameter prediction (masses, temperatures, luminosities, etc.) without
     photometry generation.
 
-    This class is analogous to MISTtracks but for stellar populations:
-    - MISTtracks: Individual star parameters (mini, EEP, feh, afe) → parameters
+    This class is analogous to EEPTracks but for stellar populations:
+    - EEPTracks: Individual star parameters (mini, EEP, feh, afe) → parameters
     - Isochrone: Population parameters (feh, afe, loga, EEP) → parameters
 
     For photometry generation, use StellarPop with this class.
@@ -175,7 +175,7 @@ class Isochrone:
 
     >>> import numpy as np
     >>> eep_range = np.arange(200, 500, 50)  # Main sequence to turnoff
-    >>> params = iso.get_predictions(feh=-0.5, afe=0.3, loga=10.0, eep=eep_range)
+    >>> params = iso.get_predictions(feh=-0.5, afe=0.0, loga=10.0, eep=eep_range)
     """
 
     def __init__(self, mistfile=None, predictions=None, verbose=True):
@@ -347,6 +347,8 @@ class Isochrone:
 
         afe : float, optional
             Alpha enhancement [alpha/Fe] relative to solar. Default is 0.0.
+            A value outside the grid's `afe` range returns NaN; for the
+            shipped MIST file, the only valid value is 0.0.
 
         loga : float, optional
             Log10(age in years). Default is 8.5 (≈316 Myr).
@@ -385,12 +387,15 @@ class Isochrone:
         Returns NaN for parameters outside the grid bounds or where data is
         not available.
 
-        Common EEP ranges:
+        MIST primary EEPs (Dotter 2016):
         - Pre-main sequence: EEP < 202
         - Zero-age main sequence: EEP = 202
         - Terminal-age main sequence: EEP = 454
-        - Subgiant branch: EEP 454-605
-        - Red giant branch: EEP 605-1409
+        - Subgiant and red giant branches: EEP 454-605 (RGB tip at 605)
+        - Core helium burning: EEP 631-707
+        - Early asymptotic giant branch: EEP 707-808
+        - Thermally pulsing AGB: EEP 808
+        - Post-AGB: EEP 1409
 
         Examples
         --------
@@ -504,7 +509,7 @@ class StellarPop:
 
     >>> # Model population with 40% mass ratio binaries
     >>> seds, params, params2 = ssp.get_seds(
-    ...     feh=-0.5, afe=0.3, loga=10.0,
+    ...     feh=-0.5, afe=0.0, loga=10.0,
     ...     binary_fraction=0.4,
     ...     av=0.2, dist=2000.0
     ... )
@@ -615,7 +620,9 @@ class StellarPop:
             Metallicity [Fe/H]. Default is 0.0.
 
         afe : float, optional
-            Alpha enhancement [alpha/Fe]. Default is 0.0.
+            Alpha enhancement [alpha/Fe]. Default is 0.0. A value outside the
+            isochrone grid's `afe` range gives NaN SEDs; for the shipped MIST
+            file, the only valid value is 0.0.
 
         loga : float, optional
             Log10(age in years). Default is 8.5.
