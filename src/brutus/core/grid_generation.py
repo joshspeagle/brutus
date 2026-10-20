@@ -103,6 +103,9 @@ from .individual import StarEvolTrack
 
 __all__ = ["GridGenerator"]
 
+# Distance of the grid magnitudes. Every grid reader assumes 1 kpc.
+_REFERENCE_DISTANCE_PC = 1000.0
+
 
 class GridGenerator:
     """
@@ -230,7 +233,6 @@ class GridGenerator:
         av_wt=None,
         rv_grid=None,
         rv_wt=None,
-        dist=1000.0,
         loga_max=10.14,
         eep_binary_max=480.0,
         mini_bound=0.5,
@@ -286,10 +288,6 @@ class GridGenerator:
         rv_wt : numpy.ndarray, optional
             Weights for R_V grid points when fitting. If None, defaults to
             exp(-abs(R_V - 3.3) / 0.5) favoring R_V=3.3.
-
-        dist : float, optional
-            Reference distance in parsecs. Default is 1000 (1 kpc).
-            **This should not be changed** as it affects StarGrid calibration.
 
         loga_max : float, optional
             Maximum log10(age) in years. Models older than this are masked.
@@ -455,7 +453,7 @@ class GridGenerator:
                     smf=smf,
                     av=0.0,
                     rv=3.3,
-                    dist=dist,
+                    dist=_REFERENCE_DISTANCE_PC,
                     loga_max=loga_max,
                     eep_binary_max=eep_binary_max,
                     mini_bound=mini_bound,
@@ -486,7 +484,6 @@ class GridGenerator:
                     av_wt=av_wt,
                     rv_grid=rv_grid,
                     rv_wt=rv_wt,
-                    dist=dist,
                 )
                 if np.any(np.isnan(coeffs)):
                     # A reddening-grid point outside the NN training bounds
@@ -530,7 +527,7 @@ class GridGenerator:
 
         # Save to file if requested
         if output_file is not None:
-            self._save_grid(output_file, dist, verbose=verbose)
+            self._save_grid(output_file, verbose=verbose)
 
     def _fit_reddening_coefficients(
         self,
@@ -541,7 +538,6 @@ class GridGenerator:
         av_wt,
         rv_grid,
         rv_wt,
-        dist,
     ):
         """
         Fit polynomial coefficients for reddening dependence.
@@ -569,8 +565,6 @@ class GridGenerator:
             Base SED at A_V=0, R_V=3.3.
         av_grid, av_wt, rv_grid, rv_wt : numpy.ndarray
             Reddening lattice points and fit weights (see `make_grid`).
-        dist : float
-            Reference distance in parsecs.
 
         Returns
         -------
@@ -584,7 +578,7 @@ class GridGenerator:
 
         # Primary SEDs across the reddening lattice (single batched NN call).
         p1 = dict(zip(self.tracks.predictions, params))
-        seds = self._sed_reddening_grid(p1, av_pts, rv_pts, dist)
+        seds = self._sed_reddening_grid(p1, av_pts, rv_pts)
 
         # Add binary companion if it contributed to the base SED. The
         # secondary predictions are all-NaN unless the companion existed and
@@ -593,7 +587,7 @@ class GridGenerator:
         p2 = dict(zip(self.tracks.predictions, params2))
         sed_fields = ("logl", "logt", "logg", "feh_surf", "afe_surf")
         if np.all(np.isfinite([p2[k] for k in sed_fields])):
-            seds2 = self._sed_reddening_grid(p2, av_pts, rv_pts, dist)
+            seds2 = self._sed_reddening_grid(p2, av_pts, rv_pts)
             seds = add_mag(seds, seds2)
 
         seds = seds.reshape(len(rv_grid), len(av_grid), -1)  # Shape: (Nrv, Nav, Nfilt)
@@ -615,7 +609,7 @@ class GridGenerator:
 
         return coeffs
 
-    def _sed_reddening_grid(self, pdict, av_pts, rv_pts, dist):
+    def _sed_reddening_grid(self, pdict, av_pts, rv_pts):
         """
         Evaluate NN photometry on an (A_V, R_V) lattice at fixed stellar
         parameters.
@@ -632,8 +626,6 @@ class GridGenerator:
             'logg', 'feh_surf', and 'afe_surf'.
         av_pts, rv_pts : numpy.ndarray of shape (Npts,)
             Flattened reddening lattice coordinates.
-        dist : float
-            Distance in parsecs.
 
         Returns
         -------
@@ -642,7 +634,7 @@ class GridGenerator:
             inputs fall outside its training bounds).
         """
         predictor = self.predictor
-        mu = 5.0 * np.log10(dist) - 5.0
+        mu = 5.0 * np.log10(_REFERENCE_DISTANCE_PC) - 5.0
 
         npts = len(av_pts)
         x = np.empty((6, npts))
@@ -667,7 +659,7 @@ class GridGenerator:
 
         return seds
 
-    def _save_grid(self, output_file, dist, verbose=True):
+    def _save_grid(self, output_file, verbose=True):
         """
         Save grid to HDF5 file in StarGrid-compatible format.
 
@@ -680,8 +672,6 @@ class GridGenerator:
         ----------
         output_file : str or Path
             Path to output HDF5 file
-        dist : float
-            Reference distance in parsecs
         verbose : bool, optional
             Whether to print save confirmation
         """
@@ -720,9 +710,9 @@ class GridGenerator:
             )
 
             # Save metadata
-            f.attrs["reference_distance_pc"] = dist
+            f.attrs["reference_distance_pc"] = _REFERENCE_DISTANCE_PC
             f.attrs["reference_distance_note"] = (
-                "All magnitudes computed at this distance (default 1 kpc = 1000 pc)"
+                "All magnitudes computed at this distance (1 kpc = 1000 pc)"
             )
             try:
                 import brutus

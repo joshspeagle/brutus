@@ -125,7 +125,6 @@ class TestGridGenerator:
             feh_grid=np.array([0.0]),
             afe_grid=np.array([0.0]),
             smf_grid=np.array([0.0]),
-            dist=1000.0,  # Explicitly set to 1 kpc
             verbose=False,
         )
 
@@ -294,33 +293,12 @@ class TestGridGenerator:
         finally:
             Path(tmp_path).unlink(missing_ok=True)
 
-    def test_different_dist_warning(self, eep_tracks):
-        """Test that using non-standard distance is preserved."""
-        tracks = eep_tracks
-        gen = GridGenerator(tracks, filters=["SDSS_g"], verbose=False)
-
-        with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as tmp:
-            tmp_path = tmp.name
-
-        try:
-            # Generate with non-standard distance
-            gen.make_grid(
-                mini_grid=np.array([1.0]),
-                eep_grid=np.array([350.0]),
-                feh_grid=np.array([0.0]),
-                afe_grid=np.array([0.0]),
-                smf_grid=np.array([0.0]),
-                dist=500.0,  # Non-standard!
-                output_file=tmp_path,
-                verbose=False,
-            )
-
-            # Check that distance is recorded
-            with h5py.File(tmp_path, "r") as f:
-                assert f.attrs["reference_distance_pc"] == 500.0
-
-        finally:
-            Path(tmp_path).unlink(missing_ok=True)
+    def test_make_grid_has_no_distance_argument(self, eep_tracks):
+        # Every grid reader assumes 1 kpc, so a grid at another distance
+        # would give wrong distances
+        gen = GridGenerator(eep_tracks, filters=["SDSS_g"], verbose=False)
+        with pytest.raises(TypeError, match="dist"):
+            gen.make_grid(mini_grid=np.array([1.0]), dist=500.0, verbose=False)
 
     def test_grid_params_structure(self, eep_tracks):
         """Test that grid parameters match track predictions."""
@@ -569,7 +547,6 @@ class TestReddeningFitEquivalence:
                 av_wt=av_wt,
                 rv_grid=rv_grid,
                 rv_wt=rv_wt,
-                dist=dist,
             )
             np.testing.assert_allclose(new, ref, rtol=1e-8, atol=1e-8)
 

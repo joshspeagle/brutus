@@ -209,6 +209,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unknown keyword now raises `TypeError`. `cornerplot` no longer sets a
   default `alpha` for the 2-D histograms, which `hist2d` never applied;
   the figures do not change.
+- **`GridGenerator.make_grid` has no `dist` argument.** Grids are always
+  computed at 1 kpc, the distance that `load_models`, `StarGrid` and
+  `BruteForce` assume; a grid made at another `dist` gave distances off by
+  a factor of (dist / 1000)^2. Passing `dist` now raises `TypeError`.
 - **`EEPTracks` drops the unused attributes `null` and `binwidths`.** Its
   `ygrid` attribute holds the unpadded grid (one [α/Fe] layer when the
   tracks have one [α/Fe] value); `xgrid` and `grid_dims` still describe the
