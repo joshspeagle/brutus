@@ -112,7 +112,9 @@ class DustMap:
         dec : float or astropy.units.Quantity
             Declination in degrees.
         d : float or astropy.units.Quantity, optional
-            Distance from the Solar System in kpc.
+            Distance from the Solar System in kpc. Not used: the query
+            returns the full distance profile. Accepted for API
+            compatibility.
         frame : str, optional
             Coordinate frame. Options: 'icrs', 'fk4', 'fk5', 'fk4noeterms'.
             Default is 'icrs'.
@@ -357,7 +359,8 @@ class Bayestar(DustMap):
         coords : astropy.coordinates.SkyCoord or array_like
             Coordinates to query. Can be a (scalar or array) SkyCoord, a
             single ``[l, b]`` pair in degrees, or an ``(Ncoords, 2)``
-            array of ``[l, b]`` pairs in degrees.
+            array of ``[l, b]`` pairs in degrees. A distance in a SkyCoord
+            is ignored: the full distance profile is returned.
         apply_reliability_mask : bool, optional
             Whether to set extinction values flagged as unreliable by the
             map (distance bins outside a pixel's reliable range, and
@@ -371,10 +374,13 @@ class Bayestar(DustMap):
         av_mean : ndarray
             Mean A(V) extinction values along each line of sight. Shape is
             ``(n_dist,)`` for a scalar SkyCoord or a single ``[l, b]``
-            pair, and ``(Ncoords, n_dist)`` for array input.
+            pair, and ``(Ncoords, n_dist)`` for array input. The dtype is
+            the storage dtype of the file: float16 for
+            ``bayestar2019_v1.h5``, so cast to float64 before arithmetic
+            that needs more than about 3 significant digits.
         av_std : ndarray
-            Standard deviation of A(V) extinction values (same shape as
-            ``av_mean``).
+            Standard deviation of A(V) extinction values (same shape and
+            dtype as ``av_mean``).
 
         Raises
         ------

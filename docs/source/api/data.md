@@ -1,20 +1,21 @@
 # Data Module (`brutus.data`)
 
-The data module manages all external data dependencies for brutus, including MIST stellar evolution grids, isochrones, 3-D dust maps, neural network weights, and photometric calibration offsets. It uses `pooch` for automatic downloading and caching of data files.
+The data module manages all external data dependencies for brutus, including MIST stellar evolution grids, isochrones, 3-D dust maps, neural network weights, and photometric calibration offsets. It uses `pooch` to download and cache the data files.
 
 **Data Dependencies:**
 
 brutus requires several types of external data:
 
-1. **MIST Grids**: HDF5 files with stellar evolutionary tracks (~750 MB)
-2. **MIST Isochrones**: Tabulated isochrones for population synthesis (~250 MB)
-3. **Dust Maps**: HEALPix 3-D extinction maps (Bayestar19, ~2 GB)
-4. **Neural Networks**: Trained weights for bolometric corrections (~250 KB)
-5. **Photometric Offsets**: Empirical calibration tables (\<1 KB)
+1. **Model grid**: a precomputed grid of stellar models and their spectral energy distributions (SEDs), `grid_mist_v9.h5` from `fetch_grids` (~780 MB)
+2. **MIST EEP tracks**: evolutionary tracks for `EEPTracks`, `MIST_1.2_EEPtrk.h5` from `fetch_tracks` (~1.1 GB). By default, the first load writes a cache of ~0.26 GB (`*_cachev2.pkl`) next to the file.
+3. **MIST Isochrones**: tabulated isochrones for population synthesis, from `fetch_isos` (~260 MB)
+4. **Dust Maps**: HEALPix 3-D extinction maps (Bayestar19, from `fetch_dustmaps`, ~2.2 GB)
+5. **Neural Networks**: trained weights for bolometric corrections, from `fetch_nns` (~250 KB)
+6. **Photometric Offsets**: empirical calibration tables, from `fetch_offsets` (\<1 KB)
 
-**Automatic Data Management:**
+**Data Management:**
 
-Data files are automatically downloaded on first use and cached locally. The default cache location is `~/.cache/astro-brutus/` (via `pooch.os_cache('astro-brutus')`) but can be overridden with the `ASTRO_BRUTUS_DATA_DIR` environment variable.
+No file downloads on first use. Each `fetch_*` function downloads its file into the brutus data directory and makes a link to it in `target_dir` (default: the current directory). The data directory is `~/.cache/astro-brutus/` (via `pooch.os_cache('astro-brutus')`), or the directory that the `ASTRO_BRUTUS_DATA_DIR` environment variable names. The loaders that find a default file (`find_nn_file`, `EEPTracks` and `Isochrone`) look in the data directory, then in `data/DATAFILES` in the repository. If the file is in neither, they raise `FileNotFoundError` with the `fetch_*` function to run.
 
 **Typical Usage:**
 
@@ -62,8 +63,9 @@ models, labels, label_mask = load_models('/path/to/my_custom_grid.h5')
 
 **Storage Requirements:**
 
-- Minimal installation (grid + isochrones): ~1 GB
-- Full installation (with dust maps): ~3 GB
+- Grid alone: ~0.8 GB
+- Grid and isochrones: ~1 GB
+- Everything (grid, isochrones, EEP tracks and dust map): ~4.3 GB, plus the 0.26 GB EEP track cache
 
 **See Also:**
 

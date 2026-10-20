@@ -288,6 +288,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rewritten stellar models and model grid pages. The EEP values of the main
   sequence are corrected, and the coverage of the default grid (0.5 to 2.0
   solar masses, [Fe/H] -3.0 to +0.45) is stated.
+- The data module page says that only the `fetch_*` functions download
+  files, and where the loaders look for them. It describes the model grid
+  as a precomputed SED grid, adds the 1.1 GB EEP track file and its cache,
+  and corrects the storage totals. Tutorials 00 to 04 give the same file
+  sizes.
+- The `Bayestar.query` docstring states that `av_mean` and `av_std` keep
+  the storage dtype of the file (float16 for `bayestar2019_v1.h5`), and
+  `query_equ` states that it ignores the distance `d`.
 
 ## [1.2.0] - 2026-07-17
 
