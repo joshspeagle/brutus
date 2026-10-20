@@ -197,6 +197,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`hist2d` no longer accepts `**kwargs`.** It ignored unknown keywords,
+  so an unknown key in `cornerplot(hist2d_kwargs=...)` had no effect. An
+  unknown keyword now raises `TypeError`. `cornerplot` no longer sets a
+  default `alpha` for the 2-D histograms, which `hist2d` never applied;
+  the figures do not change.
 - **`subsample_mode` is removed** from `fit`, `_fit` and `logpost_grid`,
   with its `"topk"` option, which truncated the posterior. `logpost_grid`
   returns a ninth value, `ln_incl`, the log-probability that each selected
@@ -446,6 +451,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Performance
 
+- `photometric_offsets_2d` groups the objects of each band into the bins
+  once, instead of scanning every object for each bin. The maps are bitwise
+  identical. With 3000 objects, 5 bands, 20 draws and 50 x 50 bins, a call
+  takes a median 0.54 s instead of 0.71 s (3 alternated runs, 4 CPUs).
 - The bootstrap of `analysis.photometric_offsets` draws each sample by a
   per-row binary search of the weight CDF, in a jitted helper, instead of
   comparing every CDF entry. The medians are bitwise identical. With 20,000
