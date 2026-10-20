@@ -544,6 +544,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- The docstring examples of `core.individual`, `core.neural_nets` and
+  `core.grid_generation` run on the shipped data: binary examples use
+  [α/Fe] = 0 (the MIST tracks have no other value) and filter names are
+  real ones such as `PS_g` and `Bessell_V`. `FastNNPredictor.sed` gives the
+  input ranges of `nn_c3k.h5` (R(V) in [2, 5], [α/Fe] in [-0.2, 0.6]) and
+  says that magnitudes are in each survey's native system, not AB.
+  `_get_seds` gives the meaning and units of `rvecs` and `drvecs`.
+- The `GridGenerator` docstrings give the default grid size (4,093,100
+  labels before masking, not ~300,000), drop the unmeasured run times and
+  memory figures, say that cost is linear in `len(av_grid) *
+  len(rv_grid)`, and give the `mini_grid` and `av_grid` defaults that the
+  code uses.
 - New SVG logo, with light and dark variants, and a favicon. The isochrone
   "S" is drawn as model-grid points coloured by temperature, over a faint
   posterior across the grid.

@@ -33,7 +33,7 @@ Generate a grid from evolutionary tracks:
 >>>
 >>> # Initialize tracks and generator
 >>> tracks = EEPTracks()
->>> generator = GridGenerator(tracks, filters=['g', 'r', 'i', 'z'])
+>>> generator = GridGenerator(tracks, filters=['PS_g', 'PS_r', 'PS_i', 'PS_z'])
 >>>
 >>> # Generate grid with default spacing
 >>> generator.make_grid(output_file='my_grid.h5')
@@ -76,10 +76,9 @@ and contain three datasets:
 - `labels`: Structured array (Nmodel,) with input parameters
 - `parameters`: Structured array (Nmodel,) with predicted stellar parameters
 
-**Memory and Performance**: Large grids can require substantial memory
-and computation time. A full grid with default spacing contains ~300k models
-and takes ~2-4 hours to generate. Use sparse grids for testing or when
-covering a limited parameter space.
+**Grid Size**: The default axes give 61 mini x 220 eep x 61 feh x 5 afe x
+1 smf = 4,093,100 labels before masking. Use sparse grids for testing or
+when covering a limited parameter space.
 
 References
 ----------
@@ -253,7 +252,7 @@ class GridGenerator:
         ----------
         mini_grid : numpy.ndarray, optional
             Grid of initial masses in solar masses. If None, defaults to
-            np.arange(0.5, 2.0, 0.025) covering low to intermediate mass stars.
+            np.arange(0.5, 2.0 + 1e-5, 0.025), 61 values from 0.5 to 2.0.
 
         eep_grid : numpy.ndarray, optional
             Grid of equivalent evolutionary points. If None, defaults to
@@ -274,20 +273,24 @@ class GridGenerator:
             to [0.] (single stars only).
 
         av_grid : numpy.ndarray, optional
-            Grid of A_V extinction values used for fitting reddening vector.
-            If None, defaults to np.arange(0., 1.5, 0.3).
+            Grid of A_V extinction values used for fitting reddening vector,
+            with at least 2 distinct values. If None, defaults to 6 values
+            from 0 to 1.5 - 1e-5 in steps of 0.3.
 
         av_wt : numpy.ndarray, optional
-            Weights for A_V grid points when fitting. If None, defaults to
-            (1e-5 + av_grid)**-1 which forces fit through A_V=0.
+            Weights for A_V grid points when fitting, one per `av_grid`
+            value. If None, defaults to (1e-5 + av_grid)**-1 which forces
+            fit through A_V=0.
 
         rv_grid : numpy.ndarray, optional
-            Grid of R_V values used for fitting differential reddening.
-            If None, defaults to np.arange(2.4, 4.2, 0.3).
+            Grid of R_V values used for fitting differential reddening, with
+            at least 2 distinct values. If None, defaults to
+            np.arange(2.4, 4.2 + 1e-5, 0.3), 7 values from 2.4 to 4.2.
 
         rv_wt : numpy.ndarray, optional
-            Weights for R_V grid points when fitting. If None, defaults to
-            exp(-abs(R_V - 3.3) / 0.5) favoring R_V=3.3.
+            Weights for R_V grid points when fitting, one per `rv_grid`
+            value. If None, defaults to exp(-abs(R_V - 3.3) / 0.5) favoring
+            R_V=3.3.
 
         loga_max : float, optional
             Maximum log10(age) in years. Models older than this are masked.
@@ -322,14 +325,21 @@ class GridGenerator:
             Results are saved to output_file if provided, and stored as
             class attributes: grid_labels, grid_seds, grid_params, grid_sel
 
+        Raises
+        ------
+        ValueError
+            If `av_grid` or `rv_grid` has fewer than 2 distinct values, or
+            if `av_wt` or `rv_wt` has a different shape from its grid.
+
         Notes
         -----
-        **Grid Size**: Default parameters create ~300,000 models. Computation
-        time scales linearly with grid size and quadratically with number of
-        (av_grid × rv_grid) points for reddening fits.
-
-        **Memory Usage**: Full grid with 20 filters requires ~2 GB for storage.
-        Peak memory during generation can be 3-4× larger.
+        **Grid Size**: The default axes give 61 mini x 220 eep x 61 feh x
+        5 afe x 1 smf = 4,093,100 labels before masking. Computation time
+        scales linearly with the number of labels and with
+        ``len(av_grid) * len(rv_grid)``, the number of SED evaluations per
+        model in the reddening fits. A model with no companion is computed
+        once per (mini, eep, feh, afe) and copied to the other `smf_grid`
+        values.
 
         **Reddening Fits**: For each valid model, the code:
 
@@ -385,7 +395,7 @@ class GridGenerator:
             # Inverse weighting favoring A_V=0
             av_wt = (1e-5 + av_grid) ** -1.0
         if rv_wt is None:
-            # Gaussian weighting favoring R_V=3.3
+            # Laplace (exponential) weighting favoring R_V=3.3
             rv_wt = np.exp(-np.abs(rv_grid - 3.3) / 0.5)
         av_wt = np.asarray(av_wt, dtype=float)
         rv_wt = np.asarray(rv_wt, dtype=float)

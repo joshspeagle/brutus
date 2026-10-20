@@ -49,7 +49,7 @@ Advanced usage with binary stars:
 
 >>> # Model binary system with mass ratio 0.7
 >>> sed, params, params2 = star_track.get_seds(
->>>     mini=1.2, eep=400, feh=-0.2, afe=0.1,
+>>>     mini=1.2, eep=400, feh=-0.2, afe=0.0,
 >>>     smf=0.7, av=0.15, dist=1500.0
 >>> )
 
@@ -381,7 +381,7 @@ class EEPTracks:
 
         # Free construction-only intermediates: nothing reads them after
         # the interpolator exists, and retaining them roughly doubles the
-        # memory footprint (and, previously, the cache size on disk).
+        # memory footprint.
         for attr in ("libparams", "output", "X"):
             if hasattr(self, attr):
                 delattr(self, attr)
@@ -875,7 +875,7 @@ class StarEvolTrack:
 
     >>> # Model binary with 70% mass ratio secondary
     >>> sed, params, params2 = star_track.get_seds(
-    ...     mini=1.2, eep=400, feh=-0.2, afe=0.1,
+    ...     mini=1.2, eep=400, feh=-0.2, afe=0.0,
     ...     smf=0.7, av=0.15, dist=1500.0
     ... )
     """
@@ -983,9 +983,7 @@ class StarEvolTrack:
             for the secondary's EEP in a binary. A companion whose age cannot be
             matched to within ``tol`` is treated as non-existent and a
             primary-only SED is returned (rather than discarding the model).
-            Default is 1e-2. The previous default (1e-6) was far tighter than
-            the age emulator's own precision and silently dropped most
-            otherwise-valid binary models.
+            Default is 1e-2.
 
         Returns
         -------
@@ -1032,7 +1030,7 @@ class StarEvolTrack:
         Binary system:
 
         >>> sed, params, params2 = star_track.get_seds(
-        ...     mini=1.2, eep=400, feh=-0.2, afe=0.1, smf=0.7
+        ...     mini=1.2, eep=400, feh=-0.2, afe=0.0, smf=0.7
         ... )
         """
         # Grab input labels
@@ -1300,9 +1298,9 @@ class StarGrid:
 
     Parameters
     ----------
-    models : numpy.ndarray of shape (Nmodel, Nfilt, Ncoef) or dict/h5py file
+    models : numpy.ndarray of shape (Nmodel, Nfilt, Ncoef) or dict
         Pre-computed model grid containing photometric coefficients.
-        If dict or h5py file, should contain 'mag_coeffs' key.
+        A dict must contain the 'mag_coeffs' key.
         Each model contains 3 coefficients per filter:
         - Unreddened magnitude
         - Reddening vector for R_V = 0
@@ -1384,7 +1382,7 @@ class StarGrid:
         """Initialize the StarGrid with model data."""
         # Handle different input formats
         if isinstance(models, dict):
-            # Dictionary input (e.g., from h5py file)
+            # Dictionary input
             if "mag_coeffs" in models:
                 mag_coeffs = models["mag_coeffs"]
             else:
@@ -1536,10 +1534,10 @@ class StarGrid:
             )
             shape = tuple(len(self.grid_axes[name]) for name in self._axis_names)
             if np.prod(shape, dtype=np.int64) <= 20_000_000:
-                # The FIRST model at duplicated coordinates must win (matches
-                # the previous scan behavior); fancy assignment with repeated
-                # indices has no write-order guarantee, so resolve duplicates
-                # explicitly via np.unique (returns first occurrences).
+                # The FIRST model at duplicated coordinates must win; fancy
+                # assignment with repeated indices has no write-order
+                # guarantee, so resolve duplicates explicitly via np.unique
+                # (returns first occurrences).
                 flat = np.ravel_multi_index(coords, shape)
                 uniq, first = np.unique(flat, return_index=True)
                 idx_map = np.full(shape, -1, dtype=np.int64)
