@@ -360,17 +360,17 @@ def phot_loglike(
     The log-likelihood without dimensionality prior is:
 
     .. math::
-        \\ln L = -\\frac{1}{2} \\left[ \\chi^2 + N \\ln(2\\pi) + \\ln|\\Sigma| \\right]
+        \ln L = -\frac{1}{2} \left[ \chi^2 + N \ln(2\pi) + \ln|\Sigma| \right]
 
-    where :math:`\\chi^2 = \\sum_i (f_i - m_i)^2/\\sigma_i^2` and
-    :math:`|\\Sigma|` is the determinant of the covariance matrix.
+    where :math:`\chi^2 = \sum_i (f_i - m_i)^2/\sigma_i^2` and
+    :math:`|\Sigma|` is the determinant of the covariance matrix.
 
     With dimensionality prior (dim_prior=True), this becomes the log-PDF
     of a chi-square distribution, which weights models by goodness-of-fit
     relative to the number of degrees of freedom.
 
     For the shared-model (2-D `mfluxes`) fast path, the chi-square is
-    expanded as :math:`\\sum w f^2 - 2 (w f) M^T + w (M^2)^T` and evaluated
+    expanded as :math:`\sum w f^2 - 2 (w f) M^T + w (M^2)^T` and evaluated
     with matrix products. This is algebraically identical to the direct
     residual sum but reassociates the floating-point additions, so results
     can differ from the 3-D path at machine precision.

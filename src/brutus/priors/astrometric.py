@@ -74,9 +74,9 @@ def logp_parallax(parallaxes, p_meas, p_err):
     The log-prior follows a normal distribution:
 
     .. math::
-        \\log p(\\pi | \\pi_{\\text{obs}}, \\sigma_\\pi) =
-        -\\frac{1}{2} \\left[ \\frac{(\\pi - \\pi_{\\text{obs}})^2}{\\sigma_\\pi^2} +
-        \\log(2\\pi\\sigma_\\pi^2) \\right]
+        \log p(\pi | \pi_{\text{obs}}, \sigma_\pi) =
+        -\frac{1}{2} \left[ \frac{(\pi - \pi_{\text{obs}})^2}{\sigma_\pi^2} +
+        \log(2\pi\sigma_\pi^2) \right]
 
     For invalid measurements (non-finite values), returns uniform prior.
     """
@@ -128,9 +128,9 @@ def logp_parallax_scale(scales, scale_errs, p_meas, p_err, snr_lim=4.0):
     prior is derived from the parallax measurement using error propagation:
 
     .. math::
-        s = \\pi^2 + \\sigma_\\pi^2
+        s = \pi^2 + \sigma_\pi^2
 
-        \\sigma_s = \\sqrt{2\\sigma_\\pi^4 + 4\\pi^2\\sigma_\\pi^2}
+        \sigma_s = \sqrt{2\sigma_\pi^4 + 4\pi^2\sigma_\pi^2}
 
     The total uncertainty combines model and measurement errors in quadrature.
     """
@@ -191,9 +191,9 @@ def convert_parallax_to_scale(p_meas, p_err, snr_lim=4.0):
     For high SNR measurements, uses error propagation:
 
     .. math::
-        s_{\\text{mean}} = \\max(0, \\pi_{\\text{meas}})^2 + \\sigma_\\pi^2
+        s_{\text{mean}} = \max(0, \pi_{\text{meas}})^2 + \sigma_\pi^2
 
-        s_{\\text{std}} = \\sqrt{2\\sigma_\\pi^4 + 4\\pi_{\\text{meas}}^2\\sigma_\\pi^2}
+        s_{\text{std}} = \sqrt{2\sigma_\pi^4 + 4\pi_{\text{meas}}^2\sigma_\pi^2}
 
     The parallax is floored at zero to handle negative measurements.
     For low SNR or invalid measurements (non-finite values, or

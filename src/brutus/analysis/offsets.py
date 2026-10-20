@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-"""
+r"""
 Photometric offset analysis for systematic calibration corrections.
 
 This module provides robust photometric offset computation for correcting
@@ -29,7 +29,7 @@ The offset computation workflow:
 3. **Compute flux ratios**: model_flux / observed_flux for each band
 4. **Reweight samples**: For bands used in fitting, importance-reweight the
    full-posterior draws to the leave-one-out posterior :math:`P(M|D_{-i})`
-   using :math:`w \\propto L_{-i}/L_{\\rm full}` to avoid circularity
+   using :math:`w \propto L_{-i}/L_{\rm full}` to avoid circularity
 5. **Bootstrap sampling**: Resample objects and models to estimate median
    offset and uncertainty
 6. **Apply priors** (optional): Incorporate Bayesian prior constraints

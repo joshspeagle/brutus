@@ -615,7 +615,7 @@ def truncnorm_logpdf(x, a, b, loc=0.0, scale=1.0):
 
 
 def galactic_to_galactocentric_cyl(dists, ell, b, R_solar=8.2, Z_solar=0.025):
-    """
+    r"""
     Convert Galactic coordinates to Galactocentric cylindrical coordinates.
 
     Converts heliocentric Galactic coordinates (l, b, distance) to
@@ -656,17 +656,17 @@ def galactic_to_galactocentric_cyl(dists, ell, b, R_solar=8.2, Z_solar=0.025):
 
     .. math::
 
-        x = d \\cos(b) \\cos(l)
+        x = d \cos(b) \cos(l)
 
-        y = d \\cos(b) \\sin(l)
+        y = d \cos(b) \sin(l)
 
     And the Galactocentric cylindrical coordinates are:
 
     .. math::
 
-        R = \\sqrt{(x - R_\\odot)^2 + y^2}
+        R = \sqrt{(x - R_\odot)^2 + y^2}
 
-        Z = d \\sin(b) + Z_\\odot
+        Z = d \sin(b) + Z_\odot
 
     See Also
     --------

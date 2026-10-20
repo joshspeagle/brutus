@@ -752,21 +752,21 @@ class EEPTracks:
         Corrections are applied as:
 
         .. math::
-            \\Delta \\log T_{\\rm eff} = f_{\\rm EEP} \\cdot f_{\\rm [Fe/H]} \\cdot \\log(1 + \\Delta M \\cdot \\alpha_T)
-            \\Delta \\log R = f_{\\rm EEP} \\cdot f_{\\rm [Fe/H]} \\cdot \\log(1 + \\Delta M \\cdot \\alpha_R)
+            \Delta \log T_{\rm eff} = f_{\rm EEP} \cdot f_{\rm [Fe/H]} \cdot \log(1 + \Delta M \cdot \alpha_T)
+            \Delta \log R = f_{\rm EEP} \cdot f_{\rm [Fe/H]} \cdot \log(1 + \Delta M \cdot \alpha_R)
 
-        where :math:`\\Delta M = M_{\\rm ini} - 1.0` and the EEP factor smoothly
+        where :math:`\Delta M = M_{\rm ini} - 1.0` and the EEP factor smoothly
         transitions from 1 (main sequence) to 0 (post-turnoff): the empirical
         low-mass corrections apply on the main sequence and are switched off
         after the main-sequence turnoff (EEP 454).
 
-        Corrections are set to zero for stars with :math:`M_{\\rm ini} \\geq 1.0 M_\\odot`.
+        Corrections are set to zero for stars with :math:`M_{\rm ini} \geq 1.0 M_\odot`.
 
         The corrections are applied by `get_predictions` as an *effective*,
         calibrated-as-is map: the temperature shift is ``dlogt``, while the
         luminosity/gravity shifts are ``+2*dlogr``/``-2*dlogr``. The
         luminosity shift deliberately omits the ``4*dlogt`` term that strict
-        Stefan-Boltzmann consistency (:math:`L = 4\\pi R^2 \\sigma T^4`) would
+        Stefan-Boltzmann consistency (:math:`L = 4\pi R^2 \sigma T^4`) would
         require, so the corrected (logl, logt, logg) do not describe a
         perfectly self-consistent star. The default `corr_params` were
         calibrated against data in exactly this form (inherited from the
@@ -998,14 +998,14 @@ class StarEvolTrack:
         Distance modulus is applied as:
 
         .. math::
-            m = M + 5 \\log_{10}(d/10\\,{\\rm pc})
+            m = M + 5 \log_{10}(d/10\,{\rm pc})
 
         where d is the distance in parsecs.
 
         Binary SEDs are combined using magnitude addition (flux summing):
 
         .. math::
-            m_{\\rm combined} = -2.5 \\log_{10}(10^{-0.4 m_1} + 10^{-0.4 m_2})
+            m_{\rm combined} = -2.5 \log_{10}(10^{-0.4 m_1} + 10^{-0.4 m_2})
 
         Examples
         --------
@@ -1958,7 +1958,7 @@ class StarGrid:
         applying the extinction law:
 
         .. math::
-            m(\\lambda) = m_0(\\lambda) + A_V \\cdot [r_0(\\lambda) + R_V \\cdot dr(\\lambda)]
+            m(\lambda) = m_0(\lambda) + A_V \cdot [r_0(\lambda) + R_V \cdot dr(\lambda)]
 
         where :math:`m_0` is the unreddened magnitude, :math:`r_0` and :math:`dr`
         are the reddening vector coefficients from the grid.

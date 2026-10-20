@@ -153,7 +153,7 @@ def logp_imf(
     The IMF follows the form:
 
     .. math::
-        \\xi(M) \\propto M^{-\\alpha}
+        \xi(M) \propto M^{-\alpha}
 
     where α = α_low for M ≤ M_break and α = α_high for M > M_break.
 

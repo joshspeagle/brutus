@@ -595,6 +595,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_sed_grid` docstring gives the distance in kpc, not parsecs.
 - Module docstrings no longer list their classes and functions; the API
   pages list each module's members.
+- The equations in 18 docstrings now render on the API pages.
 
 ## [1.2.0] - 2026-07-17
 
