@@ -289,6 +289,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `dist_vs_red` takes `fig=(fig, ax)` and draws on `ax`, as the other
   plotting functions do. Without it, it draws on the current axes, as
   before.
+- `summary_plot` takes `rstate` and passes it to `cornerplot` and
+  `posterior_predictive`. The violins of the SED inset came from the global
+  numpy stream, which only `np.random.seed` could seed.
 
 ### Fixed
 

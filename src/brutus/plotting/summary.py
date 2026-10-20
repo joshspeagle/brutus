@@ -34,6 +34,7 @@ def summary_plot(
     R_solar=8.2,
     Z_solar=0.025,
     figsize=None,
+    rstate=None,
     **corner_kwargs,
 ):
     """
@@ -111,6 +112,10 @@ def summary_plot(
     figsize : tuple, optional
         Figure size. If None, determined automatically.
 
+    rstate : `~numpy.random.RandomState`, optional
+        Random state passed to ``cornerplot`` and ``posterior_predictive``.
+        If not provided, the global `numpy.random` state is used.
+
     **corner_kwargs
         Additional keyword arguments passed to ``cornerplot``.
 
@@ -142,6 +147,7 @@ def summary_plot(
         color=color,
         R_solar=R_solar,
         Z_solar=Z_solar,
+        rstate=rstate,
         **plx_kwargs,
         **corner_kwargs,
     )
@@ -198,6 +204,7 @@ def summary_plot(
         vcolor=vcolor,
         pcolor=pcolor,
         labels=labels,
+        rstate=rstate,
         fig=(fig, ax_sed),
     )
 
