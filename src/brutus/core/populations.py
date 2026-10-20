@@ -101,6 +101,13 @@ from .neural_nets import FastNNPredictor
 __all__ = ["Isochrone", "StellarPop"]
 
 
+def _check_binary_fractions(name, values):
+    """Raise `ValueError` unless every value is finite and in [0, 1]."""
+    values = np.asarray(values, dtype=float)
+    if not np.all(np.isfinite(values) & (values >= 0.0) & (values <= 1.0)):
+        raise ValueError(f"{name} must be finite and in [0, 1]; got {values}")
+
+
 class Isochrone:
     """
     Stellar parameter predictions for isochrones using MIST evolutionary models.
@@ -715,8 +722,9 @@ class StellarPop:
         loga : float, optional
             Log10(age in years). Default is 8.5.
 
-        eep : array-like, optional
-            Equivalent evolutionary points. If None, uses isochrone default.
+        eep : float or array-like, optional
+            Equivalent evolutionary points, a scalar or a 1-D array.
+            If None, uses the isochrone's EEP grid.
 
         av : float, optional
             V-band extinction A(V). Default is 0.0.
@@ -725,7 +733,8 @@ class StellarPop:
             Extinction law parameter R(V). Default is 3.3.
 
         binary_fraction : float, optional
-            Secondary mass fraction for binaries. Default is 0.0 (no binaries).
+            Secondary mass fraction for binaries, in [0, 1]. Default is 0.0
+            (no binaries).
             - 0.0: No binaries
             - 0 < binary_fraction < 1: Mass ratio binaries
             - 1.0: Equal mass binaries
@@ -733,7 +742,8 @@ class StellarPop:
             Binary companions are only added for primaries with
             ``eep <= eep_binary_max``; other stars (and stars whose companion
             falls below ``mini_bound`` or has no age-consistent EEP) keep
-            their primary-only SED.
+            their primary-only SED. The companion EEP inverts mini(EEP) on
+            the isochrone's own EEP grid, so it does not depend on `eep`.
 
         dist : float, optional
             Distance in parsecs. Default is 1000.0.
@@ -762,7 +772,13 @@ class StellarPop:
             Primary component stellar parameters.
 
         params2 : dict or numpy.ndarray
-            Secondary component parameters (for binaries).
+            Secondary component parameters, NaN for every star whose SED has
+            no companion.
+
+        Raises
+        ------
+        ValueError
+            If `binary_fraction` is not finite or lies outside [0, 1].
 
         See Also
         --------
@@ -800,24 +816,27 @@ class StellarPop:
         ...     av=0.2, dist=2000.0
         ... )
         """
+        _check_binary_fractions("binary_fraction", binary_fraction)
+        eep = self._eep_array(eep)
         seds, params_arr, params = self._compute_primary(
             feh, afe, loga, eep, av, rv, dist, mini_bound, apply_corr, corr_params
         )
-
-        # The EEP grid actually used for the predictions above (needed to
-        # restrict binary companions; must match the caller's grid rather
-        # than always assuming the isochrone default).
-        eep_used = self.isochrone.eep_u if eep is None else np.asarray(eep)
+        mini_eep = (
+            self._mini_eep_relation(feh, afe, loga)
+            if 0.0 < binary_fraction < 1.0
+            else None
+        )
 
         return self._apply_binaries(
             seds,
             params_arr,
             params,
             binary_fraction,
+            mini_eep,
             feh,
             afe,
             loga,
-            eep_used,
+            eep,
             mini_bound,
             eep_binary_max,
             av,
@@ -858,9 +877,9 @@ class StellarPop:
         Parameters
         ----------
         smf_values : array-like of float
-            Binary mass fractions (secondary mass fractions) to evaluate.
-            Each entry is interpreted exactly like ``binary_fraction`` in
-            :meth:`get_seds`.
+            Binary mass fractions (secondary mass fractions) to evaluate, each
+            in [0, 1]. Each entry is interpreted exactly like
+            ``binary_fraction`` in :meth:`get_seds`.
 
         feh, afe, loga, eep, av, rv, dist, mini_bound, eep_binary_max, \
 apply_corr, corr_params, return_dict
@@ -874,19 +893,31 @@ apply_corr, corr_params, return_dict
             share underlying arrays across entries and must not be modified
             in place.
 
+        Raises
+        ------
+        ValueError
+            If any value of `smf_values` is not finite or lies outside [0, 1].
+
         See Also
         --------
         get_seds : Single binary-mass-fraction evaluation.
         brutus.analysis.populations.generate_isochrone_population_grid :
             Main consumer of this method.
         """
+        smf_values = np.atleast_1d(np.asarray(smf_values, dtype=float))
+        _check_binary_fractions("smf_values", smf_values)
+        eep = self._eep_array(eep)
         seds0, params_arr, params = self._compute_primary(
             feh, afe, loga, eep, av, rv, dist, mini_bound, apply_corr, corr_params
         )
-        eep_used = self.isochrone.eep_u if eep is None else np.asarray(eep)
+        mini_eep = (
+            self._mini_eep_relation(feh, afe, loga)
+            if np.any((smf_values > 0.0) & (smf_values < 1.0))
+            else None
+        )
 
         results = []
-        for smf in np.atleast_1d(smf_values):
+        for smf in smf_values:
             # Binary handling mutates the SED array in place, so each SMF
             # slice starts from a fresh copy of the shared primary SEDs.
             results.append(
@@ -894,11 +925,12 @@ apply_corr, corr_params, return_dict
                     seds0.copy(),
                     params_arr,
                     dict(params),
-                    float(smf),
+                    smf,
+                    mini_eep,
                     feh,
                     afe,
                     loga,
-                    eep_used,
+                    eep,
                     mini_bound,
                     eep_binary_max,
                     av,
@@ -910,6 +942,30 @@ apply_corr, corr_params, return_dict
                 )
             )
         return results
+
+    def _eep_array(self, eep):
+        """Return `eep` as a 1-D float array, or the isochrone's EEP grid."""
+        if eep is None:
+            return self.isochrone.eep_u
+        eep = np.atleast_1d(np.asarray(eep, dtype=float))
+        if eep.ndim != 1:
+            raise ValueError(f"eep must be a scalar or a 1-D array; got {eep.shape}")
+        return eep
+
+    def _mini_eep_relation(self, feh, afe, loga):
+        """
+        Return the isochrone's finite (mini, eep) pairs, sorted by mini.
+
+        Interpolating EEP in mini on these pairs inverts mini(EEP) on the
+        isochrone's own EEP grid, independent of the caller's `eep`.
+        """
+        iso = self.isochrone
+        mini = iso.get_predictions(
+            feh=feh, afe=afe, loga=loga, eep=iso.eep_u, apply_corr=False
+        )[:, list(iso.predictions).index("mini")]
+        finite = np.isfinite(mini)
+        order = np.argsort(mini[finite])
+        return mini[finite][order], iso.eep_u[finite][order]
 
     def _compute_primary(
         self, feh, afe, loga, eep, av, rv, dist, mini_bound, apply_corr, corr_params
@@ -962,6 +1018,7 @@ apply_corr, corr_params, return_dict
         params_arr,
         params,
         binary_fraction,
+        mini_eep,
         feh,
         afe,
         loga,
@@ -980,7 +1037,9 @@ apply_corr, corr_params, return_dict
 
         Mutates ``seds`` in place (primary + secondary combined) and returns
         the final ``(seds, params, params2)`` tuple of :meth:`get_seds`.
-        ``params_arr``/``params`` are read, never modified.
+        ``params_arr``/``params`` are read, never modified. ``mini_eep`` is
+        the output of :meth:`_mini_eep_relation`, needed only when
+        ``0 < binary_fraction < 1``.
         """
         # Initialize secondary parameters
         params_arr2 = np.full_like(params_arr, np.nan)
@@ -995,6 +1054,7 @@ apply_corr, corr_params, return_dict
                 params_arr,
                 params_arr2,
                 binary_fraction,
+                mini_eep,
                 feh,
                 afe,
                 loga,
@@ -1038,6 +1098,7 @@ apply_corr, corr_params, return_dict
         params_arr,
         params_arr2,
         binary_fraction,
+        mini_eep,
         feh,
         afe,
         loga,
@@ -1048,37 +1109,17 @@ apply_corr, corr_params, return_dict
         dist,
         apply_corr,
         corr_params,
-        eep=None,
+        eep,
     ):
         """Add binary star components to the population synthesis."""
-        # Calculate secondary masses and EEPs
-        mini = params["mini"]
-        mini2 = mini * binary_fraction
-        # Use the same EEP grid the primary predictions were generated on;
-        # falling back to the isochrone default grid otherwise. (Using the
-        # default grid for a caller-supplied `eep` would misalign — or crash
-        # on — every secondary computation.)
-        if eep is None:
-            eep = self.isochrone.eep_u
-
-        # Interpolate secondary EEPs
-        mini_mask = np.where(np.isfinite(mini))[0]
-        if len(mini_mask) > 0:
-            try:
-                mini_valid = mini[mini_mask]
-                eep_valid = eep[mini_mask]
-                sort_idx = np.argsort(mini_valid)
-                eep2 = np.interp(
-                    mini2,
-                    mini_valid[sort_idx],
-                    eep_valid[sort_idx],
-                    left=np.nan,
-                    right=np.nan,
-                )
-            except Exception:
-                eep2 = np.full_like(eep, np.nan)
+        # Secondary EEPs from the isochrone's mini(EEP) relation, so that
+        # they do not depend on how the caller samples `eep`.
+        mini2 = params["mini"] * binary_fraction
+        mini_sorted, eep_sorted = mini_eep
+        if len(mini_sorted) > 0:
+            eep2 = np.interp(mini2, mini_sorted, eep_sorted, left=np.nan, right=np.nan)
         else:
-            eep2 = np.full_like(eep, np.nan)
+            eep2 = np.full(np.shape(eep), np.nan)
 
         # Restrict binaries to main sequence
         with warnings.catch_warnings():
@@ -1114,6 +1155,11 @@ apply_corr, corr_params, return_dict
         # secondary below the mass bound, or failed EEP match) keeps its
         # primary-only SED — combining with a NaN secondary via add_mag would
         # silently discard the (valid) primary as well.
-        has_secondary = np.all(np.isfinite(seds2), axis=1)
+        # A companion counts only where the primary has an SED too: adding
+        # it to a NaN primary leaves the combined SED NaN.
+        has_secondary = np.all(np.isfinite(seds2), axis=1) & np.all(
+            np.isfinite(seds), axis=1
+        )
+        params_arr2[~has_secondary] = np.nan
         if np.any(has_secondary):
             seds[has_secondary] = add_mag(seds[has_secondary], seds2[has_secondary])

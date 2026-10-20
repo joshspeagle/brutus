@@ -57,7 +57,7 @@ def _make_mock_isochrone(n_eep=10):
     def mock_get_predictions(
         feh=0.0, afe=0.0, loga=8.5, eep=None, apply_corr=True, corr_params=None
     ):
-        if eep is not None:
+        if eep is not None and eep is not eeps:
             # For secondary stars: generate scaled-down parameters
             sec_params = params.copy()
             sec_params[:, 0] *= 0.7
@@ -464,3 +464,72 @@ class TestPredictorNotAvailable:
             RuntimeError, match="Neural network predictor not available"
         ):
             pop.get_seds(feh=0.0, loga=9.0)
+
+
+class TestCompanionInversion:
+    """Companions come from the isochrone's own mini(EEP) relation (#122,
+    #123, #127)."""
+
+    def test_binary_seds_do_not_depend_on_eep_sampling(self, real_stellarpop):
+        pop = real_stellarpop
+        coarse = np.arange(300.0, 480.0, 10)
+        kw = dict(feh=0.0, loga=9.5, binary_fraction=0.6)
+        seds, _, params2 = pop.get_seds(eep=coarse, **kw)
+        seds_u, _, params2_u = pop.get_seds(**kw)
+        rows = np.searchsorted(pop.isochrone.eep_u, coarse)
+        npt.assert_array_equal(pop.isochrone.eep_u[rows], coarse)
+        npt.assert_allclose(seds, seds_u[rows], rtol=0, atol=1e-10)
+        npt.assert_allclose(params2["mini"], params2_u["mini"][rows], rtol=1e-12)
+
+    def test_single_eep_gets_a_companion(self, real_stellarpop):
+        kw = dict(feh=0.0, loga=9.5, binary_fraction=0.6)
+        seds, _, params2 = real_stellarpop.get_seds(eep=[350.0], **kw)
+        single, _, _ = real_stellarpop.get_seds(eep=[350.0], feh=0.0, loga=9.5)
+        assert np.isfinite(params2["mini"][0])
+        assert np.all(seds < single)
+
+    def test_params2_is_finite_only_for_companions_in_the_sed(self, real_stellarpop):
+        eep = np.arange(202.0, 700.0, 2)
+        kw = dict(feh=0.0, loga=9.5, eep=eep)
+        single, _, _ = real_stellarpop.get_seds(**kw)
+        seds, _, params2 = real_stellarpop.get_seds(binary_fraction=0.5, **kw)
+        has_companion = np.any(seds != single, axis=1) & np.isfinite(single[:, 0])
+        assert has_companion.sum() > 0
+        npt.assert_array_equal(np.isfinite(params2["mini"]), has_companion)
+
+    def test_params2_is_nan_where_the_primary_sed_is_nan(self, real_stellarpop):
+        # At [Fe/H] = 0.5 some primaries fall outside the network's range, so
+        # their SED is NaN even when the companion's SED is finite.
+        seds, _, params2 = real_stellarpop.get_seds(
+            feh=0.5, loga=8.75, binary_fraction=0.6
+        )
+        no_sed = ~np.all(np.isfinite(seds), axis=1)
+        assert no_sed.any()
+        assert np.all(np.isnan(params2["mini"][no_sed]))
+
+    def test_array_predictions_and_two_dimensional_eep(self):
+        iso = _make_mock_isochrone(n_eep=10)
+        iso.predictions = np.array(iso.predictions)
+        pop = _make_stellar_pop(iso, nfilt=4)
+        seds, _, _ = pop.get_seds(feh=0.0, loga=9.0, binary_fraction=0.5)
+        assert seds.shape == (10, 4)
+        with pytest.raises(ValueError, match="eep must be a scalar or a 1-D"):
+            pop.get_seds(eep=np.full((2, 2), 300.0))
+
+    @pytest.mark.parametrize("eep", [np.arange(202, 700, 2), 300])
+    def test_integer_eep_matches_float_eep(self, real_stellarpop, eep):
+        for loga in (9.0, 11.0):  # loga=11 has no valid primaries
+            kw = dict(feh=0.0, loga=loga, binary_fraction=0.5)
+            seds_int, _, _ = real_stellarpop.get_seds(eep=eep, **kw)
+            seds_float, _, _ = real_stellarpop.get_seds(
+                eep=np.asarray(eep, dtype=float), **kw
+            )
+            npt.assert_array_equal(seds_int, seds_float)
+
+    @pytest.mark.parametrize("bad", [1.5, -0.3, np.nan])
+    def test_binary_fraction_outside_unit_interval_raises(self, bad):
+        pop = _make_stellar_pop(_make_mock_isochrone(n_eep=5))
+        with pytest.raises(ValueError, match="binary_fraction"):
+            pop.get_seds(binary_fraction=bad)
+        with pytest.raises(ValueError, match="smf_values"):
+            pop.get_seds_smf_grid([0.0, bad])

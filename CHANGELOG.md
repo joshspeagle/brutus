@@ -155,6 +155,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `labels=['mini', 'feh'], include_postms=False` returned 613530 models
   instead of 143856. A phase cut on a file without `eep` now raises
   `ValueError` instead of keeping every model.
+- **`StellarPop.get_seds` finds each companion's EEP on the isochrone's
+  own EEP grid.** It inverted mini(EEP) on the caller's `eep` only, so a
+  coarse or truncated `eep` dropped companions below its smallest mass and
+  misplaced the others; a single `eep` never got a companion. At
+  [Fe/H] = 0, log(age) = 9.5 and `binary_fraction=0.6`, the SDSS g
+  magnitude at EEP 350 is now 14.621 for any `eep`, against 14.645 with
+  `eep=np.arange(300, 480, 10)`. With the default cluster grids,
+  `isochrone_population_loglike` changes by about 0.01 on a synthetic
+  cluster of 30 stars. Companions that a young isochrone places before the
+  zero-age main sequence are now included.
+- **`StellarPop.get_seds` returns NaN `params2` for every star whose SED
+  has no companion**, for all binary fractions. For `0 < binary_fraction
+  < 1`, it also returned the parameters of companions that it left out of
+  the SED (below `mini_bound`, or with no valid SED).
 
 ### Changed
 
@@ -307,6 +321,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   turns a failed SED slice into a skipped slice. `compute_isochrone_cluster_loglike` raises `ValueError`
   for a `parallax` without `parallax_err` or `distance`, which it dropped
   without a warning.
+- `StellarPop.get_seds` raises `ValueError` for a `binary_fraction` that
+  is not finite or lies outside [0, 1], and `get_seds_smf_grid` does the
+  same for `smf_values`. Such values gave single-star SEDs. An integer or
+  scalar `eep` now works with binaries; it raised `ValueError` when a
+  companion had no valid EEP.
 - `analysis.photometric_offsets` checks `sel`, `weights`, `prior_mean` and
   `prior_std` before it generates the model SEDs, and raises `ValueError`
   that names the argument. `sel` must be a bool or 0/1 array of shape `(Nobj,)`:

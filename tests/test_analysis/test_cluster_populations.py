@@ -1101,6 +1101,6 @@ class TestPrimaryCaching:
             )
         finally:
             iso.get_predictions = orig
-        # 1 primary call + one secondary call per 0 < smf < 1 slice (3 of 5).
-        # The old implementation used 5 primary + 3 secondary = 8 calls.
-        assert calls["n"] == 4
+        # 1 primary call, 1 call for the mini(EEP) inversion, and one
+        # secondary call per 0 < smf < 1 slice (3 of 5).
+        assert calls["n"] == 5
