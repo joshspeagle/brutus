@@ -185,6 +185,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [α/Fe] = 0.0. On `MIST_1.2_EEPtrk.h5`, results at [α/Fe] = 0 do not
   change; for 0 < |[α/Fe]| < 1e-5 the companion EEP changes by at most
   9e-13 (200 random binaries each at ±3e-6).
+- **`logp_galactic_structure` computes in float64 for float32 `labels`.**
+  It used the `feh` and `loga` fields of a structured `labels` array at
+  their own dtype, so a float32 grid gave float32 metallicity and age
+  priors on the numpy path (1000 points or fewer) and, with
+  `NUMBA_DISABLE_JIT=1`, on the fused path. Both call styles now take the
+  same float64 path. On 500 random points the log-prior changes by at most
+  2.0e-6 (relative 2.7e-7). A multi-dimensional `labels` must have the
+  shape of `dists`; one of the same size but another shape now raises
+  `ValueError`, where it could pair distances with the wrong labels.
 
 ### Changed
 

@@ -160,8 +160,8 @@ class TestDiskSolarNormalization:
         assert logn[0] == 0.0
 
 
-def _make_labels(feh, loga):
-    labels = np.empty(len(feh), dtype=[("feh", float), ("loga", float)])
+def _make_labels(feh, loga, dtype=float):
+    labels = np.empty(len(feh), dtype=[("feh", dtype), ("loga", dtype)])
     labels["feh"] = feh
     labels["loga"] = loga
     return labels
@@ -202,6 +202,24 @@ class TestFehLogaArrayPaths:
         )
         assert np.array_equal(via_arrays, via_labels)
 
+    @pytest.mark.parametrize("N", [500, 2000])
+    def test_float32_labels_match_float64_arrays(self, N):
+        """Regression (#250): float32 `labels` fields were used as given, so
+        the numpy path, and the fused path without JIT, computed in float32."""
+        rng = np.random.default_rng(4)
+        d = rng.uniform(0.1, 10.0, N)
+        labels = _make_labels(
+            rng.uniform(-2.0, 0.5, N), rng.uniform(8.5, 10.1, N), dtype=np.float32
+        )
+        via_labels = logp_galactic_structure(d, self.COORD, labels=labels)
+        via_arrays = logp_galactic_structure(
+            d,
+            self.COORD,
+            feh=labels["feh"].astype(np.float64),
+            loga=labels["loga"].astype(np.float64),
+        )
+        assert np.array_equal(via_labels, via_arrays)
+
     def test_float32_and_list_inputs_normalized(self):
         N = 2000
         d = np.linspace(0.1, 5.0, N)
@@ -227,6 +245,14 @@ class TestFehLogaArrayPaths:
             logp_galactic_structure(d, self.COORD, feh=np.zeros(50))
         with pytest.raises(ValueError, match="loga"):
             logp_galactic_structure(d, self.COORD, loga=np.zeros((100, 2)))
+
+    def test_labels_of_another_shape_raise(self):
+        """A `labels` of the right size but another shape would pair each
+        distance with the wrong entry."""
+        d = np.ones((2, 3))
+        labels = _make_labels(np.zeros(6), np.full(6, 9.5)).reshape(3, 2)
+        with pytest.raises(ValueError, match="labels"):
+            logp_galactic_structure(d, self.COORD, labels=labels)
 
     def test_array_coordinates_use_numpy_path(self):
         # Per-point sky coordinates cannot use the fused kernel (scalar

@@ -2276,12 +2276,7 @@ def test_galactic_prior_gets_each_draw_paired_with_its_model_labels(
         seen["dists"], seen["labels"] = dists, labels
         return logp_galactic_structure(dists, coord, labels=labels)
 
-    # float64 labels: with NUMBA_DISABLE_JIT=1, float32 labels make the two
-    # branches differ by float32 rounding (relative 4e-9).
-    dlabels = fitter.models_labels.astype(
-        [(name, "f8") for name in fitter.models_labels.dtype.names]
-    )
-    kwargs = dict(coord=(120.0, 45.0), Nmc_prior=100, dlabels=dlabels)
+    kwargs = dict(coord=(120.0, 45.0), Nmc_prior=100, dlabels=fitter.models_labels)
     sel, _, _, dist_mc, _, _, lnp_mc, *_ = fitter.logpost_grid(
         like, lngalprior=lngalprior, rstate=np.random.RandomState(5), **kwargs
     )
@@ -2289,7 +2284,9 @@ def test_galactic_prior_gets_each_draw_paired_with_its_model_labels(
     # The default prior takes its fused branch only above 1000 draws in all.
     assert Nsel > 1 and Nmc * Nsel > 1000
     np.testing.assert_array_equal(seen["dists"], dist_mc.T.ravel())
-    np.testing.assert_array_equal(seen["labels"], np.tile(dlabels[sel], Nmc))
+    np.testing.assert_array_equal(
+        seen["labels"], np.tile(fitter.models_labels[sel], Nmc)
+    )
 
     fused = fitter.logpost_grid(like, rstate=np.random.RandomState(5), **kwargs)
     np.testing.assert_array_equal(fused[6], lnp_mc)
