@@ -1714,8 +1714,10 @@ class BruteForce:
 
         # Convert ln(d) to distance. Draws outside the support are truncated:
         # they get zero weight below. Their values are clipped only so that
-        # the priors stay finite and no saved draw leaves the support.
-        dist_raw = np.exp(eta_samples)
+        # the priors stay finite and no saved draw leaves the support. A scale
+        # clamped to MIN_SCALE gives ln(d) draws that overflow to inf here.
+        with np.errstate(over="ignore"):
+            dist_raw = np.exp(eta_samples)
         dist_mc = np.clip(dist_raw, 0.001, 1e6)
         outside = dist_mc != dist_raw
         a_clip = np.clip(a_mc, avlim[0], avlim[1])
