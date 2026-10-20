@@ -213,6 +213,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   computed at 1 kpc, the distance that `load_models`, `StarGrid` and
   `BruteForce` assume; a grid made at another `dist` gave distances off by
   a factor of (dist / 1000)^2. Passing `dist` now raises `TypeError`.
+- `GridGenerator.make_grid` raises `ValueError` naming the argument when
+  `av_grid` or `rv_grid` has a non-finite value or fewer than 2 distinct
+  values, or when `av_wt` or `rv_wt` has a non-finite value or a different
+  shape from its grid. Before, a one-value lattice gave a rank-deficient
+  fit with only a `RankWarning`, so the reddening coefficients that it
+  could not determine were arbitrary; a NaN marked every model invalid.
+  Tutorial 3 now passes 4 R(V) values.
 - **`EEPTracks` drops the unused attributes `null` and `binwidths`.** Its
   `ygrid` attribute holds the unpadded grid (one [α/Fe] layer when the
   tracks have one [α/Fe] value); `xgrid` and `grid_dims` still describe the
@@ -495,6 +502,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `grid_mist_v9.h5` with 5 bands, a KD-tree `get_seds` call takes a median
   0.11 ms instead of 35 ms, and a multilinear call 0.14 ms instead of
   0.19 ms (5 interleaved runs, 4 CPUs).
+- `GridGenerator.make_grid` computes each model without a companion once
+  per (mini, eep, feh, afe) and copies it to the other `smf_grid` values.
+  The saved values are bitwise identical. A 960-model grid with 6 `smf`
+  values takes a median 0.78 s instead of 1.29 s (3 interleaved runs).
 - `EEPTracks` pads a single [α/Fe] value with a broadcast view instead of a
   copy, and its cache stores the unpadded grid. On `MIST_1.2_EEPtrk.h5`, the
   cache falls from 255 MB to 128 MB, the peak memory of a build from 945 MB

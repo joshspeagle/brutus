@@ -1049,7 +1049,6 @@ class StarEvolTrack:
         params2 = dict(zip(self.tracks.predictions, params_arr2))
 
         # Generate primary SED
-        mini_min = max(getattr(self.tracks, "mini_bound", 0.08), mini_bound)
         loga = params["loga"]
 
         if loga <= loga_max:
@@ -1072,7 +1071,7 @@ class StarEvolTrack:
                 )
 
             # Add binary companion if requested
-            if smf > 0.0 and eep <= eep_binary_max and mini * smf >= mini_min:
+            if self._tries_companion(mini, eep, smf, mini_bound, eep_binary_max):
                 # Generate secondary parameters
                 if eep2 is None:
                     eep2 = self._get_eep_for_secondary(
@@ -1140,6 +1139,11 @@ class StarEvolTrack:
             return sed, params, params2, eep2
         else:
             return sed, params, params2
+
+    def _tries_companion(self, mini, eep, smf, mini_bound, eep_binary_max):
+        """Return whether `get_seds` looks for a companion for these labels."""
+        mini_min = max(getattr(self.tracks, "mini_bound", 0.08), mini_bound)
+        return smf > 0.0 and eep <= eep_binary_max and mini * smf >= mini_min
 
     def _get_eep_for_secondary(self, loga, mini, eep, feh, afe, smf, tol):
         r"""

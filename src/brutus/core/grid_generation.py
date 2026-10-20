@@ -377,14 +377,37 @@ class GridGenerator:
         if av_grid is None:
             av_grid = np.arange(0.0, 1.5 + 1e-5, 0.3)
             av_grid[-1] -= 1e-5  # Ensure we don't exceed 1.5
+        if rv_grid is None:
+            rv_grid = np.arange(2.4, 4.2 + 1e-5, 0.3)
+        av_grid = np.asarray(av_grid, dtype=float)
+        rv_grid = np.asarray(rv_grid, dtype=float)
         if av_wt is None:
             # Inverse weighting favoring A_V=0
             av_wt = (1e-5 + av_grid) ** -1.0
-        if rv_grid is None:
-            rv_grid = np.arange(2.4, 4.2 + 1e-5, 0.3)
         if rv_wt is None:
             # Gaussian weighting favoring R_V=3.3
             rv_wt = np.exp(-np.abs(rv_grid - 3.3) / 0.5)
+        av_wt = np.asarray(av_wt, dtype=float)
+        rv_wt = np.asarray(rv_wt, dtype=float)
+        # Each reddening fit is a straight line, so it needs 2 distinct points
+        for name, grid, wname, wt in (
+            ("av_grid", av_grid, "av_wt", av_wt),
+            ("rv_grid", rv_grid, "rv_wt", rv_wt),
+        ):
+            if (
+                grid.ndim != 1
+                or not np.all(np.isfinite(grid))
+                or len(np.unique(grid)) < 2
+            ):
+                raise ValueError(
+                    f"{name} must be a 1-D array of finite values with at "
+                    f"least 2 distinct values; got {grid}."
+                )
+            if wt.shape != grid.shape or not np.all(np.isfinite(wt)):
+                raise ValueError(
+                    f"{wname} must have one finite weight per {name} value, "
+                    f"shape {grid.shape}; got {wt}."
+                )
 
         # Create grid labels
         label_names = ["mini", "eep", "feh", "afe", "smf"]
@@ -436,63 +459,41 @@ class GridGenerator:
         percentage = -99
         ttot, t1 = 0.0, time.time()
 
+        # smf varies fastest, so the models of one primary are adjacent. A
+        # model with no companion equals the primary's single-star model.
+        single_key, single_row = None, None
+        track_kwargs = dict(
+            loga_max=loga_max,
+            eep_binary_max=eep_binary_max,
+            mini_bound=mini_bound,
+            apply_corr=apply_corr,
+            corr_params=corr_params,
+        )
+        lattice = dict(av_grid=av_grid, av_wt=av_wt, rv_grid=rv_grid, rv_wt=rv_wt)
         for i, (mini, eep, feh, afe, smf) in enumerate(self.grid_labels):
-            if mini < mini_bound:
-                # Documented contract: primaries below `mini_bound` are
-                # masked (previously the bound only gated binary secondaries,
-                # silently keeping sub-threshold primaries as valid).
-                self.grid_sel[i] = False
-                sed = params = None  # storage rows stay NaN-filled
+            if (mini, eep, feh, afe) != single_key:
+                single_key, single_row = (mini, eep, feh, afe), None
+            companion = self.star_track._tries_companion(
+                mini, eep, smf, mini_bound, eep_binary_max
+            )
+            if single_row is not None and not companion:
+                self.grid_params[i] = self.grid_params[single_row]
+                self.grid_seds[i] = self.grid_seds[single_row]
+                self.grid_sel[i] = self.grid_sel[single_row]
             else:
-                # Compute model and parameters at base reddening
-                sed, params, params2, eep2 = self.star_track.get_seds(
-                    mini=mini,
-                    eep=eep,
-                    feh=feh,
-                    afe=afe,
-                    smf=smf,
-                    av=0.0,
-                    rv=3.3,
-                    dist=_REFERENCE_DISTANCE_PC,
-                    loga_max=loga_max,
-                    eep_binary_max=eep_binary_max,
-                    mini_bound=mini_bound,
-                    apply_corr=apply_corr,
-                    corr_params=corr_params,
-                    return_dict=False,
-                    return_eep2=True,
+                params, coeffs = self._model_row(
+                    (mini, eep, feh, afe, smf), track_kwargs, lattice
                 )
-
-                # Save parameters for primary
-                self.grid_params[i] = tuple(params)
-
-            # Check if SED is valid
-            if sed is None or np.any(np.isnan(sed)) or np.any(np.isnan(params)):
-                # Flag as invalid; storage rows are pre-filled with NaN
-                self.grid_sel[i] = False
-                self.grid_seds[i] = tuple(np.full((len(self.filters), 3), np.nan))
-            else:
-                # Fit reddening coefficients. Stellar parameters are
-                # independent of (A_V, R_V), so pass the already-computed
-                # primary/secondary predictions instead of re-interpolating
-                # the tracks for every reddening-grid point.
-                coeffs = self._fit_reddening_coefficients(
-                    params=params,
-                    params2=params2,
-                    sed_base=sed,
-                    av_grid=av_grid,
-                    av_wt=av_wt,
-                    rv_grid=rv_grid,
-                    rv_wt=rv_wt,
-                )
-                if np.any(np.isnan(coeffs)):
-                    # A reddening-grid point outside the NN training bounds
-                    # yields NaN photometry which polyfit silently propagates;
-                    # such models must not be flagged as valid.
+                if params is not None:
+                    self.grid_params[i] = tuple(params)
+                if coeffs is None:
+                    # Flag as invalid; the parameter rows stay NaN-filled
                     self.grid_sel[i] = False
                     self.grid_seds[i] = tuple(np.full((len(self.filters), 3), np.nan))
                 else:
                     self.grid_seds[i] = tuple(coeffs)
+                if not companion:
+                    single_row = i
 
             # Update timing
             t2 = time.time()
@@ -528,6 +529,43 @@ class GridGenerator:
         # Save to file if requested
         if output_file is not None:
             self._save_grid(output_file, verbose=verbose)
+
+    def _model_row(self, labels, track_kwargs, lattice):
+        """Return the primary's parameters and the fitted reddening
+        coefficients of one grid model.
+
+        Either is None when the model is invalid: a primary below
+        `mini_bound` has neither, and a model whose SED or reddening fit has
+        NaN has no coefficients.
+        """
+        mini, eep, feh, afe, smf = labels
+        if mini < track_kwargs["mini_bound"]:
+            return None, None
+        # Compute model and parameters at base reddening
+        sed, params, params2, _ = self.star_track.get_seds(
+            mini=mini,
+            eep=eep,
+            feh=feh,
+            afe=afe,
+            smf=smf,
+            av=0.0,
+            rv=3.3,
+            dist=_REFERENCE_DISTANCE_PC,
+            return_dict=False,
+            return_eep2=True,
+            **track_kwargs,
+        )
+        if np.any(np.isnan(sed)) or np.any(np.isnan(params)):
+            return params, None
+        # Stellar parameters are independent of (A_V, R_V), so pass the
+        # computed primary and secondary predictions instead of interpolating
+        # the tracks again for every lattice point.
+        coeffs = self._fit_reddening_coefficients(
+            params=params, params2=params2, sed_base=sed, **lattice
+        )
+        # A lattice point outside the NN training bounds gives NaN
+        # photometry, which polyfit propagates
+        return params, None if np.any(np.isnan(coeffs)) else coeffs
 
     def _fit_reddening_coefficients(
         self,
