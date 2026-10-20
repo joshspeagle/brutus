@@ -69,6 +69,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `truncnorm_pdf` accept numpy scalars and 0-d arrays, so
   `logp_age_from_feh(5.0)` no longer raises `TypeError`. The value
   `LOG_ZERO` lives in `brutus.utils.math`.
+- **`chisquare_logpdf` returns `LOG_ZERO` (-1e300)** where the density is
+  zero, not `-inf`, like `truncnorm_logpdf`. At `x == loc` it now agrees
+  with `scipy.stats.chi2.logpdf` (`-ln 2` for `df = 2`, `+inf` for
+  `df < 2`), and float32 input no longer overflows to `-inf`.
+- **The fused Galactic prior normalizes the age prior with the tail-stable
+  log-mass of the fused extinction prior.** It used a floored `erf`
+  difference. The prior changes by at most 1.8e-15 for valid inputs; the
+  fits of `bench/fullfit.py` do not change.
 - **`logp_extinction` normalizes its truncated normal stably in the
   tails.** It took the mass on `avlim` from an `erf` difference with a
   `1e-300` floor, so a map mean far outside `avlim` (for example 9 mag
@@ -84,12 +92,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `dist_vs_red` and `bin_pdfs_distred`. A star with A(V) above 6 mag got
   every draw replaced by its mean. Without `span`, the A(V) axis of
   `dist_vs_red` and `bin_pdfs_distred` now covers 0 to 20 mag, also for
-  saved draws, so the default bins and smoothing are 3.3 times wider; pass
-  `span` for a narrower range. `draw_sar` pads a distribution with its mean after
-  100 passes with no accepted draw, instead of after `max_attempts`.
+  saved draws, so the default bins are 3.3 times wider; pass `span` for a
+  narrower range. `draw_sar` pads a distribution with its mean after 100
+  passes with no accepted draw, instead of after `max_attempts`.
+- **`dist_vs_red` and `bin_pdfs_distred` smooth A(V) by 0.005 of its range
+  by default** (0.1 mag over the default `avlim`): the default `smooth` is
+  `(0.015, 0.005)` and `(0.01, 0.005)`.
 
 ### Changed
 
+- The default fit limits are the constants `brutus.utils.math.AVLIM`,
+  (0, 20) mag, and `RVLIM`, (1, 8). Every function that takes `avlim` or
+  `rvlim` uses them as its default.
 - `import brutus` now raises the original `ImportError` when a dependency is
   missing. Before, it warned with a hidden `ImportWarning` and left most names
   undefined.

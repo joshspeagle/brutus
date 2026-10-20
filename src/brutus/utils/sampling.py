@@ -64,6 +64,8 @@ import warnings
 import numpy as np
 from numba import jit, prange
 
+from .math import AVLIM, RVLIM
+
 __all__ = ["quantile", "draw_sar", "sample_multivariate_normal"]
 
 # draw_sar pads a distribution with no accepted draw after this many passes.
@@ -155,8 +157,8 @@ def draw_sar(
     rvs,
     covs_sar,
     ndraws=500,
-    avlim=(0.0, 20.0),
-    rvlim=(1.0, 8.0),
+    avlim=AVLIM,
+    rvlim=RVLIM,
     rstate=None,
     max_attempts=10000,
 ):
@@ -186,11 +188,11 @@ def draw_sar(
         The number of desired random draws. Default is `500`.
 
     avlim : 2-tuple, optional
-        The A_V limits used to truncate results. Default is `(0., 20.)`,
+        The A_V limits used to truncate results. Default is `AVLIM`, (0, 20),
         the `BruteForce.fit` default.
 
     rvlim : 2-tuple, optional
-        The R_V limits used to truncate results. Default is `(1., 8.)`.
+        The R_V limits used to truncate results. Default is `RVLIM`, (1, 8).
 
     rstate : `~numpy.random.RandomState`, `~numpy.random.Generator`, or
         module, optional

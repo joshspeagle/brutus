@@ -106,14 +106,33 @@ class TestStatisticalDistributions:
 
     def test_chisquare_logpdf_edge_cases(self):
         """Test chi-square log-PDF edge cases."""
-        from brutus.utils.math import chisquare_logpdf
+        from brutus.utils.math import LOG_ZERO, chisquare_logpdf
 
-        # Zero and negative values should give -inf
-        x_neg = np.array([-1.0, 0.0])
-        df = 2
+        # Zero density gives LOG_ZERO, not -inf; x == loc follows scipy.
+        x = np.array([-1.0, 0.0, 2.0])
+        for df in (1, 2, 3):
+            ref = np.maximum(scipy.stats.chi2.logpdf(x, df), LOG_ZERO)
+            np.testing.assert_allclose(chisquare_logpdf(x, df), ref, rtol=1e-12)
+        assert chisquare_logpdf(2.0, 2, loc=3.0) == LOG_ZERO
+        x32 = np.array([-1.0, 1.0], dtype=np.float32)
+        assert chisquare_logpdf(x32, 3)[0] == LOG_ZERO
 
-        result = chisquare_logpdf(x_neg, df)
-        assert np.all(result == -np.inf)
+    def test_scalar_log_mass_matches_vector_log_mass(self):
+        """The jitted scalar log Gaussian mass agrees with the log_ndtr one,
+        in both tails and for narrow intervals beyond erfc underflow."""
+        from brutus.utils.math import _truncnorm_lognorm, _truncnorm_lognorm_scalar
+
+        rng = np.random.default_rng(11)
+        lo = rng.uniform(-60.0, 60.0, 2000)
+        hi = lo + 10 ** rng.uniform(-6.0, 2.0, 2000)
+        pairs = list(zip(lo, hi)) + [(-45.0, -44.99), (-1e3, -40.0), (38.0, 40.0)]
+        for a, b in pairs:
+            np.testing.assert_allclose(
+                _truncnorm_lognorm_scalar(a, b),
+                _truncnorm_lognorm(a, b),
+                rtol=1e-9,
+                atol=1e-11,
+            )
 
     def test_truncnorm_pdf_basic(self):
         """Test truncated normal PDF computation."""

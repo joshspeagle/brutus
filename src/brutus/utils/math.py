@@ -55,15 +55,23 @@ Examples
 >>> icov = inverse3(cov, regularize=True)
 """
 
-from math import lgamma, log
+from math import erfc, exp, lgamma, log, log1p, pi, sqrt
 
 import numpy as np
 from numba import jit, prange
-from scipy.special import log_ndtr
+from scipy.special import log_ndtr, xlogy
 
-# Proxy for log(0) in log-probabilities. It stays finite under arithmetic,
-# where -inf would give NaN (for example -inf - -inf).
+#: Proxy for log(0) in log-probabilities. It stays finite under arithmetic,
+#: where -inf would give NaN (for example -inf - -inf).
 LOG_ZERO = -1e300
+
+#: Default fit limits on A(V), in mag.
+AVLIM = (0.0, 20.0)
+#: Default fit limits on R(V).
+RVLIM = (1.0, 8.0)
+
+_SQRT2 = sqrt(2.0)
+_DBL_MIN = 2.2250738585072014e-308  # smallest normal float64
 
 __all__ = [
     "galactic_to_galactocentric_cyl",
@@ -461,29 +469,18 @@ def chisquare_logpdf(x, df, loc=0, scale=1):
     Returns
     -------
     ans : `~numpy.ndarray` of shape `(N)` or float
-        The natural log of the PDF values.
+        The natural log of the PDF values: `LOG_ZERO` (-1e300) where the
+        density is zero (``x < loc``, or ``x == loc`` with ``df > 2``).
     """
-    if isinstance(x, list):
-        x = np.asarray(x)
+    y = np.asarray((np.asarray(x, dtype=float) - loc) / scale)
+    outside = y < 0
+    y = np.where(outside, 1.0, y)  # placeholder; these entries get LOG_ZERO
 
-    y = (x - loc) / scale
-    is_scalar = isinstance(y, (float, int))
+    ans = -(df / 2.0) * log(2) - lgamma(df / 2.0) - log(scale)
+    ans = ans + xlogy(df / 2.0 - 1.0, y) - y / 2.0
+    ans = np.where(outside | np.isneginf(ans), LOG_ZERO, ans)
 
-    if is_scalar:
-        if y <= 0:
-            return -np.inf
-    else:
-        keys = y <= 0
-        y = np.where(keys, 0.1, y)  # temporary value, will be set to -inf below
-
-    # Compute log-pdf
-    ans = -(df / 2.0) * log(2) - lgamma(df / 2.0)
-    ans = ans + (df / 2.0 - 1.0) * np.log(y) - y / 2.0 - log(scale)
-
-    if not is_scalar:
-        ans = np.where(keys, -np.inf, ans)
-
-    return ans
+    return ans[()]
 
 
 def _truncnorm_lognorm(a, b):
@@ -521,6 +518,35 @@ def _truncnorm_lognorm(a, b):
     if out.ndim == 0:
         return float(out)
     return out
+
+
+@jit(nopython=True, cache=True)
+def _log_ndtr_tail(x):
+    # Asymptotic series of log Phi(x) for x below about -37.5; its terms
+    # beyond 1/x**8 are below rounding there.
+    u = 1.0 / (x * x)
+    series = 1.0 - u * (1.0 - u * (3.0 - u * (15.0 - 105.0 * u)))
+    return -0.5 / u - log(-x) - 0.5 * log(2.0 * pi) + log(series)
+
+
+@jit(nopython=True, cache=True)
+def _truncnorm_lognorm_scalar(lo, hi):
+    """Scalar ``_truncnorm_lognorm`` for numba kernels, for ``lo < hi``.
+
+    Numba's on-disk cache of a calling kernel does not see edits here:
+    clear ``__pycache__`` after changing this function.
+
+    Mirroring to the lower tail keeps the erfc difference precise. Below
+    about -37.5 sigma the mass is subnormal or zero, with too few bits for
+    log; there the asymptotic series of log Phi takes over at both bounds.
+    """
+    if lo > 0.0:
+        lo, hi = -hi, -lo
+    mass = 0.5 * (erfc(-hi / _SQRT2) - erfc(-lo / _SQRT2))
+    if mass >= _DBL_MIN:
+        return log(mass)
+    lphi_hi = _log_ndtr_tail(hi)
+    return lphi_hi + log1p(-exp(_log_ndtr_tail(lo) - lphi_hi))
 
 
 def truncnorm_pdf(x, a, b, loc=0.0, scale=1.0):
