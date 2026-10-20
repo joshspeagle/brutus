@@ -34,7 +34,8 @@ def lb2pix(nside, l, b, nest=True):  # noqa: E741
     -------
     pix_ids : int or ndarray
         HEALPix pixel indices corresponding to the input (l, b) coordinates.
-        Invalid coordinates (absolute b > 90°) return -1.
+        Invalid coordinates (non-finite l, or b that is NaN or outside
+        [-90°, 90°]) return -1.
 
     Examples
     --------
@@ -64,10 +65,8 @@ def lb2pix(nside, l, b, nest=True):  # noqa: E741
 
     # Handle scalar inputs
     if not hasattr(gal_l, "__len__"):
-        # Check for valid coordinate. The chained comparison is False for
-        # NaN, matching the array branch's mask (which treats NaN as
-        # invalid) instead of falling through to a healpy ValueError.
-        if not (-90.0 <= b <= 90.0):
+        # The chained comparison is False for a NaN b, as in the array mask.
+        if not (np.isfinite(gal_l) and -90.0 <= b <= 90.0):
             return -1
 
         # Query HEALPix pixel
@@ -91,7 +90,9 @@ def lb2pix(nside, l, b, nest=True):  # noqa: E741
     pix_idx = np.empty(l_broadcast.shape, dtype="i8")
 
     # Mask for valid coordinates
-    valid_idx = (b_broadcast >= -90.0) & (b_broadcast <= 90.0)
+    valid_idx = (
+        np.isfinite(l_broadcast) & (b_broadcast >= -90.0) & (b_broadcast <= 90.0)
+    )
 
     # Compute pixels for valid coordinates
     pix_idx[valid_idx] = hp.pixelfunc.ang2pix(

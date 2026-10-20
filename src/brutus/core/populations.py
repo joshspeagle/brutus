@@ -79,7 +79,6 @@ References
   Models", ApJS, 222, 8
 """
 
-import os
 import sys
 import warnings
 from pathlib import Path
@@ -87,6 +86,8 @@ from pathlib import Path
 import h5py
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
+
+from ..data.download import _find_data_file
 
 # Import filter definitions
 from ..data.filters import FILTERS
@@ -119,7 +120,10 @@ class Isochrone:
     ----------
     mistfile : str, optional
         Path to the HDF5 file containing the MIST isochrone grid. If not
-        provided, defaults to the standard MIST v1.2 isochrone file.
+        provided, `MIST_1.2_iso_vvcrit0.0.h5` is looked up in the brutus
+        download directory (the Pooch cache, or ``$ASTRO_BRUTUS_DATA_DIR``
+        when set), then in ``data/DATAFILES`` in the repository; a
+        `FileNotFoundError` names `brutus.data.fetch_isos` when it is absent.
 
     predictions : list of str, optional
         The names of stellar parameters to predict. Must be a subset of the
@@ -164,22 +168,13 @@ class Isochrone:
 
     def __init__(self, mistfile=None, predictions=None, verbose=True):
 
-        # Set default file path
         if mistfile is None:
-            package_root = Path(__file__).parent.parent.parent.parent
-            mistfile = package_root / "data" / "DATAFILES" / "MIST_1.2_iso_vvcrit0.0.h5"
-
-            # If the repo-relative default doesn't exist (e.g. pip-installed
-            # package), fall back to the pooch cache directory that
-            # brutus.data downloads into (mirrors EEPTracks.__init__).
-            # Convert to string for os.path.exists() - helps with mocks.
-            if not os.path.exists(str(mistfile)):
-                import pooch
-
-                cache_dir = Path(pooch.os_cache("astro-brutus"))
-                cache_path = cache_dir / "MIST_1.2_iso_vvcrit0.0.h5"
-                if os.path.exists(str(cache_path)):
-                    mistfile = cache_path
+            mistfile = _find_data_file(("MIST_1.2_iso_vvcrit0.0.h5",), "fetch_isos")
+        if not Path(mistfile).is_file():
+            raise FileNotFoundError(
+                f"mistfile '{mistfile}' does not exist. Run "
+                "brutus.data.fetch_isos() to download the MIST isochrones."
+            )
 
         # Set default predictions
         if predictions is None:

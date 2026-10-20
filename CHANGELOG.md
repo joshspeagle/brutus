@@ -149,6 +149,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`dist_vs_red` and `bin_pdfs_distred` smooth A(V) by 0.005 of its range
   by default** (0.1 mag over the default `avlim`): the default `smooth` is
   `(0.015, 0.005)` and `(0.01, 0.005)`.
+- **`load_models` applies the main-sequence and binary cuts whatever
+  `labels` holds.** The cuts read the file's `eep` and `smf` columns. A
+  `labels` list without `eep` or `smf` skipped the cut: on `grid_mist_v9.h5`,
+  `labels=['mini', 'feh'], include_postms=False` returned 613530 models
+  instead of 143856. A phase cut on a file without `eep` now raises
+  `ValueError` instead of keeping every model.
 
 ### Changed
 
@@ -159,6 +165,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`max_models` must be None or a positive integer**; `fit` and
   `logpost_grid` raise `ValueError` otherwise. With the old cap, `0` kept
   every model.
+- `load_models` raises `ValueError` for `include_ms=False,
+  include_postms=False` before it reads the file. It warns with a
+  `UserWarning` that lists requested `labels` absent from the file.
+  `load_offsets` warns for a filter name that is neither in `brutus.FILTERS`
+  nor in the file, and its verbose summary prints each offset as a signed percentage, such as
+  `+12.34%`.
+- **Every `fetch_*` function takes the file choice first and `target_dir`
+  only as a keyword**, for example `fetch_offsets("mist_v9",
+  target_dir=...)`. A call that passes `target_dir` by position, such as
+  `fetch_isos("./data")`, now fails. Before, `fetch_grids` alone took the
+  file choice first, so `fetch_offsets("mist_v9")` made a link in a new
+  directory `./mist_v9`. An unknown option raises `ValueError` that names
+  the argument, the valid options and the given value.
+- `Bayestar.get_query_size` is removed. Nothing called it, and it gave
+  twice the result size for an `[l, b]` array.
 - **`ltol_subthresh` is removed** from `loglike_grid`, `fit` and `_fit`.
   Each model's fit now checks its own convergence. `ltol` must be positive.
 - **`dim_prior` is removed** from `analysis.photometric_offsets`, which
@@ -212,6 +233,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `find_nn_file`, `EEPTracks` and `Isochrone` look for their default data
+  files in the brutus download directory (`strato.path`, which
+  `ASTRO_BRUTUS_DATA_DIR` sets) first, then in `data/DATAFILES`. They
+  ignored `ASTRO_BRUTUS_DATA_DIR`, so they missed files that the `fetch_*`
+  functions had downloaded there. A missing default file raises
+  `FileNotFoundError` that names the directories and the `fetch_*`
+  function to run.
+- `EEPTracks` raises `ValueError` naming `predictions` when it lacks
+  `loga`, `logl`, `logt` or `logg` or has an unknown name, and
+  `FileNotFoundError` with a `fetch_tracks()` hint for a missing
+  `mistfile`; `Isochrone` raises it with a `fetch_isos()` hint. It no longer wraps errors from reading the file in
+  `RuntimeError`.
+- `lb2pix` returns -1 for a NaN or infinite longitude, as for an invalid
+  latitude. It returned a valid pixel, so `Bayestar.query` could give such
+  a star the extinction profile of another sightline.
+- `Bayestar.query` raises `ValueError` naming `coords` when an array input
+  does not have shape `(2,)` or `(Ncoords, 2)`. A `(2, 3)` array of
+  `[l values, b values]` was read row by row, and an `(N, 3)` array lost its
+  third column. `query_gal` with a scalar `ell` and `b` returns profiles of
+  shape `(n_dist,)`, as `query_equ` does; it returned `(1, n_dist)`.
 - `logp_extinction` raises `ValueError` for a 3D dust map called without
   `distance`, and `TypeError` when `dustmap.query` returns something other
   than a tuple, list or array of length 2 or 3. Both cases returned the
@@ -288,6 +329,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rewritten stellar models and model grid pages. The EEP values of the main
   sequence are corrected, and the coverage of the default grid (0.5 to 2.0
   solar masses, [Fe/H] -3.0 to +0.45) is stated.
+- The data module page says that only the `fetch_*` functions download
+  files, and where the loaders look for them. It describes the model grid
+  as a precomputed SED grid, adds the 1.1 GB EEP track file and its cache,
+  and corrects the storage totals. Tutorials 00 to 04 give the same file
+  sizes.
+- The `Bayestar.query` docstring states that `av_mean` and `av_std` keep
+  the storage dtype of the file (float16 for `bayestar2019_v1.h5`), and
+  `query_equ` states that it ignores the distance `d`.
 
 ## [1.2.0] - 2026-07-17
 

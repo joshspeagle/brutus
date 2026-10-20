@@ -1,6 +1,5 @@
 """Tests of Isochrone and StellarPop in brutus.core.populations."""
 
-import os
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -53,10 +52,8 @@ class TestIsochroneInitialization:
         assert preds.shape[0] > 0  # Should have stellar models
 
     def test_isochrone_file_not_found_error(self):
-        """Test Isochrone initialization with non-existent file."""
-        with patch("h5py.File", side_effect=OSError("File not found")):
-            with pytest.raises(RuntimeError):
-                Isochrone(mistfile="nonexistent.h5", verbose=False)
+        with pytest.raises(FileNotFoundError, match="fetch_isos"):
+            Isochrone(mistfile="nonexistent.h5", verbose=False)
 
     def test_isochrone_verbose_output(self, capsys):
         """Test that verbose output is produced when requested."""
@@ -688,25 +685,15 @@ class TestIsochronePredictionsArgument:
 
 
 class TestIsochroneDefaultPathFallback:
-    """Isochrone() must fall back to the pooch cache like EEPTracks does."""
+    """Isochrone() finds its default file in the brutus data directory."""
 
-    def test_pooch_cache_used_when_repo_path_missing(self, tmp_path, monkeypatch):
+    def test_default_path_is_found_in_the_data_directory(self, tmp_path, monkeypatch):
         import brutus.core.populations as bcp
+        from brutus.data.download import strato
 
         cache_file = tmp_path / "MIST_1.2_iso_vvcrit0.0.h5"
-        real_exists = os.path.exists
-
-        def fake_exists(path):
-            if str(path) == str(cache_file):
-                return True
-            if str(path).endswith("MIST_1.2_iso_vvcrit0.0.h5"):
-                return False  # repo-relative default "missing"
-            return real_exists(path)
-
-        monkeypatch.setattr(os.path, "exists", fake_exists)
-        import pooch
-
-        monkeypatch.setattr(pooch, "os_cache", lambda name: str(tmp_path))
+        cache_file.touch()
+        monkeypatch.setattr(strato, "path", tmp_path)
 
         opened = {}
 
@@ -719,7 +706,7 @@ class TestIsochroneDefaultPathFallback:
         with pytest.raises(RuntimeError):
             Isochrone(verbose=False)
 
-        # The loader must have been pointed at the pooch cache copy.
+        # The loader must have been pointed at the data-directory copy.
         assert opened["path"] == str(cache_file)
 
 

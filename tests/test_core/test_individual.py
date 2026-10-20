@@ -29,6 +29,18 @@ class TestEEPTracksInitialization:
         assert preds.shape == (1, len(tracks.predictions))
         assert np.all(np.isfinite(preds))
 
+    @pytest.mark.parametrize(
+        "predictions",
+        [
+            ["loga", "logl", "logg"],
+            ["logl", "logt", "logg"],
+            ["loga", "logl", "logt", "logg", "bogus"],
+        ],
+    )
+    def test_invalid_predictions_raise_before_reading_the_file(self, predictions):
+        with pytest.raises(ValueError, match="predictions"):
+            EEPTracks(mistfile="/non/existent.h5", predictions=predictions)
+
 
 class TestStarEvolTrackInitialization:
     """Test StarEvolTrack class initialization."""
@@ -469,7 +481,7 @@ class TestBuildFromFile:
         np.testing.assert_allclose(preds[0], np.log10(AGE_SLOPE * 210.0), rtol=1e-12)
 
     def test_missing_file_raises(self, tmp_path):
-        with pytest.raises(RuntimeError, match="Failed to initialize EEPTracks"):
+        with pytest.raises(FileNotFoundError, match="fetch_tracks"):
             EEPTracks(mistfile=tmp_path / "absent.h5", verbose=False)
 
     def test_verbose_messages_report_build_cache_and_rebuild(self, tmp_path, capsys):
@@ -488,21 +500,11 @@ class TestBuildFromFile:
         EEPTracks(mistfile=mistfile, predictions=PREDICTIONS, verbose=True)
         assert "Cache is older than data file" in capsys.readouterr().err
 
-    def test_default_path_falls_back_to_pooch_cache(self, tmp_path, monkeypatch):
-        import pooch
+    def test_default_path_is_found_in_the_data_directory(self, tmp_path, monkeypatch):
+        from brutus.data.download import strato
 
         cache_file = _make_synthetic_mist_file(tmp_path / "MIST_1.2_EEPtrk.h5")
-        real_exists = os.path.exists
-
-        def fake_exists(path):
-            if str(path) == str(cache_file):
-                return True
-            if str(path).endswith("MIST_1.2_EEPtrk.h5"):
-                return False  # the repository copy is "missing"
-            return real_exists(path)
-
-        monkeypatch.setattr(os.path, "exists", fake_exists)
-        monkeypatch.setattr(pooch, "os_cache", lambda name: str(tmp_path))
+        monkeypatch.setattr(strato, "path", tmp_path)
         tracks = EEPTracks(predictions=PREDICTIONS, verbose=False, use_cache=False)
         assert tracks.mistfile == cache_file
 

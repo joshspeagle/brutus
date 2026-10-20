@@ -1,12 +1,10 @@
 """Tests of load_models and load_offsets in brutus.data.loader."""
 
-from unittest.mock import patch
-
 import numpy as np
 import pytest
 from conftest import requires_data
 
-from brutus.data.loader import load_models, load_offsets
+from brutus.data.loader import find_nn_file, load_models, load_offsets
 
 
 class TestDataLoaderFunctions:
@@ -81,6 +79,16 @@ class TestDataLoaderFunctions:
         assert len(models_ms) > 0
         assert len(models_ms) < len(models_full)  # Should be subset
 
+        # The cut applies when the labels omit 'eep'.
+        models_ms_labels, _, _ = load_models(
+            data_file,
+            filters=fast_filters,
+            labels=["mini", "feh"],
+            include_postms=False,
+            verbose=False,
+        )
+        assert len(models_ms_labels) == len(models_ms)
+
         # Test post-main sequence only
         models_postms, _, _ = load_models(
             data_file, filters=fast_filters, include_ms=False, verbose=False
@@ -145,25 +153,9 @@ class TestDataLoaderFunctions:
         ]
         assert len(available_labels) > 0  # Should have some valid labels
 
-    @pytest.mark.slow
-    def test_load_models_error_conditions_with_real_data(self):
-        """Test load_models error conditions with real data."""
-
-        from brutus.data.loader import load_models
-
-        data_file = requires_data("grid_mist_v9.h5")
-
-        # Test invalid include_ms/include_postms combination
-        import pytest
-
-        with pytest.raises(ValueError, match="you have nothing left"):
-            load_models(
-                data_file,
-                filters=["SDSS_g"],
-                include_ms=False,
-                include_postms=False,
-                verbose=False,
-            )
+    def test_both_phases_excluded_raises_before_reading_the_file(self):
+        with pytest.raises(ValueError, match="include_ms and include_postms"):
+            load_models("/non/existent/file.h5", include_ms=False, include_postms=False)
 
     def test_load_offsets_with_real_mist_v9_data(self):
         """Test load_offsets with real MIST v9 offset data."""
@@ -184,110 +176,45 @@ class TestDataLoaderFunctions:
         assert np.all(np.abs(offsets - 1.0) < 0.5)  # Reasonable range
 
         # Test with specific filters
-        test_filters = ["g", "r", "i"]
+        test_filters = ["PS_g", "PS_r", "PS_i"]
         offsets_gri = load_offsets(offset_file, filters=test_filters, verbose=False)
         assert len(offsets_gri) == len(test_filters)
         assert np.all(np.isfinite(offsets_gri))
 
-    @patch("numpy.loadtxt")
-    def test_load_offsets_basic(self, mock_loadtxt):
-        """Test basic load_offsets functionality."""
-        from brutus.data.loader import load_offsets
+    def test_load_offsets_reads_file_order_and_defaults_to_one(self, tmp_path):
+        p = tmp_path / "offsets.txt"
+        p.write_text("PS_r 0.98\nPS_g 1.02\n")
+        offsets = load_offsets(str(p), filters=["PS_g", "PS_r", "PS_i"], verbose=False)
+        np.testing.assert_array_equal(offsets, [1.02, 0.98, 1.0])
 
-        # Mock the file content: filter names and offset values
-        mock_loadtxt.return_value = (
-            np.array(["g", "r", "i"], dtype="str"),
-            np.array(["1.02", "0.98", "1.01"], dtype="str"),
-        )
-
-        with patch("brutus.data.loader.sys.stderr"):
-            offsets = load_offsets(
-                "/fake/path.txt", filters=["g", "r", "i"], verbose=False
-            )
-
-        expected = np.array([1.02, 0.98, 1.01])
-        np.testing.assert_array_almost_equal(offsets, expected)
-
-    @patch("numpy.loadtxt")
-    def test_load_offsets_missing_filter(self, mock_loadtxt):
-        """Test load_offsets with missing filter."""
-        from brutus.data.loader import load_offsets
-
-        # Mock file with only 'g' and 'r', missing 'i'
-        mock_loadtxt.return_value = (
-            np.array(["g", "r"], dtype="str"),
-            np.array(["1.02", "0.98"], dtype="str"),
-        )
-
-        with patch("brutus.data.loader.sys.stderr"):
-            offsets = load_offsets(
-                "/fake/path.txt", filters=["g", "r", "i"], verbose=False
-            )
-
-        # 'i' should default to 1.0
-        expected = np.array([1.02, 0.98, 1.0])
-        np.testing.assert_array_almost_equal(offsets, expected)
-
-    @patch("numpy.loadtxt")
-    def test_load_offsets_duplicate_filter(self, mock_loadtxt):
-        """Test load_offsets with duplicate filter names."""
-        from brutus.data.loader import load_offsets
-
-        # Mock file with duplicate 'g' filter
-        mock_loadtxt.return_value = (
-            np.array(["g", "g", "r"], dtype="str"),
-            np.array(["1.02", "1.03", "0.98"], dtype="str"),
-        )
-
+    def test_load_offsets_duplicate_filter_raises(self, tmp_path):
+        p = tmp_path / "offsets.txt"
+        p.write_text("PS_g 1.02\nPS_g 1.03\nPS_r 0.98\n")
         with pytest.raises(ValueError, match="Something went wrong when extracting"):
-            with patch("brutus.data.loader.sys.stderr"):
-                load_offsets("/fake/path.txt", filters=["g", "r"], verbose=False)
+            load_offsets(str(p), filters=["PS_g", "PS_r"], verbose=False)
 
-    @patch("numpy.loadtxt")
-    def test_load_offsets_array_format(self, mock_loadtxt):
-        """Test load_offsets with 2D array format (not tuple)."""
-        from brutus.data.loader import load_offsets
+    def test_load_offsets_warns_only_for_unknown_filter_names(self, tmp_path):
+        import warnings
 
-        # Mock loadtxt returning 2D array instead of tuple
-        mock_loadtxt.return_value = np.array(
-            [["g", "1.02"], ["r", "0.98"], ["i", "1.01"]]
-        )
+        p = tmp_path / "offsets.txt"
+        p.write_text("PS_g 1.02\nMyBand 1.05\n")
+        with pytest.warns(UserWarning, match="PS_gg"):
+            offsets = load_offsets(str(p), filters=["PS_g", "PS_gg"], verbose=False)
+        np.testing.assert_array_equal(offsets, [1.02, 1.0])
+        # A known name absent from the file, or a custom name in the file,
+        # does not warn.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            offsets = load_offsets(str(p), filters=["PS_r", "MyBand"], verbose=False)
+        np.testing.assert_array_equal(offsets, [1.0, 1.05])
 
-        with patch("brutus.data.loader.sys.stderr"):
-            offsets = load_offsets(
-                "/fake/path.txt", filters=["g", "r", "i"], verbose=False
-            )
-
-        expected = np.array([1.02, 0.98, 1.01])
-        np.testing.assert_array_almost_equal(offsets, expected)
-
-    @patch("numpy.loadtxt")
-    def test_load_offsets_verbose_output(self, mock_loadtxt):
-        """Test load_offsets verbose output."""
-        from brutus.data.loader import load_offsets
-
-        mock_loadtxt.return_value = (
-            np.array(["g", "r", "i"], dtype="str"),
-            np.array(["1.05", "0.95", "1.00"], dtype="str"),
-        )
-
-        import io
-        from unittest.mock import patch
-
-        # Capture stderr output
-        with patch(
-            "brutus.data.loader.sys.stderr", new_callable=io.StringIO
-        ) as mock_stderr:
-            offsets = load_offsets(
-                "/fake/path.txt", filters=["g", "r", "i"], verbose=True
-            )
-
-        # Check that verbose output was produced
-        output = mock_stderr.getvalue()
-        assert "g" in output
-        assert "5.0%" in output or "5%" in output  # 5% offset for g filter
-        assert "r" in output
-        assert "-5.0%" in output or "-5%" in output  # -5% offset for r filter
+    def test_load_offsets_verbose_prints_signed_percent(self, tmp_path, capsys):
+        p = tmp_path / "offsets.txt"
+        p.write_text("PS_g 1.1234\nPS_r 0.95\n")
+        load_offsets(str(p), filters=["PS_g", "PS_r"], verbose=True)
+        err = capsys.readouterr().err
+        assert "PS_g (+12.34%)" in err
+        assert "PS_r (-5.00%)" in err
 
 
 def _write_grid(
@@ -299,6 +226,8 @@ def _write_grid(
     label_fields=("mini", "feh", "eep", "afe", "smf"),
     param_fields=("loga", "logl", "logt", "logg", "agewt"),
     afe_values=(0.0,),
+    eep_range=(300.0, 420.0),
+    smf_values=(0.0,),
 ):
     """Write a synthetic HDF5 grid in GridGenerator._save_grid format."""
     import h5py
@@ -318,9 +247,11 @@ def _write_grid(
     if "mini" in label_fields:
         labels["mini"] = np.linspace(0.6, 1.4, n_models)
     if "eep" in label_fields:
-        labels["eep"] = np.linspace(300.0, 420.0, n_models)
+        labels["eep"] = np.linspace(*eep_range, n_models)
     if "afe" in label_fields:
         labels["afe"] = np.resize(afe_values, n_models)
+    if "smf" in label_fields:
+        labels["smf"] = np.resize(smf_values, n_models)
 
     ptype = np.dtype([(n, "f8") for n in param_fields])
     params = np.zeros(n_models, dtype=ptype)
@@ -374,32 +305,65 @@ class TestLoadModelsRegressions:
         for name in ("loga", "logl", "logt", "logg", "agewt"):
             assert name in labels.dtype.names, f"{name} column was dropped"
 
-    def test_ms_cut_without_eep_column_keeps_models(self, tmp_path):
-        """A file lacking 'eep' must skip the MS/post-MS cut, not return 0 models.
-
-        Old behavior compared the all-NaN eep column (NaN <= 454 is False
-        elementwise) and silently returned an empty grid.
-        """
+    def test_phase_cut_without_eep_column_raises(self, tmp_path):
+        """A phase cut on a file without 'eep' raises instead of being skipped."""
         p = tmp_path / "grid_noeep.h5"
         _write_grid(p, n_models=5, label_fields=("mini", "feh"))
 
-        models, _, _ = load_models(
-            str(p),
-            filters=["PS_g", "PS_r", "PS_i"],
-            include_postms=False,
-            verbose=False,
-        )
+        with pytest.raises(ValueError, match="include_postms"):
+            load_models(str(p), filters=["PS_g"], include_postms=False, verbose=False)
+        models, _, _ = load_models(str(p), filters=["PS_g"], verbose=False)
         assert len(models) == 5
 
-        # And the labels argument omitting 'eep' must not raise either.
-        models, _, _ = load_models(
-            str(p),
-            filters=["PS_g", "PS_r", "PS_i"],
-            labels=["mini", "feh"],
-            include_postms=False,
+    @pytest.mark.parametrize("include_ms", [True, False])
+    def test_phase_cut_applies_when_eep_is_not_requested(self, tmp_path, include_ms):
+        p = tmp_path / "grid_phase.h5"
+        _write_grid(p, n_models=10, eep_range=(400.0, 500.0))
+
+        kwargs = dict(
+            filters=["PS_g"],
+            include_ms=include_ms,
+            include_postms=not include_ms,
             verbose=False,
         )
-        assert len(models) == 5
+        _, default_labels, _ = load_models(str(p), **kwargs)
+        _, labels, _ = load_models(str(p), labels=["mini", "feh"], **kwargs)
+        assert 0 < len(default_labels) < 10
+        np.testing.assert_array_equal(labels["mini"], default_labels["mini"])
+        assert labels.dtype.names == ("mini", "feh")
+
+    def test_binary_cut_applies_when_smf_is_not_requested(self, tmp_path):
+        p = tmp_path / "grid_smf.h5"
+        _write_grid(p, n_models=6, smf_values=(0.0, 0.5))
+
+        models, labels, _ = load_models(
+            str(p), filters=["PS_g"], labels=["mini", "feh"], verbose=False
+        )
+        assert len(models) == 3
+        models, _, _ = load_models(
+            str(p),
+            filters=["PS_g"],
+            labels=["mini", "feh"],
+            include_binaries=True,
+            verbose=False,
+        )
+        assert len(models) == 6
+
+    def test_warns_on_missing_requested_labels(self, tmp_path):
+        import warnings
+
+        p = tmp_path / "grid_labels.h5"
+        _write_grid(p, n_models=4)
+
+        with pytest.warns(UserWarning, match="bogus"):
+            _, labels, _ = load_models(
+                str(p), filters=["PS_g"], labels=["mini", "bogus"], verbose=False
+            )
+        assert labels.dtype.names == ("mini",)
+        # The default labels include 'Mr', which this file lacks.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            load_models(str(p), filters=["PS_g"], verbose=False)
 
     def test_warns_on_missing_filters(self, tmp_path):
         """Requested filters absent from the file must be reported, and the
@@ -466,6 +430,36 @@ class TestLoadModelsRegressions:
         )
         assert "afe" in labels.dtype.names
         assert np.all(labels["afe"] == 0.0)
+
+
+def test_find_nn_file_searches_the_data_directory_first(tmp_path, monkeypatch):
+    from brutus.data.download import strato
+
+    nnfile = tmp_path / "nn_c3k.h5"
+    nnfile.touch()
+    monkeypatch.setattr(strato, "path", tmp_path)
+    assert find_nn_file() == nnfile
+
+
+def test_find_nn_file_names_the_data_directory_when_absent(tmp_path, monkeypatch):
+    from brutus.data.download import strato
+
+    monkeypatch.setattr(strato, "path", tmp_path)
+    with pytest.raises(FileNotFoundError, match="ASTRO_BRUTUS_DATA_DIR"):
+        find_nn_file(possible_names=("absent.h5",))
+
+
+def test_find_nn_file_skips_directories_and_rejects_a_string(tmp_path, monkeypatch):
+    from brutus.data.download import strato
+
+    # A name that no data directory holds, so the repository copy that CI
+    # links into data/DATAFILES cannot match.
+    (tmp_path / "nn_absent.h5").mkdir()
+    monkeypatch.setattr(strato, "path", tmp_path)
+    with pytest.raises(FileNotFoundError):
+        find_nn_file(possible_names=("nn_absent.h5",))
+    with pytest.raises(TypeError, match="possible_names"):
+        find_nn_file("nn_c3k.h5")
 
 
 class TestLoadOffsetsSingleRow:

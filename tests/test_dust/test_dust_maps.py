@@ -57,8 +57,7 @@ class TestDustMapBase:
         # Check that (l, b) array was passed directly (optimized path)
         coords_arg = dust_map.query.call_args[0][0]
         assert isinstance(coords_arg, np.ndarray)
-        np.testing.assert_allclose(coords_arg[0, 0], 45.0)
-        np.testing.assert_allclose(coords_arg[0, 1], 30.0)
+        np.testing.assert_allclose(coords_arg, [45.0, 30.0])
 
         # Test with distance (d is accepted but not used for HEALPix queries)
         dust_map.query.reset_mock()
@@ -66,8 +65,7 @@ class TestDustMapBase:
         assert result == "test_result"
         coords_arg = dust_map.query.call_args[0][0]
         assert isinstance(coords_arg, np.ndarray)
-        np.testing.assert_allclose(coords_arg[0, 0], 45.0)
-        np.testing.assert_allclose(coords_arg[0, 1], 30.0)
+        np.testing.assert_allclose(coords_arg, [45.0, 30.0])
 
     def test_dustmap_query_equ(self):
         """Test Equatorial coordinate query interface."""
@@ -123,16 +121,6 @@ class TestBayestarMapReal:
         """Test Bayestar error handling for missing files."""
         with pytest.raises((FileNotFoundError, OSError)):
             Bayestar(dustfile="nonexistent_file.h5")
-
-    def test_bayestar_query_size_real(self, bayestar_map):
-        """Test query size estimation with real data."""
-        # Mock coordinates with known shape
-        coords = MagicMock()
-        coords.shape = (5,)  # 5 coordinates
-
-        size = bayestar_map.get_query_size(coords)
-        expected_size = 5 * len(bayestar_map._distances)
-        assert size == expected_size
 
     def test_bayestar_find_data_idx_real(self, bayestar_map):
         """Test internal _find_data_idx method with real data."""
@@ -472,6 +460,16 @@ class TestSingleCoordinateShape:
         # An explicit (1, 2) array keeps the (1, n_dist) shape
         dists, av_mean, _ = synthetic_map.query(np.array([[120.0, 30.0]]))
         assert av_mean.shape == (1, len(dists))
+
+    def test_scalar_query_gal_returns_1d(self, synthetic_map):
+        dists, av_mean, av_std = synthetic_map.query_gal(120.0, 30.0)
+        assert av_mean.shape == (len(dists),)
+        assert av_std.shape == (len(dists),)
+
+    @pytest.mark.parametrize("shape", [(2, 3), (4, 3), (3,), (2, 2, 2)])
+    def test_misshaped_coordinate_array_raises(self, synthetic_map, shape):
+        with pytest.raises(ValueError, match="coords"):
+            synthetic_map.query(np.zeros(shape))
 
     def test_skycoord_array_shape_unchanged(self, synthetic_map):
         coords = SkyCoord(
