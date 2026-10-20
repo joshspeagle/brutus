@@ -405,18 +405,14 @@ class TestLoadModelsRegressions:
         assert "afe" in labels.dtype.names
         assert len(np.unique(labels["afe"])) == 3
 
-    def test_constant_afe_dropped_from_default_labels(self, tmp_path):
-        """Single-afe grids drop the constant 'afe' column under default
-        labels (pre-existing schema preserved; mirrors the constant-'smf'
-        convention)."""
+    def test_constant_afe_and_smf_are_kept_as_one_value_columns(self, tmp_path):
         p = tmp_path / "grid_afe_const.h5"
         _write_grid(p, n_models=6, afe_values=(0.0,))
 
         _, labels, _ = load_models(
             str(p), filters=["PS_g", "PS_r", "PS_i"], verbose=False
         )
-        assert "afe" not in labels.dtype.names
-        assert labels.dtype.metadata["constants"] == {"smf": 0.0, "afe": 0.0}
+        assert np.all(labels["afe"] == 0.0) and np.all(labels["smf"] == 0.0)
 
     def test_explicit_afe_kept_even_when_constant(self, tmp_path):
         """An explicitly requested 'afe' label is honored even if constant."""
@@ -431,7 +427,6 @@ class TestLoadModelsRegressions:
         )
         assert "afe" in labels.dtype.names
         assert np.all(labels["afe"] == 0.0)
-        assert labels.dtype.metadata["constants"] == {"smf": 0.0}
 
 
 def test_find_nn_file_searches_the_data_directory_first(tmp_path, monkeypatch):

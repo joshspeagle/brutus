@@ -204,6 +204,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`load_models` keeps constant grid labels.** It returned no `afe` column
+  for a single-afe grid under the default labels, and no `smf` column
+  without `include_binaries`. Both are now one-value columns, so
+  `StarGrid` can check a query against them. Fits do not change:
+  `BruteForce` skips the grid-spacing term of a one-value label, and the
+  default Galactic prior reads only `feh` and `loga`.
 - **`hist2d` no longer accepts `**kwargs`.** It ignored unknown keywords,
   so an unknown key in `cornerplot(hist2d_kwargs=...)` had no effect. An
   unknown keyword now raises `TypeError`. `cornerplot` no longer sets a
@@ -344,12 +350,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `StarGrid.get_seds` and `get_predictions` check a label that
-  `load_models` left out as constant. On `grid_mist_v9.h5`, `afe=0.0` is
-  accepted and `afe=0.4` raises `ValueError`; the label was ignored
-  silently, so the result was for [α/Fe] = 0. `load_models` records these
-  constants in `labels.dtype.metadata["constants"]`. Any other label that
-  the grid lacks warns and is ignored.
+- `StarGrid.get_seds(afe=0.4)` on `grid_mist_v9.h5` raises `ValueError`.
+  `load_models` dropped the constant `afe` label, so the query ignored it
+  silently and returned the [α/Fe] = 0 result. `load_models` now keeps the
+  column (see Changed), and `StarGrid` checks it as a one-value axis. A
+  label that the grid does not have at all warns and is ignored.
 - `Isochrone` keeps the `OSError` or `KeyError` of a failed file load as
   the cause of its `RuntimeError`, so the traceback shows the original error.
 - `EEPTracks` writes its cache to a temporary file and renames it. A

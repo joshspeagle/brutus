@@ -1521,14 +1521,6 @@ class StarGrid:
                 self.grid_shape.append(len(unique_vals))
                 valid &= finite
         self._finite_rows = np.where(valid)[0]
-        # (low, high) of each label a query may give: the grid axes, and the
-        # constant labels that load_models left out (labels.dtype.metadata)
-        self._label_range = {
-            name: (vals[0], vals[-1]) for name, vals in self.grid_axes.items()
-        }
-        dtype_metadata = getattr(self.labels.dtype, "metadata", None) or {}
-        for name, value in dtype_metadata.get("constants", {}).items():
-            self._label_range.setdefault(name, (value, value))
 
         # Corner-index lookup: axis indices -> model row (first match wins)
         self._axis_names = list(self.grid_axes.keys())
@@ -1573,9 +1565,7 @@ class StarGrid:
         Every multi-valued axis must be given. Each given value must be
         finite and inside its axis range, with a relative tolerance of 1e-6
         at the edges: stored edges are not round (the MIST mini maximum is
-        2.0000000000000013). A constant label that `load_models` left out
-        is checked against its value. Any other label not in the grid warns
-        and is ignored.
+        2.0000000000000013). A label not in the grid warns and is ignored.
         """
         if not self._axis_names:
             raise ValueError(
@@ -1583,7 +1573,8 @@ class StarGrid:
                 f"smf) to answer a query; models_labels has {self.label_names}."
             )
         given = {name: value for name, value in query.items() if value is not None}
-        ignored = sorted(given.keys() - self._label_range.keys())
+        values = {name: v for name, v in given.items() if name in self.grid_axes}
+        ignored = sorted(given.keys() - self.grid_axes.keys())
         if ignored:
             warnings.warn(
                 f"{ignored} are not labels of this grid and are ignored.",
@@ -1593,26 +1584,27 @@ class StarGrid:
         missing = [
             name
             for name in self._axis_names
-            if name not in given and len(self.grid_axes[name]) > 1
+            if name not in values and len(self.grid_axes[name]) > 1
         ]
         if missing:
-            ranges = {name: self._label_range[name] for name in missing}
+            ranges = {
+                name: (self.grid_axes[name][0], self.grid_axes[name][-1])
+                for name in missing
+            }
             raise ValueError(
                 f"Grid parameter(s) {missing} not specified. These axes span "
                 f"{ranges}. Specify them explicitly."
             )
-        for name, value in given.items():
-            if name not in self._label_range:
-                continue
+        for name, value in values.items():
             if not np.isfinite(value):
                 raise ValueError(f"{name} must be finite, got {value}.")
-            low, high = self._label_range[name]
+            low, high = self.grid_axes[name][0], self.grid_axes[name][-1]
             tol = 1e-6 * max(abs(low), abs(high), 1.0)
             if not low - tol <= value <= high + tol:
                 raise ValueError(
                     f"{name}={value} is outside the grid range [{low}, {high}]."
                 )
-        return {name: v for name, v in given.items() if name in self.grid_axes}
+        return values
 
     def _build_kdtree(self):
         """Build the KD-tree over all grid axes, each scaled to [0, 1]."""
@@ -1627,7 +1619,7 @@ class StarGrid:
             if label not in self.grid_axes:
                 continue
             vals = self.labels[label][self._finite_rows]
-            val_min, val_max = self._label_range[label]
+            val_min, val_max = self.grid_axes[label][0], self.grid_axes[label][-1]
             span = val_max - val_min
             self._kdtree_scale[label] = (val_min, span)
             if span > 0:
@@ -1875,15 +1867,12 @@ class StarGrid:
             If a grid dimension with more than one value is omitted, or if a
             given grid label is not finite or lies outside its axis range
             (with a relative tolerance of 1e-6 at the edges). Single-valued
-            dimensions may be omitted and take their only value. Also if a
-            constant label that `load_models` left out (such as ``afe`` on a
-            single-afe grid) is given another value.
+            dimensions may be omitted and take their only value.
 
         Warns
         -----
         UserWarning
-            If a label is given that the grid does not have and that
-            `load_models` did not record as a constant. It is ignored.
+            If a label is given that the grid does not have. It is ignored.
 
         See Also
         --------
@@ -2019,8 +2008,8 @@ class StarGrid:
         """
         if dist is None or not np.isfinite(dist) or dist <= 0:
             raise ValueError(f"dist must be a finite distance > 0 in pc; got {dist}.")
-        # Warning for binary support limitations (a grid without smf ignores it)
-        if smf is not None and smf > 0 and "smf" in self.grid_axes:
+        # Warning for binary support limitations, where the grid holds binaries
+        if smf is not None and smf > 0 and len(self.grid_axes.get("smf", ())) > 1:
             warnings.warn(
                 "Binary star support in StarGrid is limited. Secondary parameters "
                 "(params2) will be empty. For full binary modeling, use StarEvolTrack "
