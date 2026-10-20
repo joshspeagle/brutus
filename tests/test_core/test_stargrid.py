@@ -369,6 +369,42 @@ class TestStarGridEdgeCases:
         assert grid.models.shape == (nmodels, 2, 3)
 
 
+class TestStarGridFilters:
+    """Filter selection keeps the requested order and checks names."""
+
+    @pytest.fixture
+    def structured(self):
+        dtype = [("PS_g", "3f8"), ("PS_r", "3f8"), ("PS_i", "3f8")]
+        models = np.zeros(4, dtype=dtype)
+        for k, name in enumerate(["PS_g", "PS_r", "PS_i"]):
+            models[name] = [10.0 + k, 1.0, 0.1]
+        labels = np.zeros(4, dtype=[("mini", "f8")])
+        labels["mini"] = [0.5, 1.0, 1.5, 2.0]
+        return models, labels
+
+    def test_structured_columns_follow_requested_order(self, structured):
+        models, labels = structured
+        grid = StarGrid(models, labels, filters=["PS_i", "PS_g"], verbose=False)
+        assert list(grid.filters) == ["PS_i", "PS_g"]
+        np.testing.assert_array_equal(grid.models[:, :, 0], [[12.0, 10.0]] * 4)
+
+    def test_structured_unknown_filter_warns_and_is_skipped(self, structured):
+        models, labels = structured
+        with pytest.warns(UserWarning, match="nope"):
+            grid = StarGrid(models, labels, filters=["PS_r", "nope"], verbose=False)
+        assert list(grid.filters) == ["PS_r"]
+
+    def test_structured_no_known_filter_raises(self, structured):
+        models, labels = structured
+        with pytest.raises(ValueError, match="None of the requested filters"):
+            StarGrid(models, labels, filters=["nope"], verbose=False)
+
+    def test_filters_length_must_match_models(self, structured):
+        _, labels = structured
+        with pytest.raises(ValueError, match="filters"):
+            StarGrid(np.zeros((4, 3, 3)), labels, filters=["a", "b"], verbose=False)
+
+
 class TestStarGridWithRealData:
     """Tests using real MIST grid (if available)."""
 

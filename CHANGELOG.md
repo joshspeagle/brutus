@@ -319,6 +319,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `logpost_grid` raises `ValueError` that names `dlabels` when the default
   Galactic prior gets a plain, not structured, `dlabels` array. It raised a
   `TypeError` about `NoneType`.
+- `StarGrid` keeps the requested `filters` order for a structured `models`
+  array, as `load_models` does. It ordered the columns as in the file and
+  dropped unknown names silently; it now warns with the skipped names and
+  raises `ValueError` when none exists. For an unstructured `models`
+  array, a `filters` list of the wrong length raises `ValueError`.
 - `find_nn_file`, `EEPTracks` and `Isochrone` look for their default data
   files in the brutus download directory (`strato.path`, which
   `ASTRO_BRUTUS_DATA_DIR` sets) first, then in `data/DATAFILES`. They

@@ -1417,8 +1417,10 @@ class StarGrid:
         If not provided, these won't be available in predictions.
 
     filters : list of str, optional
-        Filter names for photometry. If None, uses all available filters
-        from the models.
+        Filter names for photometry. For a structured `models` array, the
+        filters to keep, in this order; names not in `models` are skipped
+        with a warning. Otherwise, one name per filter of `models`. If
+        None, uses all available filters from the models.
 
     verbose : bool, optional
         Whether to print progress messages. Default is True.
@@ -1445,6 +1447,12 @@ class StarGrid:
 
     param_names : list
         Names of available parameters
+
+    Raises
+    ------
+    ValueError
+        If no requested filter is in a structured `models` array, or if
+        `filters` does not give one name per filter of `models`.
 
     Notes
     -----
@@ -1510,11 +1518,25 @@ class StarGrid:
         else:
             # Handle structured array from actual data files
             if models.dtype.names is not None:
-                # Extract filter names and reshape
+                # Columns follow the requested order, as in `load_models`
                 filter_names = list(models.dtype.names)
                 if filters is not None:
-                    # Filter to requested filters
-                    filter_names = [f for f in filter_names if f in filters]
+                    missing = [f for f in filters if f not in filter_names]
+                    filter_names = [f for f in filters if f in filter_names]
+                    if not filter_names:
+                        raise ValueError(
+                            f"None of the requested filters {list(filters)} "
+                            f"exist in models. Available filters: "
+                            f"{list(models.dtype.names)}."
+                        )
+                    if missing:
+                        warnings.warn(
+                            f"Requested filters not found in models and "
+                            f"skipped: {missing}. The model columns correspond "
+                            f"(in order) to: {filter_names}.",
+                            UserWarning,
+                            stacklevel=2,
+                        )
 
                 self.filters = np.array(filter_names)
                 self.nfilters = len(self.filters)
@@ -1531,6 +1553,11 @@ class StarGrid:
         # Set filter names if not already set
         if not hasattr(self, "filters"):
             if filters is not None:
+                if len(filters) != self.nfilters:
+                    raise ValueError(
+                        f"filters has {len(filters)} names, but models has "
+                        f"{self.nfilters} filters."
+                    )
                 self.filters = np.array(filters)
             else:
                 # Generate default filter names
