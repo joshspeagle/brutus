@@ -736,8 +736,8 @@ def _get_sed_mle(
             s_num[i] += models[i][j] * data[j] * inv_tot_var[j]
             s_den[i] += models[i][j] * models[i][j] * inv_tot_var[j]
         scale[i] = s_num[i] / s_den[i]  # MLE scalefactor
-        if scale[i] <= 1e-20:
-            scale[i] = 1e-20
+        if scale[i] <= MIN_SCALE:
+            scale[i] = MIN_SCALE
 
     # Derive reddening terms.
     sr_mix, sa_mix = np.zeros(Nmodel), np.zeros(Nmodel)
@@ -1017,24 +1017,16 @@ class BruteForce:
         data,
         data_err,
         data_mask,
-        data_labels=None,
         phot_offsets=None,
-        parallax=None,
-        parallax_err=None,
         lnprior=None,
-        wt_thresh=1e-3,
-        cdf_thresh=2e-3,
         apply_agewt=True,
         apply_grad=True,
         lngalprior=None,
         lndustprior=None,
         dustfile=None,
         data_coords=None,
-        ltol_subthresh=1e-2,
-        logl_initthresh=5e-3,
         mag_max=50.0,
         merr_max=0.25,
-        rstate=None,
         R_solar=8.2,
         Z_solar=0.025,
     ):
@@ -2175,24 +2167,16 @@ class BruteForce:
             data,
             data_err,
             data_mask,
-            data_labels=data_labels,
             phot_offsets=phot_offsets,
-            parallax=parallax,
-            parallax_err=parallax_err,
             lnprior=lnprior,
-            wt_thresh=wt_thresh,
-            cdf_thresh=cdf_thresh,
             apply_agewt=apply_agewt,
             apply_grad=apply_grad,
             lngalprior=lngalprior,
             lndustprior=lndustprior,
             dustfile=dustfile,
             data_coords=data_coords,
-            ltol_subthresh=ltol_subthresh,
-            logl_initthresh=logl_initthresh,
             mag_max=mag_max,
             merr_max=merr_max,
-            rstate=rstate,
             R_solar=R_solar,
             Z_solar=Z_solar,
         )
