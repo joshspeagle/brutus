@@ -73,6 +73,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   zero, not `-inf`, like `truncnorm_logpdf`. At `x == loc` it now agrees
   with `scipy.stats.chi2.logpdf` (`-ln 2` for `df = 2`, `+inf` for
   `df < 2`), and float32 input no longer overflows to `-inf`.
+- **The fused Galactic prior normalizes the age prior with the tail-stable
+  log-mass of the fused extinction prior.** It used a floored `erf`
+  difference. The prior changes by at most 1.8e-15 for valid inputs; the
+  fits of `bench/fullfit.py` do not change.
 - **`logp_extinction` normalizes its truncated normal stably in the
   tails.** It took the mass on `avlim` from an `erf` difference with a
   `1e-300` floor, so a map mean far outside `avlim` (for example 9 mag

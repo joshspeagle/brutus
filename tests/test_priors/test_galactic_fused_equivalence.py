@@ -5,7 +5,7 @@
 Bitwise-equivalence tests for the optimized `_galactic_prior_fused` kernel.
 
 The production kernel hoists loop-invariant work out of the parallel loop
-(age-prior constants: 3 exp + 6 erf + logs per point; solar disk/halo
+(age-prior constants: exp, log-masses and logs per point; solar disk/halo
 normalizations) and folds the Galactocentric coordinate conversion into the
 loop. These are pure performance rewrites and must be BITWISE identical to
 the unhoisted formulation. `reference_kernel` below is a copy of the fused
@@ -15,16 +15,15 @@ semantics (smoothed solar disk normalization, metallicity-updated age
 weights).
 """
 
-from math import erf, exp, log, pi, sqrt
+from math import exp, log, pi, sqrt
 
 import numpy as np
 from numba import jit, prange
 
 from brutus.priors.galactic import logp_galactic_structure
-from brutus.utils.math import galactic_to_galactocentric_cyl
+from brutus.utils.math import _truncnorm_lognorm_scalar, galactic_to_galactocentric_cyl
 
 _LOG_2PI = log(2.0 * pi)
-_SQRT2 = sqrt(2.0)
 
 
 @jit(nopython=True, parallel=True, cache=False)
@@ -196,8 +195,7 @@ def reference_kernel(
                 alpha = (min_age - age_mean) / age_sigma
                 beta = (max_age - age_mean) / age_sigma
                 lnphi = -0.5 * (_LOG_2PI + xi * xi)
-                denom = max(erf(beta / _SQRT2) - erf(alpha / _SQRT2), 1e-300)
-                lndenom = log(age_sigma / 2.0) + log(denom)
+                lndenom = log(age_sigma) + _truncnorm_lognorm_scalar(alpha, beta)
                 age_comp = lnphi - lndenom + ln_w
 
                 if age_val < min_age or age_val > max_age:

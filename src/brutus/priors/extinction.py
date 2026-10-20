@@ -41,17 +41,14 @@ Examples
 """
 
 import warnings
-from math import erfc, log, pi, sqrt
+from math import log, pi
 
 import numpy as np
 from numba import jit, prange
 
-from ..utils.math import AVLIM, _truncnorm_lognorm
+from ..utils.math import AVLIM, _truncnorm_lognorm, _truncnorm_lognorm_scalar
 
 __all__ = ["logp_extinction"]
-
-_SQRT2 = sqrt(2.0)
-_DBL_MIN = 2.2250738585072014e-308  # smallest normal float64
 
 
 def _log_truncnorm_pdf(avs, av_mean, av_err, av_lo, av_hi):
@@ -61,25 +58,6 @@ def _log_truncnorm_pdf(avs, av_mean, av_err, av_lo, av_hi):
     return -0.5 * (chi2 + lnorm) - _truncnorm_lognorm(
         (av_lo - av_mean) / av_err, (av_hi - av_mean) / av_err
     )
-
-
-@jit(nopython=True, cache=True)
-def _log_mass_fused(lo, hi):
-    """Scalar log(Phi(hi) - Phi(lo)) for standardized bounds, for the kernel.
-
-    Mirroring to the lower tail keeps the erfc difference precise. Below
-    about -37.5 sigma the mass is subnormal or zero, with too few bits for
-    log; there the asymptotic series of log Phi(hi) takes over (lo is far
-    below hi); its terms beyond 1/x**8 are below rounding there.
-    """
-    if lo > 0.0:
-        lo, hi = -hi, -lo
-    mass = 0.5 * (erfc(-hi / _SQRT2) - erfc(-lo / _SQRT2))
-    if mass >= _DBL_MIN:
-        return log(mass)
-    u = 1.0 / (hi * hi)
-    series = 1.0 - u * (1.0 - u * (3.0 - u * (15.0 - 105.0 * u)))
-    return -0.5 / u - log(-hi) - 0.5 * log(2.0 * pi) + log(series)
 
 
 def _add_scatter(std, scatter):
@@ -158,7 +136,9 @@ def _extinction_prior_3d_fused(
             chi2 = (avs[i] - mu) ** 2 / sig**2
             lnorm = log(2.0 * pi * sig**2)
             lnp = -0.5 * (chi2 + lnorm)
-            out[i] = lnp - _log_mass_fused((av_lo - mu) / sig, (av_hi - mu) / sig)
+            out[i] = lnp - _truncnorm_lognorm_scalar(
+                (av_lo - mu) / sig, (av_hi - mu) / sig
+            )
         else:
             out[i] = lnp_uniform
 

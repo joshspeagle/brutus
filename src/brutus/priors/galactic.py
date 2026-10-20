@@ -72,17 +72,20 @@ Combined Galactic structure prior:
 >>> log_prior = logp_galactic_structure(distances, coord)
 """
 
-from math import erf, exp, log, pi, sqrt
+from math import exp, log, pi, sqrt
 
 import numpy as np
 from numba import jit, prange
 
 # Import utility functions from brutus.utils
 from brutus.utils import truncnorm_logpdf
-from brutus.utils.math import LOG_ZERO, galactic_to_galactocentric_cyl
+from brutus.utils.math import (
+    LOG_ZERO,
+    _truncnorm_lognorm_scalar,
+    galactic_to_galactocentric_cyl,
+)
 
 _LOG_2PI = log(2.0 * pi)
-_SQRT2 = sqrt(2.0)
 
 
 def _logsumexp3(a, b, c):
@@ -167,7 +170,7 @@ def _galactic_prior_fused(
     ln_f_halo = log(f_halo)
 
     # Age-prior constants depend only on the component metallicity means,
-    # not on the grid point: 3 exp + 6 erf + logs hoisted out of the loop.
+    # not on the grid point, so they are computed once per call.
     age_mean_c = np.empty(3)
     age_sigma_c = np.empty(3)
     lndenom_c = np.empty(3)
@@ -188,10 +191,9 @@ def _galactic_prior_fused(
             age_sigma = max_sigma_age
         alpha = (min_age - age_mean) / age_sigma
         beta = (max_age - age_mean) / age_sigma
-        denom = max(erf(beta / _SQRT2) - erf(alpha / _SQRT2), 1e-300)
         age_mean_c[comp_idx] = age_mean
         age_sigma_c[comp_idx] = age_sigma
-        lndenom_c[comp_idx] = log(age_sigma / 2.0) + log(denom)
+        lndenom_c[comp_idx] = log(age_sigma) + _truncnorm_lognorm_scalar(alpha, beta)
 
     for i in prange(N):
         d = dists[i]
