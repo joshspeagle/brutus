@@ -520,11 +520,12 @@ def photometric_offsets(
     dists : np.ndarray of shape (n_objects, n_samples)
         Distance values (kpc) for each object and sample.
 
-    sel : np.ndarray of shape (n_objects), optional
-        Boolean selection of objects to use. Default uses all objects.
+    sel : np.ndarray of bool or 0/1, shape (n_objects), optional
+        Selection of objects to use. Default uses all objects.
 
     weights : np.ndarray of shape (n_objects, n_samples), optional
-        Sample weights for each object. Default uses uniform weights.
+        Sample weights for each object, finite and >= 0. Default uses
+        uniform weights.
 
     mask_fit : np.ndarray of shape (n_filters), optional
         Boolean mask indicating which filters were used in fitting.
@@ -541,10 +542,11 @@ def photometric_offsets(
         Gaussian log-likelihood convention (False). Default is True.
 
     prior_mean : np.ndarray of shape (n_filters), optional
-        Gaussian prior means for offsets. Must be provided with prior_std.
+        Gaussian prior means for offsets, finite. Must be provided with
+        prior_std.
 
     prior_std : np.ndarray of shape (n_filters), optional
-        Gaussian prior standard deviations for offsets.
+        Gaussian prior standard deviations for offsets, finite and > 0.
 
     verbose : bool, optional
         Whether to print progress information. Default is True.
@@ -568,6 +570,15 @@ def photometric_offsets(
     n_objects_used : np.ndarray of shape (n_filters)
         Number of objects that actually informed each offset (objects with
         non-positive fluxes or fully degenerate weights are excluded).
+
+    Raises
+    ------
+    TypeError
+        If one of the required input arrays is not a numpy array.
+    ValueError
+        If an input has the wrong shape, dtype or values, or if only one of
+        `prior_mean` and `prior_std` is given. All checks run before the
+        model SEDs are generated.
 
     Examples
     --------
@@ -656,8 +667,24 @@ def photometric_offsets(
 
     if sel is None:
         sel = np.ones(nobj, dtype=bool)
+    sel = np.asarray(sel)
+    # An index array or other integers would act as a bitwise mask
+    # (2 & True == 0) or fail to broadcast.
+    if sel.shape != (nobj,) or not np.all((sel == 0) | (sel == 1)):
+        raise ValueError(
+            f"sel must be a bool or 0/1 array of shape ({nobj},), got "
+            f"shape {sel.shape}"
+        )
+    sel = sel.astype(bool)
     if weights is None:
         weights = np.ones((nobj, nsamps), dtype=float)
+    weights = np.asarray(weights, dtype=float)
+    if weights.shape != (nobj, nsamps):
+        raise ValueError(
+            f"weights must have shape ({nobj}, {nsamps}), got {weights.shape}"
+        )
+    if not np.all(np.isfinite(weights) & (weights >= 0)):
+        raise ValueError("weights must be finite and >= 0")
     if mask_fit is None:
         mask_fit = np.ones(nfilt, dtype=bool)
     if old_offsets is None:
@@ -682,6 +709,18 @@ def photometric_offsets(
     # discard information the caller clearly intended to supply.
     if (prior_mean is None) != (prior_std is None):
         raise ValueError("prior_mean and prior_std must be provided together")
+    if prior_mean is not None:
+        prior_mean = np.atleast_1d(np.asarray(prior_mean, dtype=float))
+        prior_std = np.atleast_1d(np.asarray(prior_std, dtype=float))
+        if prior_mean.shape != (nfilt,) or prior_std.shape != (nfilt,):
+            raise ValueError(
+                f"prior_mean and prior_std must have shape ({nfilt},), got "
+                f"{prior_mean.shape} and {prior_std.shape}"
+            )
+        if not np.all(np.isfinite(prior_mean)):
+            raise ValueError("prior_mean must be finite")
+        if not np.all(np.isfinite(prior_std) & (prior_std > 0)):
+            raise ValueError("prior_std must be finite and > 0")
 
     # Generate model SEDs (chunked to bound peak memory)
     if verbose and config.progress_interval > 0:
@@ -866,12 +905,7 @@ def photometric_offsets(
             offset_errors[i] = (q75 - q25) / 1.349  # Convert IQR to std equivalent
 
     # Apply priors if provided
-    if prior_mean is not None and prior_std is not None:
-        if len(prior_mean) != nfilt or len(prior_std) != nfilt:
-            raise ValueError("Prior arrays must have length n_filters")
-        prior_mean = np.asarray(prior_mean, dtype=float)
-        prior_std = np.asarray(prior_std, dtype=float)
-
+    if prior_mean is not None:
         # Bands with no informative objects have placeholder 1.0 +/- 0.0
         # estimates that must not act as infinitely precise measurements;
         # with no data, the posterior is the prior.

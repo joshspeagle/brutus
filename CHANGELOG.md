@@ -233,6 +233,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `BruteForce.get_sed_grid` raises `ValueError` for an `av` or `rv` array
   whose length is not the number of models. With JIT on, it read past the
   end of the array and returned garbage SEDs.
+- `analysis.photometric_offsets` checks `sel`, `weights`, `prior_mean` and
+  `prior_std` before it generates the model SEDs, and raises `ValueError`
+  that names the argument. `sel` must be a bool or 0/1 array of shape `(Nobj,)`:
+  an index array excluded objects with no error. `weights` must be
+  finite and >= 0, and `prior_std` finite and > 0. A scalar prior failed
+  only after the full computation.
 
 ### Documentation
 

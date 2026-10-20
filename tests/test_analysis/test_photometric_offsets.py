@@ -976,6 +976,49 @@ class TestPerFilterInputValidation:
                 verbose=False,
             )
 
+    def test_integer_sel_of_zeros_and_ones_acts_as_a_bool_mask(self):
+        sel = np.arange(40) % 3 > 0
+        results = [
+            photometric_offsets(
+                *_small_setup(),
+                sel=s,
+                config=PhotometricOffsetsConfig(n_bootstrap=5),
+                verbose=False,
+                rng=np.random.default_rng(0),
+            )
+            for s in (sel, sel.astype(int))
+        ]
+        for a, b in zip(*results):
+            np.testing.assert_array_equal(a, b)
+
+    @pytest.mark.parametrize(
+        "kwargs, match",
+        [
+            ({"sel": np.full(40, 2)}, "sel must be a bool or 0/1 array"),
+            ({"sel": np.array([0, 3, 7])}, "sel must be a bool or 0/1 array"),
+            ({"weights": np.ones((40, 3))}, "weights must have shape"),
+            ({"weights": -np.ones((40, 15))}, "weights must be finite"),
+            ({"prior_mean": 1.0, "prior_std": 0.1}, "must have shape"),
+            (
+                {"prior_mean": np.ones(5), "prior_std": np.zeros(5)},
+                "prior_std must be finite and > 0",
+            ),
+        ],
+    )
+    def test_invalid_sel_weights_and_priors_raise_before_seds(
+        self, monkeypatch, kwargs, match
+    ):
+        """Bad `sel`, `weights` or priors raise a ValueError that names the
+        argument, before any model SED is generated."""
+        import brutus.analysis.offsets as mod
+
+        def fail(*args, **kwargs):
+            raise AssertionError("validation ran after SED generation")
+
+        monkeypatch.setattr(mod, "_generate_seds", fail)
+        with pytest.raises(ValueError, match=match):
+            photometric_offsets(*_small_setup(), verbose=False, **kwargs)
+
 
 class TestChunkedSedGeneration:
     """Chunked SED generation must be bitwise identical to a single call."""
