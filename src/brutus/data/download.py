@@ -64,6 +64,25 @@ strato.urls = {
     k: f"{strato.base_url}:persistentId?persistentId=doi:{v}" for k, v in _dois.items()
 }
 
+# File names of the options of each fetch_* function
+_ISOS = {
+    "MIST_1.2_vvcrit0.0": "MIST_1.2_iso_vvcrit0.0.h5",
+    "MIST_1.2_vvcrit0.4": "MIST_1.2_iso_vvcrit0.4.h5",
+}
+_TRACKS = {"MIST_1.2_vvcrit0.0": "MIST_1.2_EEPtrk.h5"}
+_DUSTMAPS = {"bayestar19": "bayestar2019_v1.h5"}
+_GRIDS = {
+    "mist_v9": "grid_mist_v9.h5",
+    "mist_v8": "grid_mist_v8.h5",
+    "bayestar_v5": "grid_bayestar_v5.h5",
+}
+_OFFSETS = {
+    "mist_v9": "offsets_mist_v9.txt",
+    "mist_v8": "offsets_mist_v8.txt",
+    "bayestar_v5": "offsets_bs_v9.txt",
+}
+_NNS = {"c3k": "nn_c3k.h5"}
+
 
 def _find_data_file(possible_names, fetcher=None):
     """Return the path of the first of `possible_names` found in a data directory.
@@ -88,6 +107,13 @@ def _find_data_file(possible_names, fetcher=None):
         f"directory {dirs[0]} (strato.path, set by ASTRO_BRUTUS_DATA_DIR) or in "
         f"{dirs[1]}.{hint}"
     )
+
+
+def _file_name(files, argument, value):
+    """Return the file name of option `value` of `argument`."""
+    if value not in files:
+        raise ValueError(f"{argument} must be one of {list(files)}; got {value!r}.")
+    return files[value]
 
 
 def _fetch(name, symlink_dir):
@@ -173,22 +199,23 @@ def _fetch(name, symlink_dir):
     return target_path
 
 
-def fetch_isos(target_dir=".", iso="MIST_1.2_vvcrit0.0"):
+def fetch_isos(iso="MIST_1.2_vvcrit0.0", *, target_dir="."):
     """
     Download isochrone files to target directory.
 
     Parameters
     ----------
-    target_dir : str, optional
-        The target directory where the file should be downloaded. If not
-        specified, files will be downloaded to the current directory.
-        Default is ".".
-
     iso : str, optional
         The desired isochrone file. Available options:
 
         - 'MIST_1.2_vvcrit0.0' (default) : Non-rotating MIST v1.2 isochrones
         - 'MIST_1.2_vvcrit0.4' : Rotating MIST v1.2 isochrones
+
+    target_dir : str, optional
+        Keyword-only. The directory that gets a link to the downloaded file,
+        or a copy where the file system has no links. The file itself is
+        stored in the brutus download directory (the Pooch cache, or
+        ``$ASTRO_BRUTUS_DATA_DIR`` when set). Default is ".".
 
     Returns
     -------
@@ -198,7 +225,7 @@ def fetch_isos(target_dir=".", iso="MIST_1.2_vvcrit0.0"):
     Raises
     ------
     ValueError
-        If the specified isochrone file does not exist in the registry.
+        If the option is not one of those listed.
 
     Examples
     --------
@@ -207,33 +234,27 @@ def fetch_isos(target_dir=".", iso="MIST_1.2_vvcrit0.0"):
     >>> print(f"Downloaded isochrones to: {iso_path}")
 
     >>> # Download rotating models
-    >>> rotating_path = fetch_isos(target_dir='./data/DATAFILES/', iso='MIST_1.2_vvcrit0.4')
+    >>> rotating_path = fetch_isos('MIST_1.2_vvcrit0.4', target_dir='./data/DATAFILES/')
     """
-    if iso == "MIST_1.2_vvcrit0.0":
-        name = "MIST_1.2_iso_vvcrit0.0.h5"
-    elif iso == "MIST_1.2_vvcrit0.4":
-        name = "MIST_1.2_iso_vvcrit0.4.h5"
-    else:
-        raise ValueError("The specified isochrone file does not exist!")
-
-    return _fetch(name, target_dir)
+    return _fetch(_file_name(_ISOS, "iso", iso), target_dir)
 
 
-def fetch_tracks(target_dir=".", track="MIST_1.2_vvcrit0.0"):
+def fetch_tracks(track="MIST_1.2_vvcrit0.0", *, target_dir="."):
     """
     Download EEP (Equivalent Evolutionary Point) track files to target directory.
 
     Parameters
     ----------
-    target_dir : str, optional
-        The target directory where the file should be downloaded. If not
-        specified, files will be downloaded to the current directory.
-        Default is ".".
-
     track : str, optional
         The desired track file. Available options:
 
         - 'MIST_1.2_vvcrit0.0' (default) : Non-rotating MIST v1.2 tracks
+
+    target_dir : str, optional
+        Keyword-only. The directory that gets a link to the downloaded file,
+        or a copy where the file system has no links. The file itself is
+        stored in the brutus download directory (the Pooch cache, or
+        ``$ASTRO_BRUTUS_DATA_DIR`` when set). Default is ".".
 
     Returns
     -------
@@ -243,7 +264,7 @@ def fetch_tracks(target_dir=".", track="MIST_1.2_vvcrit0.0"):
     Raises
     ------
     ValueError
-        If the specified track file does not exist in the registry.
+        If the option is not one of those listed.
 
     Examples
     --------
@@ -251,29 +272,25 @@ def fetch_tracks(target_dir=".", track="MIST_1.2_vvcrit0.0"):
     >>> track_path = fetch_tracks(target_dir='./data/DATAFILES/')
     >>> print(f"Downloaded tracks to: {track_path}")
     """
-    if track == "MIST_1.2_vvcrit0.0":
-        name = "MIST_1.2_EEPtrk.h5"
-    else:
-        raise ValueError("The specified track file does not exist!")
-
-    return _fetch(name, target_dir)
+    return _fetch(_file_name(_TRACKS, "track", track), target_dir)
 
 
-def fetch_dustmaps(target_dir=".", dustmap="bayestar19"):
+def fetch_dustmaps(dustmap="bayestar19", *, target_dir="."):
     """
     Download 3D dust extinction map files to target directory.
 
     Parameters
     ----------
-    target_dir : str, optional
-        The target directory where the file should be downloaded. If not
-        specified, files will be downloaded to the current directory.
-        Default is ".".
-
     dustmap : str, optional
         The desired dust map file. Available options:
 
         - 'bayestar19' (default) : Bayestar dust map from Green et al. (2019)
+
+    target_dir : str, optional
+        Keyword-only. The directory that gets a link to the downloaded file,
+        or a copy where the file system has no links. The file itself is
+        stored in the brutus download directory (the Pooch cache, or
+        ``$ASTRO_BRUTUS_DATA_DIR`` when set). Default is ".".
 
     Returns
     -------
@@ -283,7 +300,7 @@ def fetch_dustmaps(target_dir=".", dustmap="bayestar19"):
     Raises
     ------
     ValueError
-        If the specified dust map file does not exist in the registry.
+        If the option is not one of those listed.
 
     Examples
     --------
@@ -291,32 +308,28 @@ def fetch_dustmaps(target_dir=".", dustmap="bayestar19"):
     >>> dust_path = fetch_dustmaps(target_dir='./data/DATAFILES/')
     >>> print(f"Downloaded dust map to: {dust_path}")
     """
-    if dustmap == "bayestar19":
-        name = "bayestar2019_v1.h5"
-    else:
-        raise ValueError("The specified dustmap file does not exist!")
-
-    return _fetch(name, target_dir)
+    return _fetch(_file_name(_DUSTMAPS, "dustmap", dustmap), target_dir)
 
 
-def fetch_grids(grid="mist_v9", target_dir="."):
+def fetch_grids(grid="mist_v9", *, target_dir="."):
     """
     Downloads pre-computed stellar model grids (used for fast stellar
     parameter inference and photometric fitting) to target directory.
 
     Parameters
     ----------
-    target_dir : str, optional
-        The target directory where the file should be downloaded. If not
-        specified, files will be downloaded to the current directory.
-        Default is ".".
-
     grid : str, optional
         The desired grid file. Available options:
 
         - 'mist_v9' (default) : MIST v1.2 with empirical corrections (v9)
         - 'mist_v8' : MIST v1.2 with empirical corrections (v8)
         - 'bayestar_v5' : Bayestar models (v5)
+
+    target_dir : str, optional
+        Keyword-only. The directory that gets a link to the downloaded file,
+        or a copy where the file system has no links. The file itself is
+        stored in the brutus download directory (the Pooch cache, or
+        ``$ASTRO_BRUTUS_DATA_DIR`` when set). Default is ".".
 
     Returns
     -------
@@ -326,7 +339,7 @@ def fetch_grids(grid="mist_v9", target_dir="."):
     Raises
     ------
     ValueError
-        If the specified grid file does not exist in the registry.
+        If the option is not one of those listed.
 
     Examples
     --------
@@ -335,38 +348,30 @@ def fetch_grids(grid="mist_v9", target_dir="."):
     >>> print(f"Downloaded model grid to: {grid_path}")
 
     >>> # Download older version
-    >>> old_grid = fetch_grids(target_dir='./data/DATAFILES/', grid='mist_v8')
+    >>> old_grid = fetch_grids('mist_v8', target_dir='./data/DATAFILES/')
     """
-    if grid == "mist_v9":
-        name = "grid_mist_v9.h5"
-    elif grid == "mist_v8":
-        name = "grid_mist_v8.h5"
-    elif grid == "bayestar_v5":
-        name = "grid_bayestar_v5.h5"
-    else:
-        raise ValueError("The specified grid file does not exist!")
-
-    return _fetch(name, target_dir)
+    return _fetch(_file_name(_GRIDS, "grid", grid), target_dir)
 
 
-def fetch_offsets(target_dir=".", grid="mist_v9"):
+def fetch_offsets(grid="mist_v9", *, target_dir="."):
     """
     Downloads photometric offset files (used to calibrate systematic
     differences between observed and model photometry) to target directory.
 
     Parameters
     ----------
-    target_dir : str, optional
-        The target directory where the file should be downloaded. If not
-        specified, files will be downloaded to the current directory.
-        Default is ".".
-
     grid : str, optional
         The associated model grid for the offsets. Available options:
 
         - 'mist_v9' (default) : Offsets for MIST v1.2 with corrections (v9)
         - 'mist_v8' : Offsets for MIST v1.2 with corrections (v8)
         - 'bayestar_v5' : Offsets for Bayestar models (v5)
+
+    target_dir : str, optional
+        Keyword-only. The directory that gets a link to the downloaded file,
+        or a copy where the file system has no links. The file itself is
+        stored in the brutus download directory (the Pooch cache, or
+        ``$ASTRO_BRUTUS_DATA_DIR`` when set). Default is ".".
 
     Returns
     -------
@@ -376,7 +381,7 @@ def fetch_offsets(target_dir=".", grid="mist_v9"):
     Raises
     ------
     ValueError
-        If the specified offset file does not exist in the registry.
+        If the option is not one of those listed.
 
     Examples
     --------
@@ -384,34 +389,26 @@ def fetch_offsets(target_dir=".", grid="mist_v9"):
     >>> offset_path = fetch_offsets(target_dir='./data/DATAFILES/')
     >>> print(f"Downloaded offsets to: {offset_path}")
     """
-    if grid == "mist_v9":
-        name = "offsets_mist_v9.txt"
-    elif grid == "mist_v8":
-        name = "offsets_mist_v8.txt"
-    elif grid == "bayestar_v5":
-        name = "offsets_bs_v9.txt"
-    else:
-        raise ValueError("The specified grid file does not exist!")
-
-    return _fetch(name, target_dir)
+    return _fetch(_file_name(_OFFSETS, "grid", grid), target_dir)
 
 
-def fetch_nns(target_dir=".", model="c3k"):
+def fetch_nns(model="c3k", *, target_dir="."):
     """
     Download pre-trained neural network model files (used for fast spectral energy
     distribution prediction) to target directory.
 
     Parameters
     ----------
-    target_dir : str, optional
-        The target directory where the file should be downloaded. If not
-        specified, files will be downloaded to the current directory.
-        Default is ".".
-
     model : str, optional
         The desired neural network model file. Available options:
 
         - 'c3k' (default) : Network trained on C3K spectral models
+
+    target_dir : str, optional
+        Keyword-only. The directory that gets a link to the downloaded file,
+        or a copy where the file system has no links. The file itself is
+        stored in the brutus download directory (the Pooch cache, or
+        ``$ASTRO_BRUTUS_DATA_DIR`` when set). Default is ".".
 
     Returns
     -------
@@ -421,7 +418,7 @@ def fetch_nns(target_dir=".", model="c3k"):
     Raises
     ------
     ValueError
-        If the specified neural network file does not exist in the registry.
+        If the option is not one of those listed.
 
     Examples
     --------
@@ -429,9 +426,4 @@ def fetch_nns(target_dir=".", model="c3k"):
     >>> nn_path = fetch_nns(target_dir='./data/DATAFILES/')
     >>> print(f"Downloaded neural network to: {nn_path}")
     """
-    if model == "c3k":
-        name = "nn_c3k.h5"
-    else:
-        raise ValueError("The specified neural network file does not exist!")
-
-    return _fetch(name, target_dir)
+    return _fetch(_file_name(_NNS, "model", model), target_dir)

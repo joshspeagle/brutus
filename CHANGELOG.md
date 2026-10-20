@@ -164,6 +164,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `load_offsets` warns for a filter name that is neither in `brutus.FILTERS`
   nor in the file, and its verbose summary prints each offset as a signed percentage, such as
   `+12.34%`.
+- **Every `fetch_*` function takes the file choice first and `target_dir`
+  only as a keyword**, for example `fetch_offsets("mist_v9",
+  target_dir=...)`. A call that passes `target_dir` by position, such as
+  `fetch_isos("./data")`, now fails. Before, `fetch_grids` alone took the
+  file choice first, so `fetch_offsets("mist_v9")` made a link in a new
+  directory `./mist_v9`. An unknown option raises `ValueError` that names
+  the argument, the valid options and the given value.
 - `Bayestar.get_query_size` is removed. Nothing called it, and it gave
   twice the result size for an `[l, b]` array.
 - **`ltol_subthresh` is removed** from `loglike_grid`, `fit` and `_fit`.

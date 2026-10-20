@@ -212,19 +212,10 @@ class TestDataDownloadFunctions:
 
         mock_fetch.return_value = Path("/fake/path/MIST_1.2_iso_vvcrit0.4.h5")
 
-        result = fetch_isos(target_dir="/tmp", iso="MIST_1.2_vvcrit0.4")
+        result = fetch_isos("MIST_1.2_vvcrit0.4", target_dir="/tmp")
 
         mock_fetch.assert_called_once_with("MIST_1.2_iso_vvcrit0.4.h5", "/tmp")
         assert result == Path("/fake/path/MIST_1.2_iso_vvcrit0.4.h5")
-
-    def test_fetch_isos_invalid(self):
-        """Test fetch_isos with invalid iso parameter."""
-        from brutus.data.download import fetch_isos
-
-        with pytest.raises(
-            ValueError, match="The specified isochrone file does not exist"
-        ):
-            fetch_isos(iso="invalid_iso")
 
     @patch("brutus.data.download._fetch")
     def test_fetch_tracks_basic(self, mock_fetch):
@@ -238,13 +229,6 @@ class TestDataDownloadFunctions:
         mock_fetch.assert_called_once_with("MIST_1.2_EEPtrk.h5", "/data")
         assert result == Path("/fake/path/MIST_1.2_EEPtrk.h5")
 
-    def test_fetch_tracks_invalid(self):
-        """Test fetch_tracks with invalid track parameter."""
-        from brutus.data.download import fetch_tracks
-
-        with pytest.raises(ValueError, match="The specified track file does not exist"):
-            fetch_tracks(track="invalid_track")
-
     @patch("brutus.data.download._fetch")
     def test_fetch_dustmaps_basic(self, mock_fetch):
         """Test basic fetch_dustmaps functionality."""
@@ -255,15 +239,6 @@ class TestDataDownloadFunctions:
         result = fetch_dustmaps()
 
         mock_fetch.assert_called_once_with("bayestar2019_v1.h5", ".")
-
-    def test_fetch_dustmaps_invalid(self):
-        """Test fetch_dustmaps with invalid dustmap parameter."""
-        from brutus.data.download import fetch_dustmaps
-
-        with pytest.raises(
-            ValueError, match="The specified dustmap file does not exist"
-        ):
-            fetch_dustmaps(dustmap="invalid_dustmap")
 
     @patch("brutus.data.download._fetch")
     def test_fetch_grids_versions(self, mock_fetch):
@@ -284,13 +259,6 @@ class TestDataDownloadFunctions:
         mock_fetch.return_value = Path("/fake/path/grid_bayestar_v5.h5")
         fetch_grids(grid="bayestar_v5")
         mock_fetch.assert_called_with("grid_bayestar_v5.h5", ".")
-
-    def test_fetch_grids_invalid(self):
-        """Test fetch_grids with invalid grid parameter."""
-        from brutus.data.download import fetch_grids
-
-        with pytest.raises(ValueError, match="The specified grid file does not exist"):
-            fetch_grids(grid="invalid_grid")
 
     @patch("brutus.data.download._fetch")
     def test_fetch_offsets_versions(self, mock_fetch):
@@ -318,14 +286,27 @@ class TestDataDownloadFunctions:
 
         mock_fetch.assert_called_once_with("nn_c3k.h5", ".")
 
-    def test_fetch_nns_invalid(self):
-        """Test fetch_nns with invalid model parameter."""
-        from brutus.data.download import fetch_nns
+    @pytest.mark.parametrize(
+        "fetcher, argument",
+        [
+            ("fetch_isos", "iso"),
+            ("fetch_tracks", "track"),
+            ("fetch_dustmaps", "dustmap"),
+            ("fetch_grids", "grid"),
+            ("fetch_offsets", "grid"),
+            ("fetch_nns", "model"),
+        ],
+    )
+    @patch("brutus.data.download._fetch")
+    def test_unknown_option_error_names_the_argument(
+        self, mock_fetch, fetcher, argument
+    ):
+        with pytest.raises(ValueError, match=f"{argument} must be one of .*'bogus'"):
+            getattr(download, fetcher)("bogus")
 
-        with pytest.raises(
-            ValueError, match="The specified neural network file does not exist"
-        ):
-            fetch_nns(model="invalid_model")
+    def test_target_dir_is_keyword_only(self):
+        with pytest.raises(TypeError):
+            download.fetch_offsets("mist_v8", "/data")
 
 
 class TestDataIntegration:
@@ -345,11 +326,11 @@ class TestDataIntegration:
         from brutus.data import fetch_grids, fetch_offsets
 
         # Download model grid
-        grid_path = fetch_grids(target_dir="/data", grid="mist_v9")
+        grid_path = fetch_grids("mist_v9", target_dir="/data")
         assert grid_path == Path("/fake/grid_mist_v9.h5")
 
         # Download offsets
-        offset_path = fetch_offsets(target_dir="/data", grid="mist_v9")
+        offset_path = fetch_offsets("mist_v9", target_dir="/data")
         assert offset_path == Path("/fake/offsets_mist_v9.txt")
 
         # Verify expected calls
