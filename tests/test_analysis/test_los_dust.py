@@ -14,6 +14,7 @@ from brutus.analysis.los_dust import (
     los_clouds_loglike_samples,
     los_clouds_priortransform,
 )
+from brutus.utils.math import LOG_ZERO
 
 
 class TestKernelFunctions:
@@ -31,7 +32,6 @@ class TestKernelFunctions:
 
         # Samples within range should have higher weights than those outside
         # For top-hat, within range should have weight 1/(2*width) = 1/0.4 = 2.5
-        # Outside range should have weight 0 (log = -inf)
         expected_weight = 1.0 / (2 * 0.2)  # 2.5
         expected_log_weight = np.log(expected_weight)
 
@@ -39,9 +39,9 @@ class TestKernelFunctions:
         assert np.allclose(logw[1:3], expected_log_weight)  # 0.3, 0.5
 
         # Samples at 0.1, 0.7, 0.9 should be outside (0.7 is boundary case)
-        assert logw[0] == -np.inf  # 0.1 < 0.3
-        assert logw[3] == -np.inf  # 0.7 >= 0.7 (not < 0.7)
-        assert logw[4] == -np.inf  # 0.9 > 0.7
+        assert logw[0] == LOG_ZERO  # 0.1 < 0.3
+        assert logw[3] == LOG_ZERO  # 0.7 >= 0.7 (not < 0.7)
+        assert logw[4] == LOG_ZERO  # 0.9 > 0.7
 
     def test_kernel_tophat_edge_cases(self):
         """Test top-hat kernel edge cases."""
@@ -344,17 +344,26 @@ class TestLogLikelihood:
         # Create non-monotonic parameters (red2 < red1)
         theta_nonmono = [0.1, 0.05, 0.05, 0.2, 7.0, 0.8, 10.0, 0.3]
 
-        # With monotonic=True (default), should return -inf
         loglike_mono = los_clouds_loglike_samples(
             theta_nonmono, self.dsamps, self.rsamps, monotonic=True
         )
-        assert loglike_mono == -np.inf
+        assert loglike_mono == LOG_ZERO
 
         # With monotonic=False, should return finite value
         loglike_no_mono = los_clouds_loglike_samples(
             theta_nonmono, self.dsamps, self.rsamps, monotonic=False
         )
         assert np.isfinite(loglike_no_mono)
+
+    def test_nan_from_custom_kernel_gives_log_zero(self):
+        theta = [0.1, 0.05, 0.05, 0.2, 7.0, 0.8]
+        loglike = los_clouds_loglike_samples(
+            theta,
+            self.dsamps,
+            self.rsamps,
+            kernel=lambda reds, kp: np.full(np.shape(reds), np.nan),
+        )
+        assert loglike == LOG_ZERO
 
     def test_loglike_template_reds(self):
         """Test log-likelihood with template reddenings."""
@@ -563,8 +572,7 @@ class TestIntegration:
             theta_nonmono, dsamps, rsamps, monotonic=True
         )
 
-        # Non-monotonic should return -inf when monotonic=True
-        assert loglike_nonmono == -np.inf
+        assert loglike_nonmono == LOG_ZERO
 
         # But should work when monotonic=False
         loglike_nonmono_allowed = los_clouds_loglike_samples(
@@ -865,7 +873,7 @@ class TestMonotonicEffectiveProfile:
         ll = los_clouds_loglike_samples(
             theta, self.dsamps, self.rsamps, additive_foreground=True, monotonic=True
         )
-        assert ll == -np.inf
+        assert ll == LOG_ZERO
 
     def test_template_monotone_rescalings_accepted(self):
         """fred (A_V) must not be compared against dimensionless rescalings.
@@ -887,7 +895,7 @@ class TestMonotonicEffectiveProfile:
         ll = los_clouds_loglike_samples(
             theta, self.dsamps, self.rsamps, template_reds=template, monotonic=True
         )
-        assert ll == -np.inf
+        assert ll == LOG_ZERO
 
     def test_default_mode_unchanged(self):
         # non-monotone raw values still rejected in the default mode
@@ -896,7 +904,7 @@ class TestMonotonicEffectiveProfile:
             los_clouds_loglike_samples(
                 theta_bad, self.dsamps, self.rsamps, monotonic=True
             )
-            == -np.inf
+            == LOG_ZERO
         )
         # fred above the first cloud level still rejected
         theta_bad_fg = [0.1, 0.05, 0.05, 0.9, 7.0, 0.5, 10.0, 0.8]
@@ -904,7 +912,7 @@ class TestMonotonicEffectiveProfile:
             los_clouds_loglike_samples(
                 theta_bad_fg, self.dsamps, self.rsamps, monotonic=True
             )
-            == -np.inf
+            == LOG_ZERO
         )
         # monotone raw values accepted
         theta_ok = [0.1, 0.05, 0.05, 0.2, 7.0, 0.3, 10.0, 0.8]
@@ -978,9 +986,9 @@ class TestKernelTruncation:
         # support [-0.1, 0.3] clipped to [0.0, 0.3]: norm 0.3, not 0.4
         reds = np.array([-0.05, 0.05, 0.25, 0.35])
         logw = kernel_tophat(reds, (0.1, 0.2), rlims=(0.0, 6.0))
-        assert logw[0] == -np.inf  # below the clipped support
+        assert logw[0] == LOG_ZERO  # below the clipped support
         assert np.allclose(logw[1:3], -np.log(0.3))
-        assert logw[3] == -np.inf
+        assert logw[3] == LOG_ZERO
 
     def test_kernels_default_rlims_none_unchanged(self):
         reds = np.array([0.1, 0.3, 0.5])
@@ -996,10 +1004,41 @@ class TestKernelTruncation:
         reds_in = np.array([0.15, 0.3, 0.45])  # strictly inside [0.1, 0.5)
         assert np.allclose(kernel_tophat(reds_in, (mu, sig)), -np.log(2 * sig))
 
-    def test_kernel_zero_mass_gives_neg_inf(self):
+    @pytest.mark.parametrize("mu, sig", [(20.0, 0.3), (-5.0, 0.5)])
+    def test_gauss_mass_matches_scipy_far_outside_rlims(self, mu, sig):
+        # (20, 0.3) is 47 sigma above rlims, where ndtr underflows to 0;
+        # (-5, 0.5) is 10 to 22 sigma below, where ndtr rounds to 1.
+        reds = np.array([0.5, 3.0, 5.5])
+        rlims = (0.0, 6.0)
+        ref = truncnorm.logpdf(
+            reds, (rlims[0] - mu) / sig, (rlims[1] - mu) / sig, loc=mu, scale=sig
+        )
+        np.testing.assert_allclose(
+            kernel_gauss(reds, (mu, sig), rlims=rlims), ref, rtol=1e-12
+        )
+
+    @pytest.mark.parametrize("mu", [-1e6, 1e6])
+    def test_lorentz_mass_does_not_cancel_far_outside_rlims(self, mu):
+        # Both arctan terms are within 1e-7 of +-pi/2; on one side of the
+        # mean the mass is (arctan(1/b) - arctan(1/a)) / pi without
+        # cancellation.
+        reds = np.array([0.5, 3.0, 5.5])
+        rlims, g = (0.0, 6.0), 0.1
+        a, b = (rlims[1] - mu) / g, (rlims[0] - mu) / g
+        mass = (np.arctan(1 / b) - np.arctan(1 / a)) / np.pi
+        ref = -np.log1p(((reds - mu) / g) ** 2) - np.log(np.pi * g) - np.log(mass)
+        # The reference loses about 5 digits to 1 / b - 1 / a.
+        np.testing.assert_allclose(
+            kernel_lorentz(reds, (mu, g), rlims=rlims), ref, rtol=1e-9
+        )
+
+    def test_kernel_zero_mass_gives_log_zero(self):
         # kernel centered far outside the admissible range: no mass
         logw = kernel_tophat(np.array([0.5]), (10.0, 0.2), rlims=(0.0, 6.0))
-        assert logw[0] == -np.inf
+        assert logw[0] == LOG_ZERO
+        # a degenerate rlims holds no Gaussian or Cauchy mass either
+        for kernel in (kernel_gauss, kernel_lorentz):
+            assert kernel(np.array([1.0]), (1.0, 0.2), rlims=(1.0, 1.0))[0] == LOG_ZERO
 
     def test_boundary_foreground_not_biased_high(self):
         """Profile likelihood must peak at the true fred = 0.

@@ -82,6 +82,8 @@ import warnings
 import numpy as np
 from scipy.special import gammaln, xlogy
 
+from .math import LOG_ZERO
+
 __all__ = [
     "magnitude",
     "inv_magnitude",
@@ -332,8 +334,9 @@ def phot_loglike(
 
         .. warning::
            When dim_prior=True, perfect model matches (chi2≈0) can cause
-           problematic behavior: +inf likelihood for DOF=1, -inf likelihood
-           for DOF≥3. Ensure test data has small but non-zero residuals.
+           problematic behavior: +inf likelihood for DOF=1, `LOG_ZERO`
+           likelihood for DOF≥3. Ensure test data has small but non-zero
+           residuals.
 
     dof_reduction : int, optional
         Number of degrees of freedom to subtract from the effective DOF
@@ -468,7 +471,7 @@ def phot_loglike(
     # Apply dimensionality prior if requested.
     if dim_prior:
         # Compute log-pdf of chi2 distribution in a vectorized way.
-        # NOTE: chi2=0 causes +inf (DOF=1) or -inf (DOF>=3) - see docstring warning
+        # NOTE: chi2=0 gives +inf (DOF=1) or LOG_ZERO (DOF>=3); see the docstring
         dof = Ndim - dof_reduction  # effective degrees of freedom
         a = 0.5 * dof[:, None]  # shape (Nobj, 1)
         mask_valid_dof = dof > 0  # shape (Nobj,)
@@ -479,11 +482,12 @@ def phot_loglike(
         if valid_idx.size > 0:
             chi2_valid = chi2[valid_idx]
             a_valid = a[valid_idx]
-            lnl_dim[valid_idx] = (
+            lnl_dim[valid_idx] = np.maximum(
                 xlogy(a_valid - 1.0, chi2_valid)
                 - (chi2_valid / 2.0)
                 - gammaln(a_valid)
-                - (np.log(2.0) * a_valid)
+                - (np.log(2.0) * a_valid),
+                LOG_ZERO,
             )
 
         lnl = lnl_dim
@@ -620,7 +624,8 @@ def uniform_outlier_loglike(
     Returns
     -------
     lnl_outlier : array-like, shape (Nobj,)
-        Log-likelihood (log density) for the outlier model for each object.
+        Log-likelihood (log density) for the outlier model for each object;
+        `LOG_ZERO` (-1e300) where it is not finite.
 
     Notes
     -----
@@ -677,6 +682,6 @@ def uniform_outlier_loglike(
             lnl_outlier = lnl_outlier - np.where(parallax_mask, log_p_side, 0.0)
 
     # Handle edge cases
-    lnl_outlier = np.where(np.isfinite(lnl_outlier), lnl_outlier, -np.inf)
+    lnl_outlier = np.where(np.isfinite(lnl_outlier), lnl_outlier, LOG_ZERO)
 
     return lnl_outlier

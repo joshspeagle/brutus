@@ -6,6 +6,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
+from brutus.utils.math import LOG_ZERO
 from brutus.utils.photometry import (
     add_mag,
     chisquare_outlier_loglike,
@@ -450,8 +451,7 @@ class TestOutlierModels:
             lnl_outlier = uniform_outlier_loglike(flux, err)
 
         assert len(lnl_outlier) == 2
-        # Should handle invalid data - may be -inf but finite is acceptable
-        assert np.all(np.isfinite(lnl_outlier) | (lnl_outlier == -np.inf))
+        assert np.all(np.isfinite(lnl_outlier))
 
     def test_uniform_outlier_custom_sigma_clip(self):
         """Test uniform outlier model with custom sigma clipping."""
@@ -482,7 +482,7 @@ class TestOutlierModels:
         )
 
         assert len(lnl_outlier) == 2
-        assert np.all(np.isfinite(lnl_outlier) | (lnl_outlier == -np.inf))
+        assert np.all(np.isfinite(lnl_outlier))
 
     def test_outlier_models_single_filter(self):
         """Test outlier models with single filter (edge case)."""
@@ -494,7 +494,7 @@ class TestOutlierModels:
 
         assert len(lnl_chi) == 2 and len(lnl_unif) == 2
         assert np.all(np.isfinite(lnl_chi))
-        assert np.all(np.isfinite(lnl_unif) | (lnl_unif == -np.inf))
+        assert np.all(np.isfinite(lnl_unif))
 
     def test_outlier_models_stellar_params_unused(self):
         """Test that stellar_params parameter is handled (currently unused)."""
@@ -530,6 +530,14 @@ def _reference_loglike(flux, err, mfluxes, mask, dim_prior, dof_reduction, extra
                     chi2 + ndim * np.log(2 * np.pi) + np.sum(np.log(var))
                 )
     return out
+
+
+class TestPhotLoglikeZeroChi2:
+    def test_perfect_fit_with_three_dof_gives_log_zero(self):
+        # The chi-square density with 3 or more degrees of freedom is 0 at 0.
+        flux = np.ones((1, 4))
+        lnl = phot_loglike(flux, np.full((1, 4), 0.1), flux, dim_prior=True)
+        assert lnl[0, 0] == LOG_ZERO
 
 
 class TestPhotLoglikeReference:

@@ -82,6 +82,7 @@ import numpy as np
 from scipy.special import logsumexp
 
 # Import photometry utilities
+from ..utils.math import LOG_ZERO
 from ..utils.photometry import (
     chisquare_outlier_loglike,
     phot_loglike,
@@ -707,7 +708,8 @@ def marginalize_isochrone_grid(lnl_mixture, mass_jacobians, smf_jacobians):
     Returns
     -------
     lnl_marginalized : array-like, shape (N_objects,)
-        Marginalized log-likelihoods for each object
+        Marginalized log-likelihoods for each object; `LOG_ZERO` (-1e300)
+        for a zero likelihood.
 
     See Also
     --------
@@ -760,7 +762,7 @@ def marginalize_isochrone_grid(lnl_mixture, mass_jacobians, smf_jacobians):
     valid_rows = np.any(np.isfinite(lnl_mixture), axis=1) & np.isfinite(ln_jacobian)
     if not np.any(valid_rows):
         n_objects = lnl_mixture.shape[1]
-        return np.full(n_objects, -np.inf)
+        return np.full(n_objects, LOG_ZERO)
     ln_measure_norm = logsumexp(ln_jacobian[valid_rows])
 
     # Add jacobian to likelihoods for proper integration
@@ -774,7 +776,8 @@ def marginalize_isochrone_grid(lnl_mixture, mass_jacobians, smf_jacobians):
     )
 
     # Marginalize over grid using logsumexp
-    lnl_marginalized = logsumexp(lnl_with_jacobian, axis=0)  # shape (N_objects,)
+    # shape (N_objects,)
+    lnl_marginalized = np.maximum(logsumexp(lnl_with_jacobian, axis=0), LOG_ZERO)
 
     return lnl_marginalized
 
@@ -851,7 +854,8 @@ def isochrone_population_loglike(
     Returns
     -------
     lnl_total : float
-        Total log-likelihood summed over all objects
+        Total log-likelihood summed over all objects; `LOG_ZERO` (-1e300)
+        when it is not finite or the computation fails.
     components : dict, optional
         Intermediate results (if return_components=True) containing:
         - 'lnl_total': same as primary return value
@@ -887,8 +891,8 @@ def isochrone_population_loglike(
     - :math:`d_i` is data for object i
 
     The function is designed for use with MCMC samplers like emcee or
-    nested sampling codes like dynesty. It handles errors gracefully by
-    returning -∞ for failed computations.
+    nested sampling codes like dynesty. It returns `LOG_ZERO` (-1e300) for
+    a failed computation.
 
     Examples
     --------
@@ -983,12 +987,12 @@ def isochrone_population_loglike(
         # 6. Sum over all objects
         lnl_total = np.sum(lnl_marginalized)
 
-        if not np.isfinite(lnl_total):
-            lnl_total = -np.inf
+        if not (np.isfinite(lnl_total) and lnl_total > LOG_ZERO):
+            lnl_total = LOG_ZERO
 
     except Exception as e:
         warnings.warn(f"Likelihood computation failed: {e}")
-        lnl_total = -np.inf
+        lnl_total = LOG_ZERO
         lnl_marginalized = None
 
     if return_components:
@@ -997,7 +1001,7 @@ def isochrone_population_loglike(
             "lnl_per_object": (
                 lnl_marginalized
                 if lnl_marginalized is not None
-                else np.full(obs_phot.shape[0], -np.inf)
+                else np.full(obs_phot.shape[0], LOG_ZERO)
             ),
             "isochrone_grid": isochrone_grid if "isochrone_grid" in locals() else None,
             "lnl_cluster": lnl_cluster if "lnl_cluster" in locals() else None,

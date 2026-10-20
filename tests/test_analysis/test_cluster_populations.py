@@ -13,6 +13,7 @@ from brutus.analysis.populations import (
     isochrone_population_loglike,
     marginalize_isochrone_grid,
 )
+from brutus.utils.math import LOG_ZERO
 from brutus.utils.photometry import phot_loglike, uniform_outlier_loglike
 
 
@@ -301,7 +302,7 @@ class TestMainInterface:
             warnings.simplefilter("ignore")  # Suppress expected warnings
 
             lnl = isochrone_population_loglike(theta, None, obs_phot, obs_err)
-            assert lnl == -np.inf  # Should return -inf for failed computation
+            assert lnl == LOG_ZERO
 
     def test_real_population_likelihood(self, real_stellarpop, mock_observations):
         """Test main function with real stellarpop and realistic parameters."""
@@ -636,6 +637,17 @@ class TestMeasureNormalization:
         scaled = marginalize_isochrone_grid(lnl_mixture, mass_jac * 7.3, smf_jac)
         np.testing.assert_allclose(base, scaled, rtol=1e-12)
 
+    def test_object_with_no_valid_model_gets_log_zero(self):
+        lnl_mixture = np.full((5, 2), -1.0)
+        lnl_mixture[:, 1] = -np.inf
+        out = marginalize_isochrone_grid(lnl_mixture, np.ones(5), np.ones(5))
+        assert np.isfinite(out[0])
+        assert out[1] == LOG_ZERO
+        none_valid = marginalize_isochrone_grid(
+            np.full((5, 2), np.nan), np.ones(5), np.ones(5)
+        )
+        np.testing.assert_array_equal(none_valid, LOG_ZERO)
+
     def test_invalid_rows_do_not_change_outlier_mass(self):
         # A grid with extra invalid (NaN) rows must marginalize identically
         # to the same grid without them.
@@ -823,6 +835,26 @@ class TestCorrParamsPlumbing:
         assert len(pop.calls) == 2
         for call in pop.calls:
             assert call["corr_params"] == corr
+
+    def test_total_of_zero_likelihood_objects_is_log_zero(self, monkeypatch):
+        # Four objects at LOG_ZERO sum to -4e300; the total stays LOG_ZERO.
+        import brutus.analysis.populations as pops
+
+        monkeypatch.setattr(
+            pops,
+            "marginalize_isochrone_grid",
+            lambda lnl, *args: np.full(lnl.shape[1], LOG_ZERO),
+        )
+        rng = np.random.default_rng(0)
+        lnl = isochrone_population_loglike(
+            [0.0, 9.0, 0.1, 3.1, 1000.0, 0.1],
+            RecordingStellarPop(),
+            rng.uniform(0.5, 1.5, (4, 3)),
+            np.full((4, 3), 0.1),
+            smf_grid=np.array([0.0, 0.5]),
+            eep_grid=np.linspace(300, 400, 10),
+        )
+        assert lnl == LOG_ZERO
 
     def test_grid_generation_forwards_corr_params(self, real_stellarpop):
         """Different corr_params must actually change the generated grid."""
