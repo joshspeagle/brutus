@@ -66,8 +66,10 @@ References
   Models", ApJS, 222, 8
 """
 
+import os
 import pickle
 import sys
+import uuid
 import warnings
 from pathlib import Path
 
@@ -384,8 +386,19 @@ class EEPTracks:
                     if hasattr(self, attr)
                 }
 
-                with open(cache_file, "wb") as f:
-                    pickle.dump(cache_data, f)
+                # Write a temporary file and rename it, so a failed write
+                # leaves no partial cache for the next load to rebuild. A
+                # random name keeps concurrent writers apart, also on other
+                # nodes of a shared file system.
+                tmp_file = cache_file.with_name(
+                    f"{cache_file.name}.{uuid.uuid4().hex}.tmp"
+                )
+                try:
+                    with open(tmp_file, "wb") as f:
+                        pickle.dump(cache_data, f)
+                    os.replace(tmp_file, cache_file)
+                finally:
+                    tmp_file.unlink(missing_ok=True)
 
                 if verbose:
                     sys.stderr.write(f"EEPTracks cached to {cache_file}\n")
