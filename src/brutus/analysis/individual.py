@@ -1564,12 +1564,11 @@ class BruteForce:
             dist_flat = dist_mc.ravel()
 
             # Detect the default galactic-structure prior (bare or partial). For
-            # it we hand the fused kernel the per-point feh/loga as plain FLOAT
-            # arrays, which is bitwise-identical to passing a structured `labels`
-            # array but avoids a numpy structured-dtype np.tile -- pathologically
-            # slow (~100x a float tile, ~200 ms at Nsel=50000). Only used on the
-            # large-array fused path (Nmc*Nsel > 1000); smaller cases keep the
-            # structured path (cheap, and exercises the numpy fallback).
+            # it we pass the per-point feh/loga as plain float64 arrays, which
+            # is bitwise-identical to passing a structured `labels` array but
+            # avoids a numpy structured-dtype np.tile -- pathologically slow
+            # (~100x a float tile, ~200 ms at Nsel=50000). Casting before the
+            # tile spares the prior a second full-size copy.
             gal_is_default = lngalprior is logp_galactic_structure or (
                 getattr(lngalprior, "func", None) is logp_galactic_structure
             )
@@ -1577,21 +1576,23 @@ class BruteForce:
             if dlabels is None:
                 # No labels - evaluate once for all distances
                 lnp_gal_flat = lngalprior(dist_flat, coord, labels=None)
-            elif gal_is_default and Nmc * Nsel > 1000:
-                labels_selected = dlabels[sel]
-                names = labels_selected.dtype.names
-                feh_flat = (
-                    np.tile(labels_selected["feh"], Nmc) if "feh" in names else None
-                )
-                loga_flat = (
-                    np.tile(labels_selected["loga"], Nmc) if "loga" in names else None
-                )
-                lnp_gal_flat = lngalprior(
-                    dist_flat, coord, feh=feh_flat, loga=loga_flat
-                )
+            elif gal_is_default:
+                if dlabels.dtype.names is None:
+                    raise ValueError(
+                        "`dlabels` must be a structured array for the default "
+                        "Galactic prior, which reads its 'feh' and 'loga' fields."
+                    )
+                tiled = {
+                    name: np.tile(
+                        dlabels[name][sel].astype(np.float64, copy=False), Nmc
+                    )
+                    for name in ("feh", "loga")
+                    if name in dlabels.dtype.names
+                }
+                lnp_gal_flat = lngalprior(dist_flat, coord, **tiled)
             else:
-                # General path (custom prior or small array): tile the full
-                # structured label array to match the flattened distances.
+                # Custom prior: tile the full structured label array to match
+                # the flattened distances.
                 labels_flat = np.tile(dlabels[sel], Nmc)
                 lnp_gal_flat = lngalprior(dist_flat, coord, labels=labels_flat)
 

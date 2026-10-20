@@ -2263,11 +2263,13 @@ def test_misspelled_keyword_raises(fitter, observation):
         fitter.logpost_grid(like, Nmc=10)
 
 
+@pytest.mark.parametrize("Nmc_prior", [2, 100])
 def test_galactic_prior_gets_each_draw_paired_with_its_model_labels(
-    fitter, observation
+    fitter, observation, Nmc_prior
 ):
     """Draws are flattened draw-major, so the labels are tiled, not repeated;
-    the fused default-prior branch must give the same weights."""
+    the default prior, which gets plain feh and loga arrays, must give the
+    same weights on its numpy path and its fused path."""
     flux, flux_err, mask = observation
     like = fitter.loglike_grid(flux, flux_err, mask, return_vals=True)
     seen = {}
@@ -2276,20 +2278,34 @@ def test_galactic_prior_gets_each_draw_paired_with_its_model_labels(
         seen["dists"], seen["labels"] = dists, labels
         return logp_galactic_structure(dists, coord, labels=labels)
 
-    kwargs = dict(coord=(120.0, 45.0), Nmc_prior=100, dlabels=fitter.models_labels)
+    kwargs = dict(
+        coord=(120.0, 45.0), Nmc_prior=Nmc_prior, dlabels=fitter.models_labels
+    )
     sel, _, _, dist_mc, _, _, lnp_mc, *_ = fitter.logpost_grid(
         like, lngalprior=lngalprior, rstate=np.random.RandomState(5), **kwargs
     )
     Nsel, Nmc = dist_mc.shape
-    # The default prior takes its fused branch only above 1000 draws in all.
-    assert Nsel > 1 and Nmc * Nsel > 1000
+    # The prior takes its fused kernel only above 1000 draws in all.
+    assert Nsel > 1 and (Nmc * Nsel > 1000) == (Nmc_prior == 100)
     np.testing.assert_array_equal(seen["dists"], dist_mc.T.ravel())
     np.testing.assert_array_equal(
         seen["labels"], np.tile(fitter.models_labels[sel], Nmc)
     )
 
-    fused = fitter.logpost_grid(like, rstate=np.random.RandomState(5), **kwargs)
-    np.testing.assert_array_equal(fused[6], lnp_mc)
+    default = fitter.logpost_grid(like, rstate=np.random.RandomState(5), **kwargs)
+    np.testing.assert_array_equal(default[6], lnp_mc)
+
+
+def test_plain_dlabels_with_the_default_galactic_prior_raise(fitter, observation):
+    flux, flux_err, mask = observation
+    like = fitter.loglike_grid(flux, flux_err, mask, return_vals=True)
+    with pytest.raises(ValueError, match="dlabels"):
+        fitter.logpost_grid(
+            like,
+            coord=(120.0, 45.0),
+            dlabels=np.zeros(len(fitter.models_labels)),
+            rstate=np.random.RandomState(5),
+        )
 
 
 @pytest.mark.parametrize("parallax", [None, 1.2])
