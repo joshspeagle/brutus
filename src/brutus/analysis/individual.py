@@ -775,10 +775,10 @@ class BruteForce:
         `StarGrid.get_seds()` repeatedly.
 
         The scale factor relates to distance as :math:`s = 1/d^2` where
-        d is distance in parsecs. The reddening is applied as:
+        d is distance in kpc. The reddening is applied as:
 
         .. math::
-            m(\\lambda) = m_0(\\lambda) + A_V \\cdot [r_0(\\lambda) + R_V \\cdot dr(\\lambda)]
+            m(\lambda) = m_0(\lambda) + A_V \cdot [r_0(\lambda) + R_V \cdot dr(\lambda)]
 
         where :math:`r_0` and :math:`dr` are the reddening vector components.
         """
@@ -971,6 +971,17 @@ class BruteForce:
         rv_gauss : tuple, optional
             (mean, std) for Gaussian prior on R(V). Default is (3.32, 0.18).
 
+        av_init, rv_init : float or `~numpy.ndarray` of shape `(Nmodels,)`, optional
+            Starting A(V) and R(V) of the magnitude-space fit, one value for
+            every model or one per model. Default is the mean of `av_gauss`
+            and of `rv_gauss`.
+
+        dim_prior : bool, optional
+            Subtract ``0.5 * (3 - Ndim) * ln(Ndim)`` from every
+            log-likelihood, where ``Ndim`` is the number of valid bands. It
+            changes only comparisons between objects with different numbers
+            of bands. Default is True.
+
         ltol : float, optional
             Convergence tolerance of both fits: a model stops when the next
             Gauss-Newton step is predicted to raise its log-posterior in
@@ -989,20 +1000,30 @@ class BruteForce:
             Parallax error in mas.
 
         return_vals : bool, optional
-            If True, return full results including covariances. Default is False.
+            If True, also return the fitted parameters and their precision
+            matrices. Default is False.
 
         Returns
         -------
-        If return_vals=False:
-            lnl : numpy.ndarray
-                Log-likelihoods for each grid point
-            Ndim : int
-                Number of dimensions (filters)
-            chi2 : numpy.ndarray
-                Chi-squared values
+        lnl : `~numpy.ndarray` of shape `(Nmodels,)`
+            Log-likelihood of each model at its fit, with the Gaussian
+            normalization and, if `dim_prior`, the dimensional term. It does
+            not include the parallax.
+        Ndim : int
+            Number of valid bands.
+        chi2 : `~numpy.ndarray` of shape `(Nmodels,)`
+            Chi-square of each model at its fit, without the parallax.
+        scale : `~numpy.ndarray` of shape `(Nmodels,)`
+            Fitted scale, ``1 / d**2`` with ``d`` in kpc. Only with
+            ``return_vals=True``, as are the arrays below.
+        av, rv : `~numpy.ndarray` of shape `(Nmodels,)`
+            Fitted A(V) in mag and R(V).
+        icov_sar : `~numpy.ndarray` of shape `(Nmodels, 3, 3)`
+            Precision matrix of (scale, A(V), R(V)) at the fit.
 
-        If return_vals=True:
-            Also includes scale, av, rv, icov_sar arrays
+        ``Nmodels`` is ``len(indices)`` when `indices` is given. A model below
+        `init_thresh` keeps its magnitude-space fit; the others are refined in
+        flux space.
 
         Raises
         ------
@@ -1264,26 +1285,85 @@ class BruteForce:
         Parameters
         ----------
         results : tuple
-            Results from loglike_grid with return_vals=True. If those were
-            computed with ``indices``, ``lnprior`` and ``dlabels`` must be
+            The 7-tuple of `loglike_grid` with ``return_vals=True``. If it
+            was computed with ``indices``, ``lnprior`` and ``dlabels`` must be
             subset with the same indices, and the returned ``sel`` indexes
             that subset.
+
+        parallax, parallax_err : float, optional
+            Parallax and its error, in mas. Both or neither.
+
+        coord : tuple of 2 floats, optional
+            Galactic (l, b) of the object, in degrees. The Galactic prior
+            applies only when it is given, and the dust-map prior needs it.
+
+        Nmc_prior : int, optional
+            Number of Monte Carlo draws per model, lowered if needed to fit
+            `mem_lim`. Default is 100.
+
+        lnprior : `~numpy.ndarray` of shape `(Nmodels,)`, optional
+            Log-prior of each model. Default is 0 for every model.
+
+        wt_thresh : float or None, optional
+            Keep the models whose selection weight is above `wt_thresh`
+            times the largest. Default is 1e-3.
+
+        cdf_thresh : float or None, optional
+            Used only if `wt_thresh` is None: keep the models of highest
+            weight that hold ``1 - cdf_thresh`` of the total. If both are
+            None, every model is kept. Default is 2e-3.
+
+        max_models : int or None, optional
+            Most models kept after the threshold. Above it, models are kept
+            by systematic sampling with probability proportional to their
+            selection weight, and ``ln_incl`` holds the log-probabilities.
+            None sets no limit. Default is 50000.
+
+        precision_shrinkage : float, optional
+            Fraction by which the off-diagonal terms of each (scale, A(V),
+            R(V)) precision matrix shrink before the draws. Default is 0.0.
+
+        lngalprior : callable, optional
+            Galactic prior ``f(dists, coord, labels=...)``, with ``dists`` in
+            kpc. Default is `~brutus.priors.logp_galactic_structure` with
+            `R_solar` and `Z_solar`.
+
+        lndustprior : callable, optional
+            Dust-map prior ``f(avs, dustmap, coord, distance=...)``. Default
+            is `~brutus.priors.logp_extinction`, given `avlim` unless it is a
+            `functools.partial` that binds its own.
+
+        dustfile : str, path-like or `~brutus.dust.Bayestar`, optional
+            3D dust map for the dust-map prior. A path is loaded as a
+            `~brutus.dust.Bayestar` map.
 
         dlabels : structured `~numpy.ndarray` of shape `(Nmodels,)` or None, optional
             Model labels passed to the Galactic prior. By default, the labels
             of the loaded model grid. With None, the prior gets
             ``labels=None``.
 
+        avlim, rvlim : tuple, optional
+            (min, max) bounds on A(V) and R(V). A draw outside them gets zero
+            weight. Defaults are `AVLIM`, (0, 20), and `RVLIM`, (1, 8).
+
+        mem_lim : float, optional
+            Memory limit for the draws, in MB. Default is 8000.0.
+
+        rstate : `~numpy.random.RandomState` or `~numpy.random.Generator`, optional
+            Random state for the draws and the `max_models` sampling.
+
         apply_av_prior : bool, optional
             Whether to apply the dust-map extinction prior when ``dustfile``
             is provided. Default is True.
+
+        R_solar, Z_solar : float, optional
+            Galactocentric radius and height of the Sun, in kpc, for the
+            default Galactic prior. Defaults are 8.2 and 0.025.
 
         return_precision : bool, optional
             Return the (scale, A(V), R(V)) precision matrices of the selected
             models in place of their covariances, which skips the inversion.
             Default is False.
-
-        Other parameters mirror the corresponding ``fit()`` options.
 
         Returns
         -------

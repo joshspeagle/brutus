@@ -590,6 +590,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `params` and also the axis text. The `hist2d` docstring documents
   `smooth` and drops its "internal function" note. The `dist_vs_red`
   docstring gives the `ebv` default as `None`.
+- The `loglike_grid` and `logpost_grid` docstrings document every
+  parameter and each value they return, with shapes and units. The
+  `get_sed_grid` docstring gives the distance in kpc, not parsecs.
 
 ## [1.2.0] - 2026-07-17
 
