@@ -13,7 +13,7 @@ See Also
 --------
 brutus.analysis.individual.BruteForce : Uses Galactic priors for distance fitting
 brutus.priors.stellar : Stellar population priors
-brutus.priors.astrometric : Parallax and proper motion priors
+brutus.priors.astrometric : Parallax priors
 
 Notes
 -----
