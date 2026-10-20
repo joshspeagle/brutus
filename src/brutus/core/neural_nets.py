@@ -154,8 +154,8 @@ class FastNN:
         Raises
         ------
         ValueError
-            If neural networks have inconsistent input parameter ranges
-            across different filters.
+            If a filter is not in `nnfile`, or if the neural networks have
+            inconsistent input parameter ranges across different filters.
 
         Notes
         -----
@@ -165,6 +165,10 @@ class FastNN:
         - /{filter}/xmin, xmax : input parameter scaling bounds
         """
         with h5py.File(nnfile, "r") as f:
+            missing = [fltr for fltr in filters if fltr not in f]
+            if missing:
+                raise ValueError(f"filters {missing} are not in {nnfile}")
+
             # Store weights and bias for each layer and filter
             self.w1 = np.array([f[fltr]["w1"] for fltr in filters])
             self.b1 = np.array([f[fltr]["b1"] for fltr in filters])

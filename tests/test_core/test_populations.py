@@ -152,6 +152,7 @@ class TestStellarPopInitialization:
         rng = np.random.RandomState(0)
         iso = MagicMock()
         iso.get_predictions.return_value = rng.random((100, 8))
+        iso.predictions = ["mini", "logl", "logt", "logg", "feh_surf", "afe_surf"]
         return iso
 
     def test_stellarpop_basic_initialization(self, mock_isochrone):
@@ -177,6 +178,18 @@ class TestStellarPopInitialization:
             )
 
             assert pop.filters == custom_filters
+
+    def test_isochrone_without_sed_labels_raises(self, mock_isochrone):
+        mock_isochrone.predictions = ["logt", "logg"]
+        with pytest.raises(ValueError, match=r"isochrone.predictions lacks"):
+            StellarPop(isochrone=mock_isochrone, verbose=False)
+
+    def test_unknown_filter_raises_at_construction(self, mock_isochrone):
+        nnfile = requires_data("nn_c3k.h5")
+        with pytest.raises(ValueError, match=r"filters \['NOT_A_FILTER'\]"):
+            StellarPop(
+                mock_isochrone, filters=["NOT_A_FILTER"], nnfile=nnfile, verbose=False
+            )
 
 
 class TestStellarPopMethods:

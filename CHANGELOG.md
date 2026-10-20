@@ -247,6 +247,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `StellarPop.get_seds(return_dict=False)` and `get_seds_smf_grid`
   return `params` with shape (Neep, Npred), like `params2` and
   `StarEvolTrack.get_seds`. It was the transpose, (Npred, Neep).
+- `StellarPop` and `StarEvolTrack` raise the error of the neural network
+  when it fails to load, at construction. Before, they set `predictor` to
+  None, and `get_seds` raised a `RuntimeError` without the cause.
+  `FastNNPredictor` raises `ValueError` that names the filters missing from
+  `nnfile`, in place of an h5py `KeyError`. `StellarPop` raises
+  `ValueError` when `isochrone.predictions` lacks mini, logl, logt, logg,
+  feh_surf or afe_surf, and `StarEvolTrack` when `tracks.predictions`
+  lacks loga, logl, logt, logg, feh_surf or afe_surf.
 
 ### Fixed
 

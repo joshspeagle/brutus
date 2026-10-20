@@ -100,6 +100,9 @@ from .neural_nets import FastNNPredictor
 
 __all__ = ["Isochrone", "StellarPop"]
 
+# Isochrone predictions that StellarPop reads to compute SEDs.
+_SED_LABELS = ("mini", "logl", "logt", "logg", "feh_surf", "afe_surf")
+
 
 def _check_binary_fractions(name, values):
     """Raise `ValueError` unless every value is finite and in [0, 1]."""
@@ -514,16 +517,25 @@ class StellarPop:
     Parameters
     ----------
     isochrone : Isochrone
-        Isochrone instance for stellar parameter predictions.
+        Isochrone instance for stellar parameter predictions. Its
+        `predictions` must include mini, logl, logt, logg, feh_surf and
+        afe_surf.
 
     filters : list of str, optional
         Filter names for photometry computation. If None, uses all available.
 
     nnfile : str, optional
-        Path to neural network file for bolometric corrections.
+        Path to neural network file for bolometric corrections. If None,
+        `FastNNPredictor` finds the default file.
 
     verbose : bool, optional
         Whether to output progress messages. Default is True.
+
+    Raises
+    ------
+    ValueError
+        If `isochrone.predictions` lacks a label listed above, or if a
+        filter is not in the neural network file.
 
     Attributes
     ----------
@@ -581,7 +593,11 @@ class StellarPop:
 
     def __init__(self, isochrone, filters=None, nnfile=None, verbose=True):
 
-        # Store isochrone reference
+        missing = [p for p in _SED_LABELS if p not in isochrone.predictions]
+        if missing:
+            raise ValueError(
+                f"isochrone.predictions lacks {missing}, which StellarPop needs"
+            )
         self.isochrone = isochrone
 
         # Set up filters
@@ -589,23 +605,9 @@ class StellarPop:
             filters = np.array(FILTERS)
         self.filters = filters
 
-        # Set default neural network file
-        if nnfile is None:
-            from ..data.loader import find_nn_file
-
-            nnfile = find_nn_file()
-
-        # Initialize neural network predictor
-        try:
-            self.predictor = FastNNPredictor(
-                filters=filters, nnfile=nnfile, verbose=verbose
-            )
-        except Exception as e:
-            if verbose:
-                sys.stderr.write(
-                    f"Warning: Neural network initialization failed: {e}\n"
-                )
-            self.predictor = None
+        self.predictor = FastNNPredictor(
+            filters=filters, nnfile=nnfile, verbose=verbose
+        )
 
     def _evaluate_seds(self, params, valid_mask, av, rv, dist, label=""):
         """
@@ -989,9 +991,6 @@ apply_corr, corr_params, return_dict
         params : dict
             ``params_arr`` keyed by prediction name (column views).
         """
-        if self.predictor is None:
-            raise RuntimeError("Neural network predictor not available")
-
         # Generate stellar parameters using isochrone
         try:
             params_arr = self.isochrone.get_predictions(

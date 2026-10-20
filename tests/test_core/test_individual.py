@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import h5py
 import numpy as np
 import pytest
-from conftest import mock_nn_predictor
+from conftest import mock_nn_predictor, requires_data
 
 from brutus.core.individual import (
     _EEPTRACKS_CACHE_ATTRS,
@@ -52,6 +52,7 @@ class TestStarEvolTrackInitialization:
         tracks = MagicMock()
         tracks.get_predictions.return_value = rng.random(6)  # 6 parameters
         tracks.pred_labels = ["age", "logl", "logt", "logr", "logg", "phase"]
+        tracks.predictions = ["loga", "logl", "logt", "logg", "feh_surf", "afe_surf"]
         return tracks
 
     def test_star_evol_track_basic_initialization(self, mock_eep_tracks):
@@ -267,6 +268,7 @@ class TestStarEvolTrackMethods:
         tracks = MagicMock()
         tracks.get_predictions.side_effect = Exception("Prediction failed")
         tracks.labels = ["mini", "eep", "feh", "afe"]
+        tracks.predictions = ["loga", "logl", "logt", "logg", "feh_surf", "afe_surf"]
 
         with mock_nn_predictor("brutus.core.individual") as mock_nn:
             mock_predictor = MagicMock()
@@ -281,20 +283,18 @@ class TestStarEvolTrackMethods:
             ):
                 star_track.get_seds(mini=1.0, eep=350, feh=0.0, afe=0.0)
 
-    def test_get_seds_no_predictor_error(self):
-        """Test get_seds when no neural network predictor available (line 830)."""
+    def test_tracks_without_sed_labels_raise(self):
         tracks = MagicMock()
+        tracks.predictions = ["loga", "logl", "logt"]
+        with pytest.raises(ValueError, match=r"lacks \['logg', 'feh_surf'"):
+            StarEvolTrack(tracks=tracks, verbose=False)
 
-        # Create StarEvolTrack with no predictor
-        star_track = StarEvolTrack.__new__(StarEvolTrack)
-        star_track.tracks = tracks
-        star_track.predictor = None  # No predictor
-
-        # Should raise RuntimeError (line 830)
-        with pytest.raises(
-            RuntimeError, match="Neural network predictor not available"
-        ):
-            star_track.get_seds(mini=1.0, eep=350, feh=0.0, afe=0.0)
+    def test_unknown_filter_raises_at_construction(self):
+        tracks = MagicMock()
+        tracks.predictions = ["loga", "logl", "logt", "logg", "feh_surf", "afe_surf"]
+        nnfile = requires_data("nn_c3k.h5")
+        with pytest.raises(ValueError, match=r"filters \['BOGUS_V'\]"):
+            StarEvolTrack(tracks, filters=["BOGUS_V"], nnfile=nnfile, verbose=False)
 
     def test_get_seds_old_star_age_cutoff(self, mock_star_evol_track):
         """Test get_seds with old stars exceeding loga_max cutoff."""

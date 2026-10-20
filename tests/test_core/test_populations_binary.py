@@ -444,22 +444,6 @@ class TestAddBinaryComponents:
         assert np.all(np.isnan(results[0.0][1]["mini"]))
 
 
-class TestPredictorNotAvailable:
-    """Test error when predictor is None."""
-
-    def test_no_predictor_raises_error(self):
-        """get_seds should raise RuntimeError when predictor is None."""
-        iso = _make_mock_isochrone(n_eep=5)
-        with mock_nn_predictor("brutus.core.populations"):
-            pop = StellarPop(isochrone=iso, verbose=False)
-        pop.predictor = None
-
-        with pytest.raises(
-            RuntimeError, match="Neural network predictor not available"
-        ):
-            pop.get_seds(feh=0.0, loga=9.0)
-
-
 class TestCompanionInversion:
     """Companions come from the isochrone's own mini(EEP) relation (#122,
     #123, #127)."""
