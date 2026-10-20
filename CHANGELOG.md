@@ -155,6 +155,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `labels=['mini', 'feh'], include_postms=False` returned 613530 models
   instead of 143856. A phase cut on a file without `eep` now raises
   `ValueError` instead of keeping every model.
+- **`StellarPop.get_seds` finds each companion's EEP on the isochrone's
+  own EEP grid.** It inverted mini(EEP) on the caller's `eep` only, so a
+  coarse or truncated `eep` dropped companions below its smallest mass and
+  misplaced the others; a single `eep` never got a companion. At
+  [Fe/H] = 0, log(age) = 9.5 and `binary_fraction=0.6`, the SDSS g
+  magnitude at EEP 350 is now 14.621 for any `eep`, against 14.645 with
+  `eep=np.arange(300, 480, 10)`. With the default cluster grids,
+  `isochrone_population_loglike` changes by about 0.01 on a synthetic
+  cluster of 30 stars. Companions that a young isochrone places before the
+  zero-age main sequence are now included.
+- **`StellarPop.get_seds` returns NaN `params2` for every star whose SED
+  has no companion**, for all binary fractions. For `0 < binary_fraction
+  < 1`, it also returned the parameters of companions that it left out of
+  the SED (below `mini_bound`, or with no valid SED).
+- **`los_clouds_loglike_samples` averages each star's likelihood over its
+  finite draws only.** It divided by the count of all draws, so NaN draws
+  lowered the star's inlier term against the outlier term, and a star with
+  only NaN draws added `ln(pb) - ln(area)`, which pulled the outlier
+  fraction `pb` upward. A draw with a NaN or infinite distance or
+  reddening is now left out, a finite distance outside [0, 1e10) still
+  counts as a zero-likelihood draw, and a star with no finite draw is left
+  out of the sum. With 5 stars, 25 draws each, and one star all NaN, the
+  log-likelihood at `pb` = 0.01, 0.1 and 0.5 was -8.25, -6.22 and -6.14;
+  it is now -1.85, -2.13 and -3.66, the values without that star.
+- **`StarEvolTrack` finds a companion's EEP at the primary's [α/Fe]**,
+  with no clamp to the library range, as `get_seds` already used for the
+  companion's parameters. Tracks without a `gridpoints` EEP axis used
+  [α/Fe] = 0.0. On `MIST_1.2_EEPtrk.h5`, results at [α/Fe] = 0 do not
+  change; for 0 < |[α/Fe]| < 1e-5 the companion EEP changes by at most
+  9e-13 (200 random binaries each at ±3e-6).
 
 ### Changed
 
@@ -230,6 +260,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Python 3.10 or later and numpy 2.0 or later are required (the floors were 3.9
   and 1.19). Python 3.9 is past its end of life, and no astropy release for
   Python 3.9 supports numpy 2.
+- `StellarPop.get_seds(return_dict=False)` and `get_seds_smf_grid`
+  return `params` with shape (Neep, Npred), like `params2` and
+  `StarEvolTrack.get_seds`. It was the transpose, (Npred, Neep).
+- `StellarPop` and `StarEvolTrack` raise the error of the neural network
+  when it fails to load, at construction. Before, they set `predictor` to
+  None, and `get_seds` raised a `RuntimeError` without the cause.
+  `FastNNPredictor` raises `ValueError` that names the filters missing from
+  `nnfile`, in place of an h5py `KeyError`. `StellarPop` raises
+  `ValueError` when `isochrone.predictions` lacks mini, logl, logt, logg,
+  feh_surf or afe_surf, and `StarEvolTrack` when `tracks.predictions`
+  lacks loga, logl, logt, logg, feh_surf or afe_surf.
+- `StellarPop.get_seds` computes SEDs only with `FastNNPredictor.sed_batch`.
+  The per-star `sed` fallback, which ran when `sed_batch` raised, is
+  removed; such an error now propagates, as does an error in the
+  companions' parameters, which gave single-star SEDs with a warning.
+- `Isochrone.get_predictions` and `EEPTracks.get_corrections` share one
+  correction function, with bitwise-identical results. `Isochrone` raises
+  `ValueError` for a `corr_params` without 4 entries, and at construction
+  for a file without the mini, logt, logl or logg label; it warned and
+  returned uncorrected predictions. `StellarPop` passes errors of
+  `Isochrone.get_predictions` through, not as `RuntimeError`.
 
 ### Fixed
 
@@ -294,6 +345,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `BruteForce.get_sed_grid` raises `ValueError` for an `av` or `rv` array
   whose length is not the number of models. With JIT on, it read past the
   end of the array and returned garbage SEDs.
+- `isochrone_population_loglike` checks its inputs before it builds the
+  model grid and raises `ValueError` that names the argument: `obs_phot`,
+  `obs_err` and `mask` must be 2-D with one shape, `parallax` and
+  `parallax_err` must come together with shape (N_objects,), and
+  `smf_grid` and `eep_grid` must be 1-D, finite and strictly increasing,
+  with `smf_grid` in [0, 1]. These inputs returned `LOG_ZERO` with a warning
+  for every `theta`. Only a `theta` with no valid model in the isochrone
+  grid still returns `LOG_ZERO`; any other error, such as a misspelled
+  outlier keyword or a `ValueError` from the model code, now raises.
+  `generate_isochrone_population_grid` checks the grids and no longer
+  turns a failed SED slice into a skipped slice. `compute_isochrone_cluster_loglike` raises `ValueError`
+  for a `parallax` without `parallax_err` or `distance`, which it dropped
+  without a warning.
+- `StellarPop.get_seds` raises `ValueError` for a `binary_fraction` that
+  is not finite or lies outside [0, 1], and `get_seds_smf_grid` does the
+  same for `smf_values`. Such values gave single-star SEDs. An integer or
+  scalar `eep` now works with binaries; it raised `ValueError` when a
+  companion had no valid EEP.
+- `los_clouds_priortransform` raises `ValueError` unless `u` has
+  4 + 2 * n entries (n >= 1), all finite. A short `u` raised an
+  `IndexError`, and a NaN entry gave NaN parameters.
+  `los_clouds_loglike_samples` raises `ValueError` unless `Ndraws` is an
+  integer >= 1 and `s0` and `s` are positive. `Ndraws=-1` silently dropped
+  the last draw, `Ndraws=0` returned NaN, and `s=0` failed inside the
+  kernel with a message that did not name the argument.
 - `analysis.photometric_offsets` checks `sel`, `weights`, `prior_mean` and
   `prior_std` before it generates the model SEDs, and raises `ValueError`
   that names the argument. `sel` must be a bool or 0/1 array of shape `(Nobj,)`:
@@ -315,6 +391,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   comparing every CDF entry. The medians are bitwise identical. With 20,000
   objects, 500 draws and 30 replicates, a bootstrap takes 0.33 s instead of
   1.66 s (medians of 7 interleaved runs, 4 CPUs).
+- `marginalize_isochrone_grid` makes two fewer full-size temporaries, and
+  `compute_isochrone_cluster_loglike` adds the parallax term only when one
+  exists. Results are bitwise identical. With 21000 models and 1000 stars,
+  the marginalization takes a median 0.59 to 0.67 s against 0.70 s on one
+  core (25 interleaved runs, two repeats).
 
 ### Documentation
 
@@ -337,6 +418,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `Bayestar.query` docstring states that `av_mean` and `av_std` keep
   the storage dtype of the file (float16 for `bayestar2019_v1.h5`), and
   `query_equ` states that it ignores the distance `d`.
+- The `los_dust` docstrings state that the outlier model is uniform in
+  reddening over `rlims`, independent of distance, and that `s_params`
+  sets the kernel width as a fraction of the `rlims` range, not in
+  percent.
+- Tutorial 1 and the `Isochrone.get_predictions` docstring use the MIST
+  primary EEPs: the main sequence is EEP 202 to 454, the subgiant and red
+  giant branches 454 to 605, and core helium burning 631 to 707.
+- The population docstrings give units (distance in pc), allow a
+  per-star `cluster_prob`, describe the grid's model selection as the code
+  does it, name `EEPTracks`, and use `afe=0.0` in their examples: the
+  shipped isochrone file has only [α/Fe] = 0, and other values give NaN.
 
 ## [1.2.0] - 2026-07-17
 

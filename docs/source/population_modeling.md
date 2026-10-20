@@ -105,7 +105,7 @@ lnl = isochrone_population_loglike(
 )
 ```
 
-`flux` and `flux_err` have shape `(Nstars, Nbands)` in {term}`maggies <maggie>`, in the order of `filters`. Masked or non-finite fluxes are skipped band by band; `mask` sets more. If the isochrone cannot be computed, the function warns and returns `LOG_ZERO` (-1e300).
+`flux` and `flux_err` have shape `(Nstars, Nbands)` in {term}`maggies <maggie>`, in the order of `filters`. Masked or non-finite fluxes are skipped band by band; `mask` sets more. Malformed inputs raise `ValueError`. If no isochrone model is valid at `theta`, for example outside the isochrone grid, the function warns and returns `LOG_ZERO` (-1e300).
 
 To sample the posterior, add a prior. With [emcee](https://emcee.readthedocs.io):
 

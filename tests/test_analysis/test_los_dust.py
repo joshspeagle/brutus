@@ -259,7 +259,7 @@ class TestPriorTransform:
 
         # Test u values outside [0,1]
         u_invalid = np.array([0.1, 0.2, 1.5, 0.4, 0.6, 0.8])
-        with pytest.raises(ValueError, match="All values in u must be between 0 and 1"):
+        with pytest.raises(ValueError, match="All values in u must be finite"):
             los_clouds_priortransform(u_invalid)
 
         # Test invalid rlims
@@ -274,6 +274,15 @@ class TestPriorTransform:
         # Test invalid nlims for dust template
         with pytest.raises(ValueError, match="nlims must be a 2-tuple"):
             los_clouds_priortransform(u, dust_template=True, nlims=(2.0, 0.2))
+
+    @pytest.mark.parametrize("n", [4, 5, 7])
+    def test_u_of_wrong_length_raises(self, n):
+        with pytest.raises(ValueError, match="u must have 4 \\+ 2 \\* n entries"):
+            los_clouds_priortransform(np.full(n, 0.5))
+
+    def test_nan_in_u_raises(self):
+        with pytest.raises(ValueError, match="finite"):
+            los_clouds_priortransform([0.5, np.nan, 0.5, 0.5, 0.5, 0.5])
 
 
 class TestLogLikelihood:
@@ -497,12 +506,6 @@ class TestLogLikelihood:
         with pytest.raises(ValueError, match="Outlier fraction pb must be in"):
             los_clouds_loglike_samples(theta_invalid_pb, self.dsamps, self.rsamps)
 
-        theta_invalid_s = [0.1, -0.1, 0.05, 0.2, 8.0, 0.5]  # negative smoothing
-        with pytest.raises(
-            ValueError, match="Smoothing parameters must be non-negative"
-        ):
-            los_clouds_loglike_samples(theta_invalid_s, self.dsamps, self.rsamps)
-
         # Test non-monotonic distances
         theta_bad_dist = [0.1, 0.05, 0.05, 0.2, 10.0, 0.3, 8.0, 0.5]  # dist2 < dist1
         with pytest.raises(
@@ -519,6 +522,19 @@ class TestLogLikelihood:
                 self.rsamps,
                 template_reds=template_wrong_shape,
             )
+
+    @pytest.mark.parametrize("ndraws", [-1, 0, 2.5])
+    def test_ndraws_must_be_a_positive_integer(self, ndraws):
+        with pytest.raises(ValueError, match="Ndraws"):
+            los_clouds_loglike_samples(
+                self.theta_1cloud, self.dsamps, self.rsamps, Ndraws=ndraws
+            )
+
+    @pytest.mark.parametrize("s0, s", [(0.0, 0.05), (0.05, 0.0), (-0.1, 0.05)])
+    def test_non_positive_smoothing_raises(self, s0, s):
+        theta = [0.1, s0, s, 0.2, 8.0, 0.5]
+        with pytest.raises(ValueError, match="s0 and s must be > 0"):
+            los_clouds_loglike_samples(theta, self.dsamps, self.rsamps)
 
     def test_loglike_edge_cases(self):
         """Test log-likelihood edge cases."""
@@ -674,7 +690,8 @@ def _reference_loglike_core(
     searchsorted performance rewrite:
 
     - kernels are called with ``rlims`` (truncation renormalization), and
-    - non-finite reddening samples are masked to -inf (NaN fix).
+    - each star averages over its finite draws only, and a star without
+      finite draws is left out (decision D7).
 
     The monotonicity gate is intentionally omitted (it is exercised by its
     own dedicated tests); callers compare with ``monotonic=False`` or with
@@ -718,13 +735,13 @@ def _reference_loglike_core(
         else:
             kparams.append((r_exp, rsmooth_full))
 
-    finite_rs = np.isfinite(rs)
+    finite = np.isfinite(ds) & np.isfinite(rs)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         logw = np.array(
             [
                 np.where(
-                    finite_rs,
+                    finite,
                     kern(rs, kp, rlims=rlims) + np.log((ds >= xl) & (ds < xh)),
                     -np.inf,
                 )
@@ -732,7 +749,9 @@ def _reference_loglike_core(
             ]
         )
 
-    logls = logsumexp(logw, axis=(0, 2)) - np.log(Nsamps)
+    nfinite = finite.sum(axis=1)
+    keep = nfinite > 0
+    logls = logsumexp(logw[:, keep], axis=(0, 2)) - np.log(nfinite[keep])
 
     logls = logsumexp(
         a=np.c_[logls, np.full_like(logls, -np.log(area))],
@@ -940,7 +959,7 @@ class TestNonFiniteSamples:
         assert np.isfinite(ll)
 
     def test_nan_reddening_matches_nan_distance_handling(self):
-        """A NaN rsamp is down-weighted exactly like a NaN dsamp."""
+        """A NaN rsamp is left out exactly like a NaN dsamp."""
         rsamps = self.rsamps.copy()
         rsamps[0, 0] = np.nan
         ll_r = los_clouds_loglike_samples(self.theta, self.dsamps, rsamps)
@@ -950,7 +969,7 @@ class TestNonFiniteSamples:
         ll_d = los_clouds_loglike_samples(self.theta, dsamps, self.rsamps)
 
         # both are finite, and dropping the SAME sample by either route
-        # must give the identical likelihood (both zero its weight)
+        # must give the identical likelihood (both leave it out)
         assert np.isfinite(ll_r) and np.isfinite(ll_d)
         assert ll_r == ll_d
 
@@ -959,6 +978,49 @@ class TestNonFiniteSamples:
         rsamps[3, 5] = np.inf
         ll = los_clouds_loglike_samples(self.theta, self.dsamps, rsamps)
         assert np.isfinite(ll)
+
+
+class TestFiniteDrawAverage:
+    """Each star averages over its finite draws only (#111, decision D7)."""
+
+    def setup_method(self):
+        rng = np.random.default_rng(111)
+        self.dsamps = rng.uniform(6, 12, (5, 50))
+        self.rsamps = np.abs(rng.normal(0.4, 0.2, (5, 50)))
+
+    def loglike(self, pb, dsamps, rsamps):
+        theta = [pb, 0.1, 0.1, 0.2, 9.0, 1.0]
+        return los_clouds_loglike_samples(theta, dsamps, rsamps, Ndraws=25)
+
+    def test_star_without_finite_draws_is_left_out(self):
+        dsamps = self.dsamps.copy()
+        dsamps[0] = np.nan
+        for pb in (0.01, 0.1, 0.5):
+            with_nan = self.loglike(pb, dsamps, self.rsamps)
+            without = self.loglike(pb, self.dsamps[1:], self.rsamps[1:])
+            assert with_nan == without
+
+    def test_nan_draws_are_left_out_of_the_average(self):
+        theta = [0.1, 0.1, 0.1, 0.2, 9.0, 1.0]
+        rsamps = self.rsamps.copy()
+        rsamps[0, :13] = np.nan  # 12 of star 0's 25 draws stay finite
+        mixed = los_clouds_loglike_samples(theta, self.dsamps, rsamps, Ndraws=25)
+        star0 = los_clouds_loglike_samples(
+            theta, self.dsamps[:1, 13:25], self.rsamps[:1, 13:25]
+        )
+        rest = los_clouds_loglike_samples(
+            theta, self.dsamps[1:], self.rsamps[1:], Ndraws=25
+        )
+        np.testing.assert_allclose(mixed, star0 + rest, rtol=1e-13)
+
+    def test_out_of_range_distance_is_a_zero_likelihood_draw(self):
+        theta = [0.0, 0.1, 0.1, 0.2, 9.0, 1.0]
+        dsamps = self.dsamps[:1, :2].copy()
+        rsamps = self.rsamps[:1, :2].copy()
+        one = los_clouds_loglike_samples(theta, dsamps[:, :1], rsamps[:, :1])
+        dsamps[0, 1] = -1.0  # finite but outside [0, 1e10)
+        two = los_clouds_loglike_samples(theta, dsamps, rsamps)
+        np.testing.assert_allclose(two, one - np.log(2.0), rtol=1e-13)
 
 
 class TestKernelTruncation:

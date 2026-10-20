@@ -51,11 +51,8 @@ def requires_data(filename):
 
 @contextmanager
 def mock_nn_predictor(module):
-    """Patch `FastNNPredictor` in `module` and the default NN file lookup."""
-    with (
-        patch(f"{module}.FastNNPredictor") as predictor,
-        patch("brutus.data.loader.find_nn_file", return_value="nn.h5"),
-    ):
+    """Patch `FastNNPredictor` in `module`."""
+    with patch(f"{module}.FastNNPredictor") as predictor:
         yield predictor
 
 

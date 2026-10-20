@@ -152,6 +152,39 @@ rename = {
 }
 
 
+def _mass_corrections(mini, eep, feh, corr_params=None):
+    """
+    Return the empirical (dlogt, dlogr) corrections of low-mass stars.
+
+    `EEPTracks.get_corrections` documents the formula. `corr_params` is
+    (dtdm, drdm, msto_smooth, feh_scale), by default (0.09, -0.09, 30.0, 0.5).
+    """
+    if corr_params is None:
+        corr_params = (0.09, -0.09, 30.0, 0.5)
+    if len(corr_params) != 4:
+        raise ValueError(
+            "corr_params must be (dtdm, drdm, msto_smooth, feh_scale); "
+            f"got {corr_params}"
+        )
+    dtdm, drdm, msto_smooth, feh_scale = corr_params
+
+    # Clip the log arguments away from zero for extreme masses
+    mass_offset = mini - 1.0
+    eps = 1e-10
+    dlogt = np.log10(np.maximum(1.0 + mass_offset * dtdm, eps))
+    dlogr = np.log10(np.maximum(1.0 + mass_offset * drdm, eps))
+
+    # EEP and metallicity dependence
+    ecorr = 1.0 - 1.0 / (1.0 + np.exp(-(eep - 454.0) / msto_smooth))
+    fcorr = np.exp(feh_scale * feh)
+    dlogt = dlogt * (ecorr * fcorr)
+    dlogr = dlogr * (ecorr * fcorr)
+
+    # No corrections at solar mass and above
+    solar = mini >= 1.0
+    return np.where(solar, 0.0, dlogt), np.where(solar, 0.0, dlogr)
+
+
 class EEPTracks:
     """
     Stellar parameter predictions for individual stars using evolutionary tracks.
@@ -770,6 +803,12 @@ class EEPTracks:
             Corrections to [log(Teff), log(R)]. These are added to the
             base predictions from the interpolator.
 
+        Raises
+        ------
+        ValueError
+            If `labels` is not 1-D or 2-D, or `corr_params` does not have 4
+            entries.
+
         See Also
         --------
         get_predictions : Applies these corrections to stellar parameters
@@ -815,44 +854,7 @@ class EEPTracks:
         else:
             raise ValueError("Input `labels` must be 1-D or 2-D array.")
 
-        # Set correction parameters
-        if corr_params is not None:
-            dtdm, drdm, msto_smooth, feh_scale = corr_params
-        else:
-            dtdm, drdm, msto_smooth, feh_scale = 0.09, -0.09, 30.0, 0.5
-
-        # Compute corrections with safeguards
-        mass_offset = mini - 1.0
-        eps = 1e-10
-        temp_arg = np.maximum(1.0 + mass_offset * dtdm, eps)
-        radius_arg = np.maximum(1.0 + mass_offset * drdm, eps)
-
-        dlogt = np.log10(temp_arg)
-        dlogr = np.log10(radius_arg)
-
-        # EEP and metallicity dependence
-        ecorr = 1.0 - 1.0 / (1.0 + np.exp(-(eep - 454.0) / msto_smooth))
-        fcorr = np.exp(feh_scale * feh)
-
-        dlogt *= ecorr * fcorr
-        dlogr *= ecorr * fcorr
-
-        # Zero corrections for solar mass and above
-        if ndim == 1:
-            if mini >= 1.0:
-                dlogt, dlogr = 0.0, 0.0
-        elif ndim == 2:
-            mask = mini >= 1.0
-            dlogt[mask] = 0.0
-            dlogr[mask] = 0.0
-
-        # Format output
-        if ndim == 1:
-            corrs = np.array([dlogt, dlogr])
-        elif ndim == 2:
-            corrs = np.c_[dlogt, dlogr]
-
-        return corrs
+        return np.stack(_mass_corrections(mini, eep, feh, corr_params), axis=-1)
 
 
 class StarEvolTrack:
@@ -873,16 +875,25 @@ class StarEvolTrack:
     Parameters
     ----------
     tracks : EEPTracks
-        EEPTracks instance for stellar parameter predictions.
+        EEPTracks instance for stellar parameter predictions. Its
+        `predictions` must include loga, logl, logt, logg, feh_surf and
+        afe_surf.
 
     filters : list of str, optional
         Filter names for photometry computation. If None, uses all available.
 
     nnfile : str, optional
-        Path to neural network file for bolometric corrections.
+        Path to neural network file for bolometric corrections. If None,
+        `FastNNPredictor` finds the default file.
 
     verbose : bool, optional
         Whether to output progress messages. Default is True.
+
+    Raises
+    ------
+    ValueError
+        If `tracks.predictions` lacks a label listed above, or if a filter
+        is not in the neural network file.
 
     Attributes
     ----------
@@ -925,7 +936,12 @@ class StarEvolTrack:
 
     def __init__(self, tracks, filters=None, nnfile=None, verbose=True):
 
-        # Store tracks reference
+        needed = ("loga", "logl", "logt", "logg", "feh_surf", "afe_surf")
+        missing = [p for p in needed if p not in tracks.predictions]
+        if missing:
+            raise ValueError(
+                f"tracks.predictions lacks {missing}, which StarEvolTrack needs"
+            )
         self.tracks = tracks
 
         # Set up filters
@@ -933,23 +949,9 @@ class StarEvolTrack:
             filters = np.array(FILTERS)
         self.filters = filters
 
-        # Set default neural network file
-        if nnfile is None:
-            from ..data.loader import find_nn_file
-
-            nnfile = find_nn_file()
-
-        # Initialize neural network predictor
-        try:
-            self.predictor = FastNNPredictor(
-                filters=filters, nnfile=nnfile, verbose=verbose
-            )
-        except Exception as e:
-            if verbose:
-                sys.stderr.write(
-                    f"Warning: Neural network initialization failed: {e}\n"
-                )
-            self.predictor = None
+        self.predictor = FastNNPredictor(
+            filters=filters, nnfile=nnfile, verbose=verbose
+        )
 
     def get_seds(
         self,
@@ -1088,9 +1090,6 @@ class StarEvolTrack:
         ...     mini=1.2, eep=400, feh=-0.2, afe=0.1, smf=0.7
         ... )
         """
-        if self.predictor is None:
-            raise RuntimeError("Neural network predictor not available")
-
         # Grab input labels
         labels = {"mini": mini, "eep": eep, "feh": feh, "afe": afe}
         labels = np.array([labels[lbl] for lbl in self.tracks.labels])
@@ -1250,12 +1249,8 @@ class StarEvolTrack:
 
         Notes
         -----
-        The secondary is evaluated at the primary's [α/Fe] clamped to the
-        track library's available range (so the age matching is consistent
-        with the [α/Fe] later used for the secondary's parameters and SED in
-        `get_seds`). When the library's [α/Fe] range is unknown (no
-        ``gridpoints`` attribute on the tracks object), [α/Fe] = 0.0 is used,
-        matching the historical behavior for the solar-scaled MIST grids.
+        The secondary uses the primary's [α/Fe], as `get_seds` does for the
+        secondary's parameters and SED.
 
         Empirical corrections never touch ``loga``, so the age lookups skip
         them (``apply_corr=False``).
@@ -1264,19 +1259,10 @@ class StarEvolTrack:
         aidx = self.tracks.predictions.index("loga")
         mini2 = mini * smf
 
-        # Secondary [a/Fe]: primary's value clamped to the library's range.
-        # (Previously hard-coded to 0.0, which mismatched ages on
-        # alpha-enhanced track libraries.)
-        gridpoints = getattr(self.tracks, "gridpoints", None)
-        if isinstance(gridpoints, dict) and "afe" in gridpoints:
-            afe_grid = np.asarray(gridpoints["afe"], dtype=float)
-            afe2 = float(np.clip(afe, afe_grid.min(), afe_grid.max()))
-        else:
-            afe2 = 0.0
-
         # Fast path: invert the monotone age(EEP) curve directly.
+        gridpoints = getattr(self.tracks, "gridpoints", None)
         if isinstance(gridpoints, dict) and "eep" in gridpoints:
-            eep2 = self._invert_age_curve(loga, mini2, feh, afe2, aidx, tol)
+            eep2 = self._invert_age_curve(loga, mini2, feh, afe, aidx, tol)
             if eep2 is not None:
                 return eep2
 
@@ -1289,7 +1275,7 @@ class StarEvolTrack:
             # Get predicted age for secondary star with mass mini*smf at EEP x
             try:
                 loga_pred = self.tracks.get_predictions(
-                    [mini2, x, feh, afe2], apply_corr=False
+                    [mini2, x, feh, afe], apply_corr=False
                 )[aidx]
                 return (loga_pred - loga) ** 2
             except Exception:
@@ -1320,12 +1306,12 @@ class StarEvolTrack:
 
         return eep2
 
-    def _invert_age_curve(self, loga, mini2, feh, afe2, aidx, tol):
+    def _invert_age_curve(self, loga, mini2, feh, afe, aidx, tol):
         """
         Invert the interpolated age(EEP) curve for a star of mass `mini2`.
 
         Evaluates log10(age) along the full EEP grid axis at fixed
-        (mini2, feh, afe2) with one vectorized interpolator call, then
+        (mini2, feh, afe) with one vectorized interpolator call, then
         inverts the piecewise-linear curve with ``np.interp``. Because the
         underlying interpolant is linear in EEP with knots at the grid
         values, this inversion is exact (up to the acceptance check).
@@ -1338,8 +1324,8 @@ class StarEvolTrack:
             Secondary initial mass in solar masses.
         feh : float
             Metallicity [Fe/H].
-        afe2 : float
-            Alpha enhancement [α/Fe], already clamped to the library range.
+        afe : float
+            Alpha enhancement [α/Fe] of the primary.
         aidx : int
             Index of 'loga' in the tracks' predictions.
         tol : float
@@ -1354,7 +1340,7 @@ class StarEvolTrack:
         """
         try:
             eep_axis = np.asarray(self.tracks.gridpoints["eep"], dtype=float)
-            values = {"mini": mini2, "eep": eep_axis, "feh": feh, "afe": afe2}
+            values = {"mini": mini2, "eep": eep_axis, "feh": feh, "afe": afe}
             labels = np.column_stack(
                 [
                     np.broadcast_to(values[lbl], eep_axis.shape)

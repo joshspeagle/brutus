@@ -284,25 +284,15 @@ class TestMarginalization:
 class TestMainInterface:
     """Test the main isochrone_population_loglike function with real data."""
 
-    def test_parameter_validation(self):
-        """Test parameter validation for main function."""
-        theta = [
-            0.0,
-            9.5,
-            0.1,
-            3.1,
-            1000.0,
-            0.05,
-        ]  # [feh, loga, av, rv, dist, field_frac]
+    def test_theta_outside_isochrone_grid_returns_log_zero(self, real_stellarpop):
+        theta = [0.0, 20.0, 0.1, 3.1, 1000.0, 0.05]  # loga=20 is off the grid
         obs_phot = np.array([[1.0, 0.8, 0.6]])
         obs_err = np.array([[0.1, 0.08, 0.06]])
-
-        # Should fail with no isochrone
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")  # Suppress expected warnings
-
-            lnl = isochrone_population_loglike(theta, None, obs_phot, obs_err)
-            assert lnl == LOG_ZERO
+        with pytest.warns(UserWarning, match="No valid isochrone models"):
+            lnl = isochrone_population_loglike(
+                theta, real_stellarpop, obs_phot, obs_err, smf_grid=[0.0, 0.5]
+            )
+        assert lnl == LOG_ZERO
 
     def test_real_population_likelihood(self, real_stellarpop, mock_observations):
         """Test main function with real stellarpop and realistic parameters."""
@@ -359,7 +349,7 @@ class TestMainInterface:
         obs_phot = np.array([[1.0, 0.8]])
         obs_err = np.array([[0.1, 0.08, 0.06]])  # Wrong shape
 
-        with pytest.raises(ValueError, match="shapes must match"):
+        with pytest.raises(ValueError, match="same shape"):
             isochrone_population_loglike(theta, None, obs_phot, obs_err)
 
     def test_parallax_integration(self, real_stellarpop, mock_observations):
@@ -398,6 +388,72 @@ class TestMainInterface:
             # Should get a finite likelihood
             assert np.isfinite(lnl)
             assert isinstance(lnl, (int, float, np.number))
+
+
+class TestInputValidation:
+    """Malformed inputs raise before any model is generated (#106)."""
+
+    theta = [0.0, 9.5, 0.1, 3.1, 1000.0, 0.05]
+    obs_phot = np.full((3, 4), 1.0)
+    obs_err = np.full((3, 4), 0.1)
+
+    @pytest.mark.parametrize(
+        "kwargs, match",
+        [
+            ({"obs_phot": np.ones(4), "obs_err": np.ones(4)}, "obs_phot"),
+            ({"mask": np.ones((3, 2))}, "mask"),
+            ({"parallax": np.ones(2), "parallax_err": np.ones(2)}, "parallax"),
+            ({"parallax": np.ones(3)}, "parallax_err"),
+            ({"smf_grid": [1.0, 0.5, 0.0]}, "smf_grid"),
+            ({"smf_grid": [0.0, 0.5, 1.5]}, "smf_grid"),
+            ({"eep_grid": np.linspace(500, 300, 50)}, "eep_grid"),
+        ],
+    )
+    def test_malformed_input_raises_value_error(self, kwargs, match):
+        args = {"obs_phot": self.obs_phot, "obs_err": self.obs_err, **kwargs}
+        with pytest.raises(ValueError, match=match):
+            isochrone_population_loglike(self.theta, MockStellarPop(4), **args)
+
+    def test_misspelled_outlier_keyword_raises_type_error(self):
+        with pytest.raises(TypeError, match="bogus_kw"):
+            isochrone_population_loglike(
+                self.theta,
+                MockStellarPop(4),
+                self.obs_phot,
+                self.obs_err,
+                smf_grid=[0.0, 0.5],
+                eep_grid=np.linspace(300, 500, 20),
+                bogus_kw=1,
+            )
+
+    def test_model_value_error_propagates(self):
+        """Only a grid with no valid model returns LOG_ZERO; a ValueError from
+        the model code itself propagates."""
+
+        class FailingPop(MockStellarPop):
+            def get_seds(self, **kwargs):
+                raise ValueError("bad corr_params")
+
+        with pytest.raises(ValueError, match="bad corr_params"):
+            isochrone_population_loglike(
+                self.theta, FailingPop(4), self.obs_phot, self.obs_err
+            )
+
+    @pytest.mark.parametrize(
+        "kwargs, match",
+        [
+            ({"parallax": np.ones(3), "distance": 1000.0}, "parallax_err"),
+            ({"parallax": np.ones(3), "parallax_err": np.ones(3)}, "distance"),
+        ],
+    )
+    def test_cluster_loglike_parallax_needs_error_and_distance(self, kwargs, match):
+        grid = generate_isochrone_population_grid(
+            MockStellarPop(4), 0.0, 9.5, 0.1, 3.1, 1000.0, smf_grid=[0.0]
+        )
+        with pytest.raises(ValueError, match=match):
+            compute_isochrone_cluster_loglike(
+                self.obs_phot, self.obs_err, grid, **kwargs
+            )
 
 
 class TestIntegration:
@@ -627,6 +683,27 @@ class TestNaNAutoMask:
 
 class TestMeasureNormalization:
     """The marginalization must be invariant to the measure's overall scale."""
+
+    def test_marginalization_matches_direct_computation_bitwise(self):
+        from scipy.special import logsumexp
+
+        rng = np.random.default_rng(121)
+        lnl_mixture = rng.normal(-50.0, 20.0, size=(200, 6))
+        lnl_mixture[rng.random(200) < 0.1] = np.nan
+        lnl_mixture[rng.random((200, 6)) < 0.05] = -np.inf
+        mass_jac = rng.uniform(1e-4, 1e-2, 200)
+        smf_jac = rng.uniform(0.02, 0.05, 200)
+        original = lnl_mixture.copy()
+
+        ln_jac = np.log(mass_jac * smf_jac)
+        valid = np.any(np.isfinite(lnl_mixture), axis=1)
+        terms = lnl_mixture + ln_jac[:, None] - logsumexp(ln_jac[valid])
+        terms = np.where(np.isfinite(terms), terms, -np.inf)
+        expected = np.maximum(logsumexp(terms, axis=0), LOG_ZERO)
+
+        out = marginalize_isochrone_grid(lnl_mixture, mass_jac, smf_jac)
+        assert out.tobytes() == expected.tobytes()
+        np.testing.assert_array_equal(lnl_mixture, original)
 
     def test_marginalization_invariant_to_jacobian_scale(self):
         rng = np.random.default_rng(0)
@@ -1045,6 +1122,6 @@ class TestPrimaryCaching:
             )
         finally:
             iso.get_predictions = orig
-        # 1 primary call + one secondary call per 0 < smf < 1 slice (3 of 5).
-        # The old implementation used 5 primary + 3 secondary = 8 calls.
-        assert calls["n"] == 4
+        # 1 primary call, 1 call for the mini(EEP) inversion, and one
+        # secondary call per 0 < smf < 1 slice (3 of 5).
+        assert calls["n"] == 5

@@ -5,10 +5,10 @@
 Tests for binary population handling in brutus stellar populations module.
 
 This test suite covers coverage gaps in src/brutus/core/populations.py:
-1. Scalar fallback SED generation (lines 750-764)
+1. The mini_bound cut
 2. Equal-mass binary fraction (binary_fraction=1.0)
-3. return_dict=False output format (lines 803-804)
-4. _add_binary_components method (lines 829-916)
+3. return_dict=False output format
+4. _add_binary_components method
 """
 
 from copy import deepcopy
@@ -57,7 +57,7 @@ def _make_mock_isochrone(n_eep=10):
     def mock_get_predictions(
         feh=0.0, afe=0.0, loga=8.5, eep=None, apply_corr=True, corr_params=None
     ):
-        if eep is not None:
+        if eep is not None and eep is not eeps:
             # For secondary stars: generate scaled-down parameters
             sec_params = params.copy()
             sec_params[:, 0] *= 0.7
@@ -71,103 +71,37 @@ def _make_mock_isochrone(n_eep=10):
     return iso
 
 
-def _make_stellar_pop(iso, has_sed_batch=True, nfilt=5):
+def _make_stellar_pop(iso, nfilt=5):
     """Create a StellarPop with a mock predictor."""
     with mock_nn_predictor("brutus.core.populations"):
         pop = StellarPop(isochrone=iso, verbose=False)
 
     mock_predictor = MagicMock()
     mock_predictor.NFILT = nfilt
-    mock_predictor.sed.return_value = np.linspace(14.0, 16.0, nfilt)
 
-    if has_sed_batch:
-        # sed_batch needs to return shape (N, nfilt) where N = len(logt)
-        def _sed_batch_side_effect(**kwargs):
-            n = len(kwargs["logt"])
-            return np.tile(np.linspace(14.0, 16.0, nfilt), (n, 1))
+    # sed_batch needs to return shape (N, nfilt) where N = len(logt)
+    def _sed_batch_side_effect(**kwargs):
+        n = len(kwargs["logt"])
+        return np.tile(np.linspace(14.0, 16.0, nfilt), (n, 1))
 
-        mock_predictor.sed_batch.side_effect = _sed_batch_side_effect
-    else:
-        # Remove sed_batch entirely so hasattr returns False
-        del mock_predictor.sed_batch
+    mock_predictor.sed_batch.side_effect = _sed_batch_side_effect
 
     pop.predictor = mock_predictor
     pop.filters = [f"band_{i}" for i in range(nfilt)]
     return pop
 
 
-class TestScalarFallbackSEDGeneration:
-    """Test the scalar loop fallback when sed_batch is unavailable (lines 748-764)."""
-
-    def test_scalar_fallback_when_no_sed_batch(self):
-        """When predictor lacks sed_batch, code should fall back to scalar loop."""
+class TestMiniBound:
+    def test_stars_below_mini_bound_have_nan_seds(self):
         iso = _make_mock_isochrone(n_eep=5)
-        pop = _make_stellar_pop(iso, has_sed_batch=False, nfilt=4)
+        pop = _make_stellar_pop(iso, nfilt=4)
 
-        seds, params, params2 = pop.get_seds(feh=0.0, loga=9.0)
+        seds, params, _ = pop.get_seds(feh=0.0, loga=9.0, mini_bound=1.0)
 
-        # Should have called sed() for each star above mini_bound
-        assert pop.predictor.sed.called
-        assert isinstance(seds, np.ndarray)
-        assert seds.shape == (5, 4)
-        # All stars should have valid SEDs (all mini >= 0.5)
-        assert np.all(np.isfinite(seds))
-
-    def test_scalar_fallback_when_sed_batch_fails(self):
-        """When sed_batch raises, code should fall back to scalar loop."""
-        iso = _make_mock_isochrone(n_eep=5)
-        pop = _make_stellar_pop(iso, has_sed_batch=True, nfilt=4)
-
-        # Make sed_batch raise an exception to trigger fallback
-        pop.predictor.sed_batch.side_effect = RuntimeError("batch failed")
-
-        with pytest.warns(RuntimeWarning, match="Batch primary SED generation failed"):
-            seds, params, params2 = pop.get_seds(feh=0.0, loga=9.0)
-
-        # Should still produce valid output via scalar loop
-        assert pop.predictor.sed.called
-        assert isinstance(seds, np.ndarray)
-        assert seds.shape == (5, 4)
-
-    def test_scalar_fallback_respects_mini_bound(self):
-        """Scalar loop should skip stars below mini_bound."""
-        iso = _make_mock_isochrone(n_eep=5)
-        # Masses range from 0.6 to 2.5; mini_bound=1.0 should exclude some
-        pop = _make_stellar_pop(iso, has_sed_batch=False, nfilt=4)
-
-        seds, params, params2 = pop.get_seds(feh=0.0, loga=9.0, mini_bound=1.0)
-
-        # Stars below mini_bound should have NaN SEDs
-        masses = params["mini"]
-        for i in range(len(masses)):
-            if masses[i] < 1.0:
-                assert np.all(np.isnan(seds[i]))
-            else:
-                assert np.all(np.isfinite(seds[i]))
-
-    def test_scalar_fallback_handles_individual_failure(self):
-        """Scalar loop should warn and continue if individual sed() call fails."""
-        iso = _make_mock_isochrone(n_eep=5)
-        pop = _make_stellar_pop(iso, has_sed_batch=False, nfilt=4)
-
-        call_count = [0]
-        original_return = np.linspace(14.0, 16.0, 4)
-
-        def sed_side_effect(**kwargs):
-            call_count[0] += 1
-            if call_count[0] == 2:
-                raise ValueError("SED generation failed for this star")
-            return original_return.copy()
-
-        pop.predictor.sed.side_effect = sed_side_effect
-
-        with pytest.warns(RuntimeWarning, match="Primary SED generation failed"):
-            seds, params, params2 = pop.get_seds(feh=0.0, loga=9.0)
-
-        # The star that failed should have NaN SEDs
-        assert np.any(np.isnan(seds))
-        # Other stars should be fine
-        assert np.any(np.isfinite(seds))
+        below = params["mini"] < 1.0
+        assert below.any() and not below.all()
+        assert np.all(np.isnan(seds[below]))
+        assert np.all(np.isfinite(seds[~below]))
 
 
 class TestEqualMassBinary:
@@ -181,7 +115,7 @@ class TestEqualMassBinary:
     def test_binary_fraction_one_calls_add_binary(self):
         """binary_fraction=1.0 goes through _add_binary_components."""
         iso = _make_mock_isochrone(n_eep=8)
-        pop = _make_stellar_pop(iso, has_sed_batch=True, nfilt=4)
+        pop = _make_stellar_pop(iso, nfilt=4)
 
         seds, params, params2 = pop.get_seds(feh=0.0, loga=9.0, binary_fraction=1.0)
 
@@ -198,8 +132,8 @@ class TestEqualMassBinary:
     def test_binary_seds_differ_from_single(self):
         """Binary SEDs should differ from single-star SEDs (combined flux)."""
         iso = _make_mock_isochrone(n_eep=8)
-        pop_single = _make_stellar_pop(iso, has_sed_batch=True, nfilt=4)
-        pop_binary = _make_stellar_pop(iso, has_sed_batch=True, nfilt=4)
+        pop_single = _make_stellar_pop(iso, nfilt=4)
+        pop_binary = _make_stellar_pop(iso, nfilt=4)
 
         seds_single, _, _ = pop_single.get_seds(feh=0.0, loga=9.0, binary_fraction=0.0)
         seds_binary, _, _ = pop_binary.get_seds(feh=0.0, loga=9.0, binary_fraction=0.5)
@@ -216,7 +150,7 @@ class TestReturnDictFalse:
     def test_return_dict_false_returns_arrays(self):
         """With return_dict=False, params should be arrays not dicts."""
         iso = _make_mock_isochrone(n_eep=6)
-        pop = _make_stellar_pop(iso, has_sed_batch=True, nfilt=4)
+        pop = _make_stellar_pop(iso, nfilt=4)
 
         seds, params, params2 = pop.get_seds(feh=0.0, loga=9.0, return_dict=False)
 
@@ -226,41 +160,37 @@ class TestReturnDictFalse:
         assert isinstance(seds, np.ndarray)
 
     def test_return_dict_false_shape(self):
-        """Array output shapes should match the source code behavior."""
+        """params and params2 both have shape (Neep, Npred)."""
         n_eep = 6
         iso = _make_mock_isochrone(n_eep=n_eep)
-        pop = _make_stellar_pop(iso, has_sed_batch=True, nfilt=4)
+        pop = _make_stellar_pop(iso, nfilt=4)
 
         seds, params, params2 = pop.get_seds(feh=0.0, loga=9.0, return_dict=False)
 
         n_pred = len(iso.predictions)
-        # params = params_arr.T => shape (Npred, Neep)
-        assert params.shape == (n_pred, n_eep)
-        # params2 = params_arr2 (no binary) => shape (Neep, Npred)
+        assert params.shape == (n_eep, n_pred)
         assert params2.shape == (n_eep, n_pred)
         assert seds.shape == (n_eep, 4)
 
     def test_return_dict_false_shape_equal_mass_binary(self):
-        """binary_fraction=1.0 must return params2 in the same (Neep, Npred)
-        orientation as every other path (it previously returned the
-        transpose)."""
+        """binary_fraction=1.0 returns params and params2 as (Neep, Npred)."""
         n_eep = 6
         iso = _make_mock_isochrone(n_eep=n_eep)
-        pop = _make_stellar_pop(iso, has_sed_batch=True, nfilt=4)
+        pop = _make_stellar_pop(iso, nfilt=4)
 
         seds, params, params2 = pop.get_seds(
             feh=0.0, loga=9.0, binary_fraction=1.0, return_dict=False
         )
 
         n_pred = len(iso.predictions)
-        assert params.shape == (n_pred, n_eep)
+        assert params.shape == (n_eep, n_pred)
         assert params2.shape == (n_eep, n_pred)
         assert seds.shape == (n_eep, 4)
 
     def test_return_dict_true_returns_dicts(self):
         """Verify default return_dict=True returns dicts (contrast test)."""
         iso = _make_mock_isochrone(n_eep=6)
-        pop = _make_stellar_pop(iso, has_sed_batch=True, nfilt=4)
+        pop = _make_stellar_pop(iso, nfilt=4)
 
         seds, params, params2 = pop.get_seds(feh=0.0, loga=9.0, return_dict=True)
 
@@ -273,7 +203,7 @@ class TestReturnDictFalse:
         """return_dict=False should work correctly with binary populations."""
         n_eep = 8
         iso = _make_mock_isochrone(n_eep=n_eep)
-        pop = _make_stellar_pop(iso, has_sed_batch=True, nfilt=4)
+        pop = _make_stellar_pop(iso, nfilt=4)
 
         seds, params, params2 = pop.get_seds(
             feh=0.0, loga=9.0, binary_fraction=0.5, return_dict=False
@@ -282,9 +212,7 @@ class TestReturnDictFalse:
         n_pred = len(iso.predictions)
         assert isinstance(params, np.ndarray)
         assert isinstance(params2, np.ndarray)
-        # params = params_arr.T => (Npred, Neep)
-        assert params.shape == (n_pred, n_eep)
-        # params2 = params_arr2 => (Neep, Npred) -- not transposed
+        assert params.shape == (n_eep, n_pred)
         assert params2.shape == (n_eep, n_pred)
 
 
@@ -294,7 +222,7 @@ class TestAddBinaryComponents:
     def test_binary_components_generated(self):
         """Binary components should be generated with reasonable properties."""
         iso = _make_mock_isochrone(n_eep=10)
-        pop = _make_stellar_pop(iso, has_sed_batch=True, nfilt=4)
+        pop = _make_stellar_pop(iso, nfilt=4)
 
         seds, params, params2 = pop.get_seds(feh=0.0, loga=9.0, binary_fraction=0.5)
 
@@ -304,7 +232,7 @@ class TestAddBinaryComponents:
     def test_binary_secondary_mass_relation(self):
         """Secondary mass should be binary_fraction * primary mass."""
         iso = _make_mock_isochrone(n_eep=10)
-        pop = _make_stellar_pop(iso, has_sed_batch=True, nfilt=4)
+        pop = _make_stellar_pop(iso, nfilt=4)
 
         bf = 0.7
         seds, params, params2 = pop.get_seds(feh=0.0, loga=9.0, binary_fraction=bf)
@@ -320,7 +248,7 @@ class TestAddBinaryComponents:
     def test_binary_eep_restriction(self):
         """Binaries should be restricted to EEPs below eep_binary_max."""
         iso = _make_mock_isochrone(n_eep=10)
-        pop = _make_stellar_pop(iso, has_sed_batch=True, nfilt=4)
+        pop = _make_stellar_pop(iso, nfilt=4)
 
         # Use a low eep_binary_max to restrict binary modeling
         # The _add_binary_components method sets eep2 to NaN for
@@ -335,7 +263,7 @@ class TestAddBinaryComponents:
         assert seds_restricted.shape == (10, 4)
 
         # Compare with a high eep_binary_max -- should differ
-        pop2 = _make_stellar_pop(iso, has_sed_batch=True, nfilt=4)
+        pop2 = _make_stellar_pop(iso, nfilt=4)
         seds_unrestricted, _, _ = pop2.get_seds(
             feh=0.0, loga=9.0, binary_fraction=0.5, eep_binary_max=700.0
         )
@@ -346,7 +274,7 @@ class TestAddBinaryComponents:
         n_eep = 10
         nfilt = 4
         iso = _make_mock_isochrone(n_eep=n_eep)
-        pop = _make_stellar_pop(iso, has_sed_batch=True, nfilt=nfilt)
+        pop = _make_stellar_pop(iso, nfilt=nfilt)
 
         seds, params, params2 = pop.get_seds(feh=0.0, loga=9.0, binary_fraction=0.5)
 
@@ -361,48 +289,6 @@ class TestAddBinaryComponents:
             assert len(params[key]) == n_eep
             assert len(params2[key]) == n_eep
 
-    def test_binary_scalar_fallback_for_secondaries(self):
-        """When sed_batch is unavailable, secondary SEDs use scalar loop."""
-        iso = _make_mock_isochrone(n_eep=5)
-        pop = _make_stellar_pop(iso, has_sed_batch=False, nfilt=4)
-
-        seds, params, params2 = pop.get_seds(feh=0.0, loga=9.0, binary_fraction=0.5)
-
-        # Should still produce output even without sed_batch
-        assert isinstance(seds, np.ndarray)
-        assert seds.shape == (5, 4)
-        # sed() should have been called for both primary and secondary stars
-        assert pop.predictor.sed.call_count > 5  # More than just primary stars
-
-    def test_binary_secondary_batch_failure_fallback(self):
-        """When secondary sed_batch fails, should fall back to scalar loop."""
-        iso = _make_mock_isochrone(n_eep=5)
-        pop = _make_stellar_pop(iso, has_sed_batch=True, nfilt=4)
-
-        call_count = [0]
-
-        def batch_side_effect(**kwargs):
-            call_count[0] += 1
-            n = len(kwargs["logt"])
-            if call_count[0] == 1:
-                # Primary batch succeeds
-                return np.tile(np.linspace(14.0, 16.0, 4), (n, 1))
-            else:
-                # Secondary batch fails
-                raise RuntimeError("secondary batch failed")
-
-        pop.predictor.sed_batch.side_effect = batch_side_effect
-
-        with pytest.warns(
-            RuntimeWarning, match="Batch secondary SED generation failed"
-        ):
-            seds, params, params2 = pop.get_seds(feh=0.0, loga=9.0, binary_fraction=0.5)
-
-        assert isinstance(seds, np.ndarray)
-        # sed() should have been called for fallback secondary computation
-        assert pop.predictor.sed.called
-
-    @pytest.mark.filterwarnings("ignore::RuntimeWarning")
     def test_binary_no_valid_masses(self):
         """When no primary masses are valid for interpolation, handle gracefully."""
         iso = MagicMock()
@@ -428,8 +314,6 @@ class TestAddBinaryComponents:
 
         mock_predictor = MagicMock()
         mock_predictor.NFILT = 4
-        mock_predictor.sed.return_value = np.array([14.0, 15.0, 15.5, 16.0])
-        del mock_predictor.sed_batch
         pop.predictor = mock_predictor
 
         # Should not crash -- all SEDs will be NaN since mini < mini_bound (NaN)
@@ -442,7 +326,7 @@ class TestAddBinaryComponents:
 
         results = {}
         for bf in [0.0, 0.3, 0.7, 1.0]:
-            pop = _make_stellar_pop(iso, has_sed_batch=True, nfilt=4)
+            pop = _make_stellar_pop(iso, nfilt=4)
             seds, params, params2 = pop.get_seds(feh=0.0, loga=9.0, binary_fraction=bf)
             results[bf] = (seds.copy(), params2.copy())
 
@@ -450,17 +334,70 @@ class TestAddBinaryComponents:
         assert np.all(np.isnan(results[0.0][1]["mini"]))
 
 
-class TestPredictorNotAvailable:
-    """Test error when predictor is None."""
+class TestCompanionInversion:
+    """Companions come from the isochrone's own mini(EEP) relation (#122,
+    #123, #127)."""
 
-    def test_no_predictor_raises_error(self):
-        """get_seds should raise RuntimeError when predictor is None."""
-        iso = _make_mock_isochrone(n_eep=5)
-        with mock_nn_predictor("brutus.core.populations"):
-            pop = StellarPop(isochrone=iso, verbose=False)
-        pop.predictor = None
+    def test_binary_seds_do_not_depend_on_eep_sampling(self, real_stellarpop):
+        pop = real_stellarpop
+        coarse = np.arange(300.0, 480.0, 10)
+        kw = dict(feh=0.0, loga=9.5, binary_fraction=0.6)
+        seds, _, params2 = pop.get_seds(eep=coarse, **kw)
+        seds_u, _, params2_u = pop.get_seds(**kw)
+        rows = np.searchsorted(pop.isochrone.eep_u, coarse)
+        npt.assert_array_equal(pop.isochrone.eep_u[rows], coarse)
+        npt.assert_allclose(seds, seds_u[rows], rtol=0, atol=1e-10)
+        npt.assert_allclose(params2["mini"], params2_u["mini"][rows], rtol=1e-12)
 
-        with pytest.raises(
-            RuntimeError, match="Neural network predictor not available"
-        ):
-            pop.get_seds(feh=0.0, loga=9.0)
+    def test_single_eep_gets_a_companion(self, real_stellarpop):
+        kw = dict(feh=0.0, loga=9.5, binary_fraction=0.6)
+        seds, _, params2 = real_stellarpop.get_seds(eep=[350.0], **kw)
+        single, _, _ = real_stellarpop.get_seds(eep=[350.0], feh=0.0, loga=9.5)
+        assert np.isfinite(params2["mini"][0])
+        assert np.all(seds < single)
+
+    def test_params2_is_finite_only_for_companions_in_the_sed(self, real_stellarpop):
+        eep = np.arange(202.0, 700.0, 2)
+        kw = dict(feh=0.0, loga=9.5, eep=eep)
+        single, _, _ = real_stellarpop.get_seds(**kw)
+        seds, _, params2 = real_stellarpop.get_seds(binary_fraction=0.5, **kw)
+        has_companion = np.any(seds != single, axis=1) & np.isfinite(single[:, 0])
+        assert has_companion.sum() > 0
+        npt.assert_array_equal(np.isfinite(params2["mini"]), has_companion)
+
+    def test_params2_is_nan_where_the_primary_sed_is_nan(self, real_stellarpop):
+        # At [Fe/H] = 0.5 some primaries fall outside the network's range, so
+        # their SED is NaN even when the companion's SED is finite.
+        seds, _, params2 = real_stellarpop.get_seds(
+            feh=0.5, loga=8.75, binary_fraction=0.6
+        )
+        no_sed = ~np.all(np.isfinite(seds), axis=1)
+        assert no_sed.any()
+        assert np.all(np.isnan(params2["mini"][no_sed]))
+
+    def test_array_predictions_and_two_dimensional_eep(self):
+        iso = _make_mock_isochrone(n_eep=10)
+        iso.predictions = np.array(iso.predictions)
+        pop = _make_stellar_pop(iso, nfilt=4)
+        seds, _, _ = pop.get_seds(feh=0.0, loga=9.0, binary_fraction=0.5)
+        assert seds.shape == (10, 4)
+        with pytest.raises(ValueError, match="eep must be a scalar or a 1-D"):
+            pop.get_seds(eep=np.full((2, 2), 300.0))
+
+    @pytest.mark.parametrize("eep", [np.arange(202, 700, 2), 300])
+    def test_integer_eep_matches_float_eep(self, real_stellarpop, eep):
+        for loga in (9.0, 11.0):  # loga=11 has no valid primaries
+            kw = dict(feh=0.0, loga=loga, binary_fraction=0.5)
+            seds_int, _, _ = real_stellarpop.get_seds(eep=eep, **kw)
+            seds_float, _, _ = real_stellarpop.get_seds(
+                eep=np.asarray(eep, dtype=float), **kw
+            )
+            npt.assert_array_equal(seds_int, seds_float)
+
+    @pytest.mark.parametrize("bad", [1.5, -0.3, np.nan])
+    def test_binary_fraction_outside_unit_interval_raises(self, bad):
+        pop = _make_stellar_pop(_make_mock_isochrone(n_eep=5))
+        with pytest.raises(ValueError, match="binary_fraction"):
+            pop.get_seds(binary_fraction=bad)
+        with pytest.raises(ValueError, match="smf_values"):
+            pop.get_seds_smf_grid([0.0, bad])

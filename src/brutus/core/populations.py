@@ -13,7 +13,7 @@ The module follows a clean separation of concerns:
 - StellarPop: SED/photometry generation for populations
 
 This design is consistent with the individual star modeling pattern:
-- EEPtracks: Stellar parameter predictions for individuals
+- EEPTracks: Stellar parameter predictions for individuals
 - StarEvolTrack: SED/photometry generation for individuals
 
 Classes
@@ -49,7 +49,7 @@ Advanced usage with binary populations:
 
 >>> # Model binary stellar populations
 >>> seds, params, params2 = pop_synth.get_seds(
-...     feh=-0.5, afe=0.3, loga=10.0,
+...     feh=-0.5, afe=0.0, loga=10.0,
 ...     binary_fraction=0.4,  # 40% mass ratio binaries
 ...     av=0.2, dist=2000.0
 ... )
@@ -80,7 +80,6 @@ References
 """
 
 import sys
-import warnings
 from pathlib import Path
 
 import h5py
@@ -94,11 +93,22 @@ from ..data.filters import FILTERS
 
 # Import from utils (to be reorganized)
 from ..utils.photometry import add_mag
+from .individual import _mass_corrections
 
 # Import neural network predictor
 from .neural_nets import FastNNPredictor
 
 __all__ = ["Isochrone", "StellarPop"]
+
+# Isochrone predictions that StellarPop reads to compute SEDs.
+_SED_LABELS = ("mini", "logl", "logt", "logg", "feh_surf", "afe_surf")
+
+
+def _check_binary_fractions(name, values):
+    """Raise `ValueError` unless every value is finite and in [0, 1]."""
+    values = np.asarray(values, dtype=float)
+    if not np.all(np.isfinite(values) & (values >= 0.0) & (values <= 1.0)):
+        raise ValueError(f"{name} must be finite and in [0, 1]; got {values}")
 
 
 class Isochrone:
@@ -110,8 +120,8 @@ class Isochrone:
     parameter prediction (masses, temperatures, luminosities, etc.) without
     photometry generation.
 
-    This class is analogous to MISTtracks but for stellar populations:
-    - MISTtracks: Individual star parameters (mini, EEP, feh, afe) → parameters
+    This class is analogous to EEPTracks but for stellar populations:
+    - EEPTracks: Individual star parameters (mini, EEP, feh, afe) → parameters
     - Isochrone: Population parameters (feh, afe, loga, EEP) → parameters
 
     For photometry generation, use StellarPop with this class.
@@ -124,6 +134,8 @@ class Isochrone:
         download directory (the Pooch cache, or ``$ASTRO_BRUTUS_DATA_DIR``
         when set), then in ``data/DATAFILES`` in the repository; a
         `FileNotFoundError` names `brutus.data.fetch_isos` when it is absent.
+        The file must hold the mini, logt, logl and logg labels, which the
+        empirical corrections need; a missing one raises a `ValueError`.
 
     predictions : list of str, optional
         The names of stellar parameters to predict. Must be a subset of the
@@ -163,7 +175,7 @@ class Isochrone:
 
     >>> import numpy as np
     >>> eep_range = np.arange(200, 500, 50)  # Main sequence to turnoff
-    >>> params = iso.get_predictions(feh=-0.5, afe=0.3, loga=10.0, eep=eep_range)
+    >>> params = iso.get_predictions(feh=-0.5, afe=0.0, loga=10.0, eep=eep_range)
     """
 
     def __init__(self, mistfile=None, predictions=None, verbose=True):
@@ -224,6 +236,16 @@ class Isochrone:
         )
         self._pred_identity = list(self.predictions) == list(self.pred_labels)
 
+        # Columns that the empirical corrections read and shift
+        corr_labels = ["mini", "logt", "logl", "logg"]
+        missing = [p for p in corr_labels if p not in self.pred_labels]
+        if missing:
+            raise ValueError(
+                f"{mistfile} lacks the labels {missing} that the empirical "
+                "corrections need"
+            )
+        self._corr_idxs = [self.pred_labels.index(p) for p in corr_labels]
+
         # Initialize interpolator
         self._build_interpolator()
 
@@ -276,27 +298,18 @@ class Isochrone:
                     sel = np.all(np.isfinite(self.pred_grid[i, j, k]), axis=1)
 
                     if np.sum(sel) > 1:  # Need at least 2 points
-                        try:
-                            # Linearly interpolate over EEP grid
-                            pnew = [
-                                np.interp(
-                                    self.eep_u,
-                                    self.eep_u[sel],
-                                    par,
-                                    left=np.nan,
-                                    right=np.nan,
-                                )
-                                for par in self.pred_grid[i, j, k, sel].T
-                            ]
-                            self.pred_grid[i, j, k] = np.array(pnew).T
-                        except Exception as e:
-                            warnings.warn(
-                                f"Gap filling failed for grid cell "
-                                f"(feh={self.feh_u[i]}, afe={self.afe_u[j]}, "
-                                f"loga={self.loga_u[k]}): {e}",
-                                RuntimeWarning,
-                                stacklevel=2,
+                        # Linearly interpolate over EEP grid
+                        pnew = [
+                            np.interp(
+                                self.eep_u,
+                                self.eep_u[sel],
+                                par,
+                                left=np.nan,
+                                right=np.nan,
                             )
+                            for par in self.pred_grid[i, j, k, sel].T
+                        ]
+                        self.pred_grid[i, j, k] = np.array(pnew).T
 
         # Handle singular alpha enhancement dimension
         if self.grid_dims[1] == 1:
@@ -334,6 +347,8 @@ class Isochrone:
 
         afe : float, optional
             Alpha enhancement [alpha/Fe] relative to solar. Default is 0.0.
+            A value outside the grid's `afe` range returns NaN; for the
+            shipped MIST file, the only valid value is 0.0.
 
         loga : float, optional
             Log10(age in years). Default is 8.5 (≈316 Myr).
@@ -346,6 +361,8 @@ class Isochrone:
 
         corr_params : tuple, optional
             Correction parameters (dtdm, drdm, msto_smooth, feh_scale).
+            Default is (0.09, -0.09, 30.0, 0.5), as in
+            `EEPTracks.get_corrections`.
 
         Returns
         -------
@@ -353,6 +370,11 @@ class Isochrone:
             Stellar parameter predictions for each EEP value. The columns
             correspond to the parameters listed in `self.predictions`
             (a subset/reordering of the file's `self.pred_labels`).
+
+        Raises
+        ------
+        ValueError
+            If `corr_params` does not have 4 entries.
 
         See Also
         --------
@@ -365,12 +387,15 @@ class Isochrone:
         Returns NaN for parameters outside the grid bounds or where data is
         not available.
 
-        Common EEP ranges:
+        MIST primary EEPs (Dotter 2016):
         - Pre-main sequence: EEP < 202
         - Zero-age main sequence: EEP = 202
         - Terminal-age main sequence: EEP = 454
-        - Subgiant branch: EEP 454-605
-        - Red giant branch: EEP 605-1409
+        - Subgiant and red giant branches: EEP 454-605 (RGB tip at 605)
+        - Core helium burning: EEP 631-707
+        - Early asymptotic giant branch: EEP 707-808
+        - Thermally pulsing AGB: EEP 808
+        - Post-AGB: EEP 1409
 
         Examples
         --------
@@ -397,29 +422,16 @@ class Isochrone:
         except Exception as e:
             raise RuntimeError(f"Interpolation failed: {e}")
 
-        # Apply empirical corrections if requested
-        if apply_corr and hasattr(self, "_apply_corrections"):
-            try:
-                # Extract parameters needed for corrections
-                mini_idx = list(self.pred_labels).index("mini")
-                logt_idx = list(self.pred_labels).index("logt")
-                logl_idx = list(self.pred_labels).index("logl")
-                logg_idx = list(self.pred_labels).index("logg")
-
-                mini = preds[:, mini_idx]
-
-                # Apply corrections
-                corrs = self._apply_corrections(
-                    mini=mini, feh=feh_arr, eep=eep, corr_params=corr_params
-                )
-
-                dlogt, dlogr = corrs.T
-                preds[:, logt_idx] += dlogt
-                preds[:, logl_idx] += 2.0 * dlogr  # L ∝ R^2
-                preds[:, logg_idx] -= 2.0 * dlogr  # g ∝ M/R^2
-
-            except Exception as e:
-                warnings.warn(f"Correction application failed: {e}")
+        # Apply empirical corrections if requested (the same effective map
+        # as EEPTracks.get_predictions; see EEPTracks.get_corrections)
+        if apply_corr:
+            mini_idx, logt_idx, logl_idx, logg_idx = self._corr_idxs
+            dlogt, dlogr = _mass_corrections(
+                preds[:, mini_idx], eep, feh_arr, corr_params
+            )
+            preds[:, logt_idx] += dlogt
+            preds[:, logl_idx] += 2.0 * dlogr  # L ∝ R^2
+            preds[:, logg_idx] -= 2.0 * dlogr  # g ∝ M/R^2
 
         # Subset/reorder the interpolator output (file `pred_labels` order)
         # into the order the user requested via `self.predictions`. The
@@ -429,64 +441,6 @@ class Isochrone:
             preds = preds[:, self._pred_idxs]
 
         return preds
-
-    def _apply_corrections(self, mini, feh, eep, corr_params=None):
-        """
-        Apply empirical corrections to stellar parameters.
-
-        Computes corrections to effective temperature and radius based on
-        stellar mass, evolutionary phase, and metallicity. This method
-        parallels the corrections in EEPTracks but adapted for isochrone data.
-
-        Parameters
-        ----------
-        mini : array_like
-            Initial stellar masses in solar masses
-        feh : array_like
-            Metallicities [Fe/H]
-        eep : array_like
-            Equivalent evolutionary points
-        corr_params : tuple, optional
-            Correction parameters (dtdm, drdm, msto_smooth, feh_scale).
-            Default is (0.09, -0.09, 30.0, 0.5).
-
-        Returns
-        -------
-        corrs : numpy.ndarray of shape (N, 2)
-            Corrections to [log(Teff), log(R)]
-
-        See Also
-        --------
-        brutus.core.EEPTracks.get_corrections : Individual star corrections
-        get_predictions : Applies these corrections to predictions
-        """
-        if corr_params is not None:
-            dtdm, drdm, msto_smooth, feh_scale = corr_params
-        else:
-            dtdm, drdm, msto_smooth, feh_scale = 0.09, -0.09, 30.0, 0.5
-
-        # Safeguarded corrections computation
-        mass_offset = mini - 1.0
-        eps = 1e-10
-        temp_arg = np.maximum(1.0 + mass_offset * dtdm, eps)
-        radius_arg = np.maximum(1.0 + mass_offset * drdm, eps)
-
-        dlogt = np.log10(temp_arg)
-        dlogr = np.log10(radius_arg)
-
-        # EEP and metallicity dependence
-        ecorr = 1.0 - 1.0 / (1.0 + np.exp(-(eep - 454.0) / msto_smooth))
-        fcorr = np.exp(feh_scale * feh)
-
-        dlogt *= ecorr * fcorr
-        dlogr *= ecorr * fcorr
-
-        # Zero corrections for solar mass and above
-        mask = mini >= 1.0
-        dlogt[mask] = 0.0
-        dlogr[mask] = 0.0
-
-        return np.c_[dlogt, dlogr]
 
 
 class StellarPop:
@@ -507,16 +461,25 @@ class StellarPop:
     Parameters
     ----------
     isochrone : Isochrone
-        Isochrone instance for stellar parameter predictions.
+        Isochrone instance for stellar parameter predictions. Its
+        `predictions` must include mini, logl, logt, logg, feh_surf and
+        afe_surf.
 
     filters : list of str, optional
         Filter names for photometry computation. If None, uses all available.
 
     nnfile : str, optional
-        Path to neural network file for bolometric corrections.
+        Path to neural network file for bolometric corrections. If None,
+        `FastNNPredictor` finds the default file.
 
     verbose : bool, optional
         Whether to output progress messages. Default is True.
+
+    Raises
+    ------
+    ValueError
+        If `isochrone.predictions` lacks a label listed above, or if a
+        filter is not in the neural network file.
 
     Attributes
     ----------
@@ -546,7 +509,7 @@ class StellarPop:
 
     >>> # Model population with 40% mass ratio binaries
     >>> seds, params, params2 = ssp.get_seds(
-    ...     feh=-0.5, afe=0.3, loga=10.0,
+    ...     feh=-0.5, afe=0.0, loga=10.0,
     ...     binary_fraction=0.4,
     ...     av=0.2, dist=2000.0
     ... )
@@ -574,7 +537,11 @@ class StellarPop:
 
     def __init__(self, isochrone, filters=None, nnfile=None, verbose=True):
 
-        # Store isochrone reference
+        missing = [p for p in _SED_LABELS if p not in isochrone.predictions]
+        if missing:
+            raise ValueError(
+                f"isochrone.predictions lacks {missing}, which StellarPop needs"
+            )
         self.isochrone = isochrone
 
         # Set up filters
@@ -582,30 +549,13 @@ class StellarPop:
             filters = np.array(FILTERS)
         self.filters = filters
 
-        # Set default neural network file
-        if nnfile is None:
-            from ..data.loader import find_nn_file
+        self.predictor = FastNNPredictor(
+            filters=filters, nnfile=nnfile, verbose=verbose
+        )
 
-            nnfile = find_nn_file()
-
-        # Initialize neural network predictor
-        try:
-            self.predictor = FastNNPredictor(
-                filters=filters, nnfile=nnfile, verbose=verbose
-            )
-        except Exception as e:
-            if verbose:
-                sys.stderr.write(
-                    f"Warning: Neural network initialization failed: {e}\n"
-                )
-            self.predictor = None
-
-    def _evaluate_seds(self, params, valid_mask, av, rv, dist, label=""):
+    def _evaluate_seds(self, params, valid_mask, av, rv, dist):
         """
-        Evaluate SEDs using batch method with scalar fallback.
-
-        Attempts vectorized evaluation via ``sed_batch`` first. If that fails
-        (or is unavailable), falls back to a per-star ``sed()`` loop.
+        Evaluate SEDs with ``sed_batch`` on the rows in `valid_mask`.
 
         Parameters
         ----------
@@ -626,63 +576,23 @@ class StellarPop:
         dist : float
             Distance in parsecs.
 
-        label : str, optional
-            Descriptive label used in warning messages (e.g., ``"primary"``
-            or ``"secondary"``). Default is ``""``.
-
         Returns
         -------
         seds : numpy.ndarray of shape (N, Nfilt)
             SED array with predictions for valid stars and NaN elsewhere.
         """
-        N = len(params["mini"])
-        seds = np.full((N, self.predictor.NFILT), np.nan)
-        n_valid = np.sum(valid_mask)
-
-        if n_valid > 0 and hasattr(self.predictor, "sed_batch"):
-            try:
-                seds[valid_mask] = self.predictor.sed_batch(
-                    logt=params["logt"][valid_mask],
-                    logg=params["logg"][valid_mask],
-                    feh_surf=params["feh_surf"][valid_mask],
-                    logl=params["logl"][valid_mask],
-                    afe=params["afe_surf"][valid_mask],
-                    av=av,
-                    rv=rv,
-                    dist=dist,
-                )
-            except Exception as e:
-                warnings.warn(
-                    f"Batch {label}SED generation failed, falling back to "
-                    f"loop: {e}",
-                    RuntimeWarning,
-                    stacklevel=3,
-                )
-                # Fall through to scalar loop below
-                n_valid = 0
-
-        if n_valid == 0 or not hasattr(self.predictor, "sed_batch"):
-            for i in range(N):
-                if valid_mask[i]:
-                    try:
-                        seds[i] = self.predictor.sed(
-                            logl=params["logl"][i],
-                            logt=params["logt"][i],
-                            logg=params["logg"][i],
-                            feh_surf=params["feh_surf"][i],
-                            afe=params["afe_surf"][i],
-                            av=av,
-                            rv=rv,
-                            dist=dist,
-                        )
-                    except Exception as e:
-                        warnings.warn(
-                            f"{label.capitalize()}SED generation failed for "
-                            f"index {i} (mini={params['mini'][i]:.3f}): {e}",
-                            RuntimeWarning,
-                            stacklevel=3,
-                        )
-
+        seds = np.full((len(params["mini"]), self.predictor.NFILT), np.nan)
+        if np.any(valid_mask):
+            seds[valid_mask] = self.predictor.sed_batch(
+                logt=params["logt"][valid_mask],
+                logg=params["logg"][valid_mask],
+                feh_surf=params["feh_surf"][valid_mask],
+                logl=params["logl"][valid_mask],
+                afe=params["afe_surf"][valid_mask],
+                av=av,
+                rv=rv,
+                dist=dist,
+            )
         return seds
 
     def get_seds(
@@ -710,13 +620,16 @@ class StellarPop:
             Metallicity [Fe/H]. Default is 0.0.
 
         afe : float, optional
-            Alpha enhancement [alpha/Fe]. Default is 0.0.
+            Alpha enhancement [alpha/Fe]. Default is 0.0. A value outside the
+            isochrone grid's `afe` range gives NaN SEDs; for the shipped MIST
+            file, the only valid value is 0.0.
 
         loga : float, optional
             Log10(age in years). Default is 8.5.
 
-        eep : array-like, optional
-            Equivalent evolutionary points. If None, uses isochrone default.
+        eep : float or array-like, optional
+            Equivalent evolutionary points, a scalar or a 1-D array.
+            If None, uses the isochrone's EEP grid.
 
         av : float, optional
             V-band extinction A(V). Default is 0.0.
@@ -725,7 +638,8 @@ class StellarPop:
             Extinction law parameter R(V). Default is 3.3.
 
         binary_fraction : float, optional
-            Secondary mass fraction for binaries. Default is 0.0 (no binaries).
+            Secondary mass fraction for binaries, in [0, 1]. Default is 0.0
+            (no binaries).
             - 0.0: No binaries
             - 0 < binary_fraction < 1: Mass ratio binaries
             - 1.0: Equal mass binaries
@@ -733,7 +647,8 @@ class StellarPop:
             Binary companions are only added for primaries with
             ``eep <= eep_binary_max``; other stars (and stars whose companion
             falls below ``mini_bound`` or has no age-consistent EEP) keep
-            their primary-only SED.
+            their primary-only SED. The companion EEP inverts mini(EEP) on
+            the isochrone's own EEP grid, so it does not depend on `eep`.
 
         dist : float, optional
             Distance in parsecs. Default is 1000.0.
@@ -759,10 +674,18 @@ class StellarPop:
             Synthetic SEDs in magnitudes.
 
         params : dict or numpy.ndarray
-            Primary component stellar parameters.
+            Primary component stellar parameters: a dict of (Neep,) arrays
+            keyed by `isochrone.predictions`, or with ``return_dict=False``
+            an array of shape (Neep, Npred) with columns in that order.
 
         params2 : dict or numpy.ndarray
-            Secondary component parameters (for binaries).
+            Secondary component parameters, in the same form as `params`.
+            NaN for every star whose SED has no companion.
+
+        Raises
+        ------
+        ValueError
+            If `binary_fraction` is not finite or lies outside [0, 1].
 
         See Also
         --------
@@ -800,24 +723,27 @@ class StellarPop:
         ...     av=0.2, dist=2000.0
         ... )
         """
+        _check_binary_fractions("binary_fraction", binary_fraction)
+        eep = self._eep_array(eep)
         seds, params_arr, params = self._compute_primary(
             feh, afe, loga, eep, av, rv, dist, mini_bound, apply_corr, corr_params
         )
-
-        # The EEP grid actually used for the predictions above (needed to
-        # restrict binary companions; must match the caller's grid rather
-        # than always assuming the isochrone default).
-        eep_used = self.isochrone.eep_u if eep is None else np.asarray(eep)
+        mini_eep = (
+            self._mini_eep_relation(feh, afe, loga)
+            if 0.0 < binary_fraction < 1.0
+            else None
+        )
 
         return self._apply_binaries(
             seds,
             params_arr,
             params,
             binary_fraction,
+            mini_eep,
             feh,
             afe,
             loga,
-            eep_used,
+            eep,
             mini_bound,
             eep_binary_max,
             av,
@@ -858,9 +784,9 @@ class StellarPop:
         Parameters
         ----------
         smf_values : array-like of float
-            Binary mass fractions (secondary mass fractions) to evaluate.
-            Each entry is interpreted exactly like ``binary_fraction`` in
-            :meth:`get_seds`.
+            Binary mass fractions (secondary mass fractions) to evaluate, each
+            in [0, 1]. Each entry is interpreted exactly like
+            ``binary_fraction`` in :meth:`get_seds`.
 
         feh, afe, loga, eep, av, rv, dist, mini_bound, eep_binary_max, \
 apply_corr, corr_params, return_dict
@@ -874,19 +800,31 @@ apply_corr, corr_params, return_dict
             share underlying arrays across entries and must not be modified
             in place.
 
+        Raises
+        ------
+        ValueError
+            If any value of `smf_values` is not finite or lies outside [0, 1].
+
         See Also
         --------
         get_seds : Single binary-mass-fraction evaluation.
         brutus.analysis.populations.generate_isochrone_population_grid :
             Main consumer of this method.
         """
+        smf_values = np.atleast_1d(np.asarray(smf_values, dtype=float))
+        _check_binary_fractions("smf_values", smf_values)
+        eep = self._eep_array(eep)
         seds0, params_arr, params = self._compute_primary(
             feh, afe, loga, eep, av, rv, dist, mini_bound, apply_corr, corr_params
         )
-        eep_used = self.isochrone.eep_u if eep is None else np.asarray(eep)
+        mini_eep = (
+            self._mini_eep_relation(feh, afe, loga)
+            if np.any((smf_values > 0.0) & (smf_values < 1.0))
+            else None
+        )
 
         results = []
-        for smf in np.atleast_1d(smf_values):
+        for smf in smf_values:
             # Binary handling mutates the SED array in place, so each SMF
             # slice starts from a fresh copy of the shared primary SEDs.
             results.append(
@@ -894,11 +832,12 @@ apply_corr, corr_params, return_dict
                     seds0.copy(),
                     params_arr,
                     dict(params),
-                    float(smf),
+                    smf,
+                    mini_eep,
                     feh,
                     afe,
                     loga,
-                    eep_used,
+                    eep,
                     mini_bound,
                     eep_binary_max,
                     av,
@@ -910,6 +849,30 @@ apply_corr, corr_params, return_dict
                 )
             )
         return results
+
+    def _eep_array(self, eep):
+        """Return `eep` as a 1-D float array, or the isochrone's EEP grid."""
+        if eep is None:
+            return self.isochrone.eep_u
+        eep = np.atleast_1d(np.asarray(eep, dtype=float))
+        if eep.ndim != 1:
+            raise ValueError(f"eep must be a scalar or a 1-D array; got {eep.shape}")
+        return eep
+
+    def _mini_eep_relation(self, feh, afe, loga):
+        """
+        Return the isochrone's finite (mini, eep) pairs, sorted by mini.
+
+        Interpolating EEP in mini on these pairs inverts mini(EEP) on the
+        isochrone's own EEP grid, independent of the caller's `eep`.
+        """
+        iso = self.isochrone
+        mini = iso.get_predictions(
+            feh=feh, afe=afe, loga=loga, eep=iso.eep_u, apply_corr=False
+        )[:, list(iso.predictions).index("mini")]
+        finite = np.isfinite(mini)
+        order = np.argsort(mini[finite])
+        return mini[finite][order], iso.eep_u[finite][order]
 
     def _compute_primary(
         self, feh, afe, loga, eep, av, rv, dist, mini_bound, apply_corr, corr_params
@@ -931,28 +894,22 @@ apply_corr, corr_params, return_dict
         params : dict
             ``params_arr`` keyed by prediction name (column views).
         """
-        if self.predictor is None:
-            raise RuntimeError("Neural network predictor not available")
-
         # Generate stellar parameters using isochrone
-        try:
-            params_arr = self.isochrone.get_predictions(
-                feh=feh,
-                afe=afe,
-                loga=loga,
-                eep=eep,
-                apply_corr=apply_corr,
-                corr_params=corr_params,
-            )
-        except Exception as e:
-            raise RuntimeError(f"Failed to generate stellar parameters: {e}")
+        params_arr = self.isochrone.get_predictions(
+            feh=feh,
+            afe=afe,
+            loga=loga,
+            eep=eep,
+            apply_corr=apply_corr,
+            corr_params=corr_params,
+        )
 
         # Convert to dictionary format
         params = dict(zip(self.isochrone.predictions, params_arr.T))
 
         # Generate primary component SEDs using vectorized evaluation
         mass_valid = params["mini"] >= mini_bound
-        seds = self._evaluate_seds(params, mass_valid, av, rv, dist, label="primary ")
+        seds = self._evaluate_seds(params, mass_valid, av, rv, dist)
 
         return seds, params_arr, params
 
@@ -962,10 +919,11 @@ apply_corr, corr_params, return_dict
         params_arr,
         params,
         binary_fraction,
+        mini_eep,
         feh,
         afe,
         loga,
-        eep_used,
+        eep,
         mini_bound,
         eep_binary_max,
         av,
@@ -980,7 +938,9 @@ apply_corr, corr_params, return_dict
 
         Mutates ``seds`` in place (primary + secondary combined) and returns
         the final ``(seds, params, params2)`` tuple of :meth:`get_seds`.
-        ``params_arr``/``params`` are read, never modified.
+        ``params_arr``/``params`` are read, never modified. ``mini_eep`` is
+        the output of :meth:`_mini_eep_relation`, needed only when
+        ``0 < binary_fraction < 1``.
         """
         # Initialize secondary parameters
         params_arr2 = np.full_like(params_arr, np.nan)
@@ -995,6 +955,7 @@ apply_corr, corr_params, return_dict
                 params_arr,
                 params_arr2,
                 binary_fraction,
+                mini_eep,
                 feh,
                 afe,
                 loga,
@@ -1005,16 +966,14 @@ apply_corr, corr_params, return_dict
                 dist,
                 apply_corr,
                 corr_params,
-                eep_used,
+                eep,
             )
         elif binary_fraction == 1.0:
             # Equal-mass binary: flux doubles -> magnitude decreases by
             # 2.5*log10(2). Binaries are only modeled on the main sequence
             # (eep <= eep_binary_max), matching _add_binary_components:
             # post-MS stars keep their primary-only SED and get no secondary.
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")  # NaN comparisons
-                is_binary = (eep_used <= eep_binary_max) & ~np.isnan(seds[:, 0])
+            is_binary = (eep <= eep_binary_max) & ~np.isnan(seds[:, 0])
             seds[is_binary] -= 2.5 * np.log10(2.0)
             # np.where already returns fresh arrays, so no copies are needed;
             # keep params_arr2 in the same (Neep, Npred) orientation as the
@@ -1025,7 +984,7 @@ apply_corr, corr_params, return_dict
 
         # Format output
         if not return_dict:
-            params = params_arr.T
+            params = params_arr
             params2 = params_arr2
 
         return seds, params, params2
@@ -1038,6 +997,7 @@ apply_corr, corr_params, return_dict
         params_arr,
         params_arr2,
         binary_fraction,
+        mini_eep,
         feh,
         afe,
         loga,
@@ -1048,72 +1008,45 @@ apply_corr, corr_params, return_dict
         dist,
         apply_corr,
         corr_params,
-        eep=None,
+        eep,
     ):
         """Add binary star components to the population synthesis."""
-        # Calculate secondary masses and EEPs
-        mini = params["mini"]
-        mini2 = mini * binary_fraction
-        # Use the same EEP grid the primary predictions were generated on;
-        # falling back to the isochrone default grid otherwise. (Using the
-        # default grid for a caller-supplied `eep` would misalign — or crash
-        # on — every secondary computation.)
-        if eep is None:
-            eep = self.isochrone.eep_u
-
-        # Interpolate secondary EEPs
-        mini_mask = np.where(np.isfinite(mini))[0]
-        if len(mini_mask) > 0:
-            try:
-                mini_valid = mini[mini_mask]
-                eep_valid = eep[mini_mask]
-                sort_idx = np.argsort(mini_valid)
-                eep2 = np.interp(
-                    mini2,
-                    mini_valid[sort_idx],
-                    eep_valid[sort_idx],
-                    left=np.nan,
-                    right=np.nan,
-                )
-            except Exception:
-                eep2 = np.full_like(eep, np.nan)
+        # Secondary EEPs from the isochrone's mini(EEP) relation, so that
+        # they do not depend on how the caller samples `eep`.
+        mini2 = params["mini"] * binary_fraction
+        mini_sorted, eep_sorted = mini_eep
+        if len(mini_sorted) > 0:
+            eep2 = np.interp(mini2, mini_sorted, eep_sorted, left=np.nan, right=np.nan)
         else:
-            eep2 = np.full_like(eep, np.nan)
+            eep2 = np.full(np.shape(eep), np.nan)
 
         # Restrict binaries to main sequence
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            eep2[(eep2 > eep_binary_max) | (eep > eep_binary_max)] = np.nan
+        eep2[(eep2 > eep_binary_max) | (eep > eep_binary_max)] = np.nan
 
         # Generate secondary parameters
-        try:
-            params_arr2[:] = self.isochrone.get_predictions(
-                feh=feh,
-                afe=afe,
-                loga=loga,
-                eep=eep2,
-                apply_corr=apply_corr,
-                corr_params=corr_params,
-            )
-            params2.update(dict(zip(self.isochrone.predictions, params_arr2.T)))
-        except Exception as e:
-            warnings.warn(
-                f"Secondary parameter generation failed for binary population: {e}",
-                RuntimeWarning,
-                stacklevel=2,
-            )
+        params_arr2[:] = self.isochrone.get_predictions(
+            feh=feh,
+            afe=afe,
+            loga=loga,
+            eep=eep2,
+            apply_corr=apply_corr,
+            corr_params=corr_params,
+        )
 
         # Generate secondary SEDs using vectorized evaluation
         sec_valid = (params2["mini"] >= mini_bound) & np.isfinite(params2["mini"])
-        seds2 = self._evaluate_seds(
-            params2, sec_valid, av, rv, dist, label="secondary "
-        )
+        seds2 = self._evaluate_seds(params2, sec_valid, av, rv, dist)
 
         # Combine primary and secondary SEDs only where a valid secondary
         # exists. A star without a resolvable companion (post-MS primary,
         # secondary below the mass bound, or failed EEP match) keeps its
         # primary-only SED — combining with a NaN secondary via add_mag would
         # silently discard the (valid) primary as well.
-        has_secondary = np.all(np.isfinite(seds2), axis=1)
+        # A companion counts only where the primary has an SED too: adding
+        # it to a NaN primary leaves the combined SED NaN.
+        has_secondary = np.all(np.isfinite(seds2), axis=1) & np.all(
+            np.isfinite(seds), axis=1
+        )
+        params_arr2[~has_secondary] = np.nan
         if np.any(has_secondary):
             seds[has_secondary] = add_mag(seds[has_secondary], seds2[has_secondary])

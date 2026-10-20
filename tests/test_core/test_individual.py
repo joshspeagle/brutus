@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import h5py
 import numpy as np
 import pytest
-from conftest import mock_nn_predictor
+from conftest import mock_nn_predictor, requires_data
 
 from brutus.core.individual import (
     _EEPTRACKS_CACHE_ATTRS,
@@ -42,6 +42,13 @@ class TestEEPTracksInitialization:
             EEPTracks(mistfile="/non/existent.h5", predictions=predictions)
 
 
+def test_get_corrections_rejects_malformed_corr_params():
+    tracks = MagicMock()
+    tracks.mini_idx, tracks.eep_idx, tracks.feh_idx = 0, 1, 2
+    with pytest.raises(ValueError, match="corr_params"):
+        EEPTracks.get_corrections(tracks, [0.8, 350.0, 0.0, 0.0], (0.09, -0.09))
+
+
 class TestStarEvolTrackInitialization:
     """Test StarEvolTrack class initialization."""
 
@@ -52,6 +59,7 @@ class TestStarEvolTrackInitialization:
         tracks = MagicMock()
         tracks.get_predictions.return_value = rng.random(6)  # 6 parameters
         tracks.pred_labels = ["age", "logl", "logt", "logr", "logg", "phase"]
+        tracks.predictions = ["loga", "logl", "logt", "logg", "feh_surf", "afe_surf"]
         return tracks
 
     def test_star_evol_track_basic_initialization(self, mock_eep_tracks):
@@ -267,6 +275,7 @@ class TestStarEvolTrackMethods:
         tracks = MagicMock()
         tracks.get_predictions.side_effect = Exception("Prediction failed")
         tracks.labels = ["mini", "eep", "feh", "afe"]
+        tracks.predictions = ["loga", "logl", "logt", "logg", "feh_surf", "afe_surf"]
 
         with mock_nn_predictor("brutus.core.individual") as mock_nn:
             mock_predictor = MagicMock()
@@ -281,20 +290,18 @@ class TestStarEvolTrackMethods:
             ):
                 star_track.get_seds(mini=1.0, eep=350, feh=0.0, afe=0.0)
 
-    def test_get_seds_no_predictor_error(self):
-        """Test get_seds when no neural network predictor available (line 830)."""
+    def test_tracks_without_sed_labels_raise(self):
         tracks = MagicMock()
+        tracks.predictions = ["loga", "logl", "logt"]
+        with pytest.raises(ValueError, match=r"lacks \['logg', 'feh_surf'"):
+            StarEvolTrack(tracks=tracks, verbose=False)
 
-        # Create StarEvolTrack with no predictor
-        star_track = StarEvolTrack.__new__(StarEvolTrack)
-        star_track.tracks = tracks
-        star_track.predictor = None  # No predictor
-
-        # Should raise RuntimeError (line 830)
-        with pytest.raises(
-            RuntimeError, match="Neural network predictor not available"
-        ):
-            star_track.get_seds(mini=1.0, eep=350, feh=0.0, afe=0.0)
+    def test_unknown_filter_raises_at_construction(self):
+        tracks = MagicMock()
+        tracks.predictions = ["loga", "logl", "logt", "logg", "feh_surf", "afe_surf"]
+        nnfile = requires_data("nn_c3k.h5")
+        with pytest.raises(ValueError, match=r"filters \['BOGUS_V'\]"):
+            StarEvolTrack(tracks, filters=["BOGUS_V"], nnfile=nnfile, verbose=False)
 
     def test_get_seds_old_star_age_cutoff(self, mock_star_evol_track):
         """Test get_seds with old stars exceeding loga_max cutoff."""
@@ -639,20 +646,16 @@ class TestSecondaryAfeConsistency:
         )
         assert abs(loga_2 - loga_target) < 1e-3
 
-    def test_afe_clamped_to_library_range(self):
+    def test_tracks_without_gridpoints_use_primary_afe(self):
+        # Without an EEP grid axis, the Nelder-Mead fallback also solves at
+        # the primary's [a/Fe]; it used 0.0 (#139).
         st = self._star_track()
-        tracks = st.tracks
-        # Request afe beyond the library maximum (0.4): must clamp, not
-        # extrapolate
-        afe_req, afe_max = 1.0, 0.4
-        eep_p = 350.0
-        loga_target = float(tracks._loga(eep_p, afe_max))
-        eep2 = st._get_eep_for_secondary(
-            loga_target, 1.0, eep_p, 0.0, afe_req, 0.8, 1e-2
-        )
-        assert np.isfinite(eep2)
+        st.tracks.gridpoints = None
+        afe, eep_p = 0.4, 350.0
+        loga_target = float(st.tracks._loga(eep_p, afe))
+        eep2 = st._get_eep_for_secondary(loga_target, 1.0, eep_p, 0.0, afe, 0.8, 1e-2)
         loga_2 = float(
-            tracks.get_predictions([0.8, eep2, 0.0, afe_max], apply_corr=False)[0]
+            st.tracks.get_predictions([0.8, eep2, 0.0, afe], apply_corr=False)[0]
         )
         assert abs(loga_2 - loga_target) < 1e-3
 
