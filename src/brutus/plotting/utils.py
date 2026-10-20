@@ -14,8 +14,11 @@ import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap, colorConverter
 from scipy.ndimage import gaussian_filter as norm_kde
+from scipy.special import logsumexp
 
-from ..utils.sampling import quantile
+from ..priors import logp_galactic_structure as gal_lnprior
+from ..priors import logp_parallax
+from ..utils.sampling import draw_sar, quantile
 
 __all__ = ["hist2d"]
 
@@ -40,19 +43,25 @@ def hist2d(
     **kwargs,
 ):
     """
-    Internal function used to generate a 2-D histogram/contour of samples.
+    Plot a 2-D histogram and contours of weighted samples.
 
-    This is the refactored version of _hist2d from the original plotting.py.
+    The plot is drawn on `ax`, with its limits set to `span`.
 
     Parameters
     ----------
-    x : interable with shape `(nsamps,)`
+    x : iterable with shape `(nsamps,)`
        Sample positions in the first dimension.
 
     y : iterable with shape `(nsamps,)`
        Sample positions in the second dimension.
 
-    span : iterable with shape `(ndim,)`, optional
+    smooth : int, float or 2-tuple of these, optional
+        The binning of each axis, one value for both or one per axis. A
+        float is the standard deviation of the Gaussian kernel that smooths
+        the histogram, as a fraction of the span. An int is a number of
+        bins, with no smoothing. Default is `0.02`.
+
+    span : iterable with shape `(2,)`, optional
         A list where each element is either a length-2 tuple containing
         lower and upper bounds or a float from `(0., 1.]` giving the
         fraction of (weighted) samples to include. If a fraction is provided,
@@ -107,20 +116,11 @@ def hist2d(
 
     if ax is None:
         ax = plt.gca()
+    data_kwargs = dict(data_kwargs or {})
+    contourf_kwargs = dict(contourf_kwargs or {})
+    contour_kwargs = dict(contour_kwargs or {})
 
-    # Determine plotting bounds.
-    data = [x, y]
-    if span is None:
-        span = [0.99 for i in range(2)]
-    span = list(span)
-    if len(span) != 2:
-        raise ValueError("Dimension mismatch between samples and span.")
-    for i, _ in enumerate(span):
-        try:
-            xmin, xmax = span[i]
-        except (TypeError, ValueError):
-            q = [0.5 - 0.5 * span[i], 0.5 + 0.5 * span[i]]
-            span[i] = quantile(data[i], q, weights=weights)
+    span = _resolve_span(span, [x, y], weights)
 
     # The default "sigma" contour levels.
     if levels is None:
@@ -260,12 +260,10 @@ def hist2d(
 
     # Plot the data points.
     if plot_datapoints:
-        if data_kwargs is None:
-            data_kwargs = dict()
-        data_kwargs["color"] = data_kwargs.get("color", color)
-        data_kwargs["ms"] = data_kwargs.get("ms", 2.0)
-        data_kwargs["mec"] = data_kwargs.get("mec", "none")
-        data_kwargs["alpha"] = data_kwargs.get("alpha", 0.1)
+        data_kwargs.setdefault("color", color)
+        data_kwargs.setdefault("ms", 2.0)
+        data_kwargs.setdefault("mec", "none")
+        data_kwargs.setdefault("alpha", 0.1)
         ax.plot(x, y, "o", zorder=-1, rasterized=True, **data_kwargs)
 
     # Plot the base fill to hide the densest data points.
@@ -281,10 +279,8 @@ def hist2d(
         ax.contourf(X2, Y2, H2.T, base_levels, cmap=white_cmap, antialiased=False)
 
     if plot_contours and fill_contours and not degenerate_data:
-        if contourf_kwargs is None:
-            contourf_kwargs = dict()
-        contourf_kwargs["colors"] = contourf_kwargs.get("colors", contour_cmap)
-        contourf_kwargs["antialiased"] = contourf_kwargs.get("antialiased", False)
+        contourf_kwargs.setdefault("colors", contour_cmap)
+        contourf_kwargs.setdefault("antialiased", False)
         ax.contourf(
             X2,
             Y2,
@@ -301,10 +297,82 @@ def hist2d(
 
     # Plot the contour edge colors.
     if plot_contours and not degenerate_data:
-        if contour_kwargs is None:
-            contour_kwargs = dict()
-        contour_kwargs["colors"] = contour_kwargs.get("colors", color)
+        contour_kwargs.setdefault("colors", color)
         ax.contour(X2, Y2, H2.T, V, **contour_kwargs)
 
     ax.set_xlim(span[0])
     ax.set_ylim(span[1])
+
+
+def _resolve_span(span, samples, weights):
+    """Return `(low, high)` bounds for each row of `samples`.
+
+    An entry of `span` that is a float is the weighted credible fraction of
+    an equal-tailed interval. `None` means 0.99 for every row.
+    """
+    if span is None:
+        span = [0.99] * len(samples)
+    span = list(span)
+    if len(span) != len(samples):
+        raise ValueError("Dimension mismatch between samples and span.")
+    for i, s in enumerate(span):
+        if np.ndim(s) == 0:
+            span[i] = quantile(samples[i], [0.5 - 0.5 * s, 0.5 + 0.5 * s], weights)
+    return span
+
+
+def _require_coord(lndistprior, coord):
+    """Raise unless `coord` is given for the default Galactic prior."""
+    if coord is None and getattr(lndistprior, "func", lndistprior) is gal_lnprior:
+        raise ValueError(
+            "`coord` must be passed if the default distance prior was used."
+        )
+
+
+def _sar_draws(
+    scales,
+    avs,
+    rvs,
+    covs_sar,
+    lndistprior,
+    coord,
+    parallax,
+    parallax_err,
+    ndraws,
+    avlim,
+    rvlim,
+    rstate,
+):
+    """Draw `ndraws` (scale, A(V), R(V)) per sample and weight them by the
+    distance prior and, unless `parallax` is None, the parallax prior.
+
+    Returns the scale, parallax, distance, A(V) and R(V) draws and the
+    weights, each of shape `(Nsamps, ndraws)`. Each row of the weights sums
+    to 1, or is 0 when the priors give zero weight to every draw of the
+    sample.
+    """
+    sdraws, adraws, rdraws = draw_sar(
+        scales,
+        avs,
+        rvs,
+        covs_sar,
+        ndraws=ndraws,
+        avlim=avlim,
+        rvlim=rvlim,
+        rstate=rstate,
+    )
+    pdraws = np.sqrt(sdraws)
+    ddraws = 1.0 / pdraws
+    # The draws come from a Gaussian in scale (s = d^-2), but `lndistprior`
+    # is a density in distance, so the weight takes the Jacobian
+    # |dd/ds| = d^3 / 2 (the constant cancels in the normalization), as
+    # `analysis.individual.logpost_grid` does for ln-distance.
+    lnp = lndistprior(ddraws, coord) + 3.0 * np.log(ddraws)
+    if parallax is not None:
+        lnp += logp_parallax(pdraws, parallax, parallax_err)
+    lnz = logsumexp(lnp, axis=1)
+    with np.errstate(invalid="ignore"):
+        pwt = np.exp(lnp - lnz[:, None])
+        pwt /= pwt.sum(axis=1)[:, None]
+    pwt[~np.isfinite(lnz)] = 0.0
+    return sdraws, pdraws, ddraws, adraws, rdraws, pwt

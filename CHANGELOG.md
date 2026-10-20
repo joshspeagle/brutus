@@ -281,6 +281,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for a file without the mini, logt, logl or logg label; it warned and
   returned uncorrected predictions. `StellarPop` passes errors of
   `Isochrone.get_predictions` through, not as `RuntimeError`.
+- `cornerplot` defaults `applied_parallax` to `None`, which applies the
+  parallax when both `parallax` and `parallax_err` are given. The default
+  `True` raised for saved `(dists, reds, dreds)` draws given without a
+  parallax, where the flag has no effect. `applied_parallax=True` without
+  both values now raises only for `(scales, avs, rvs, covs_sar)` input.
+- `dist_vs_red` takes `fig=(fig, ax)` and draws on `ax`, as the other
+  plotting functions do. Without it, it draws on the current axes, as
+  before.
+- `summary_plot` takes `rstate` and passes it to `cornerplot` and
+  `posterior_predictive`. The violins of the SED inset came from the global
+  numpy stream, which only `np.random.seed` could seed.
 
 ### Fixed
 
@@ -383,6 +394,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the band on the draws. With a 10% offset injected into a fitted band, the
   plotted offset differed from the analysis offset by 0.013 mag; it now
   agrees to 0.0001 mag.
+- `dist_vs_red` and `bin_pdfs_distred` accept a float parallax and
+  parallax error for several objects and apply them to every object, and
+  raise `ValueError` that names the argument for any shape other than
+  `(Nobj,)`. A float raised `TypeError`, and a short array left the last
+  objects without parallax smoothing. `bin_pdfs_distred` accepts a tuple
+  `span` for every `dist_type`, and raises `ValueError` unless `span` has
+  shape `(2, 2)`; `dist_type='scale'` and `'parallax'` raised `TypeError`.
+- `plotting.photometric_offsets` leaves the panel of a band that no object
+  qualifies for blank and draws the other bands; it raised `IndexError`. It
+  raises `ValueError` that names `bins` unless `bins` is an int or one int
+  per band; a length-2 `bins` raised `TypeError`. `photometric_offsets_2d`
+  reads a `bins` of length `Nfilt` as one entry per band, also with 2 bands.
+  Both raise `ValueError` that names `weights` unless it has shape `(Nobj,)`
+  or `(Nobj, Nsamps)`; a `(Nsamps,)` array was read as per-object weights
+  when `Nsamps == Nobj`. The titles of `photometric_offsets_2d` give the
+  offset in fixed point (`+12.0%`, not `1.2e+01%`).
+- `plotting.photometric_offsets_2d` draws each map over its bin edges. The
+  image extent was the outer bin centres, half a bin too narrow on each
+  side. `xspan` and `yspan` now set the range of the bins, as in
+  `photometric_offsets`; they relabelled the axes of bins taken over the
+  data range. The last bin includes its right edge, as in `np.histogram`;
+  the object with the largest x or y was left out of every bin.
+- `posterior_predictive`, `photometric_offsets` and
+  `photometric_offsets_2d` lay out only a figure that they create. With
+  `fig=(fig, ax)`, they called `plt.tight_layout()`, which re-laid out the
+  current figure, not the one passed.
+- `hist2d` and `dist_vs_red` no longer write their defaults into the
+  keyword dicts the caller passes (`data_kwargs`, `contourf_kwargs`,
+  `contour_kwargs`, `truth_kwargs`). A `contour_kwargs` reused across
+  panels kept the colour of the first call.
+- `cornerplot` and `bin_pdfs_distred` choose the input format by the
+  length of `data`, and raise `ValueError` that names `data` unless it has
+  3 or 4 arrays. `cornerplot` accepts saved draws as lists; it sent them to
+  the `(scales, avs, rvs, covs_sar)` path, which failed with an unpacking
+  error. With `(scales, avs, rvs, covs_sar)` input, `bin_pdfs_distred`
+  gives zero weight to a sample when the priors give zero weight to every
+  draw of it; the binned PDF of its object was NaN.
 
 ### Performance
 
@@ -396,6 +444,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exists. Results are bitwise identical. With 21000 models and 1000 stars,
   the marginalization takes a median 0.59 to 0.67 s against 0.70 s on one
   core (25 interleaved runs, two repeats).
+- `cornerplot` resamples the regenerated draws with one batch of uniform
+  deviates and a search of each sample's weight CDF, instead of one
+  `rstate.choice` call per sample. The draws are bitwise identical for a
+  seeded `RandomState` or `Generator`. For 2000 samples and 500 draws, the
+  resampling takes 12 ms instead of 35 ms (medians of 7 interleaved runs,
+  4 CPUs).
 
 ### Documentation
 
@@ -429,6 +483,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-star `cluster_prob`, describe the grid's model selection as the code
   does it, name `EEPTracks`, and use `afe=0.0` in their examples: the
   shipped isochrone file has only [α/Fe] = 0, and other values give NaN.
+- The `cornerplot` docstring says that `labels` are field names of
+  `params` and also the axis text. The `hist2d` docstring documents
+  `smooth` and drops its "internal function" note. The `dist_vs_red`
+  docstring gives the `ebv` default as `None`.
 
 ## [1.2.0] - 2026-07-17
 

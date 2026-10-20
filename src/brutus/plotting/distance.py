@@ -12,7 +12,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 
 from ..utils.math import AVLIM, RVLIM
-from .binning import bin_pdfs_distred
+from .binning import _per_object, bin_pdfs_distred
 
 __all__ = ["dist_vs_red"]
 
@@ -38,6 +38,7 @@ def dist_vs_red(
     truth_color="red",
     truth_kwargs=None,
     rstate=None,
+    fig=None,
 ):
     """
     Generate a 2-D plot of distance vs reddening.
@@ -57,7 +58,7 @@ def dist_vs_red(
 
     ebv : bool, optional
         If provided, will convert from Av to E(B-V) when plotting using
-        the provided Rv values. Default is `False`.
+        the provided Rv values. Default is `None` (plot A(V)).
 
     dist_type : str, optional
         The distance format to be plotted. Options include `'parallax'`,
@@ -84,11 +85,13 @@ def dist_vs_red(
     weights : `~numpy.ndarray` of shape `(Nsamps)` or `(Nobj, Nsamps)`, optional
         An optional set of importance weights used to reweight the samples.
 
-    parallax : float, optional
-        The parallax estimate for the source.
+    parallax : float or `~numpy.ndarray` of shape `(Nobj,)`, optional
+        The parallax estimate for each source in mas. A float applies to
+        every object.
 
-    parallax_err : float, optional
-        The parallax error.
+    parallax_err : float or `~numpy.ndarray` of shape `(Nobj,)`, optional
+        The parallax error for each source in mas. A float applies to
+        every object.
 
     Nr : int, optional
         The number of Monte Carlo realizations used when sampling using the
@@ -101,7 +104,9 @@ def dist_vs_red(
         The number of bins to be used in each dimension. Default is `300`.
 
     span : iterable with shape `(2, 2)`, optional
-        `(av_bounds, dist_bounds)`, as in `bin_pdfs_distred`.
+        `((av_min, av_max), (d_min, d_max))`, A(V) in mag and distance in
+        kpc, as in `bin_pdfs_distred`. If not provided, A(V) spans `avlim`
+        and the distance spans distance modulus 4 to 19.
 
     smooth : float or 2-tuple of floats, optional
         The smoothing, as in `bin_pdfs_distred`. Default is `(0.015, 0.005)`.
@@ -128,6 +133,10 @@ def dist_vs_red(
     rstate : `~numpy.random.RandomState`, optional
         `~numpy.random.RandomState` instance.
 
+    fig : (`~matplotlib.figure.Figure`, `~matplotlib.axes.Axes`), optional
+        The figure and axes to draw on. Default is the current axes,
+        `~matplotlib.pyplot.gca`.
+
     Returns
     -------
     hist2d : (counts, xedges, yedges, `~matplotlib.figure.Image`)
@@ -136,15 +145,14 @@ def dist_vs_red(
     """
 
     # Initialize values.
-    if truth_kwargs is None:
-        truth_kwargs = dict()
+    truth_kwargs = dict(truth_kwargs or {})
     if plot_kwargs is None:
         plot_kwargs = dict()
 
     # Set defaults for truth plotting
-    truth_kwargs["linestyle"] = truth_kwargs.get("linestyle", "solid")
-    truth_kwargs["linewidth"] = truth_kwargs.get("linewidth", 2)
-    truth_kwargs["alpha"] = truth_kwargs.get("alpha", 0.7)
+    truth_kwargs.setdefault("linestyle", "solid")
+    truth_kwargs.setdefault("linewidth", 2)
+    truth_kwargs.setdefault("alpha", 0.7)
 
     # Handle single object case - convert to array format expected by bin_pdfs_distred
     # bin_pdfs_distred expects (n_objects, n_samples) shape
@@ -168,12 +176,6 @@ def dist_vs_red(
         # Convert weights to (Nobj, Nsamps) format
         if weights is not None:
             weights = np.atleast_2d(np.asarray(weights))
-
-        # Convert parallax info to array format
-        if parallax is not None:
-            parallax = np.array([parallax])
-        if parallax_err is not None:
-            parallax_err = np.array([parallax_err])
     else:
         # Multi-object case
         single_object = False
@@ -191,6 +193,10 @@ def dist_vs_red(
                         f"(Nobj, Nsamps) = {(nobj, nsamps)}."
                     )
                 weights = np.broadcast_to(weights, (nobj, nsamps))
+
+    nobj = data[0].shape[0]
+    parallax = _per_object(parallax, "parallax", nobj)
+    parallax_err = _per_object(parallax_err, "parallax_err", nobj)
 
     # Use bin_pdfs_distred to do all the heavy lifting for data preparation
     binned_vals, xedges, yedges = bin_pdfs_distred(
@@ -241,7 +247,8 @@ def dist_vs_red(
     ylims = [yedges[0], yedges[-1]]
 
     # Generate the plot
-    img = plt.imshow(
+    ax = plt.gca() if fig is None else fig[1]
+    img = ax.imshow(
         H.T,
         cmap=cmap,
         aspect="auto",
@@ -250,20 +257,16 @@ def dist_vs_red(
         extent=[xlims[0], xlims[1], ylims[0], ylims[1]],
         **plot_kwargs,
     )
-    plt.xlabel(xlabel)
-    plt.ylabel(ylabel)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
 
     # Add truth values if provided
     if truths is not None:
         if truths[0] is not None:  # x-axis truth
-            try:
-                [plt.axvline(t, color=truth_color, **truth_kwargs) for t in truths[0]]
-            except TypeError:
-                plt.axvline(truths[0], color=truth_color, **truth_kwargs)
+            for t in np.atleast_1d(truths[0]):
+                ax.axvline(t, color=truth_color, **truth_kwargs)
         if truths[1] is not None:  # y-axis truth
-            try:
-                [plt.axhline(t, color=truth_color, **truth_kwargs) for t in truths[1]]
-            except TypeError:
-                plt.axhline(truths[1], color=truth_color, **truth_kwargs)
+            for t in np.atleast_1d(truths[1]):
+                ax.axhline(t, color=truth_color, **truth_kwargs)
 
     return H, xedges, yedges, img

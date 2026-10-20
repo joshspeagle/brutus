@@ -364,3 +364,74 @@ class TestBinPdfsDistred:
 
         assert len(result) == 3
         assert result[0].shape[0] == 1  # One object
+
+
+def _three_objects():
+    rng = np.random.RandomState(7)
+    dists = rng.lognormal(np.log(2.0), 0.3, (3, 200))
+    reds = rng.exponential(0.5, (3, 200))
+    dreds = rng.normal(3.3, 0.3, (3, 200))
+    return dists, reds, dreds
+
+
+@pytest.mark.parametrize("dist_type", ["scale", "parallax"])
+def test_tuple_span_sets_the_bin_edges(dist_type):
+    """Regression (#177): a tuple `span` raised TypeError for these types."""
+    span = ((0.0, 6.0), (0.1, 10.0))
+    _, xedges, yedges = bin_pdfs_distred(
+        _three_objects(), span=span, bins=20, dist_type=dist_type
+    )
+    power = 2 if dist_type == "scale" else 1
+    np.testing.assert_allclose(xedges[[0, -1]], [0.1**power, 10.0**power])
+    np.testing.assert_allclose(yedges[[0, -1]], [0.0, 6.0])
+
+
+def test_span_of_wrong_shape_raises():
+    with pytest.raises(ValueError, match="span"):
+        bin_pdfs_distred(_three_objects(), span=(0.0, 6.0, 0.1, 10.0))
+
+
+def test_scalar_parallax_applies_to_every_object():
+    data = _three_objects()
+    kwargs = dict(bins=(30, 20), dist_type="parallax", smooth=(0.2, 0.01))
+    scalar = bin_pdfs_distred(data, parallaxes=0.5, parallax_errors=0.01, **kwargs)
+    array = bin_pdfs_distred(
+        data, parallaxes=np.full(3, 0.5), parallax_errors=np.full(3, 0.01), **kwargs
+    )
+    np.testing.assert_array_equal(scalar[0], array[0])
+
+
+def test_parallax_with_too_few_objects_raises():
+    """Regression (#177): `zip` dropped the parallax of the third object."""
+    with pytest.raises(ValueError, match="parallaxes"):
+        bin_pdfs_distred(
+            _three_objects(), parallaxes=[1.0, 1.0], parallax_errors=[0.1, 0.1]
+        )
+
+
+def test_data_of_wrong_length_raises():
+    with pytest.raises(ValueError, match="`data` must be"):
+        bin_pdfs_distred(_three_objects()[:2])
+
+
+def test_sample_with_zero_prior_weight_gets_zero_weight():
+    """Regression (#186): a sample whose draws all have zero prior weight
+    made the binned PDF of its object NaN."""
+    rng = np.random.RandomState(2)
+    sar = (
+        rng.lognormal(np.log(0.25), 0.2, (2, 10)),
+        rng.uniform(0.2, 1.0, (2, 10)),
+        rng.normal(3.3, 0.1, (2, 10)),
+        np.tile(np.diag([0.002, 0.02, 0.05]), (2, 10, 1, 1)),
+    )
+    # Zero prior weight beyond 3 kpc; sample 0 of object 0 lies far beyond.
+    sar[0][0, 0] = 1e-4
+    sar[3][0, 0] = np.diag([1e-12, 0.02, 0.05])
+
+    def lndistprior(d, coord):
+        return np.where(d < 3.0, 0.0, -np.inf)
+
+    kwargs = dict(lndistprior=lndistprior, Nr=50, bins=(20, 10), smooth=0)
+    binned = bin_pdfs_distred(sar, rstate=np.random.RandomState(0), **kwargs)[0]
+    assert np.all(np.isfinite(binned))
+    np.testing.assert_allclose(binned[0].sum(), 9 / 10)

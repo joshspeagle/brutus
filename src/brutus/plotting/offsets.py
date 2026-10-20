@@ -82,7 +82,7 @@ def photometric_offsets(
     dists : `~numpy.ndarray` of shape `(Nobj, Nsamps)`
         Distance samples (in kpc) associated with the model indices.
 
-    x : `~numpy.ndarray` with shape `(Nobj)` or `(Nobj, Nsamps)`, optional
+    x : `~numpy.ndarray` with shape `(Nobj,)` or `(Nobj, Nsamps)`, optional
         Corresponding values to be plotted on the `x` axis. If not provided,
         the default behavior is to plot as a function of observed magnitude.
 
@@ -90,21 +90,23 @@ def photometric_offsets(
         Whether the photometry provided is in fluxes (instead of magnitudes).
         Default is `True`.
 
-    weights : `~numpy.ndarray` of shape `(Nobj)` or `(Nobj, Nsamps)`, optional
-        An optional set of importance weights used to reweight the samples.
+    weights : `~numpy.ndarray` of shape `(Nobj,)` or `(Nobj, Nsamps)`, optional
+        Importance weights of the objects or of their samples. Any other
+        shape raises `ValueError`.
 
-    bins : single value or iterable of length `Nfilt`, optional
-        The number of bins to use. Passed to `~matplotlib.pyplot.hist2d`.
+    bins : int or sequence of `Nfilt` ints, optional
+        The number of bins along both axes of each panel, for all bands or
+        one value per band. Any other input raises `ValueError`.
         Default is `100`.
 
     offset : `~numpy.ndarray` of shape `(Nfilt)`, optional
-        Multiplicative photometric offsets that will be applied to
-        the data (i.e. `data_new = data * phot_offsets`) and errors
-        when provided.
+        Multiplicative flux offsets. They shift the plotted residuals by
+        `2.5 log10(offset)` and do not change the weights.
 
     plot_thresh : float, optional
-        The threshold used to threshold the colormap when plotting.
-        Default is `0.`.
+        The minimum summed weight of a bin to be colored, passed to
+        `~matplotlib.axes.Axes.hist2d` as `cmin`. The draws of each object
+        sum to 1 in each band. Default is `0.`.
 
     cmap : colormap, optional
         The colormap used when plotting results. Default is `'viridis'`.
@@ -122,16 +124,16 @@ def photometric_offsets(
         If not provided `Band #` will be used.
 
     xlabel : str, optional
-        Labels for the x-axis of each subplot. If not provided,
-        these will default to the titles.
+        Label for the x-axis of each subplot. If not provided, it is the
+        title of the subplot when `x` is not given, and `'Label'` otherwise.
 
     plot_kwargs : kwargs, optional
-        Keyword arguments to be passed to `~matplotlib.pyplot.imshow`.
+        Keyword arguments to be passed to `~matplotlib.axes.Axes.hist2d`.
 
     fig : (`~matplotlib.figure.Figure`, `~matplotlib.axes.Axes`), optional
-        If provided, overplot the traces and marginalized 1-D posteriors
-        onto the provided figure. Otherwise, by default an
-        internal figure is generated.
+        If provided, draw on the provided axes, one per band, and leave the
+        figure layout unchanged. Otherwise, a new figure is generated and
+        laid out with `~matplotlib.figure.Figure.tight_layout`.
 
     Returns
     -------
@@ -141,25 +143,21 @@ def photometric_offsets(
     """
 
     # Initialize values.
-    nmodels, nfilt, ncoeff = models.shape
+    nfilt = models.shape[1]
     nobj, nsamps = idxs.shape
-    # Coerce to boolean: an integer 0/1 mask would otherwise fancy-index
-    # (selecting rows 0/1) instead of masking.
-    mask = np.asarray(mask, dtype=bool)
+    bins = np.array(bins, dtype=object)
+    if bins.ndim == 0:
+        bins = np.full(nfilt, bins)
+    if bins.shape != (nfilt,) or not all(
+        isinstance(b, (int, np.integer)) for b in bins
+    ):
+        raise ValueError(f"`bins` must be an int or {nfilt} ints; got {bins.tolist()}.")
+    bins = bins.astype(int)
+    mask, usable, weights, mpred, fobs, feobs, magobs = _setup(
+        phot, err, mask, models, idxs, reds, dreds, dists, flux, weights, offset
+    )
     if plot_kwargs is None:
         plot_kwargs = dict()
-    if weights is None:
-        weights = np.ones((nobj, nsamps))
-    elif weights.shape != (nobj, nsamps):
-        weights = np.repeat(weights, nsamps).reshape(nobj, nsamps)
-    try:
-        nbins = len(bins)
-        if nbins != 2:
-            bins = [b for b in bins]
-        else:
-            bins = [bins for i in range(nfilt)]
-    except TypeError:
-        bins = [bins for i in range(nfilt)]
     if titles is None:
         titles = ["Band {0}".format(i) for i in range(nfilt)]
     if xlabel is None:
@@ -169,53 +167,18 @@ def photometric_offsets(
             xlabel = ["Label" for i in range(nfilt)]
     else:
         xlabel = [xlabel for i in range(nfilt)]
-    if offset is None:
-        offset = np.ones(nfilt)
 
-    # Compute posterior predictive SED magnitudes.
-    mpred = get_seds(models[idxs.flatten()], av=reds.flatten(), rv=dreds.flatten())
-    mpred += 5.0 * np.log10(dists.flatten())[:, None]
-    mpred = mpred.reshape(nobj, nsamps, nfilt)
-
-    # Convert observed data to magnitudes.
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")  # ignore bad values
-        # The leave-one-out weights use the data of the fit; `offset` only
-        # shifts the plotted residuals.
-        if flux:
-            fobs, feobs = phot, err
-            magobs = magnitude(phot * offset, err * offset)[0]
-        else:
-            # `offset` is a multiplicative *flux* correction; in magnitude
-            # space it is applied as -2.5 log10(offset).
-            fobs, feobs = inv_magnitude(phot, err)
-            magobs = phot - 2.5 * np.log10(offset)
-
-    # Generate figure.
-    if fig is None:
-        ncols = 5
-        nrows = (nfilt - 1) // ncols + 1
-        fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 6, nrows * 5))
-    else:
-        fig, axes = fig
-        nrows, ncols = axes.shape
+    own_fig = fig is None
+    fig, axes = _band_figure(fig, nfilt, (6, 5))
     ax = axes.flatten()
     # Plot offsets.
     for i in range(nfilt):
-        # Require at least 4 observed bands besides band i, and finite
-        # magnitudes only in *observed* bands: unobserved
-        # (masked) bands routinely hold nonpositive/NaN fluxes that map to
-        # non-finite magnitudes and must not disqualify the object.
-        s = (
-            mask[:, i]
-            & (np.sum(mask, axis=1) > 4)
-            & (np.all(np.isfinite(magobs) | ~mask, axis=1))
-            & (weights.sum(axis=1) > 0)
-        )
-        wt = _loo_weights(
-            fobs[s, i], feobs[s, i], 10 ** (-0.4 * mpred[s, :, i]), weights[s]
-        )
-        wt /= wt.sum(axis=1, keepdims=True)
+        ax[i].set_xlabel(xlabel[i])
+        ax[i].set_title(titles[i])
+        ax[i].set_ylabel(r"$\Delta\,$mag")
+        s, wt = _band_weights(i, mask, usable, fobs, feobs, mpred, weights)
+        if not np.any(s):
+            continue  # no object qualifies: leave the panel blank
         # Repeat to match up with `nsamps`.
         mobs = np.repeat(magobs[s, i], nsamps)
         if x is None:
@@ -247,15 +210,7 @@ def photometric_offsets(
             cmap=cmap,
             **plot_kwargs,
         )
-        ax[i].set_xlabel(xlabel[i])
-        ax[i].set_title(titles[i])
-        ax[i].set_ylabel(r"$\Delta\,$mag")
-    # Clear other axes.
-    for i in range(nfilt, nrows * ncols):
-        ax[i].set_frame_on(False)
-        ax[i].set_xticks([])
-        ax[i].set_yticks([])
-    plt.tight_layout()
+    _finish_figure(fig, ax, nfilt, own_fig)
 
     return fig, axes
 
@@ -327,31 +282,32 @@ def photometric_offsets_2d(
     dists : `~numpy.ndarray` of shape `(Nobj, Nsamps)`
         Distance samples (in kpc) associated with the model indices.
 
-    x : `~numpy.ndarray` with shape `(Nobj)` or `(Nobj, Nsamps)`
+    x : `~numpy.ndarray` with shape `(Nobj,)`
         Values to be plotted on the `x` axis. Required.
 
-    y : `~numpy.ndarray` with shape `(Nobj)` or `(Nobj, Nsamps)`
+    y : `~numpy.ndarray` with shape `(Nobj,)`
         Values to be plotted on the `y` axis. Required.
 
     flux : bool, optional
         Whether the photometry provided is in fluxes (instead of magnitudes).
         Default is `True`.
 
-    weights : `~numpy.ndarray` of shape `(Nobj)` or `(Nobj, Nsamps)`, optional
-        An optional set of importance weights used to reweight the samples.
+    weights : `~numpy.ndarray` of shape `(Nobj,)` or `(Nobj, Nsamps)`, optional
+        Importance weights of the objects or of their samples. Any other
+        shape raises `ValueError`.
 
-    bins : single value or iterable of length `Nfilt`, optional
-        The number of bins to use. Passed to `~matplotlib.pyplot.hist2d`.
-        Default is `100`.
+    bins : int, (int, int) or sequence of `Nfilt` of these, optional
+        The number of bins of each map: one int for both axes, an
+        `(nx, ny)` pair, or one of these per band. A sequence of length
+        `Nfilt` is read as one entry per band. Default is `100`.
 
     offset : `~numpy.ndarray` of shape `(Nfilt)`, optional
-        Multiplicative photometric offsets that will be applied to
-        the data (i.e. `data_new = data * phot_offsets`) and errors
-        when provided.
+        Multiplicative flux offsets. They shift the plotted residuals by
+        `2.5 log10(offset)` and do not change the weights.
 
     plot_thresh : float, optional
-        The threshold used to threshold the colormap when plotting.
-        Default is `10.`.
+        The minimum number of objects in a bin. Bins with fewer objects, or
+        with zero total weight, are masked. Default is `10.`.
 
     cmap : colormap, optional
         The colormap used when plotting results. Default is `'coolwarm'`.
@@ -360,12 +316,12 @@ def photometric_offsets_2d(
         Plotting bounds for the colorbar. Default is `(-0.05, 0.05)`.
 
     xspan : iterable with shape `(nfilt, 2)`, optional
-        A list where each element is a length-2 tuple containing
-        lower and upper bounds for the x-axis for each plot.
+        The `(low, high)` range of the x bins of each map. If not provided,
+        the bins span the range of `x`.
 
     yspan : iterable with shape `(nfilt, 2)`, optional
-        A list where each element is a length-2 tuple containing
-        lower and upper bounds for the y-axis for each plot.
+        The `(low, high)` range of the y bins of each map. If not provided,
+        the bins span the range of `y`.
 
     titles : iterable of str of length `Nfilt`, optional
         Titles for each of the subplots corresponding to each band.
@@ -383,12 +339,12 @@ def photometric_offsets_2d(
         this will default to `Y`.
 
     plot_kwargs : kwargs, optional
-        Keyword arguments to be passed to `~matplotlib.pyplot.imshow`.
+        Keyword arguments to be passed to `~matplotlib.axes.Axes.imshow`.
 
     fig : (`~matplotlib.figure.Figure`, `~matplotlib.axes.Axes`), optional
-        If provided, overplot the traces and marginalized 1-D posteriors
-        onto the provided figure. Otherwise, by default an
-        internal figure is generated.
+        If provided, draw on the provided axes, one per band, and leave the
+        figure layout unchanged. Otherwise, a new figure is generated and
+        laid out with `~matplotlib.figure.Figure.tight_layout`.
 
     Returns
     -------
@@ -398,97 +354,48 @@ def photometric_offsets_2d(
     """
 
     # Initialize values.
-    nmodels, nfilt, ncoeff = models.shape
-    nobj, nsamps = idxs.shape
-    # Coerce to boolean: an integer 0/1 mask would otherwise fancy-index
-    # (selecting rows 0/1) and make `~mask` a bitwise complement (-1/-2).
-    mask = np.asarray(mask, dtype=bool)
+    nfilt = models.shape[1]
+    mask, usable, weights, mpred, fobs, feobs, magobs = _setup(
+        phot, err, mask, models, idxs, reds, dreds, dists, flux, weights, offset
+    )
     if plot_kwargs is None:
         plot_kwargs = dict()
-    if weights is None:
-        weights = np.ones((nobj, nsamps))
-    elif weights.shape != (nobj, nsamps):
-        weights = np.repeat(weights, nsamps).reshape(nobj, nsamps)
-    try:
-        nbins = len(bins)
-        if nbins != 2:
-            bins = [b for b in bins]
-        else:
-            bins = [bins for i in range(nfilt)]
-    except TypeError:
-        bins = [bins for i in range(nfilt)]
+    if np.ndim(bins) == 0 or len(bins) != nfilt:
+        bins = [bins] * nfilt
     if titles is None:
         titles = ["Band {0}".format(i) for i in range(nfilt)]
     if show_off and offset is not None:
         titles = [
-            t + " ({:2.2}% offset)".format(100.0 * (off - 1.0))
+            t + " ({:+.1f}% offset)".format(100.0 * (off - 1.0))
             for t, off in zip(titles, offset)
         ]
     if xlabel is None:
         xlabel = "X"
     if ylabel is None:
         ylabel = "Y"
-    if offset is None:
-        offset = np.ones(nfilt)
 
-    # Compute posterior predictive SED magnitudes.
-    mpred = get_seds(models[idxs.flatten()], av=reds.flatten(), rv=dreds.flatten())
-    mpred += 5.0 * np.log10(dists.flatten())[:, None]
-    mpred = mpred.reshape(nobj, nsamps, nfilt)
+    # Magnitude offsets.
+    dm = mpred - magobs[:, None]
+    dm[np.broadcast_to(~mask[:, None], dm.shape)] = np.nan
 
-    # Convert observed data to magnitudes.
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")  # ignore bad values
-        # The leave-one-out weights use the data of the fit; `offset` only
-        # shifts the plotted residuals.
-        if flux:
-            fobs, feobs = phot, err
-            magobs = magnitude(phot * offset, err * offset)[0]
-        else:
-            # `offset` is a multiplicative *flux* correction; in magnitude
-            # space it is applied as -2.5 log10(offset).
-            fobs, feobs = inv_magnitude(phot, err)
-            magobs = phot - 2.5 * np.log10(offset)
-
-        # Magnitude offsets.
-        dm = mpred - magobs[:, None]
-        for i in range(nfilt):
-            dm[~mask[:, i], :, i] = np.nan
-
-    # Generate figure.
-    if fig is None:
-        ncols = 5
-        nrows = (nfilt - 1) // ncols + 1
-        fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 15, nrows * 12))
-    else:
-        fig, axes = fig
-        nrows, ncols = axes.shape
+    own_fig = fig is None
+    fig, axes = _band_figure(fig, nfilt, (15, 12))
     ax = axes.flatten()
 
     # Plot offsets.
     for i in range(nfilt):
         # Bin in 2-D.
-        n, xbins, ybins = np.histogram2d(x, y, bins=bins[i])
-        xcent = 0.5 * (xbins[1:] + xbins[:-1])
-        ycent = 0.5 * (ybins[1:] + ybins[:-1])
-        bounds = [xcent[0], xcent[-1], ycent[0], ycent[-1]]  # default size
-        # Digitize values.
+        nx, ny = np.broadcast_to(bins[i], (2,))
+        xbins = np.histogram_bin_edges(x, nx, None if xspan is None else xspan[i])
+        ybins = np.histogram_bin_edges(y, ny, None if yspan is None else yspan[i])
+        # Digitize values. The last bin includes its right edge, as in
+        # `np.histogram`.
         xloc, yloc = np.digitize(x, xbins) - 1, np.digitize(y, ybins) - 1
-        # Require at least 4 observed bands besides band i, and finite
-        # magnitudes only in *observed* bands: unobserved
-        # (masked) bands routinely hold nonpositive/NaN fluxes that map to
-        # non-finite magnitudes and must not disqualify the object.
-        s = (
-            mask[:, i]
-            & (np.sum(mask, axis=1) > 4)
-            & (np.all(np.isfinite(magobs) | ~mask, axis=1))
-            & (weights.sum(axis=1) > 0)
-        )
-        wt = np.zeros((nobj, nsamps))
-        wt_s = _loo_weights(
-            fobs[s, i], feobs[s, i], 10 ** (-0.4 * mpred[s, :, i]), weights[s]
-        )
-        wt[s] = wt_s / wt_s.sum(axis=1, keepdims=True)
+        xloc[x == xbins[-1]] = nx - 1
+        yloc[y == ybins[-1]] = ny - 1
+        s, wt_s = _band_weights(i, mask, usable, fobs, feobs, mpred, weights)
+        wt = np.zeros(weights.shape)
+        wt[s] = wt_s
         # Compute weighted median offsets.
         offset2d = np.zeros((len(xbins) - 1, len(ybins) - 1))
         for xidx in range(len(xbins) - 1):
@@ -503,14 +410,10 @@ def photometric_offsets_2d(
                     # Otherwise mask the bin.
                     offset2d[xidx, yidx] = np.nan
         # Plot offsets over 2-D histogram.
-        if xspan is not None:
-            bounds[:2] = xspan[i]
-        if yspan is not None:
-            bounds[2:] = yspan[i]
         img = ax[i].imshow(
             offset2d.T,
             origin="lower",
-            extent=bounds,
+            extent=[xbins[0], xbins[-1], ybins[0], ybins[-1]],
             vmin=clims[0],
             vmax=clims[1],
             aspect="auto",
@@ -521,14 +424,93 @@ def photometric_offsets_2d(
         ax[i].set_ylabel(ylabel)
         ax[i].set_title(titles[i])
         plt.colorbar(img, ax=ax[i], label=r"$\Delta\,$mag")
-    # Clear other axes.
-    for i in range(nfilt, nrows * ncols):
-        ax[i].set_frame_on(False)
-        ax[i].set_xticks([])
-        ax[i].set_yticks([])
-    plt.tight_layout()
+    _finish_figure(fig, ax, nfilt, own_fig)
 
     return fig, axes
+
+
+def _setup(phot, err, mask, models, idxs, reds, dreds, dists, flux, weights, offset):
+    """Return the bool mask, the objects usable in any band, the
+    `(Nobj, Nsamps)` weights, the predicted magnitudes `(Nobj, Nsamps, Nfilt)`,
+    the observed fluxes and errors, and the observed magnitudes shifted by
+    `offset`."""
+    nobj, nsamps = idxs.shape
+    # Coerce to boolean: an integer 0/1 mask would otherwise fancy-index
+    # (selecting rows 0/1) and make `~mask` a bitwise complement (-1/-2).
+    mask = np.asarray(mask, dtype=bool)
+    weights = _sample_weights(weights, nobj, nsamps)
+    if offset is None:
+        offset = np.ones(models.shape[1])
+
+    mpred = get_seds(models[idxs.flatten()], av=reds.flatten(), rv=dreds.flatten())
+    mpred += 5.0 * np.log10(dists.flatten())[:, None]
+    mpred = mpred.reshape(nobj, nsamps, -1)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # ignore bad values
+        # The leave-one-out weights use the data of the fit; `offset` only
+        # shifts the plotted residuals.
+        if flux:
+            fobs, feobs = phot, err
+            magobs = magnitude(phot * offset, err * offset)[0]
+        else:
+            # `offset` is a multiplicative *flux* correction; in magnitude
+            # space it is applied as -2.5 log10(offset).
+            fobs, feobs = inv_magnitude(phot, err)
+            magobs = phot - 2.5 * np.log10(offset)
+    # Require at least 4 observed bands besides the plotted one, and finite
+    # magnitudes only in *observed* bands: unobserved (masked) bands
+    # routinely hold nonpositive/NaN fluxes that map to non-finite
+    # magnitudes and must not disqualify the object.
+    usable = (
+        (np.sum(mask, axis=1) > 4)
+        & np.all(np.isfinite(magobs) | ~mask, axis=1)
+        & (weights.sum(axis=1) > 0)
+    )
+    return mask, usable, weights, mpred, fobs, feobs, magobs
+
+
+def _band_weights(i, mask, usable, fobs, feobs, mpred, weights):
+    """Select the usable objects observed in band i and return the selection
+    and their leave-one-out weights, normalized per object."""
+    s = mask[:, i] & usable
+    wt = _loo_weights(
+        fobs[s, i], feobs[s, i], 10 ** (-0.4 * mpred[s, :, i]), weights[s]
+    )
+    return s, wt / wt.sum(axis=1, keepdims=True)
+
+
+def _band_figure(fig, nfilt, panel_size):
+    """Return `fig` as `(figure, axes)`, or a new grid of 5 panels per row."""
+    if fig is not None:
+        return fig
+    nrows = (nfilt - 1) // 5 + 1
+    return plt.subplots(nrows, 5, figsize=(5 * panel_size[0], nrows * panel_size[1]))
+
+
+def _finish_figure(fig, ax, nfilt, own_fig):
+    """Hide the panels beyond `nfilt` and lay out a figure the plot created."""
+    for extra in ax[nfilt:]:
+        extra.set_frame_on(False)
+        extra.set_xticks([])
+        extra.set_yticks([])
+    if own_fig:
+        fig.tight_layout()
+
+
+def _sample_weights(weights, nobj, nsamps):
+    """Return `weights` of shape `(nobj,)` or `(nobj, nsamps)` as `(nobj, nsamps)`."""
+    if weights is None:
+        return np.ones((nobj, nsamps))
+    weights = np.asarray(weights, dtype=float)
+    if weights.shape == (nobj,):
+        return np.broadcast_to(weights[:, None], (nobj, nsamps))
+    if weights.shape != (nobj, nsamps):
+        raise ValueError(
+            f"`weights` must have shape ({nobj},) or ({nobj}, {nsamps}); "
+            f"got {weights.shape}."
+        )
+    return weights
 
 
 __all__ = ["photometric_offsets", "photometric_offsets_2d"]

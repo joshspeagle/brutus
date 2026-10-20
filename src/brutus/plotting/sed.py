@@ -102,9 +102,9 @@ def posterior_predictive(
         from any provided `data_err`. Default is `2.`.
 
     fig : (`~matplotlib.figure.Figure`, `~matplotlib.axes.Axes`), optional
-        If provided, overplot the traces and marginalized 1-D posteriors
-        onto the provided figure. Otherwise, by default an
-        internal figure is generated.
+        If provided, draw on the provided axes and leave the figure layout
+        unchanged. Otherwise, a new figure is generated and laid out with
+        `~matplotlib.figure.Figure.tight_layout`.
 
     Returns
     -------
@@ -145,7 +145,8 @@ def posterior_predictive(
         seds += 5.0 * np.log10(dists)[:, None]
 
     # Generate figure.
-    if fig is None:
+    own_fig = fig is None
+    if own_fig:
         fig, ax = plt.subplots(1, 1, figsize=(nfilt * 1.5, 10))
     else:
         fig, ax = fig
@@ -190,6 +191,7 @@ def posterior_predictive(
     else:
         ax.set_ylabel("Magnitude")
         ax.set_ylim(ax.get_ylim()[::-1])  # flip axis
-    plt.tight_layout()
+    if own_fig:
+        fig.tight_layout()
 
     return fig, ax, parts

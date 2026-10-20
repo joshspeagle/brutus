@@ -331,6 +331,22 @@ class TestPosteriorPredictive:
 
         plt.close(fig)
 
+    def test_given_figure_leaves_other_figures_unchanged(
+        self, mock_models, sample_indices, sample_parameters
+    ):
+        """Regression (#184): `plt.tight_layout()` re-laid out the current
+        figure, not the figure the caller passed."""
+        reds, dreds, dists = sample_parameters
+        other, _ = plt.subplots(2, 2)
+        before = vars(other.subplotpars).copy()
+        given = plt.subplots(1, 1)
+        plt.figure(other.number)  # make the other figure current
+        posterior_predictive(mock_models, sample_indices, reds, dreds, dists, fig=given)
+        after = vars(other.subplotpars).copy()
+        plt.close(other)
+        plt.close(given[0])
+        assert after == before
+
     def test_posterior_predictive_random_state(
         self, mock_models, sample_indices, sample_parameters
     ):
@@ -562,6 +578,41 @@ class TestSummaryPlot:
         assert hasattr(ax_sed, "plot")  # Axes-like object
 
         plt.close(fig)
+
+
+def test_summary_plot_with_the_same_seed_draws_the_same_violins():
+    """Regression (#182): the violins came from the global numpy stream."""
+    from brutus.plotting.summary import summary_plot
+
+    rng = np.random.RandomState(4)
+    nmodels, nsamps = 20, 25
+    models = rng.uniform(10, 20, (nmodels, 5, 3))
+    idxs = rng.choice(nmodels, nsamps)
+    reds, dreds = rng.exponential(0.3, nsamps), rng.normal(3.3, 0.2, nsamps)
+    dists = rng.lognormal(np.log(1.5), 0.4, nsamps)
+    params = np.zeros(nmodels, dtype=[("mass", "f4")])
+    params["mass"] = rng.uniform(0.5, 2.0, nmodels)
+    weights = rng.uniform(0.1, 1.0, nsamps)
+
+    def violins(seed):
+        fig, _, ax_sed = summary_plot(
+            models,
+            idxs,
+            reds,
+            dreds,
+            dists,
+            params,
+            weights=weights,
+            rstate=np.random.RandomState(seed),
+        )
+        paths = [p.get_paths()[0].vertices for p in ax_sed.collections]
+        plt.close(fig)
+        return paths
+
+    first, second, other = violins(1), violins(1), violins(2)
+    for a, b in zip(first, second):
+        np.testing.assert_array_equal(a, b)
+    assert any(not np.array_equal(a, b) for a, b in zip(first, other))
 
 
 class TestPosteriorPredictiveIntegration:

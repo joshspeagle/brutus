@@ -170,3 +170,22 @@ def test_hist2d_tiny_inputs_run(ax, n):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         assert hist2d(x, x, ax=ax) is None
+
+
+def test_caller_kwargs_dicts_are_not_modified(sample_data, ax):
+    """Regression (#181): defaults were written into the caller's dicts, so a
+    reused `contour_kwargs` kept the colour of the first call."""
+    data_kwargs, contourf_kwargs, contour_kwargs = {}, {}, {}
+    for color in ["red", "blue"]:
+        hist2d(
+            *sample_data,
+            ax=ax,
+            color=color,
+            plot_datapoints=True,
+            data_kwargs=data_kwargs,
+            contourf_kwargs=contourf_kwargs,
+            contour_kwargs=contour_kwargs,
+        )
+    assert data_kwargs == contourf_kwargs == contour_kwargs == {}
+    lines = [c for c in ax.collections if isinstance(c, ContourSet) and not c.filled]
+    assert matplotlib.colors.same_color(lines[-1].get_edgecolor()[0], "blue")

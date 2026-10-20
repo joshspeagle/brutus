@@ -34,6 +34,7 @@ def summary_plot(
     R_solar=8.2,
     Z_solar=0.025,
     figsize=None,
+    rstate=None,
     **corner_kwargs,
 ):
     """
@@ -111,6 +112,10 @@ def summary_plot(
     figsize : tuple, optional
         Figure size. If None, determined automatically.
 
+    rstate : `~numpy.random.RandomState`, optional
+        Random state passed to ``cornerplot`` and ``posterior_predictive``.
+        If not provided, the global `numpy.random` state is used.
+
     **corner_kwargs
         Additional keyword arguments passed to ``cornerplot``.
 
@@ -126,12 +131,10 @@ def summary_plot(
 
     # Build parallax kwargs
     plx_kwargs = {}
-    applied_parallax = False
     if parallax is not None and parallax_err is not None:
         if np.isfinite(parallax) and np.isfinite(parallax_err):
             plx_kwargs["parallax"] = parallax
             plx_kwargs["parallax_err"] = parallax_err
-            applied_parallax = True
 
     # Generate the corner plot
     fig, axes = cornerplot(
@@ -139,12 +142,12 @@ def summary_plot(
         (dists, reds, dreds),
         params,
         coord=coord,
-        applied_parallax=applied_parallax,
         weights=weights,
         show_titles=show_titles,
         color=color,
         R_solar=R_solar,
         Z_solar=Z_solar,
+        rstate=rstate,
         **plx_kwargs,
         **corner_kwargs,
     )
@@ -186,18 +189,6 @@ def summary_plot(
 
     ax_sed = fig.add_axes([left, bottom, width, height])
 
-    # Save the corner plot's subplot params before calling posterior_predictive,
-    # which calls plt.tight_layout() and would destroy the spacing.
-    sp = fig.subplotpars
-    saved = dict(
-        left=sp.left,
-        right=sp.right,
-        top=sp.top,
-        bottom=sp.bottom,
-        wspace=sp.wspace,
-        hspace=sp.hspace,
-    )
-
     # Generate the posterior predictive SED on the inset axes
     posterior_predictive(
         models,
@@ -213,15 +204,10 @@ def summary_plot(
         vcolor=vcolor,
         pcolor=pcolor,
         labels=labels,
+        rstate=rstate,
         fig=(fig, ax_sed),
     )
 
     ax_sed.set_title("Posterior Predictive SED", fontsize=9)
-
-    # Restore the corner plot's subplot params (undoes plt.tight_layout())
-    fig.subplots_adjust(**saved)
-
-    # Re-set the SED axes position (it was computed before tight_layout)
-    ax_sed.set_position([left, bottom, width, height])
 
     return fig, axes, ax_sed

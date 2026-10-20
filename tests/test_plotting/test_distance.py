@@ -324,3 +324,50 @@ class TestDistVsRedBackwardCompatibility:
         assert H.shape == (6, 5)
 
         plt.close()
+
+
+def test_scalar_parallax_with_several_objects_matches_an_array():
+    """Regression (#177): a scalar parallax raised TypeError for several
+    objects."""
+    rng = np.random.RandomState(3)
+    data = (
+        rng.lognormal(np.log(2.0), 0.3, (3, 200)),
+        rng.exponential(0.5, (3, 200)),
+        rng.normal(3.3, 0.3, (3, 200)),
+    )
+    kwargs = dict(bins=(30, 20), dist_type="parallax", smooth=(0.2, 0.01))
+    H_scalar = dist_vs_red(data, parallax=0.5, parallax_err=0.01, **kwargs)[0]
+    H_array = dist_vs_red(
+        data, parallax=np.full(3, 0.5), parallax_err=np.full(3, 0.01), **kwargs
+    )[0]
+    plt.close("all")
+    np.testing.assert_array_equal(H_scalar, H_array)
+
+
+def test_parallax_of_wrong_shape_raises():
+    data = tuple(np.ones((3, 10)) for _ in range(3))
+    with pytest.raises(ValueError, match="`parallax`"):
+        dist_vs_red(data, parallax=[1.0, 1.0], parallax_err=0.1)
+
+
+def test_draws_on_the_given_axes():
+    data = tuple(np.random.RandomState(1).uniform(1, 2, (3, 50)))
+    other, _ = plt.subplots()
+    fig, ax = plt.subplots()
+    plt.figure(other.number)
+    img = dist_vs_red(data, bins=(5, 4), fig=(fig, ax))[3]
+    plt.close(other)
+    plt.close(fig)
+    assert img.axes is ax and ax.get_xlabel() == r"$\mu$"
+
+
+def test_caller_truth_kwargs_are_not_modified():
+    """Regression (#181)."""
+    data = tuple(np.random.RandomState(1).uniform(1, 2, (3, 50)))
+    truth_kwargs = {}
+    fig, ax = plt.subplots()
+    dist_vs_red(
+        data, bins=(5, 4), truths=(12.0, 1.5), truth_kwargs=truth_kwargs, fig=(fig, ax)
+    )
+    plt.close(fig)
+    assert truth_kwargs == {}

@@ -141,19 +141,16 @@ class TestCornerplot:
         assert fig is not None
         plt.close(fig)
 
-    def test_cornerplot_no_parallax_applied(
+    def test_saved_draws_without_parallax_need_no_flag(
         self, sample_indices, basic_params, direct_data
     ):
-        """Test cornerplot with applied_parallax=False."""
+        """Regression (#174): the default `applied_parallax` raised for saved
+        draws given without a parallax."""
         fig, axes = cornerplot(
-            sample_indices,
-            direct_data,
-            basic_params,
-            applied_parallax=False,
-            span=[0.9 for _ in range(7)],
+            sample_indices, direct_data, basic_params, span=[0.9] * 7
         )
 
-        assert fig is not None
+        assert axes.shape == (7, 7)
         plt.close(fig)
 
     def test_cornerplot_with_weights(self, sample_indices, basic_params, direct_data):
@@ -275,12 +272,19 @@ class TestCornerplot:
         n_samples = len(sample_indices)
         dummy_data = (np.ones(n_samples), np.ones(n_samples), np.ones(n_samples))
 
-        # Test parallax error without both parallax and parallax_err
-        with pytest.raises(ValueError, match="must be provided together"):
+        # `applied_parallax=True` on regenerated draws needs both values.
+        sar_data = (
+            np.ones(n_samples),
+            np.ones(n_samples),
+            np.full(n_samples, 3.3),
+            np.tile(np.eye(3) * 0.01, (n_samples, 1, 1)),
+        )
+        with pytest.raises(ValueError, match="applied_parallax.*parallax_err"):
             cornerplot(
                 sample_indices,
-                dummy_data,
+                sar_data,
                 basic_params,
+                coord=(45.0, 30.0),
                 parallax=1.0,  # Missing parallax_err
                 applied_parallax=True,
             )
@@ -549,3 +553,63 @@ class TestCornerplotIntegration:
 
         assert fig is not None
         plt.close(fig)
+
+
+def _sar_inputs(nsamps, seed=0):
+    rng = np.random.RandomState(seed)
+    params = np.zeros(20, dtype=[("mass", "f8")])
+    params["mass"] = rng.uniform(0.5, 2.0, 20)
+    idxs = rng.randint(0, 20, nsamps)
+    sar = (
+        rng.lognormal(np.log(0.25), 0.2, nsamps),
+        rng.uniform(0.2, 1.0, nsamps),
+        rng.normal(3.3, 0.1, nsamps),
+        np.tile(np.diag([0.002, 0.02, 0.05]), (nsamps, 1, 1)),
+    )
+    return idxs, sar, params
+
+
+@pytest.mark.parametrize("make_rstate", [np.random.RandomState, np.random.default_rng])
+def test_regenerated_draws_match_choice_per_sample(monkeypatch, make_rstate):
+    """The vectorized resampling picks the draws that
+    `rstate.choice(Nr, p=pwt[i])` picks for each sample in turn (#187)."""
+    import brutus.plotting.corner as corner
+    from brutus.plotting.utils import _sar_draws
+
+    idxs, sar, params = _sar_inputs(40)
+    lndistprior = lambda d, coord: -0.5 * d**2  # noqa: E731
+    captured = []
+    real = corner._resolve_span
+    monkeypatch.setattr(
+        corner,
+        "_resolve_span",
+        lambda span, samples, w: captured.append(samples) or real(span, samples, w),
+    )
+    fig, _ = corner.cornerplot(
+        idxs, sar, params, lndistprior=lndistprior, Nr=30, rstate=make_rstate(5)
+    )
+    plt.close(fig)
+
+    rstate = make_rstate(5)
+    _, p, d, a, r, pwt = _sar_draws(
+        *sar, lndistprior, None, None, None, 30, (0, 20), (1, 8), rstate
+    )
+    ridx = [rstate.choice(30, p=pwt[i]) for i in range(len(idxs))]
+    expected = np.array([x[np.arange(len(idxs)), ridx] for x in (a, r, p, d)])
+    np.testing.assert_array_equal(captured[0][1:], expected)
+
+
+def test_saved_draws_may_be_lists():
+    """Regression (#179): lists fell through to the SAR branch."""
+    idxs, _, params = _sar_inputs(30)
+    rng = np.random.RandomState(1)
+    data = tuple(list(rng.uniform(lo, hi, 30)) for lo, hi in [(1, 3), (0, 1), (3, 4)])
+    fig, axes = cornerplot(idxs, data, params)
+    plt.close(fig)
+    assert axes.shape == (5, 5)
+
+
+def test_data_of_wrong_length_raises():
+    idxs, sar, params = _sar_inputs(30)
+    with pytest.raises(ValueError, match="`data` must be"):
+        cornerplot(idxs, sar[:2], params)
