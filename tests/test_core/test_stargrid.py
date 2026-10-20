@@ -244,18 +244,11 @@ class TestStarGridEdgeCases:
         with pytest.raises(TypeError, match="fe_h"):
             getattr(mock_grid, method)(mini=1.0, eep=300, fe_h=0.0)
 
-    def test_negative_distance(self, mock_grid):
-        """Test with invalid distance."""
-        params = {"mini": 1.0, "eep": 300, "feh": 0.0}
-
-        # Negative distance will cause issues with log10
-        # Test that it's handled somehow (may give NaN or use abs)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            sed, _, _ = mock_grid.get_seds(**params, dist=-1000)
-
-        # Result exists but may contain NaNs
-        assert sed is not None
+    @pytest.mark.parametrize("dist", [-1000.0, 0.0, np.nan, None])
+    def test_invalid_distance_raises(self, mock_grid, dist):
+        """A negative distance gave NaN magnitudes; None a TypeError."""
+        with pytest.raises(ValueError, match="dist"):
+            mock_grid.get_seds(mini=1.0, eep=300, feh=0.0, dist=dist)
 
     def test_negative_extinction(self, mock_grid):
         """Test negative extinction values."""
@@ -287,6 +280,24 @@ class TestStarGridEdgeCases:
 
         sed, params, _ = grid.get_seds(mini=0.5, eep=200, feh=-0.5)
         assert sed.shape == (1,)
+
+    def test_one_model_grid_works_on_the_kdtree_path(self):
+        labels = np.array(
+            [(1.0, 300.0, 0.0)], dtype=[(n, "f8") for n in ("mini", "eep", "feh")]
+        )
+        models = np.array([[[15.0, 1.0, 0.1], [14.0, 0.8, 0.05]]])
+        grid = StarGrid(models, labels, verbose=False)
+        sed, _, _ = grid.get_seds(av=0.5, rv=3.0, use_multilinear=False)
+        np.testing.assert_allclose(sed, [15.0 + 0.5 * 1.3, 14.0 + 0.5 * 0.95])
+
+    @pytest.mark.parametrize("use_multilinear", [True, False])
+    def test_query_needs_a_grid_label(self, use_multilinear):
+        """The multilinear path returned model 0 for any query."""
+        grid = StarGrid(
+            np.zeros((2, 1, 3)), np.zeros(2, dtype=[("x", "f8")]), verbose=False
+        )
+        with pytest.raises(ValueError, match="grid label"):
+            grid.get_seds(use_multilinear=use_multilinear)
 
     def test_models_as_dict(self):
         """Test StarGrid initialization with models as a dict."""

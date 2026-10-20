@@ -332,6 +332,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `StarGrid` no longer warns about missing grid corners that carry zero
   weight. On `grid_mist_v9.h5`, 96 of 3000 queries on grid nodes warned;
   the SEDs do not change.
+- `StarGrid.get_seds(use_multilinear=False)` works on a grid of one
+  model; it raised `AttributeError`. On a grid with no grid label (`mini`,
+  `eep`, `feh`, `afe` or `smf`), both neighbour methods raise `ValueError`;
+  the default method returned the first model for any query. A `dist` that
+  is not a finite distance > 0 raises `ValueError`; a negative `dist` gave
+  NaN magnitudes.
 - `find_nn_file`, `EEPTracks` and `Isochrone` look for their default data
   files in the brutus download directory (`strato.path`, which
   `ASTRO_BRUTUS_DATA_DIR` sets) first, then in `data/DATAFILES`. They
@@ -475,6 +481,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once, instead of scanning every object for each bin. The maps are bitwise
   identical. With 3000 objects, 5 bands, 20 draws and 50 x 50 bins, a call
   takes a median 0.54 s instead of 0.71 s (3 alternated runs, 4 CPUs).
+- `StarGrid.get_seds` and `get_predictions` with `use_multilinear=False`
+  keep the scaling of the grid axes with the KD-tree instead of scanning
+  every model per query. Results are bitwise identical. On
+  `grid_mist_v9.h5` with 5 bands, a KD-tree `get_seds` call takes a median
+  0.11 ms instead of 35 ms, and a multilinear call 0.14 ms instead of
+  0.19 ms (5 interleaved runs, 4 CPUs).
 - The bootstrap of `analysis.photometric_offsets` draws each sample by a
   per-row binary search of the weight CDF, in a jitted helper, instead of
   comparing every CDF entry. The medians are bitwise identical. With 20,000

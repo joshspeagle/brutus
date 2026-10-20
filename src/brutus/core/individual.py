@@ -1665,10 +1665,15 @@ class StarGrid:
         at the edges: stored edges are not round (the MIST mini maximum is
         2.0000000000000013).
         """
+        if not self._axis_names:
+            raise ValueError(
+                "StarGrid needs at least one grid label (mini, eep, feh, afe or "
+                f"smf) to answer a query; models_labels has {self.label_names}."
+            )
         values = {
-            name: query[name]
-            for name in self._axis_names
-            if query.get(name) is not None
+            name: value
+            for name, value in query.items()
+            if name in self.grid_axes and value is not None
         }
         missing = [
             name
@@ -1698,23 +1703,21 @@ class StarGrid:
 
         # A fixed axis order keeps the distances, summed over axes, independent
         # of the column order of models_labels
-        self._kdtree_axes = [
-            name
-            for name in ["mini", "eep", "feh", "afe", "smf"]
-            if name in self.grid_axes
-        ]
+        # Per-axis (minimum, span), kept for scaling the queries
+        self._kdtree_scale = {}
         coords = []
-        for label in self._kdtree_axes:
+        for label in ["mini", "eep", "feh", "afe", "smf"]:
+            if label not in self.grid_axes:
+                continue
             vals = self.labels[label]
-            # Normalize to [0, 1] for balanced distance metrics
             val_min, val_max = vals.min(), vals.max()
-            if val_max > val_min:
-                normalized = (vals - val_min) / (val_max - val_min)
+            span = val_max - val_min
+            self._kdtree_scale[label] = (val_min, span)
+            if span > 0:
+                coords.append((vals - val_min) / span)
             else:
-                normalized = np.zeros_like(vals)
-            coords.append(normalized)
-
-        self.kdtree = cKDTree(np.column_stack(coords)) if coords else None
+                coords.append(np.zeros_like(vals))
+        self.kdtree = cKDTree(np.column_stack(coords))
 
     def _find_neighbors_multilinear(self, **req_params):
         """
@@ -1811,8 +1814,8 @@ class StarGrid:
             else:
                 n_missing += 1
 
-        wsum = float(np.sum(weights)) if weights else 0.0
-        if not indices or wsum < 0.5:
+        wsum = float(np.sum(weights))
+        if wsum < 0.5:
             # All bracketing corners are missing, or the surviving corners
             # carry a minority of the interpolation weight (the query's
             # dominant corner is absent from the grid). Renormalizing the
@@ -1865,38 +1868,16 @@ class StarGrid:
         if self.kdtree is None:
             self._build_kdtree()
 
-        if self.kdtree is None:
-            # KD-tree couldn't be built, use simple nearest neighbor
-            distances = np.zeros(self.nmodels)
-            for label in ["mini", "eep", "feh", "afe", "smf"]:
-                if (
-                    label in kwargs
-                    and kwargs[label] is not None
-                    and label in self.label_names
-                ):
-                    label_vals = self.labels[label]
-                    val_range = label_vals.max() - label_vals.min()
-                    if val_range > 0:
-                        distances += ((label_vals - kwargs[label]) / val_range) ** 2
+        # A single-valued axis scales to 0 and may be omitted
+        query_point = [
+            (kwargs[label] - val_min) / span if span > 0 else 0.0
+            for label, (val_min, span) in self._kdtree_scale.items()
+        ]
 
-            nearest_idx = np.argmin(distances)
-            return np.array([nearest_idx]), np.array([1.0])
-
-        # Build query point; a single-valued axis scales to 0 and may be
-        # omitted
-        query_point = []
-        for label in self._kdtree_axes:
-            vals = self.labels[label]
-            val_min, val_max = vals.min(), vals.max()
-            if val_max > val_min:
-                normalized = (kwargs[label] - val_min) / (val_max - val_min)
-            else:
-                normalized = 0.0
-            query_point.append(normalized)
-
-        # Query KD-tree for nearest neighbors
         k = min(8, self.nmodels)  # Use up to 8 neighbors
         distances, indices = self.kdtree.query(query_point, k=k)
+        # A 1-model grid returns scalars
+        distances, indices = np.atleast_1d(distances, indices)
 
         # Convert distances to weights (inverse distance weighting)
         epsilon = 1e-10
@@ -1904,6 +1885,29 @@ class StarGrid:
         weights /= weights.sum()
 
         return indices, weights
+
+    def _neighbors(self, use_multilinear, **labels):
+        """Return the checked query and the indices and weights of its neighbours."""
+        query = self._check_query(**labels)
+        if use_multilinear:
+            return (query, *self._find_neighbors_multilinear(**query))
+        return (query, *self._find_neighbors_kdtree(**query))
+
+    def _interpolate_params(self, query, indices, weights):
+        """Return the query labels and the weighted parameters as a dict.
+
+        Without parameters, return the weighted labels instead.
+        """
+        if self.params is not None and self.param_names:
+            predictions = dict(query)
+            neighbors = self.params[indices]
+            for param in self.param_names:
+                predictions[param] = np.sum(neighbors[param] * weights)
+            return predictions
+        return {
+            label: np.sum(self.labels[label][indices] * weights)
+            for label in self.label_names
+        }
 
     def get_predictions(
         self,
@@ -1968,37 +1972,11 @@ class StarGrid:
         >>> print(f"log(age) = {preds['loga']:.2f}")
         >>> print(f"log(L) = {preds['logl']:.2f}")
         """
-        query = self._check_query(mini=mini, eep=eep, feh=feh, afe=afe, smf=smf)
-        if use_multilinear:
-            indices, weights = self._find_neighbors_multilinear(**query)
-        else:
-            indices, weights = self._find_neighbors_kdtree(**query)
+        query, indices, weights = self._neighbors(
+            use_multilinear, mini=mini, eep=eep, feh=feh, afe=afe, smf=smf
+        )
 
-        # Interpolate parameters if available
-        if self.params is not None and self.param_names:
-            predictions = {}
-
-            # Add input labels to predictions
-            for label in ["mini", "eep", "feh", "afe", "smf"]:
-                value = locals()[label]
-                if label in self.label_names and value is not None:
-                    predictions[label] = value
-
-            # Interpolate each parameter
-            for param in self.param_names:
-                param_vals = self.params[param][indices]
-                predictions[param] = np.sum(param_vals * weights)
-
-            return predictions
-
-        else:
-            # Return weighted average of labels only
-            predictions = {}
-            for label in self.label_names:
-                label_vals = self.labels[label][indices]
-                predictions[label] = np.sum(label_vals * weights)
-
-            return predictions
+        return self._interpolate_params(query, indices, weights)
 
     def get_seds(
         self,
@@ -2079,7 +2057,8 @@ class StarGrid:
         Raises
         ------
         ValueError
-            As in `get_predictions`.
+            As in `get_predictions`, or if `dist` is not a finite distance
+            greater than 0.
 
         See Also
         --------
@@ -2107,10 +2086,10 @@ class StarGrid:
         ... )
         >>> print(f"G magnitude: {sed[0]:.2f}")
         """
+        if dist is None or not np.isfinite(dist) or dist <= 0:
+            raise ValueError(f"dist must be a finite distance > 0 in pc; got {dist}.")
         # Warning for binary support limitations
         if smf is not None and smf > 0:
-            import warnings
-
             warnings.warn(
                 "Binary star support in StarGrid is limited. Secondary parameters "
                 "(params2) will be empty. For full binary modeling, use StarEvolTrack "
@@ -2119,68 +2098,23 @@ class StarGrid:
                 stacklevel=2,
             )
 
-        query = self._check_query(mini=mini, eep=eep, feh=feh, afe=afe, smf=smf)
-        if use_multilinear:
-            indices, weights = self._find_neighbors_multilinear(**query)
-        else:
-            indices, weights = self._find_neighbors_kdtree(**query)
-
-        # Get weighted average of magnitude coefficients
-        weighted_coeffs = np.zeros((self.nfilters, 3))
-        for idx, weight in zip(indices, weights):
-            weighted_coeffs += self.models[idx] * weight
-
-        # Apply extinction and distance modulus using sed_utils
-        from .sed_utils import _get_seds
-
-        # Get reddened magnitudes
-        # _get_seds expects (Nmodels, Nbands, Ncoef) and arrays for av/rv
-        weighted_coeffs_3d = weighted_coeffs[np.newaxis, :, :]
-        av_array = np.array([av])
-        rv_array = np.array([rv])
-        seds_array, _, _ = _get_seds(
-            weighted_coeffs_3d, av_array, rv_array, return_flux=False
+        query, indices, weights = self._neighbors(
+            use_multilinear, mini=mini, eep=eep, feh=feh, afe=afe, smf=smf
         )
-        mags = seds_array[0]  # Extract the single model result
 
-        # Apply distance modulus (grid magnitudes stored at 1 kpc = 1000 pc reference)
-        # Note: Grid files are generated at 1 kpc distance for consistency with
-        # Gaia parallax measurements (1 mas = 1 kpc)
-        if dist is not None and dist != 1000.0:  # Grid reference is 1 kpc
-            dist_mod = 5.0 * np.log10(dist / 1000.0)
-            mags += dist_mod
+        # Weighted average of the magnitude coefficients (np.sum adds the rows
+        # in order; np.tensordot can change the last bit), reddened as in
+        # `_get_seds`. Grid magnitudes are at 1 kpc.
+        coeffs = np.sum(self.models[indices] * weights[:, None, None], axis=0)
+        mags = (
+            coeffs[:, 0]
+            + av * (coeffs[:, 1] + rv * coeffs[:, 2])
+            + 5.0 * np.log10(dist / 1000.0)
+        )
+        sed = 10 ** (-0.4 * mags) if return_flux else mags
 
-        # Convert to flux if requested
-        if return_flux:
-            from ..utils.photometry import inv_magnitude
-
-            # Use zero errors for now (could be improved with proper error propagation)
-            sed, _ = inv_magnitude(mags, np.zeros_like(mags))
-        else:
-            sed = mags
-
-        # Get parameter predictions using same neighbors (avoid redundant computation)
         if return_predictions:
-            # Interpolate parameters using already-found neighbors
-            if self.params is not None and self.param_names:
-                params = {}
-
-                # Add input labels
-                for label in ["mini", "eep", "feh", "afe", "smf"]:
-                    value = locals()[label]
-                    if label in self.label_names and value is not None:
-                        params[label] = value
-
-                # Interpolate parameters
-                for param in self.param_names:
-                    param_vals = self.params[param][indices]
-                    params[param] = np.sum(param_vals * weights)
-            else:
-                # Interpolate labels only
-                params = {}
-                for label in self.label_names:
-                    label_vals = self.labels[label][indices]
-                    params[label] = np.sum(label_vals * weights)
+            params = self._interpolate_params(query, indices, weights)
         else:
             params = None
 
