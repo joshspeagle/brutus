@@ -684,6 +684,27 @@ class TestNaNAutoMask:
 class TestMeasureNormalization:
     """The marginalization must be invariant to the measure's overall scale."""
 
+    def test_marginalization_matches_direct_computation_bitwise(self):
+        from scipy.special import logsumexp
+
+        rng = np.random.default_rng(121)
+        lnl_mixture = rng.normal(-50.0, 20.0, size=(200, 6))
+        lnl_mixture[rng.random(200) < 0.1] = np.nan
+        lnl_mixture[rng.random((200, 6)) < 0.05] = -np.inf
+        mass_jac = rng.uniform(1e-4, 1e-2, 200)
+        smf_jac = rng.uniform(0.02, 0.05, 200)
+        original = lnl_mixture.copy()
+
+        ln_jac = np.log(mass_jac * smf_jac)
+        valid = np.any(np.isfinite(lnl_mixture), axis=1)
+        terms = lnl_mixture + ln_jac[:, None] - logsumexp(ln_jac[valid])
+        terms = np.where(np.isfinite(terms), terms, -np.inf)
+        expected = np.maximum(logsumexp(terms, axis=0), LOG_ZERO)
+
+        out = marginalize_isochrone_grid(lnl_mixture, mass_jac, smf_jac)
+        assert out.tobytes() == expected.tobytes()
+        np.testing.assert_array_equal(lnl_mixture, original)
+
     def test_marginalization_invariant_to_jacobian_scale(self):
         rng = np.random.default_rng(0)
         lnl_mixture = rng.normal(-10, 2, size=(50, 4))

@@ -462,7 +462,7 @@ def compute_isochrone_cluster_loglike(
     # density and the parallax term is added as one.
     extra_chi2 = None
     extra_dims = None
-    lnl_parallax = 0.0
+    lnl_parallax = None
     if parallax is not None:
         parallax = np.asarray(parallax)
         parallax_err = np.asarray(parallax_err)
@@ -520,11 +520,10 @@ def compute_isochrone_cluster_loglike(
     # For invalid models, set likelihood to NaN (will be handled in marginalization)
     lnl_phot[~model_valid_mask, :] = np.nan
 
-    # Combine photometric and parallax likelihoods
-    lnl_cluster = lnl_phot + lnl_parallax  # shape (N_grid_points, N_objects)
+    if lnl_parallax is not None:
+        lnl_phot += lnl_parallax
 
-    # Already in standard grid-first ordering
-    return lnl_cluster  # shape (N_grid_points, N_objects)
+    return lnl_phot  # shape (N_grid_points, N_objects)
 
 
 def compute_isochrone_outlier_loglike(
@@ -801,17 +800,14 @@ def marginalize_isochrone_grid(lnl_mixture, mass_jacobians, smf_jacobians):
         return np.full(n_objects, LOG_ZERO)
     ln_measure_norm = logsumexp(ln_jacobian[valid_rows])
 
-    # Add jacobian to likelihoods for proper integration
-    lnl_with_jacobian = (
-        lnl_mixture + ln_jacobian[:, None] - ln_measure_norm
-    )  # shape (N_grid_points, N_objects)
+    # Add the jacobian to the likelihoods, in place on one (N_grid_points,
+    # N_objects) array. The operation order matches (lnl + ln_jac) - norm.
+    lnl_with_jacobian = lnl_mixture + ln_jacobian[:, None]
+    lnl_with_jacobian -= ln_measure_norm
 
-    # Convert NaN to -inf for logsumexp (invalid models contribute nothing to marginalization)
-    lnl_with_jacobian = np.where(
-        np.isfinite(lnl_with_jacobian), lnl_with_jacobian, -np.inf
-    )
+    # Invalid models (NaN) contribute nothing to the marginalization.
+    np.copyto(lnl_with_jacobian, -np.inf, where=~np.isfinite(lnl_with_jacobian))
 
-    # Marginalize over grid using logsumexp
     # shape (N_objects,)
     lnl_marginalized = np.maximum(logsumexp(lnl_with_jacobian, axis=0), LOG_ZERO)
 

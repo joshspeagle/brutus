@@ -358,6 +358,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   comparing every CDF entry. The medians are bitwise identical. With 20,000
   objects, 500 draws and 30 replicates, a bootstrap takes 0.33 s instead of
   1.66 s (medians of 7 interleaved runs, 4 CPUs).
+- `marginalize_isochrone_grid` makes two fewer full-size temporaries, and
+  `compute_isochrone_cluster_loglike` adds the parallax term only when one
+  exists. Results are bitwise identical. With 21000 models and 1000 stars,
+  the marginalization takes a median 0.59 to 0.67 s against 0.70 s on one
+  core (25 interleaved runs, two repeats).
 
 ### Documentation
 
