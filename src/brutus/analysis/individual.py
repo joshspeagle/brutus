@@ -104,6 +104,16 @@ __all__ = ["BruteForce"]
 MIN_SCALE = 1e-20
 
 
+class _GridLabels:
+    # Default of `dlabels`: the labels of the loaded model grid. It differs
+    # from `dlabels=None`, which evaluates the Galactic prior without labels.
+    def __repr__(self):
+        return "<model grid labels>"
+
+
+_GRID_LABELS = _GridLabels()
+
+
 def _has_parallax(parallax, parallax_err):
     """Return True for a usable parallax, as the parallax priors define it."""
     return (
@@ -1430,7 +1440,7 @@ class BruteForce:
         lngalprior=None,
         lndustprior=None,
         dustfile=None,
-        dlabels=None,
+        dlabels=_GRID_LABELS,
         avlim=AVLIM,
         rvlim=RVLIM,
         mem_lim=8000.0,
@@ -1454,6 +1464,11 @@ class BruteForce:
             subset with the same indices, and the returned ``sel`` indexes
             that subset.
 
+        dlabels : structured `~numpy.ndarray` of shape `(Nmodels,)` or None, optional
+            Model labels passed to the Galactic prior. By default, the labels
+            of the loaded model grid. With None, the prior gets
+            ``labels=None``.
+
         apply_av_prior : bool, optional
             Whether to apply the dust-map extinction prior when ``dustfile``
             is provided. Default is True.
@@ -1473,8 +1488,7 @@ class BruteForce:
                 "to fit())."
             )
 
-        # Use instance's labels if not provided
-        if dlabels is None:
+        if dlabels is _GRID_LABELS:
             dlabels = self.models_labels
 
         # Implementation of grid-based posterior computation
@@ -1963,7 +1977,8 @@ class BruteForce:
             ``Bayestar`` object.
 
         apply_dlabels : bool, optional
-            Whether to pass model labels to Galactic prior. Default is True.
+            Whether to pass model labels to the Galactic prior. With False,
+            the prior gets ``labels=None``. Default is True.
 
         data_coords : numpy.ndarray of shape (Ndata, 2), optional
             Galactic (l, b) coordinates for each object in degrees.
@@ -2330,7 +2345,7 @@ class BruteForce:
         lngalprior=None,
         lndustprior=None,
         dustfile=None,
-        dlabels=None,
+        dlabels=_GRID_LABELS,
         logl_dim_prior=True,
         ltol=3e-2,
         ltol_subthresh=1e-2,
@@ -2386,8 +2401,9 @@ class BruteForce:
         dustfile : str, path-like, or `~brutus.dust.Bayestar`, optional
             Path to a 3D dust map file (loaded automatically), or a
             pre-loaded ``Bayestar`` object.
-        dlabels : numpy.ndarray, optional
-            Model labels for prior evaluation.
+        dlabels : structured numpy.ndarray or None, optional
+            Model labels for the Galactic prior, as in `logpost_grid`.
+            Default is the labels of the loaded model grid.
         logl_dim_prior : bool, optional
             Whether to apply dimensional prior correction.
         ltol : float, optional

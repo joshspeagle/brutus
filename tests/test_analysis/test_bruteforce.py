@@ -2111,7 +2111,7 @@ class TestSubsetResults:
         with pytest.raises(ValueError, match="dlabels"):
             fitter.logpost_grid(like, coord=(120.0, 45.0), Nmc_prior=5)
         with pytest.raises(ValueError, match="lnprior"):
-            fitter.logpost_grid(like, lnprior=np.zeros(27), dlabels=None, Nmc_prior=5)
+            fitter.logpost_grid(like, lnprior=np.zeros(27), Nmc_prior=5)
 
     def test_subset_labels_are_accepted(self, fitter, observation):
         flux, flux_err, mask = observation
@@ -2171,6 +2171,33 @@ class TestUnfittedObjects:
         # HDF5 refuses to truncate a file that is still open.
         h5py.File(path, "w").close()
         assert excinfo.traceback
+
+
+@pytest.mark.parametrize("apply_dlabels", [True, False])
+def test_apply_dlabels_controls_galactic_prior_labels(
+    fitter, batch, tmp_path, apply_dlabels
+):
+    seen = []
+
+    def lngalprior(dists, coord, labels=None):
+        seen.append(labels)
+        return np.zeros_like(dists)
+
+    fitter.fit(
+        save_file=str(tmp_path / "out"),
+        lngalprior=lngalprior,
+        apply_dlabels=apply_dlabels,
+        Ndraws=10,
+        Nmc_prior=5,
+        rstate=np.random.RandomState(3),
+        verbose=False,
+        **batch,
+    )
+    assert len(seen) == 2
+    if apply_dlabels:
+        assert all(labels.dtype == fitter.models_labels.dtype for labels in seen)
+    else:
+        assert all(labels is None for labels in seen)
 
 
 def test_misspelled_keyword_raises(fitter, observation):
