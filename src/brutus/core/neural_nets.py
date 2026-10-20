@@ -512,10 +512,10 @@ class FastNNPredictor(FastNN):
             Base-10 logarithm of luminosity for each star.
         afe : numpy.ndarray of shape (N,)
             Alpha element enhancement [alpha/Fe] for each star.
-        av : float
-            V-band extinction (same for all stars).
-        rv : float
-            Reddening parameter R(V) (same for all stars).
+        av : float or numpy.ndarray of shape (N,)
+            V-band extinction A(V) in mag.
+        rv : float or numpy.ndarray of shape (N,)
+            Reddening parameter R(V).
         dist : float
             Distance in parsecs (same for all stars).
         filt_idxs : slice or array-like, optional
