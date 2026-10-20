@@ -769,11 +769,13 @@ class StellarPop:
             Synthetic SEDs in magnitudes.
 
         params : dict or numpy.ndarray
-            Primary component stellar parameters.
+            Primary component stellar parameters: a dict of (Neep,) arrays
+            keyed by `isochrone.predictions`, or with ``return_dict=False``
+            an array of shape (Neep, Npred) with columns in that order.
 
         params2 : dict or numpy.ndarray
-            Secondary component parameters, NaN for every star whose SED has
-            no companion.
+            Secondary component parameters, in the same form as `params`.
+            NaN for every star whose SED has no companion.
 
         Raises
         ------
@@ -1085,7 +1087,7 @@ apply_corr, corr_params, return_dict
 
         # Format output
         if not return_dict:
-            params = params_arr.T
+            params = params_arr
             params2 = params_arr2
 
         return seds, params, params2

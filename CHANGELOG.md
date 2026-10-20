@@ -244,6 +244,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Python 3.10 or later and numpy 2.0 or later are required (the floors were 3.9
   and 1.19). Python 3.9 is past its end of life, and no astropy release for
   Python 3.9 supports numpy 2.
+- `StellarPop.get_seds(return_dict=False)` and `get_seds_smf_grid`
+  return `params` with shape (Neep, Npred), like `params2` and
+  `StarEvolTrack.get_seds`. It was the transpose, (Npred, Neep).
 
 ### Fixed
 

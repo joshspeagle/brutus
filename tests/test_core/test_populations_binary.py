@@ -226,7 +226,7 @@ class TestReturnDictFalse:
         assert isinstance(seds, np.ndarray)
 
     def test_return_dict_false_shape(self):
-        """Array output shapes should match the source code behavior."""
+        """params and params2 both have shape (Neep, Npred)."""
         n_eep = 6
         iso = _make_mock_isochrone(n_eep=n_eep)
         pop = _make_stellar_pop(iso, has_sed_batch=True, nfilt=4)
@@ -234,16 +234,12 @@ class TestReturnDictFalse:
         seds, params, params2 = pop.get_seds(feh=0.0, loga=9.0, return_dict=False)
 
         n_pred = len(iso.predictions)
-        # params = params_arr.T => shape (Npred, Neep)
-        assert params.shape == (n_pred, n_eep)
-        # params2 = params_arr2 (no binary) => shape (Neep, Npred)
+        assert params.shape == (n_eep, n_pred)
         assert params2.shape == (n_eep, n_pred)
         assert seds.shape == (n_eep, 4)
 
     def test_return_dict_false_shape_equal_mass_binary(self):
-        """binary_fraction=1.0 must return params2 in the same (Neep, Npred)
-        orientation as every other path (it previously returned the
-        transpose)."""
+        """binary_fraction=1.0 returns params and params2 as (Neep, Npred)."""
         n_eep = 6
         iso = _make_mock_isochrone(n_eep=n_eep)
         pop = _make_stellar_pop(iso, has_sed_batch=True, nfilt=4)
@@ -253,7 +249,7 @@ class TestReturnDictFalse:
         )
 
         n_pred = len(iso.predictions)
-        assert params.shape == (n_pred, n_eep)
+        assert params.shape == (n_eep, n_pred)
         assert params2.shape == (n_eep, n_pred)
         assert seds.shape == (n_eep, 4)
 
@@ -282,9 +278,7 @@ class TestReturnDictFalse:
         n_pred = len(iso.predictions)
         assert isinstance(params, np.ndarray)
         assert isinstance(params2, np.ndarray)
-        # params = params_arr.T => (Npred, Neep)
-        assert params.shape == (n_pred, n_eep)
-        # params2 = params_arr2 => (Neep, Npred) -- not transposed
+        assert params.shape == (n_eep, n_pred)
         assert params2.shape == (n_eep, n_pred)
 
 
