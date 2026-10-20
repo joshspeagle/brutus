@@ -65,6 +65,13 @@ def test_plot_options_draw_the_matching_artists(sample_data, ax, options, expect
     assert _artists(ax) == expected
 
 
+def test_unknown_keyword_raises(sample_data, ax):
+    """Regression (#261): unknown keywords were silently ignored."""
+    x, y = sample_data
+    with pytest.raises(TypeError, match="alpha"):
+        hist2d(x, y, ax=ax, alpha=0.5)
+
+
 def test_datapoints_are_the_samples_with_their_style(sample_data, ax):
     x, y = sample_data
     hist2d(x, y, ax=ax, plot_datapoints=True, data_kwargs={"marker": "s", "alpha": 0.3})

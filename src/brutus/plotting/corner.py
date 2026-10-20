@@ -274,7 +274,6 @@ def cornerplot(
 
     # Set defaults.
     hist_kwargs["alpha"] = hist_kwargs.get("alpha", 0.6)
-    hist2d_kwargs["alpha"] = hist2d_kwargs.get("alpha", 0.6)
     truth_kwargs["linestyle"] = truth_kwargs.get("linestyle", "solid")
     truth_kwargs["linewidth"] = truth_kwargs.get("linewidth", 2)
     truth_kwargs["alpha"] = truth_kwargs.get("alpha", 0.7)

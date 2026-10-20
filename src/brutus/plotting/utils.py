@@ -40,7 +40,6 @@ def hist2d(
     contour_kwargs=None,
     contourf_kwargs=None,
     data_kwargs=None,
-    **kwargs,
 ):
     """
     Plot a 2-D histogram and contours of weighted samples.

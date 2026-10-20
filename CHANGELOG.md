@@ -197,6 +197,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`hist2d` no longer accepts `**kwargs`.** It ignored unknown keywords,
+  so an unknown key in `cornerplot(hist2d_kwargs=...)` had no effect. An
+  unknown keyword now raises `TypeError`. `cornerplot` no longer sets a
+  default `alpha` for the 2-D histograms, which `hist2d` never applied;
+  the figures do not change.
 - **`subsample_mode` is removed** from `fit`, `_fit` and `logpost_grid`,
   with its `"topk"` option, which truncated the posterior. `logpost_grid`
   returns a ninth value, `ln_incl`, the log-probability that each selected
