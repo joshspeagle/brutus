@@ -267,6 +267,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plotted offset differed from the analysis offset by 0.013 mag; it now
   agrees to 0.0001 mag.
 
+### Performance
+
+- The bootstrap of `analysis.photometric_offsets` draws each sample by a
+  per-row binary search of the weight CDF, in a jitted helper, instead of
+  comparing every CDF entry. The medians are bitwise identical. With 20,000
+  objects, 500 draws and 30 replicates, a bootstrap takes 0.33 s instead of
+  1.66 s (medians of 7 interleaved runs, 4 CPUs).
+
 ### Documentation
 
 - New SVG logo, with light and dark variants, and a favicon. The isochrone

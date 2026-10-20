@@ -101,6 +101,7 @@ Advanced usage with configuration:
 from typing import Optional, Tuple
 
 import numpy as np
+from numba import jit
 
 from ..core.sed_utils import get_seds
 
@@ -348,6 +349,15 @@ def _loo_weights(
         return np.exp(lnw - np.max(lnw, axis=1, keepdims=True))
 
 
+@jit(nopython=True, cache=True)
+def _inverse_cdf_draws(cdf, rows, u):
+    """Index of the first entry >= u[k] in row rows[k] of cdf."""
+    draws = np.empty(len(rows), dtype=np.int64)
+    for k in range(len(rows)):
+        draws[k] = np.searchsorted(cdf[rows[k]], u[k])
+    return draws
+
+
 def _vectorized_bootstrap_median(
     ratios: np.ndarray,
     weights: np.ndarray,
@@ -356,22 +366,23 @@ def _vectorized_bootstrap_median(
     rng: np.random.Generator,
 ) -> np.ndarray:
     """
-    Vectorized bootstrap implementation for better performance.
+    Bootstrap the weighted median ratio over objects and draws.
 
-    Model draws use per-row inverted-CDF sampling: the weight CDFs are
-    computed once and each replicate's draw reduces to a vectorized
-    comparison count, equivalent to ``np.searchsorted(cdf_row, u, "left")``
-    per row. This samples the same distribution as per-object
-    ``rng.choice(nsamps, p=w)`` calls (zero-weight samples are never
-    selected) while removing the O(n_bootstrap * n_objects) Python loop;
-    the random stream differs from the per-object-choice implementation.
+    Each replicate resamples the objects with `obj_weights` and then one
+    draw per object by inverted-CDF sampling: the weight CDFs are computed
+    once, and each draw is a per-row ``np.searchsorted(cdf_row, u)``, at
+    O(n_objects * log n_samples) per replicate. This samples the same
+    distribution as per-object ``rng.choice(n_samples, p=w)`` calls, with a
+    different random stream. A zero-weight sample is drawn only when ``u``
+    is exactly 0 and the sample precedes every positive weight.
 
     Parameters
     ----------
     ratios : np.ndarray of shape (n_objects, n_samples)
         Model/data ratios for each object and sample
     weights : np.ndarray of shape (n_objects, n_samples)
-        Model weights for each object and sample
+        Model weights for each object and sample. Each row must have a
+        finite, positive sum.
     obj_weights : np.ndarray of shape (n_objects,)
         Object selection weights
     n_bootstrap : int
@@ -384,28 +395,20 @@ def _vectorized_bootstrap_median(
     bootstrap_medians : np.ndarray of shape (n_bootstrap,)
         Bootstrap median estimates
     """
-    n_objects, n_samples = ratios.shape
+    n_objects = len(ratios)
     bootstrap_medians = np.zeros(n_bootstrap)
 
     # Pre-generate object resampling indices
     obj_indices = rng.choice(n_objects, size=(n_bootstrap, n_objects), p=obj_weights)
 
-    # Normalized per-row weight CDFs (computed once). Rows with zero total
-    # weight fall back to sample 0, matching the legacy per-object behavior.
+    # Normalized per-row weight CDFs; the last entry of each row is exactly
+    # 1.0 and u < 1, so every draw is a valid sample index.
     cdf = np.cumsum(weights, axis=1)
-    totals = cdf[:, -1].copy()
-    valid_rows = totals > 0
-    cdf[valid_rows] /= totals[valid_rows, None]  # last entry becomes exactly 1.0
+    cdf /= cdf[:, -1:].copy()
 
     for i in range(n_bootstrap):
         rows = obj_indices[i]
-
-        # Inverted-CDF draw: index of the first CDF entry >= u.
-        u = rng.random(n_objects)
-        model_indices = np.sum(cdf[rows] < u[:, None], axis=1)
-        model_indices[~valid_rows[rows]] = 0
-        np.clip(model_indices, 0, n_samples - 1, out=model_indices)
-
+        model_indices = _inverse_cdf_draws(cdf, rows, rng.random(n_objects))
         bootstrap_medians[i] = np.median(ratios[rows, model_indices])
 
     return bootstrap_medians

@@ -452,10 +452,8 @@ class TestBootstrapVectorization:
         n_objects, nsamps = 100, 25
         ratios = rng_data.lognormal(0.0, 0.15, (n_objects, nsamps))
         weights = rng_data.random((n_objects, nsamps)) ** 3
-        weights[5] = 0.0  # zero-weight row exercises the sample-0 fallback
-        sums = weights.sum(axis=1)
-        nz = sums > 0
-        weights[nz] /= sums[nz, None]
+        weights[5, 1:] = 0.0  # zero-weight samples are never drawn
+        weights /= weights.sum(axis=1, keepdims=True)
         obj_weights = np.full(n_objects, 1.0 / n_objects)
 
         n_bootstrap = 500
@@ -476,16 +474,36 @@ class TestBootstrapVectorization:
         iqr_new = np.subtract(*np.percentile(new, [75, 25]))
         assert abs(iqr_ref - iqr_new) < 0.25 * max(abs(iqr_ref), abs(iqr_new))
 
-    def test_zero_weight_rows_fall_back_to_sample_zero(self):
-        """Rows with zero total weight deterministically yield sample 0,
-        matching the legacy per-object behavior."""
-        ratios = np.array([[1.0, 2.0, 3.0], [10.0, 20.0, 30.0]])
-        weights = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
-        obj_weights = np.array([1.0, 0.0])  # always resample object 0
-        medians = _vectorized_bootstrap_median(
-            ratios, weights, obj_weights, 20, np.random.default_rng(0)
+    def test_searchsorted_draws_match_comparison_count(self):
+        """The per-row searchsorted draws give bitwise the medians of the
+        former comparison count, ``sum(cdf[rows] < u[:, None], axis=1)``,
+        on the same random stream. Zero-weight samples give tied CDF
+        entries, where the side of the search matters."""
+        rng_data = np.random.default_rng(8)
+        n_objects, nsamps, n_bootstrap = 300, 40, 50
+        ratios = rng_data.lognormal(0.0, 0.15, (n_objects, nsamps))
+        weights = rng_data.random((n_objects, nsamps)) ** 3
+        weights[rng_data.random((n_objects, nsamps)) < 0.3] = 0.0
+        weights[:, 0] += 1e-300  # every row has a positive sum
+        weights /= weights.sum(axis=1, keepdims=True)
+        obj_weights = np.full(n_objects, 1.0 / n_objects)
+
+        rng = np.random.default_rng(42)
+        obj_indices = rng.choice(
+            n_objects, size=(n_bootstrap, n_objects), p=obj_weights
         )
-        assert np.all(medians == 1.0)
+        cdf = np.cumsum(weights, axis=1)
+        cdf /= cdf[:, -1:].copy()
+        expected = np.empty(n_bootstrap)
+        for i in range(n_bootstrap):
+            rows = obj_indices[i]
+            draws = np.sum(cdf[rows] < rng.random(n_objects)[:, None], axis=1)
+            expected[i] = np.median(ratios[rows, draws])
+
+        new = _vectorized_bootstrap_median(
+            ratios, weights, obj_weights, n_bootstrap, np.random.default_rng(42)
+        )
+        np.testing.assert_array_equal(new, expected)
 
 
 class TestLeaveOneOutReweighting:
