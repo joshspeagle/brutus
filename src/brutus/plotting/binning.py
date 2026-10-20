@@ -19,6 +19,7 @@ from scipy.special import logsumexp
 
 from ..priors import logp_galactic_structure as gal_lnprior
 from ..priors import logp_parallax
+from ..utils.math import AVLIM, RVLIM
 from ..utils.sampling import draw_sar
 
 __all__ = ["bin_pdfs_distred"]
@@ -31,8 +32,8 @@ def bin_pdfs_distred(
     dist_type="distance_modulus",
     lndistprior=None,
     coord=None,
-    avlim=(0.0, 20.0),
-    rvlim=(1.0, 8.0),
+    avlim=AVLIM,
+    rvlim=RVLIM,
     weights=None,
     parallaxes=None,
     parallax_errors=None,
@@ -85,10 +86,10 @@ def bin_pdfs_distred(
     avlim : 2-tuple, optional
         The Av limits used to truncate regenerated draws. Without `span`,
         they also set the A(V) range of the bins and of the smoothing.
-        Default is `(0., 20.)`, the `BruteForce.fit` default.
+        Default is `AVLIM`, (0, 20), the `BruteForce.fit` default.
 
     rvlim : 2-tuple, optional
-        The Rv limits used to truncate results. Default is `(1., 8.)`.
+        The Rv limits used to truncate results. Default is `RVLIM`, (1, 8).
 
     weights : `~numpy.ndarray` of shape `(Nobj, Nsamps)`, optional
         An optional set of importance weights used to reweight the samples.

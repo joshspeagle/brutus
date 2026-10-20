@@ -94,6 +94,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The default fit limits are the constants `brutus.utils.math.AVLIM`,
+  (0, 20) mag, and `RVLIM`, (1, 8). Every function that takes `avlim` or
+  `rvlim` uses them as its default.
 - `import brutus` now raises the original `ImportError` when a dependency is
   missing. Before, it warned with a hidden `ImportWarning` and left most names
   undefined.

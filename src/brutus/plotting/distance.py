@@ -11,6 +11,7 @@ posterior distributions.
 import numpy as np
 from matplotlib import pyplot as plt
 
+from ..utils.math import AVLIM, RVLIM
 from .binning import bin_pdfs_distred
 
 __all__ = ["dist_vs_red"]
@@ -22,8 +23,8 @@ def dist_vs_red(
     dist_type="distance_modulus",
     lndistprior=None,
     coord=None,
-    avlim=(0.0, 20.0),
-    rvlim=(1.0, 8.0),
+    avlim=AVLIM,
+    rvlim=RVLIM,
     weights=None,
     parallax=None,
     parallax_err=None,
@@ -75,10 +76,10 @@ def dist_vs_red(
     avlim : 2-tuple, optional
         The Av limits used to truncate regenerated draws. Without `span`,
         they also set the A(V) range of the bins and of the smoothing.
-        Default is `(0., 20.)`, the `BruteForce.fit` default.
+        Default is `AVLIM`, (0, 20), the `BruteForce.fit` default.
 
     rvlim : 2-tuple, optional
-        The Rv limits used to truncate results. Default is `(1., 8.)`.
+        The Rv limits used to truncate results. Default is `RVLIM`, (1, 8).
 
     weights : `~numpy.ndarray` of shape `(Nsamps)` or `(Nobj, Nsamps)`, optional
         An optional set of importance weights used to reweight the samples.

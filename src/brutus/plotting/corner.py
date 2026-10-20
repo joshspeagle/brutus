@@ -20,6 +20,7 @@ from scipy.special import logsumexp
 
 from ..priors import logp_galactic_structure as gal_lnprior
 from ..priors import logp_parallax
+from ..utils.math import AVLIM, RVLIM
 from ..utils.sampling import draw_sar, quantile
 from .utils import hist2d
 
@@ -32,8 +33,8 @@ def cornerplot(
     params,
     lndistprior=None,
     coord=None,
-    avlim=(0.0, 20.0),
-    rvlim=(1.0, 8.0),
+    avlim=AVLIM,
+    rvlim=RVLIM,
     weights=None,
     parallax=None,
     parallax_err=None,
@@ -97,10 +98,10 @@ def cornerplot(
 
     avlim : 2-tuple, optional
         The Av limits used to truncate regenerated draws. Default is
-        `(0., 20.)`, the `BruteForce.fit` default.
+        `AVLIM`, (0, 20), the `BruteForce.fit` default.
 
     rvlim : 2-tuple, optional
-        The Rv limits used to truncate results. Default is `(1., 8.)`.
+        The Rv limits used to truncate results. Default is `RVLIM`, (1, 8).
 
     weights : `~numpy.ndarray` of shape `(Nsamps)`, optional
         An optional set of importance weights used to reweight the samples.

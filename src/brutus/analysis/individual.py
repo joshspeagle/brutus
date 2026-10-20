@@ -88,7 +88,7 @@ from ..priors.galactic import logp_galactic_structure
 from ..priors.stellar import logp_imf, logp_ps1_luminosity_function
 
 # Import utility functions
-from ..utils.math import LOG_ZERO
+from ..utils.math import AVLIM, LOG_ZERO, RVLIM
 from ..utils.math import inverse3 as _inverse3
 from ..utils.photometry import magnitude
 from ..utils.sampling import sample_multivariate_normal
@@ -208,9 +208,9 @@ def _optimize_fit_mag(
     stepsize,
     mags,
     mags_var,
-    avlim=(0.0, 20.0),
+    avlim=AVLIM,
     av_gauss=(0.0, 1e6),
-    rvlim=(1.0, 8.0),
+    rvlim=RVLIM,
     rv_gauss=(3.32, 0.18),
     tol=0.05,
     init_thresh=5e-3,
@@ -259,14 +259,14 @@ def _optimize_fit_mag(
         Data variance in magnitudes.
 
     avlim : 2-tuple, optional
-        Bounds on A(V). Default is `(0., 20.)`.
+        Bounds on A(V). Default is `AVLIM`, (0, 20).
 
     av_gauss : 2-tuple, optional
         The mean and standard deviation of a Gaussian prior on A(V).
         Default is `(0., 1e6)` (i.e. flat).
 
     rvlim : 2-tuple, optional
-        Bounds on R(V). Default is `(1., 8.)`.
+        Bounds on R(V). Default is `RVLIM`, (1, 8).
 
     rv_gauss : 2-tuple, optional
         The mean and standard deviation of a Gaussian prior on R(V).
@@ -470,9 +470,9 @@ def _optimize_fit_flux(
     mag_coeffs,
     resid,
     stepsize,
-    avlim=(0.0, 20.0),
+    avlim=AVLIM,
     av_gauss=(0.0, 1e6),
-    rvlim=(1.0, 8.0),
+    rvlim=RVLIM,
     rv_gauss=(3.32, 0.18),
 ):
     """
@@ -517,7 +517,7 @@ def _optimize_fit_flux(
 
     avlim : 2-tuple, optional
         The lower and upper bound where the reddened photometry is reliable.
-        Default is `(0., 20.)`.
+        Default is `AVLIM`, (0, 20).
 
     av_gauss : 2-tuple, optional
         The mean and standard deviation of the Gaussian prior that is placed
@@ -526,7 +526,7 @@ def _optimize_fit_flux(
 
     rvlim : 2-tuple, optional
         The lower and upper bound where the reddening vector shape changes
-        are reliable. Default is `(1., 8.)`.
+        are reliable. Default is `RVLIM`, (1, 8).
 
     rv_gauss : 2-tuple, optional
         The mean and standard deviation of the Gaussian prior that is placed
@@ -1143,9 +1143,9 @@ class BruteForce:
         data,
         data_err,
         data_mask,
-        avlim=(0.0, 20.0),
+        avlim=AVLIM,
         av_gauss=(0.0, 1e6),
-        rvlim=(1.0, 8.0),
+        rvlim=RVLIM,
         rv_gauss=(3.32, 0.18),
         av_init=None,
         rv_init=None,
@@ -1179,13 +1179,13 @@ class BruteForce:
             Subset of model indices to use. If None, uses all models.
 
         avlim : tuple, optional
-            (min, max) bounds on A(V). Default is (0.0, 20.0).
+            (min, max) bounds on A(V). Default is `AVLIM`, (0, 20).
 
         av_gauss : tuple, optional
             (mean, std) for Gaussian prior on A(V). Default is (0.0, 1e6).
 
         rvlim : tuple, optional
-            (min, max) bounds on R(V). Default is (1.0, 8.0).
+            (min, max) bounds on R(V). Default is `RVLIM`, (1, 8).
 
         rv_gauss : tuple, optional
             (mean, std) for Gaussian prior on R(V). Default is (3.32, 0.18).
@@ -1431,8 +1431,8 @@ class BruteForce:
         lndustprior=None,
         dustfile=None,
         dlabels=None,
-        avlim=(0.0, 20.0),
-        rvlim=(1.0, 8.0),
+        avlim=AVLIM,
+        rvlim=RVLIM,
         mem_lim=8000.0,
         rstate=None,
         apply_av_prior=True,
@@ -1836,9 +1836,9 @@ class BruteForce:
         parallax=None,
         parallax_err=None,
         Nmc_prior=50,
-        avlim=(0.0, 20.0),
+        avlim=AVLIM,
         av_gauss=None,
-        rvlim=(1.0, 8.0),
+        rvlim=RVLIM,
         rv_gauss=(3.32, 0.18),
         lnprior=None,
         wt_thresh=1e-3,
@@ -1906,7 +1906,7 @@ class BruteForce:
             Number of Monte Carlo samples for prior integration. Default is 50.
 
         avlim : tuple, optional
-            (min, max) bounds on A(V). Default is (0.0, 20.0).
+            (min, max) bounds on A(V). Default is `AVLIM`, (0, 20).
 
         av_gauss : tuple, optional
             (mean, std) for a Gaussian prior on A(V) applied during the
@@ -1917,7 +1917,7 @@ class BruteForce:
             with ``dustfile`` counts the A(V) constraint twice.
 
         rvlim : tuple, optional
-            (min, max) bounds on R(V). Default is (1.0, 8.0).
+            (min, max) bounds on R(V). Default is `RVLIM`, (1, 8).
 
         rv_gauss : tuple, optional
             (mean, std) for Gaussian prior on R(V). Default is (3.32, 0.18)
@@ -2319,9 +2319,9 @@ class BruteForce:
         parallax_err=None,
         coord=None,
         Nmc_prior=100,
-        avlim=(0.0, 20.0),
+        avlim=AVLIM,
         av_gauss=(0.0, 1e6),
-        rvlim=(1.0, 8.0),
+        rvlim=RVLIM,
         rv_gauss=(3.32, 0.18),
         lnprior=None,
         wt_thresh=1e-3,

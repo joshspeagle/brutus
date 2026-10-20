@@ -46,7 +46,7 @@ from math import erfc, log, pi, sqrt
 import numpy as np
 from numba import jit, prange
 
-from ..utils.math import _truncnorm_lognorm
+from ..utils.math import AVLIM, _truncnorm_lognorm
 
 __all__ = ["logp_extinction"]
 
@@ -171,7 +171,7 @@ def logp_extinction(
     coord,
     distance=None,
     return_components=False,
-    avlim=(0.0, 20.0),
+    avlim=AVLIM,
     scatter=0.2,
 ):
     r"""
@@ -207,7 +207,7 @@ def logp_extinction(
         Support ``(av_min, av_max)`` over which the Gaussian prior is
         normalized (truncated normal), and over which the uniform prior of
         uninformative map bins is normalized. Should match the ``avlim``
-        of the fit. Default is ``(0.0, 20.0)`` (the ``BruteForce.fit``
+        of the fit. Default is ``AVLIM``, (0, 20) (the ``BruteForce.fit``
         default).
     scatter : float, optional
         Systematic scatter (in magnitudes) added in quadrature to the map's

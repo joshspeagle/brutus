@@ -61,9 +61,14 @@ import numpy as np
 from numba import jit, prange
 from scipy.special import log_ndtr, xlogy
 
-# Proxy for log(0) in log-probabilities. It stays finite under arithmetic,
-# where -inf would give NaN (for example -inf - -inf).
+#: Proxy for log(0) in log-probabilities. It stays finite under arithmetic,
+#: where -inf would give NaN (for example -inf - -inf).
 LOG_ZERO = -1e300
+
+#: Default fit limits on A(V), in mag.
+AVLIM = (0.0, 20.0)
+#: Default fit limits on R(V).
+RVLIM = (1.0, 8.0)
 
 __all__ = [
     "galactic_to_galactocentric_cyl",
