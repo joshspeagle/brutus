@@ -646,20 +646,16 @@ class TestSecondaryAfeConsistency:
         )
         assert abs(loga_2 - loga_target) < 1e-3
 
-    def test_afe_clamped_to_library_range(self):
+    def test_tracks_without_gridpoints_use_primary_afe(self):
+        # Without an EEP grid axis, the Nelder-Mead fallback also solves at
+        # the primary's [a/Fe]; it used 0.0 (#139).
         st = self._star_track()
-        tracks = st.tracks
-        # Request afe beyond the library maximum (0.4): must clamp, not
-        # extrapolate
-        afe_req, afe_max = 1.0, 0.4
-        eep_p = 350.0
-        loga_target = float(tracks._loga(eep_p, afe_max))
-        eep2 = st._get_eep_for_secondary(
-            loga_target, 1.0, eep_p, 0.0, afe_req, 0.8, 1e-2
-        )
-        assert np.isfinite(eep2)
+        st.tracks.gridpoints = None
+        afe, eep_p = 0.4, 350.0
+        loga_target = float(st.tracks._loga(eep_p, afe))
+        eep2 = st._get_eep_for_secondary(loga_target, 1.0, eep_p, 0.0, afe, 0.8, 1e-2)
         loga_2 = float(
-            tracks.get_predictions([0.8, eep2, 0.0, afe_max], apply_corr=False)[0]
+            st.tracks.get_predictions([0.8, eep2, 0.0, afe], apply_corr=False)[0]
         )
         assert abs(loga_2 - loga_target) < 1e-3
 

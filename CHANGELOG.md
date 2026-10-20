@@ -179,6 +179,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   out of the sum. With 5 stars, 25 draws each, and one star all NaN, the
   log-likelihood at `pb` = 0.01, 0.1 and 0.5 was -8.25, -6.22 and -6.14;
   it is now -1.85, -2.13 and -3.66, the values without that star.
+- **`StarEvolTrack` finds a companion's EEP at the primary's [α/Fe]**,
+  with no clamp to the library range, as `get_seds` already used for the
+  companion's parameters. Tracks without a `gridpoints` EEP axis used
+  [α/Fe] = 0.0. On `MIST_1.2_EEPtrk.h5`, results at [α/Fe] = 0 do not
+  change; for 0 < |[α/Fe]| < 1e-5 the companion EEP changes by at most
+  9e-13 (200 random binaries each at ±3e-6).
 
 ### Changed
 

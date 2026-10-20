@@ -1249,12 +1249,8 @@ class StarEvolTrack:
 
         Notes
         -----
-        The secondary is evaluated at the primary's [α/Fe] clamped to the
-        track library's available range (so the age matching is consistent
-        with the [α/Fe] later used for the secondary's parameters and SED in
-        `get_seds`). When the library's [α/Fe] range is unknown (no
-        ``gridpoints`` attribute on the tracks object), [α/Fe] = 0.0 is used,
-        matching the historical behavior for the solar-scaled MIST grids.
+        The secondary uses the primary's [α/Fe], as `get_seds` does for the
+        secondary's parameters and SED.
 
         Empirical corrections never touch ``loga``, so the age lookups skip
         them (``apply_corr=False``).
@@ -1263,19 +1259,10 @@ class StarEvolTrack:
         aidx = self.tracks.predictions.index("loga")
         mini2 = mini * smf
 
-        # Secondary [a/Fe]: primary's value clamped to the library's range.
-        # (Previously hard-coded to 0.0, which mismatched ages on
-        # alpha-enhanced track libraries.)
-        gridpoints = getattr(self.tracks, "gridpoints", None)
-        if isinstance(gridpoints, dict) and "afe" in gridpoints:
-            afe_grid = np.asarray(gridpoints["afe"], dtype=float)
-            afe2 = float(np.clip(afe, afe_grid.min(), afe_grid.max()))
-        else:
-            afe2 = 0.0
-
         # Fast path: invert the monotone age(EEP) curve directly.
+        gridpoints = getattr(self.tracks, "gridpoints", None)
         if isinstance(gridpoints, dict) and "eep" in gridpoints:
-            eep2 = self._invert_age_curve(loga, mini2, feh, afe2, aidx, tol)
+            eep2 = self._invert_age_curve(loga, mini2, feh, afe, aidx, tol)
             if eep2 is not None:
                 return eep2
 
@@ -1288,7 +1275,7 @@ class StarEvolTrack:
             # Get predicted age for secondary star with mass mini*smf at EEP x
             try:
                 loga_pred = self.tracks.get_predictions(
-                    [mini2, x, feh, afe2], apply_corr=False
+                    [mini2, x, feh, afe], apply_corr=False
                 )[aidx]
                 return (loga_pred - loga) ** 2
             except Exception:
@@ -1319,12 +1306,12 @@ class StarEvolTrack:
 
         return eep2
 
-    def _invert_age_curve(self, loga, mini2, feh, afe2, aidx, tol):
+    def _invert_age_curve(self, loga, mini2, feh, afe, aidx, tol):
         """
         Invert the interpolated age(EEP) curve for a star of mass `mini2`.
 
         Evaluates log10(age) along the full EEP grid axis at fixed
-        (mini2, feh, afe2) with one vectorized interpolator call, then
+        (mini2, feh, afe) with one vectorized interpolator call, then
         inverts the piecewise-linear curve with ``np.interp``. Because the
         underlying interpolant is linear in EEP with knots at the grid
         values, this inversion is exact (up to the acceptance check).
@@ -1337,8 +1324,8 @@ class StarEvolTrack:
             Secondary initial mass in solar masses.
         feh : float
             Metallicity [Fe/H].
-        afe2 : float
-            Alpha enhancement [α/Fe], already clamped to the library range.
+        afe : float
+            Alpha enhancement [α/Fe] of the primary.
         aidx : int
             Index of 'loga' in the tracks' predictions.
         tol : float
@@ -1353,7 +1340,7 @@ class StarEvolTrack:
         """
         try:
             eep_axis = np.asarray(self.tracks.gridpoints["eep"], dtype=float)
-            values = {"mini": mini2, "eep": eep_axis, "feh": feh, "afe": afe2}
+            values = {"mini": mini2, "eep": eep_axis, "feh": feh, "afe": afe}
             labels = np.column_stack(
                 [
                     np.broadcast_to(values[lbl], eep_axis.shape)
