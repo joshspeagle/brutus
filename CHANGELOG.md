@@ -404,6 +404,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or `(Nobj, Nsamps)`; a `(Nsamps,)` array was read as per-object weights
   when `Nsamps == Nobj`. The titles of `photometric_offsets_2d` give the
   offset in fixed point (`+12.0%`, not `1.2e+01%`).
+- `plotting.photometric_offsets_2d` draws each map over its bin edges. The
+  image extent was the outer bin centres, half a bin too narrow on each
+  side. `xspan` and `yspan` now set the range of the bins, as in
+  `photometric_offsets`; they relabelled the axes of bins taken over the
+  data range. The last bin includes its right edge, as in `np.histogram`;
+  the object with the largest x or y was left out of every bin.
 
 ### Performance
 

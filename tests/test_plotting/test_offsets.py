@@ -437,6 +437,69 @@ class TestPhotometricOffsets2D:
         shapes = [arr.shape for arr in _run_2d(d, x, y, bins=[2, 3])]
         assert shapes == [(2, 2), (3, 3)]
 
+    def test_image_extent_is_the_outer_bin_edges(self):
+        """Regression (#172): the extent was the outer bin centres."""
+        d = _offsets_dataset()
+        x, y = self._xy(d)
+        fig, axes = plt.subplots(2, 3)
+        photometric_offsets_2d(
+            d["flux"],
+            d["fluxerr"],
+            d["mask"],
+            d["models"],
+            d["idxs"],
+            d["reds"],
+            d["dreds"],
+            d["dists"],
+            x,
+            y,
+            bins=4,
+            fig=(fig, axes),
+        )
+        extent = axes[0, 0].images[0].get_extent()
+        plt.close(fig)
+        np.testing.assert_array_equal(extent, [x.min(), x.max(), y.min(), y.max()])
+
+    def test_object_on_the_last_edge_is_in_the_last_bin(self):
+        """Regression (#172): `np.digitize` left the object with the largest
+        x and y out of every bin."""
+        d = _offsets_dataset()
+        x, y = self._xy(d)
+        x[0], y[0] = 100.0, 100.0  # alone in the top-right bin of a 2 x 2 grid
+        arrays = _run_2d(d, x, y, bins=2)
+        assert np.isfinite(arrays[0][-1, -1])
+
+    def test_spans_set_the_bins_and_the_extent(self):
+        """Regression (#172): `xspan` and `yspan` relabelled the axes of
+        bins taken over the data range."""
+        d = _offsets_dataset()
+        x, y = self._xy(d)  # x in [-2, 2], y in [-1, 1]
+        nfilt = d["nfilt"]
+        fig, axes = plt.subplots(2, 3)
+        photometric_offsets_2d(
+            d["flux"],
+            d["fluxerr"],
+            d["mask"],
+            d["models"],
+            d["idxs"],
+            d["reds"],
+            d["dreds"],
+            d["dists"],
+            x,
+            y,
+            bins=(2, 1),
+            plot_thresh=1.0,
+            xspan=[(-2.5, 6.5)] * nfilt,
+            yspan=[(-1.5, 1.5)] * nfilt,
+            fig=(fig, axes),
+        )
+        image = axes[0, 0].images[0]
+        extent, offsets = image.get_extent(), np.ma.filled(image.get_array(), np.nan)
+        plt.close(fig)
+        np.testing.assert_array_equal(extent, [-2.5, 6.5, -1.5, 1.5])
+        # Every object falls in the left bin, [-2.5, 2).
+        assert np.isfinite(offsets[0, 0]) and np.isnan(offsets[0, 1])
+
     def test_magnitude_input_matches_flux_input(self):
         d = _offsets_dataset()
         x, y = self._xy(d)

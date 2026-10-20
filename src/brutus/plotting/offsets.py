@@ -359,12 +359,12 @@ def photometric_offsets_2d(
         Plotting bounds for the colorbar. Default is `(-0.05, 0.05)`.
 
     xspan : iterable with shape `(nfilt, 2)`, optional
-        A list where each element is a length-2 tuple containing
-        lower and upper bounds for the x-axis for each plot.
+        The `(low, high)` range of the x bins of each map. If not provided,
+        the bins span the range of `x`.
 
     yspan : iterable with shape `(nfilt, 2)`, optional
-        A list where each element is a length-2 tuple containing
-        lower and upper bounds for the y-axis for each plot.
+        The `(low, high)` range of the y bins of each map. If not provided,
+        the bins span the range of `y`.
 
     titles : iterable of str of length `Nfilt`, optional
         Titles for each of the subplots corresponding to each band.
@@ -458,12 +458,14 @@ def photometric_offsets_2d(
     # Plot offsets.
     for i in range(nfilt):
         # Bin in 2-D.
-        n, xbins, ybins = np.histogram2d(x, y, bins=bins[i])
-        xcent = 0.5 * (xbins[1:] + xbins[:-1])
-        ycent = 0.5 * (ybins[1:] + ybins[:-1])
-        bounds = [xcent[0], xcent[-1], ycent[0], ycent[-1]]  # default size
-        # Digitize values.
+        nx, ny = np.broadcast_to(bins[i], (2,))
+        xbins = np.histogram_bin_edges(x, nx, None if xspan is None else xspan[i])
+        ybins = np.histogram_bin_edges(y, ny, None if yspan is None else yspan[i])
+        # Digitize values. The last bin includes its right edge, as in
+        # `np.histogram`.
         xloc, yloc = np.digitize(x, xbins) - 1, np.digitize(y, ybins) - 1
+        xloc[x == xbins[-1]] = nx - 1
+        yloc[y == ybins[-1]] = ny - 1
         # Require at least 4 observed bands besides band i, and finite
         # magnitudes only in *observed* bands: unobserved
         # (masked) bands routinely hold nonpositive/NaN fluxes that map to
@@ -493,14 +495,10 @@ def photometric_offsets_2d(
                     # Otherwise mask the bin.
                     offset2d[xidx, yidx] = np.nan
         # Plot offsets over 2-D histogram.
-        if xspan is not None:
-            bounds[:2] = xspan[i]
-        if yspan is not None:
-            bounds[2:] = yspan[i]
         img = ax[i].imshow(
             offset2d.T,
             origin="lower",
-            extent=bounds,
+            extent=[xbins[0], xbins[-1], ybins[0], ybins[-1]],
             vmin=clims[0],
             vmax=clims[1],
             aspect="auto",
