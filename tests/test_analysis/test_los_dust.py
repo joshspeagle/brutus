@@ -259,7 +259,7 @@ class TestPriorTransform:
 
         # Test u values outside [0,1]
         u_invalid = np.array([0.1, 0.2, 1.5, 0.4, 0.6, 0.8])
-        with pytest.raises(ValueError, match="All values in u must be between 0 and 1"):
+        with pytest.raises(ValueError, match="All values in u must be finite"):
             los_clouds_priortransform(u_invalid)
 
         # Test invalid rlims
@@ -274,6 +274,15 @@ class TestPriorTransform:
         # Test invalid nlims for dust template
         with pytest.raises(ValueError, match="nlims must be a 2-tuple"):
             los_clouds_priortransform(u, dust_template=True, nlims=(2.0, 0.2))
+
+    @pytest.mark.parametrize("n", [4, 5, 7])
+    def test_u_of_wrong_length_raises(self, n):
+        with pytest.raises(ValueError, match="u must have 4 \\+ 2 \\* n entries"):
+            los_clouds_priortransform(np.full(n, 0.5))
+
+    def test_nan_in_u_raises(self):
+        with pytest.raises(ValueError, match="finite"):
+            los_clouds_priortransform([0.5, np.nan, 0.5, 0.5, 0.5, 0.5])
 
 
 class TestLogLikelihood:
@@ -497,12 +506,6 @@ class TestLogLikelihood:
         with pytest.raises(ValueError, match="Outlier fraction pb must be in"):
             los_clouds_loglike_samples(theta_invalid_pb, self.dsamps, self.rsamps)
 
-        theta_invalid_s = [0.1, -0.1, 0.05, 0.2, 8.0, 0.5]  # negative smoothing
-        with pytest.raises(
-            ValueError, match="Smoothing parameters must be non-negative"
-        ):
-            los_clouds_loglike_samples(theta_invalid_s, self.dsamps, self.rsamps)
-
         # Test non-monotonic distances
         theta_bad_dist = [0.1, 0.05, 0.05, 0.2, 10.0, 0.3, 8.0, 0.5]  # dist2 < dist1
         with pytest.raises(
@@ -519,6 +522,19 @@ class TestLogLikelihood:
                 self.rsamps,
                 template_reds=template_wrong_shape,
             )
+
+    @pytest.mark.parametrize("ndraws", [-1, 0, 2.5])
+    def test_ndraws_must_be_a_positive_integer(self, ndraws):
+        with pytest.raises(ValueError, match="Ndraws"):
+            los_clouds_loglike_samples(
+                self.theta_1cloud, self.dsamps, self.rsamps, Ndraws=ndraws
+            )
+
+    @pytest.mark.parametrize("s0, s", [(0.0, 0.05), (0.05, 0.0), (-0.1, 0.05)])
+    def test_non_positive_smoothing_raises(self, s0, s):
+        theta = [0.1, s0, s, 0.2, 8.0, 0.5]
+        with pytest.raises(ValueError, match="s0 and s must be > 0"):
+            los_clouds_loglike_samples(theta, self.dsamps, self.rsamps)
 
     def test_loglike_edge_cases(self):
         """Test log-likelihood edge cases."""

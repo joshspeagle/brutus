@@ -351,6 +351,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same for `smf_values`. Such values gave single-star SEDs. An integer or
   scalar `eep` now works with binaries; it raised `ValueError` when a
   companion had no valid EEP.
+- `los_clouds_priortransform` raises `ValueError` unless `u` has
+  4 + 2 * n entries (n >= 1), all finite. A short `u` raised an
+  `IndexError`, and a NaN entry gave NaN parameters.
+  `los_clouds_loglike_samples` raises `ValueError` unless `Ndraws` is an
+  integer >= 1 and `s0` and `s` are positive. `Ndraws=-1` silently dropped
+  the last draw, `Ndraws=0` returned NaN, and `s=0` failed inside the
+  kernel with a message that did not name the argument.
 - `analysis.photometric_offsets` checks `sel`, `weights`, `prior_mean` and
   `prior_std` before it generates the model SEDs, and raises `ValueError`
   that names the argument. `sel` must be a bool or 0/1 array of shape `(Nobj,)`:
@@ -399,6 +406,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `Bayestar.query` docstring states that `av_mean` and `av_std` keep
   the storage dtype of the file (float16 for `bayestar2019_v1.h5`), and
   `query_equ` states that it ignores the distance `d`.
+- The `los_dust` docstrings state that the outlier model is uniform in
+  reddening over `rlims`, independent of distance, and that `s_params`
+  sets the kernel width as a fraction of the `rlims` range, not in
+  percent.
 
 ## [1.2.0] - 2026-07-17
 

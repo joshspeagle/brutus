@@ -59,7 +59,8 @@ The likelihood computation accounts for:
    between it and the next cloud (levels are not summed across clouds)
 2. **Dispersion**: Kernel function defines scatter of extinction values around
    the cloud mean at each distance step
-3. **Outlier model**: Uniform distribution in (distance, extinction)
+3. **Outlier model**: Uniform in extinction over `rlims`, independent of
+   distance
 4. **Foreground component**: Extinction before first cloud
 
 The model is fit using nested sampling (e.g., dynesty) which requires:
@@ -218,7 +219,9 @@ def los_clouds_priortransform(
     s_params : tuple of float, optional
         Mean, standard deviation, lower bound, and upper bound for a
         truncated log-normal distribution used as a prior for the
-        smoothing along the reddening axis (in %). The default is
+        smoothing along the reddening axis, as a fraction of the `rlims`
+        range (the kernel width is ``s * (rlims[1] - rlims[0])``). The
+        default is
         `(-3., 0.3, -np.inf, 0.)`, which corresponds to a mean of 0.05, a
         standard deviation of a factor of 1.35, a lower bound of 0, and an
         upper bound of 1.
@@ -240,6 +243,12 @@ def los_clouds_priortransform(
         The transformed physical parameters in order:
         [pb, s_fore, s_back, A_V_fore, d1, A_V1, d2, A_V2, ...]
         where di are sorted in increasing order.
+
+    Raises
+    ------
+    ValueError
+        If `u` is not 1-D with 4 + 2 * n entries (n >= 1) of finite values
+        in [0, 1], or if a limit or hyperparameter is degenerate.
 
     See Also
     --------
@@ -289,8 +298,12 @@ def los_clouds_priortransform(
     u = np.asarray(u)
     if u.ndim != 1:
         raise ValueError("Input u must be a 1D array")
-    if np.any((u < 0) | (u > 1)):
-        raise ValueError("All values in u must be between 0 and 1")
+    if len(u) < 6 or (len(u) - 4) % 2 != 0:
+        raise ValueError(
+            f"u must have 4 + 2 * n entries for n >= 1 clouds; got {len(u)}"
+        )
+    if not np.all(np.isfinite(u) & (u >= 0) & (u <= 1)):
+        raise ValueError("All values in u must be finite and between 0 and 1")
 
     if len(rlims) != 2 or rlims[0] >= rlims[1]:
         raise ValueError("rlims must be a 2-tuple with rlims[0] < rlims[1]")
@@ -357,8 +370,8 @@ def los_clouds_loglike_samples(
 
     Compute the log-likelihood for the cumulative reddening along the
     line of sight (LOS) parameterized by `theta`, given a set of input
-    reddening and distance draws. Assumes a uniform outlier model in distance
-    and reddening across our binned posteriors.
+    reddening and distance draws. Assumes an outlier model that is uniform
+    in reddening over `rlims`, independent of distance.
 
     Parameters
     ----------
@@ -409,7 +422,8 @@ def los_clouds_loglike_samples(
         individual reddenings will be fit instead.
 
     Ndraws : int, optional
-        The number of draws to use for each star. Default is `25`.
+        The number of draws to use for each star, at least 1; the first
+        `Ndraws` columns of `dsamps` and `rsamps` are used. Default is `25`.
 
     additive_foreground : bool, optional
         Whether the foreground is treated as just another value or added
@@ -438,6 +452,14 @@ def los_clouds_loglike_samples(
     loglike : float
         The computed log-likelihood; `LOG_ZERO` (-1e300) for a zero
         likelihood, or when it is NaN.
+
+    Raises
+    ------
+    ValueError
+        If the shapes of `theta`, `dsamps`, `rsamps` or `template_reds` do
+        not match, if `pb` is outside [0, 1], if `s0` or `s` is not
+        positive, if `Ndraws` is not an integer >= 1, if the cloud distances
+        decrease, or if `kernel` is unknown.
 
     Examples
     --------
@@ -498,10 +520,10 @@ def los_clouds_loglike_samples(
     # Validate parameter ranges
     if not (0 <= pb <= 1):
         raise ValueError(f"Outlier fraction pb must be in [0,1], got {pb}")
-    if s0 < 0 or s < 0:
-        raise ValueError(
-            f"Smoothing parameters must be non-negative, got s0={s0}, s={s}"
-        )
+    if not (s0 > 0 and s > 0):
+        raise ValueError(f"Smoothing parameters s0 and s must be > 0, got {s0}, {s}")
+    if not isinstance(Ndraws, (int, np.integer)) or Ndraws < 1:
+        raise ValueError(f"Ndraws must be an integer >= 1, got {Ndraws}")
 
     # Check monotonicity. Distances must always increase; with `monotonic`
     # the EFFECTIVE extinction profile (after the template_reds /
