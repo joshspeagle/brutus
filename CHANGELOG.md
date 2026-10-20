@@ -80,6 +80,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `isochrone_population_loglike` and `uniform_outlier_loglike`. With
   `dim_prior=True`, `phot_loglike` gives `LOG_ZERO` for an exact fit
   (`chi2 = 0`) with 3 or more degrees of freedom.
+- **`kernel_gauss` and `kernel_lorentz` normalize over `rlims` stably in
+  the tails.** `kernel_gauss` took the mass from an `ndtr` difference that
+  rounds to 0 for a kernel mean about 8 sigma below `rlims` or 38 sigma
+  above; it now uses `log_ndtr`. `kernel_lorentz` took it from an `arctan`
+  difference that lost its digits for a mean far from `rlims` (a relative
+  error of 2e-4 at 1e7 widths).
 - **The fused Galactic prior normalizes the age prior with the tail-stable
   log-mass of the fused extinction prior.** It used a floored `erf`
   difference. The prior changes by at most 1.8e-15 for valid inputs; the

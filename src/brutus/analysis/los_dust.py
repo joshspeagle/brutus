@@ -125,7 +125,7 @@ import warnings
 import numpy as np
 from scipy.special import logsumexp, ndtr, ndtri
 
-from ..utils.math import LOG_ZERO
+from ..utils.math import LOG_ZERO, _truncnorm_lognorm
 
 __all__ = [
     "los_clouds_priortransform",
@@ -540,17 +540,24 @@ def los_clouds_loglike_samples(
     # segment's kernel over all samples and masking the other segments to
     # -inf (the previous implementation), but ~10x faster.
     idx = np.searchsorted(dists, ds, side="right")
-    behind = idx > 0
 
-    # Kernel mean per sample (the segment's absolute extinction level)
-    kmean = reds[idx]
+    # Kernel mean (absolute extinction level) and width per segment, then
+    # per sample by indexing with the sample's segment
+    cloud = np.arange(len(reds)) > 0
+    seg_mean = reds.astype(float)
     if template_reds is not None:
         # cloud values are rescalings of each star's template reddening
-        kmean = np.where(behind, kmean * template_reds[:, None], kmean)
+        seg_mean = np.where(cloud, seg_mean * template_reds[:, None], seg_mean)
     if additive_foreground:
         # foreground is added to (not replaced by) the cloud levels
-        kmean = np.where(behind, kmean + reds[0], kmean)
-    ksig = np.where(behind, rsmooth, rsmooth0)
+        seg_mean = np.where(cloud, seg_mean + reds[0], seg_mean)
+    seg_sig = np.where(cloud, rsmooth, rsmooth0)
+
+    def per_sample(seg_values):
+        seg_values = np.broadcast_to(seg_values, (Nobj, len(reds)))
+        return np.take_along_axis(seg_values, idx, axis=1)
+
+    kmean, ksig = per_sample(seg_mean), seg_sig[idx]
 
     # Samples with distances outside [0, 1e10) fall in no segment, and
     # non-finite reddening samples carry no information: both get zero
@@ -561,7 +568,12 @@ def los_clouds_loglike_samples(
     # kernel centered on its own segment's extinction level
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")  # ignore bad values
-        if isinstance(kernel, str):
+        log_mass = _LOG_MASS.get(kernel)
+        if log_mass is not None:
+            # the kernel mass inside rlims depends only on the segment
+            lnmass = per_sample(log_mass(seg_mean, seg_sig, rlims))
+            logw = _renormalize(kern(rs, (kmean, ksig)), lnmass)
+        elif isinstance(kernel, str):
             # built-in kernels renormalize for truncation to the admissible
             # reddening range (samples cannot scatter below A_V = rlims[0])
             logw = kern(rs, (kmean, ksig), rlims=rlims)
@@ -703,13 +715,37 @@ def kernel_gauss(reds, kp, rlims=None):
     logw = -0.5 * ((reds - kmean) / kstd) ** 2 - np.log(norm)
 
     if rlims is not None:
-        # renormalize by the kernel mass inside the admissible range:
-        # Phi((hi - mu)/sig) - Phi((lo - mu)/sig)
-        mass = ndtr((rlims[1] - kmean) / kstd) - ndtr((rlims[0] - kmean) / kstd)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            logw = np.where(mass > 0, logw - np.log(mass), LOG_ZERO)
+        logw = _renormalize(logw, _gauss_log_mass(kmean, kstd, rlims))
 
     return logw
+
+
+def _gauss_log_mass(kmean, kstd, rlims):
+    # Phi((hi - mu)/sig) - Phi((lo - mu)/sig), computed stably in the tails
+    return _truncnorm_lognorm((rlims[0] - kmean) / kstd, (rlims[1] - kmean) / kstd)
+
+
+def _lorentz_log_mass(kmean, khwhm, rlims):
+    # (arctan(a) - arctan(b)) / pi. On one side of the mean (a * b > -1) use
+    # arctan((a - b) / (1 + a * b)), which does not cancel when both terms
+    # are close to +-pi/2.
+    a = (rlims[1] - kmean) / khwhm
+    b = (rlims[0] - kmean) / khwhm
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        ab = a * b
+        one_side = (ab > -1) & np.isfinite(ab)
+        mass = np.where(
+            one_side, np.arctan((a - b) / (1.0 + ab)), np.arctan(a) - np.arctan(b)
+        )
+        return np.where(mass > 0, np.log(mass / np.pi), -np.inf)
+
+
+_LOG_MASS = {"gauss": _gauss_log_mass, "lorentz": _lorentz_log_mass}
+
+
+def _renormalize(logw, lnmass):
+    # Divide by the kernel mass inside rlims; no mass means zero probability.
+    return np.where(np.isfinite(lnmass), logw - lnmass, LOG_ZERO)
 
 
 def kernel_lorentz(reds, kp, rlims=None):
@@ -766,13 +802,6 @@ def kernel_lorentz(reds, kp, rlims=None):
     logw = -np.log(1.0 + ((reds - kmean) / khwhm) ** 2) - np.log(norm)
 
     if rlims is not None:
-        # renormalize by the Cauchy mass inside the admissible range:
-        # (arctan((hi - mu)/g) - arctan((lo - mu)/g)) / pi
-        mass = (
-            np.arctan((rlims[1] - kmean) / khwhm)
-            - np.arctan((rlims[0] - kmean) / khwhm)
-        ) / np.pi
-        with np.errstate(divide="ignore", invalid="ignore"):
-            logw = np.where(mass > 0, logw - np.log(mass), LOG_ZERO)
+        logw = _renormalize(logw, _lorentz_log_mass(kmean, khwhm, rlims))
 
     return logw

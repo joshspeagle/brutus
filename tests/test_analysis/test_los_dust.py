@@ -1004,10 +1004,41 @@ class TestKernelTruncation:
         reds_in = np.array([0.15, 0.3, 0.45])  # strictly inside [0.1, 0.5)
         assert np.allclose(kernel_tophat(reds_in, (mu, sig)), -np.log(2 * sig))
 
+    @pytest.mark.parametrize("mu, sig", [(20.0, 0.3), (-5.0, 0.5)])
+    def test_gauss_mass_matches_scipy_far_outside_rlims(self, mu, sig):
+        # (20, 0.3) is 47 sigma above rlims, where ndtr underflows to 0;
+        # (-5, 0.5) is 10 to 22 sigma below, where ndtr rounds to 1.
+        reds = np.array([0.5, 3.0, 5.5])
+        rlims = (0.0, 6.0)
+        ref = truncnorm.logpdf(
+            reds, (rlims[0] - mu) / sig, (rlims[1] - mu) / sig, loc=mu, scale=sig
+        )
+        np.testing.assert_allclose(
+            kernel_gauss(reds, (mu, sig), rlims=rlims), ref, rtol=1e-12
+        )
+
+    @pytest.mark.parametrize("mu", [-1e6, 1e6])
+    def test_lorentz_mass_does_not_cancel_far_outside_rlims(self, mu):
+        # Both arctan terms are within 1e-7 of +-pi/2; on one side of the
+        # mean the mass is (arctan(1/b) - arctan(1/a)) / pi without
+        # cancellation.
+        reds = np.array([0.5, 3.0, 5.5])
+        rlims, g = (0.0, 6.0), 0.1
+        a, b = (rlims[1] - mu) / g, (rlims[0] - mu) / g
+        mass = (np.arctan(1 / b) - np.arctan(1 / a)) / np.pi
+        ref = -np.log1p(((reds - mu) / g) ** 2) - np.log(np.pi * g) - np.log(mass)
+        # The reference loses about 5 digits to 1 / b - 1 / a.
+        np.testing.assert_allclose(
+            kernel_lorentz(reds, (mu, g), rlims=rlims), ref, rtol=1e-9
+        )
+
     def test_kernel_zero_mass_gives_log_zero(self):
         # kernel centered far outside the admissible range: no mass
         logw = kernel_tophat(np.array([0.5]), (10.0, 0.2), rlims=(0.0, 6.0))
         assert logw[0] == LOG_ZERO
+        # a degenerate rlims holds no Gaussian or Cauchy mass either
+        for kernel in (kernel_gauss, kernel_lorentz):
+            assert kernel(np.array([1.0]), (1.0, 0.2), rlims=(1.0, 1.0))[0] == LOG_ZERO
 
     def test_boundary_foreground_not_biased_high(self):
         """Profile likelihood must peak at the true fred = 0.
