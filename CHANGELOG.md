@@ -142,6 +142,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`dist_vs_red` and `bin_pdfs_distred` smooth A(V) by 0.005 of its range
   by default** (0.1 mag over the default `avlim`): the default `smooth` is
   `(0.015, 0.005)` and `(0.01, 0.005)`.
+- **`load_models` applies the main-sequence and binary cuts whatever
+  `labels` holds.** The cuts read the file's `eep` and `smf` columns. A
+  `labels` list without `eep` or `smf` skipped the cut: on `grid_mist_v9.h5`,
+  `labels=['mini', 'feh'], include_postms=False` returned 613530 models
+  instead of 143856. A phase cut on a file without `eep` now raises
+  `ValueError` instead of keeping every model.
 
 ### Changed
 

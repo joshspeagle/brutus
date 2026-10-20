@@ -105,17 +105,21 @@ def load_models(
         'logl', 'logt', 'logg', 'Mr', 'agewt']`.
 
     include_ms : bool, optional
-        Whether to include objects on the Main Sequence. Applied as a cut on
-        `eep <= 454` when `'eep'` is included. Default is `True`.
+        Whether to include objects on the Main Sequence (`eep <= 454`).
+        The cut reads the file's `'eep'` column whatever `labels` holds.
+        Default is `True`.
 
     include_postms : bool, optional
-        Whether to include objects evolved off the Main Sequence. Applied as a
-        cut on `eep > 454` when `'eep'` is included. Default is `True`.
+        Whether to include objects evolved off the Main Sequence
+        (`eep > 454`). The cut reads the file's `'eep'` column whatever
+        `labels` holds. Default is `True`.
 
     include_binaries : bool, optional
-        Whether to include unresolved binaries. Applied as a cut on
-        secondary mass fraction (`'smf'`) when it has been included. Default
-        is `False`. If set to `False`, `'smf'` is not returned as a label.
+        Whether to include unresolved binaries. If `False`, only models with
+        secondary mass fraction `smf == 0` are kept, read from the file's
+        `'smf'` column whatever `labels` holds, and `'smf'` is not returned
+        as a label. A file without an `'smf'` column is taken to hold no
+        binaries. Default is `False`.
 
     verbose : bool, optional
         Whether to print progress messages. Default is `True`.
@@ -141,7 +145,9 @@ def load_models(
     Raises
     ------
     ValueError
-        If neither main sequence nor post-main sequence models are included.
+        If neither main sequence nor post-main sequence models are included,
+        or if `include_ms` or `include_postms` is `False` and the file has no
+        `'eep'` column.
 
     Notes
     -----
@@ -276,6 +282,9 @@ def load_models(
             len(models), np.nan, dtype=np.dtype([(n, np.float64) for n in labels])
         )
         label_mask = np.zeros(1, dtype=np.dtype([(n, np.bool_) for n in labels]))
+        # The phase and binary cuts read the file's columns, so they apply
+        # whatever labels the caller requested.
+        cut_columns = {}
         try:
             # Grab "labels" (inputs).
             flabels = f["labels"][:]
@@ -283,6 +292,8 @@ def load_models(
                 if n in labels:
                     combined_labels[n] = flabels[n]
                     label_mask[n] = True
+                if n in ("eep", "smf"):
+                    cut_columns[n] = flabels[n]
         except KeyError:
             pass
         try:
@@ -291,6 +302,8 @@ def load_models(
             for n in fparams.dtype.names:
                 if n in labels:
                     combined_labels[n] = fparams[n]
+                if n in ("eep", "smf"):
+                    cut_columns.setdefault(n, fparams[n])
         except KeyError:
             pass
 
@@ -317,18 +330,20 @@ def load_models(
             "If you don't include the Main Sequence and "
             "Post-Main Sequence models you have nothing left!"
         )
-    elif include_postms and not include_ms:
-        # Gate on actual availability: when the file lacks 'eep' the column
-        # is all-NaN and `NaN > 454.` would silently select ZERO models.
-        if "eep" in labels2:
-            sel &= combined_labels["eep"] > 454.0
-    elif include_ms and not include_postms:
-        if "eep" in labels2:
-            sel &= combined_labels["eep"] <= 454.0
-    # else: include_ms and include_postms — no evolutionary-phase cut
+    eep = cut_columns.get("eep")
+    if not (include_ms and include_postms) and eep is None:
+        raise ValueError(
+            "include_ms=False or include_postms=False needs an 'eep' "
+            f"column, which '{filepath}' does not have."
+        )
+    if not include_ms:
+        sel &= eep > 454.0
+    elif not include_postms:
+        sel &= eep <= 454.0
 
-    if not include_binaries and "smf" in labels2:
-        sel &= combined_labels["smf"] == 0.0
+    if not include_binaries:
+        if "smf" in cut_columns:
+            sel &= cut_columns["smf"] == 0.0
         labels2 = [x for x in labels2 if x != "smf"]
 
     # The default label set includes 'afe' only to disambiguate multi-afe

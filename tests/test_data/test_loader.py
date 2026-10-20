@@ -81,6 +81,16 @@ class TestDataLoaderFunctions:
         assert len(models_ms) > 0
         assert len(models_ms) < len(models_full)  # Should be subset
 
+        # The cut applies when the labels omit 'eep'.
+        models_ms_labels, _, _ = load_models(
+            data_file,
+            filters=fast_filters,
+            labels=["mini", "feh"],
+            include_postms=False,
+            verbose=False,
+        )
+        assert len(models_ms_labels) == len(models_ms)
+
         # Test post-main sequence only
         models_postms, _, _ = load_models(
             data_file, filters=fast_filters, include_ms=False, verbose=False
@@ -299,6 +309,8 @@ def _write_grid(
     label_fields=("mini", "feh", "eep", "afe", "smf"),
     param_fields=("loga", "logl", "logt", "logg", "agewt"),
     afe_values=(0.0,),
+    eep_range=(300.0, 420.0),
+    smf_values=(0.0,),
 ):
     """Write a synthetic HDF5 grid in GridGenerator._save_grid format."""
     import h5py
@@ -318,9 +330,11 @@ def _write_grid(
     if "mini" in label_fields:
         labels["mini"] = np.linspace(0.6, 1.4, n_models)
     if "eep" in label_fields:
-        labels["eep"] = np.linspace(300.0, 420.0, n_models)
+        labels["eep"] = np.linspace(*eep_range, n_models)
     if "afe" in label_fields:
         labels["afe"] = np.resize(afe_values, n_models)
+    if "smf" in label_fields:
+        labels["smf"] = np.resize(smf_values, n_models)
 
     ptype = np.dtype([(n, "f8") for n in param_fields])
     params = np.zeros(n_models, dtype=ptype)
@@ -374,32 +388,49 @@ class TestLoadModelsRegressions:
         for name in ("loga", "logl", "logt", "logg", "agewt"):
             assert name in labels.dtype.names, f"{name} column was dropped"
 
-    def test_ms_cut_without_eep_column_keeps_models(self, tmp_path):
-        """A file lacking 'eep' must skip the MS/post-MS cut, not return 0 models.
-
-        Old behavior compared the all-NaN eep column (NaN <= 454 is False
-        elementwise) and silently returned an empty grid.
-        """
+    def test_phase_cut_without_eep_column_raises(self, tmp_path):
+        """A phase cut on a file without 'eep' raises instead of being skipped."""
         p = tmp_path / "grid_noeep.h5"
         _write_grid(p, n_models=5, label_fields=("mini", "feh"))
 
-        models, _, _ = load_models(
-            str(p),
-            filters=["PS_g", "PS_r", "PS_i"],
-            include_postms=False,
-            verbose=False,
-        )
+        with pytest.raises(ValueError, match="include_postms"):
+            load_models(str(p), filters=["PS_g"], include_postms=False, verbose=False)
+        models, _, _ = load_models(str(p), filters=["PS_g"], verbose=False)
         assert len(models) == 5
 
-        # And the labels argument omitting 'eep' must not raise either.
-        models, _, _ = load_models(
-            str(p),
-            filters=["PS_g", "PS_r", "PS_i"],
-            labels=["mini", "feh"],
-            include_postms=False,
+    @pytest.mark.parametrize("include_ms", [True, False])
+    def test_phase_cut_applies_when_eep_is_not_requested(self, tmp_path, include_ms):
+        p = tmp_path / "grid_phase.h5"
+        _write_grid(p, n_models=10, eep_range=(400.0, 500.0))
+
+        kwargs = dict(
+            filters=["PS_g"],
+            include_ms=include_ms,
+            include_postms=not include_ms,
             verbose=False,
         )
-        assert len(models) == 5
+        _, default_labels, _ = load_models(str(p), **kwargs)
+        _, labels, _ = load_models(str(p), labels=["mini", "feh"], **kwargs)
+        assert 0 < len(default_labels) < 10
+        np.testing.assert_array_equal(labels["mini"], default_labels["mini"])
+        assert labels.dtype.names == ("mini", "feh")
+
+    def test_binary_cut_applies_when_smf_is_not_requested(self, tmp_path):
+        p = tmp_path / "grid_smf.h5"
+        _write_grid(p, n_models=6, smf_values=(0.0, 0.5))
+
+        models, labels, _ = load_models(
+            str(p), filters=["PS_g"], labels=["mini", "feh"], verbose=False
+        )
+        assert len(models) == 3
+        models, _, _ = load_models(
+            str(p),
+            filters=["PS_g"],
+            labels=["mini", "feh"],
+            include_binaries=True,
+            verbose=False,
+        )
+        assert len(models) == 6
 
     def test_warns_on_missing_filters(self, tmp_path):
         """Requested filters absent from the file must be reported, and the
