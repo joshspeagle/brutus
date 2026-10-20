@@ -102,21 +102,38 @@ class TestExtinctionPriors:
         assert logp[1] > logp[0]
         assert logp[1] > logp[2]
 
-    def test_logp_extinction_3d_dustmap_no_distance(self):
-        """Test 3D dust map without distance returns uniform prior."""
-        avs = np.array([0.1, 0.5])
-        coord = SkyCoord(l=90.0, b=0.0, unit="deg", frame="galactic")
-
-        map_distances = np.array([0.1, 1.0, 5.0])
-        av_profile = np.array([0.05, 0.3, 0.8])
-        std_profile = np.array([0.02, 0.1, 0.2])
-
+    def test_3d_dustmap_without_distance_raises(self):
         dustmap = Mock()
-        dustmap.query.return_value = (map_distances, av_profile, std_profile)
+        dustmap.query.return_value = (
+            np.array([0.1, 1.0, 5.0]),
+            np.array([0.05, 0.3, 0.8]),
+            np.array([0.02, 0.1, 0.2]),
+        )
+        with pytest.raises(ValueError, match="distance"):
+            logp_extinction(np.array([0.1, 0.5]), dustmap, (90.0, 0.0))
 
-        # No distance provided — should return uniform prior
-        logp = logp_extinction(avs, dustmap, coord)
-        assert np.allclose(logp, -np.log(20.0))
+    @pytest.mark.parametrize("wrap", [list, np.array])
+    def test_list_or_array_query_result_matches_tuple(self, wrap):
+        profile = (
+            np.array([0.1, 1.0, 5.0]),
+            np.array([0.05, 0.3, 0.8]),
+            np.array([0.02, 0.1, 0.2]),
+        )
+        avs, dist = np.array([0.0, 1.0, 2.0]), np.full(3, 3.0)
+        tuple_map, wrapped_map = Mock(), Mock()
+        tuple_map.query.return_value = profile
+        wrapped_map.query.return_value = wrap(profile)
+        np.testing.assert_array_equal(
+            logp_extinction(avs, wrapped_map, None, distance=dist),
+            logp_extinction(avs, tuple_map, None, distance=dist),
+        )
+
+    @pytest.mark.parametrize("result", [None, 0.3, (1.0,), (1, 2, 3, 4)])
+    def test_unreadable_query_result_raises(self, result):
+        dustmap = Mock()
+        dustmap.query.return_value = result
+        with pytest.raises(TypeError, match="dustmap.query"):
+            logp_extinction(np.array([0.1]), dustmap, None, distance=1.0)
 
     def test_logp_extinction_3d_dustmap_array_distances(self):
         """Test 3D dust map with array of distances (BruteForce MC case)."""
@@ -137,10 +154,10 @@ class TestExtinctionPriors:
         dustmap = Mock()
         dustmap.query.return_value = (map_distances, av_profile, std_profile)
 
-        # avlim=None, scatter=0: plain (untruncated) Gaussian with the raw
-        # map spread for the manual check below
+        # A wide avlim and scatter=0: a plain Gaussian (the truncated mass
+        # is 1 to rounding) with the raw map spread, for the check below
         logp = logp_extinction(
-            avs, dustmap, coord, distance=distances, avlim=None, scatter=0.0
+            avs, dustmap, coord, distance=distances, avlim=(-50.0, 50.0), scatter=0.0
         )
 
         assert logp.shape == avs.shape
@@ -291,11 +308,15 @@ class TestExtinctionTruncatedNormalization:
             integral = np.trapezoid(np.exp(lp), av_grid)
             assert np.isclose(integral, 1.0, rtol=1e-3)
 
-    def test_avlim_none_gives_plain_gaussian(self):
+    def test_avlim_none_raises(self):
+        with pytest.raises(ValueError, match="avlim"):
+            logp_extinction(np.array([0.1]), self.map, None, distance=1.0, avlim=None)
+
+    def test_wide_avlim_gives_plain_gaussian(self):
         avs = np.array([0.1, 0.2])
         dist = np.array([1.0, 1.0])
         lp = logp_extinction(
-            avs, self.map, None, distance=dist, avlim=None, scatter=0.0
+            avs, self.map, None, distance=dist, avlim=(-50.0, 50.0), scatter=0.0
         )
         mu = np.interp(1.0, self.map.xp, self.map.mu)
         sig = np.interp(1.0, self.map.xp, self.map.sig)
@@ -308,7 +329,9 @@ class TestExtinctionTruncatedNormalization:
         avs = np.array([0.0, 0.0])
         dist = np.array([0.05, 5.0])
         lp_trunc = logp_extinction(avs, self.map, None, distance=dist)
-        lp_plain = logp_extinction(avs, self.map, None, distance=dist, avlim=None)
+        lp_plain = logp_extinction(
+            avs, self.map, None, distance=dist, avlim=(-50.0, 50.0)
+        )
         corr = lp_trunc - lp_plain
         assert corr[0] > corr[1] > 0.0
 
@@ -343,7 +366,12 @@ class TestExtinctionScatter:
     def test_scatter_matches_plain_gaussian(self, scatter):
         avs = np.array([0.0, 0.1, 0.4])
         lp = logp_extinction(
-            avs, self.map, None, distance=np.ones(3), avlim=None, scatter=scatter
+            avs,
+            self.map,
+            None,
+            distance=np.ones(3),
+            avlim=(-50.0, 50.0),
+            scatter=scatter,
         )
         mu = np.interp(1.0, self.map.xp, self.mu)
         sig = np.hypot(np.interp(1.0, self.map.xp, self.sig), scatter)

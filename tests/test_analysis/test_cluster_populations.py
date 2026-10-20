@@ -605,6 +605,24 @@ class TestNaNAutoMask:
         lnl = compute_isochrone_cluster_loglike(flux, err, grid, dim_prior=False)
         assert np.isfinite(lnl).all()
 
+    def test_object_without_bands_adds_nothing_to_cluster_fit(self):
+        grid = self._tiny_grid()
+
+        def total(flux, err):
+            lnl_c = compute_isochrone_cluster_loglike(flux, err, grid, dim_prior=True)
+            lnl_o = compute_isochrone_outlier_loglike(flux, err, grid, dim_prior=True)
+            mix = apply_isochrone_mixture_model(lnl_c, lnl_o, 0.9, 0.1)
+            marg = marginalize_isochrone_grid(
+                mix, grid["mass_jacobians"], grid["smf_jacobians"]
+            )
+            return marg.sum()
+
+        flux = np.array([[1.1, 1.0, 0.9], [np.nan, np.nan, np.nan]])
+        err = np.full_like(flux, 0.1)
+        with_empty = total(flux, err)
+        assert np.isfinite(with_empty)
+        np.testing.assert_allclose(with_empty, total(flux[:1], err[:1]))
+
 
 class TestMeasureNormalization:
     """The marginalization must be invariant to the measure's overall scale."""

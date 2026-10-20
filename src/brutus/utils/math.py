@@ -61,6 +61,10 @@ import numpy as np
 from numba import jit, prange
 from scipy.special import log_ndtr
 
+# Proxy for log(0) in log-probabilities. It stays finite under arithmetic,
+# where -inf would give NaN (for example -inf - -inf).
+LOG_ZERO = -1e300
+
 __all__ = [
     "galactic_to_galactocentric_cyl",
     "inverse3",
@@ -69,47 +73,6 @@ __all__ = [
     "truncnorm_pdf",
     "truncnorm_logpdf",
 ]
-
-
-class _function_wrapper:
-    """
-    A hack to make functions pickleable when `args` or `kwargs` are.
-
-    also included. Based on the implementation in
-    `emcee <http://dan.iel.fm/emcee/>`_.
-
-    Parameters
-    ----------
-    func : callable
-        The function to wrap.
-    args : tuple
-        Additional positional arguments to pass to the function.
-    kwargs : dict
-        Additional keyword arguments to pass to the function.
-    name : str, optional
-        Name for the function (used in error messages).
-    """
-
-    def __init__(self, func, args, kwargs, name="input"):
-        self.func = func
-        self.args = args
-        self.kwargs = kwargs
-        self.name = name
-
-    def __call__(self, x):
-        """Call the wrapped function with stored arguments."""
-        try:
-            return self.func(x, *self.args, **self.kwargs)
-        except Exception:
-            import traceback
-
-            print(f"Exception while calling {self.name} function:")
-            print("  params:", x)
-            print("  args:", self.args)
-            print("  kwargs:", self.kwargs)
-            print("  exception:")
-            traceback.print_exc()
-            raise
 
 
 @jit(nopython=True, cache=True)
@@ -172,74 +135,63 @@ def _invert_3x3_analytical(A):
 
 
 @jit(nopython=True, cache=True, parallel=True)
-def _batch_min_eig_sym3(A_batch):
+def _batch_min_eig_of_inverse_sym3(P_batch):
     """
-    Smallest eigenvalue of a batch of symmetric 3x3 matrices, analytically.
+    Smallest eigenvalue of the inverse of each symmetric 3x3 matrix.
 
-    Uses the closed-form trigonometric solution for the eigenvalues of a
-    symmetric 3x3 matrix (Smith 1961). This replaces ``np.linalg.eigvalsh``
-    for the regularization check in the batch inverse: that routine only needs
-    the *minimum* eigenvalue, and computing it analytically is both far cheaper
-    and parallelizable. Agreement with ``eigvalsh`` is at the ~1e-14 level, so
-    the regularization decision (a threshold comparison) is unchanged except
-    for matrices whose minimum eigenvalue sits within ~1e-14 of the threshold.
-
-    Parameters
-    ----------
-    A_batch : ndarray of shape (N, 3, 3)
-        Batch of symmetric 3x3 matrices.
-
-    Returns
-    -------
-    min_eig : ndarray of shape (N,)
-        Smallest eigenvalue of each matrix.
+    The eigenvalues ``mu`` of ``P`` come from the closed-form trigonometric
+    solution (Smith 1961); those of ``inv(P)`` are ``1 / mu``. Working on a
+    unit-diagonal ``P`` keeps every ``mu`` accurate to rounding, while the
+    same formula applied to ``inv(P)`` cancels when its eigenvalues span
+    many orders of magnitude.
     """
-    N = A_batch.shape[0]
+    N = P_batch.shape[0]
     out = np.empty(N)
     for n in prange(N):
-        a11 = A_batch[n, 0, 0]
-        a22 = A_batch[n, 1, 1]
-        a33 = A_batch[n, 2, 2]
-        a12 = A_batch[n, 0, 1]
-        a13 = A_batch[n, 0, 2]
-        a23 = A_batch[n, 1, 2]
+        a11 = P_batch[n, 0, 0]
+        a22 = P_batch[n, 1, 1]
+        a33 = P_batch[n, 2, 2]
+        a12 = P_batch[n, 0, 1]
+        a13 = P_batch[n, 0, 2]
+        a23 = P_batch[n, 1, 2]
         p1 = a12 * a12 + a13 * a13 + a23 * a23
         if p1 == 0.0:
-            # Diagonal matrix: eigenvalues are the diagonal entries.
-            m = a11
-            if a22 < m:
-                m = a22
-            if a33 < m:
-                m = a33
-            out[n] = m
-            continue
-        q = (a11 + a22 + a33) / 3.0
-        d11 = a11 - q
-        d22 = a22 - q
-        d33 = a33 - q
-        p2 = d11 * d11 + d22 * d22 + d33 * d33 + 2.0 * p1
-        p = np.sqrt(p2 / 6.0)
-        # B = (A - qI)/p ; r = det(B)/2
-        b11 = d11 / p
-        b22 = d22 / p
-        b33 = d33 / p
-        b12 = a12 / p
-        b13 = a13 / p
-        b23 = a23 / p
-        detB = (
-            b11 * (b22 * b33 - b23 * b23)
-            - b12 * (b12 * b33 - b23 * b13)
-            + b13 * (b12 * b23 - b22 * b13)
-        )
-        r = detB / 2.0
-        if r <= -1.0:
-            phi = np.pi / 3.0
-        elif r >= 1.0:
-            phi = 0.0
+            mu0 = min(a11, a22, a33)
+            mu2 = max(a11, a22, a33)
+            mu1 = a11 + a22 + a33 - mu0 - mu2
         else:
-            phi = np.arccos(r) / 3.0
-        # Smallest eigenvalue corresponds to angle (phi + 2pi/3).
-        out[n] = q + 2.0 * p * np.cos(phi + (2.0 * np.pi / 3.0))
+            q = (a11 + a22 + a33) / 3.0
+            d11 = a11 - q
+            d22 = a22 - q
+            d33 = a33 - q
+            p = np.sqrt((d11 * d11 + d22 * d22 + d33 * d33 + 2.0 * p1) / 6.0)
+            # B = (P - qI)/p ; r = det(B)/2
+            b11 = d11 / p
+            b22 = d22 / p
+            b33 = d33 / p
+            b12 = a12 / p
+            b13 = a13 / p
+            b23 = a23 / p
+            r = 0.5 * (
+                b11 * (b22 * b33 - b23 * b23)
+                - b12 * (b12 * b33 - b23 * b13)
+                + b13 * (b12 * b23 - b22 * b13)
+            )
+            if r <= -1.0:
+                phi = np.pi / 3.0
+            elif r >= 1.0:
+                phi = 0.0
+            else:
+                phi = np.arccos(r) / 3.0
+            mu2 = q + 2.0 * p * np.cos(phi)
+            mu0 = q + 2.0 * p * np.cos(phi + (2.0 * np.pi / 3.0))
+            mu1 = 3.0 * q - mu0 - mu2
+        if mu0 > 0.0:
+            out[n] = 1.0 / mu2
+        else:
+            # The most negative 1/mu comes from the negative mu nearest 0.
+            m = mu2 if mu2 < 0.0 else (mu1 if mu1 < 0.0 else mu0)
+            out[n] = 1.0 / m if m != 0.0 else -np.inf
     return out
 
 
@@ -392,11 +344,10 @@ def _batch_invert_3x3_preconditioned(P_batch, min_eigenval_threshold=1e-12):
     # Step 6: Symmetrize
     C_sym = 0.5 * (C_norm + np.swapaxes(C_norm, 1, 2))
 
-    # Step 7: Batch eigenvalue check and regularization.
-    # Only the smallest eigenvalue is needed (to test positive-definiteness),
-    # so use the analytic symmetric-3x3 min-eigenvalue kernel instead of a full
-    # batched eigvalsh. Same regularization decision, much cheaper + parallel.
-    min_eigs = _batch_min_eig_sym3(C_sym)  # (N,)
+    # Step 7: Batch eigenvalue check and regularization. Only the smallest
+    # eigenvalue of C_norm is needed; it comes from the eigenvalues of
+    # P_norm, which is about 30 times faster than a batched eigvalsh.
+    min_eigs = _batch_min_eig_of_inverse_sym3(P_norm)  # (N,)
     needs_reg = (min_eigs < min_eigenval_threshold) & (~bad)
     if np.any(needs_reg):
         shifts = min_eigenval_threshold - min_eigs[needs_reg]
@@ -423,8 +374,8 @@ def inverse3(A, regularize=False, min_eigenval_threshold=1e-12):
 
     Parameters
     ----------
-    A : `~numpy.ndarray` of shape `(..., 3, 3)`
-        Array of 3x3 matrices.
+    A : array_like of shape `(3, 3)` or `(N, 3, 3)`
+        A 3x3 matrix or a stack of them.
     regularize : bool, optional
         Whether to apply diagonal preconditioning and regularization
         to ensure positive semi-definiteness. Default: False.
@@ -434,17 +385,25 @@ def inverse3(A, regularize=False, min_eigenval_threshold=1e-12):
 
     Returns
     -------
-    A_inv : `~numpy.ndarray` of shape `(..., 3, 3)`
+    A_inv : `~numpy.ndarray` of the shape of `A`
         Inverse matrices, guaranteed to be positive semi-definite if
         regularize=True.
+
+    Raises
+    ------
+    ValueError
+        If `A` does not have shape `(3, 3)` or `(N, 3, 3)`.
     """
+    A = np.asarray(A, dtype=float)
+    if A.ndim not in (2, 3) or A.shape[-2:] != (3, 3):
+        raise ValueError(f"`A` must have shape (3, 3) or (N, 3, 3); got {A.shape}.")
     if not regularize:
-        if len(A.shape) == 2:
+        if A.ndim == 2:
             return _invert_3x3_analytical(A)
         else:
             return _batch_invert_3x3(A)
 
-    if len(A.shape) == 2:
+    if A.ndim == 2:
         return _invert_3x3_preconditioned(A, min_eigenval_threshold)
     else:
         return _batch_invert_3x3_preconditioned(A, min_eigenval_threshold)
@@ -594,27 +553,9 @@ def truncnorm_pdf(x, a, b, loc=0.0, scale=1.0):
     Returns
     -------
     ans : `~numpy.ndarray` of shape `(N)` or float
-        The PDF values.
+        The PDF values: 0 outside the bounds, and a scalar for scalar `x`.
     """
-    _a = scale * a + loc
-    _b = scale * b + loc
-    xi = (x - loc) / scale
-
-    # Exponentiate the log-density so the normalization shares the
-    # tail-stable log-space computation (a direct CDF difference underflows
-    # to 0 for same-side bounds beyond ~8 sigma, yielding inf here).
-    lnphi = -np.log(np.sqrt(2.0 * np.pi)) - 0.5 * np.square(xi)
-    lndenom = np.log(scale) + _truncnorm_lognorm(a, b)
-    ans = np.exp(lnphi - lndenom)
-
-    if not isinstance(x, (float, int)):
-        keys = np.logical_or(x < _a, x > _b)
-        ans[keys] = 0
-    else:
-        if x < _a or x > _b:
-            ans = 0
-
-    return ans
+    return np.exp(truncnorm_logpdf(x, a, b, loc=loc, scale=scale))
 
 
 def truncnorm_logpdf(x, a, b, loc=0.0, scale=1.0):
@@ -647,29 +588,19 @@ def truncnorm_logpdf(x, a, b, loc=0.0, scale=1.0):
     Returns
     -------
     ans : `~numpy.ndarray` of shape `(N)` or float
-        The natural log PDF values.
+        The natural log PDF values: `LOG_ZERO` (-1e300) outside the
+        bounds, and a scalar for scalar `x`.
     """
+    x = np.asarray(x, dtype=float)
     _a = scale * a + loc
     _b = scale * b + loc
-
     xi = (x - loc) / scale
 
     lnphi = -np.log(np.sqrt(2 * np.pi)) - 0.5 * np.square(xi)
-    # Tail-stable normalization: an erf difference underflows to 0 for
-    # same-side bounds beyond ~8 sigma, which (with the old 1e-300 clamp)
-    # returned wildly wrong finite values instead of the correct log-mass.
+    # The log-mass is tail-stable: an erf difference underflows to 0 for
+    # same-side bounds beyond about 8 sigma.
     lndenom = np.log(scale) + _truncnorm_lognorm(a, b)
-
-    ans = np.subtract(lnphi, lndenom)
-
-    if not isinstance(x, (float, int)):
-        keys = np.logical_or(x < _a, x > _b)
-        ans[keys] = -np.inf
-    else:
-        if x < _a or x > _b:
-            ans = -np.inf
-
-    return ans
+    return np.where((x < _a) | (x > _b), LOG_ZERO, lnphi - lndenom)[()]
 
 
 def galactic_to_galactocentric_cyl(dists, ell, b, R_solar=8.2, Z_solar=0.025):

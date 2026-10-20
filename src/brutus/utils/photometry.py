@@ -11,7 +11,7 @@ These utilities are fundamental for all photometric analysis in brutus.
 Functions
 ---------
 magnitude : Convert flux to magnitudes
-    AB magnitude system conversion
+    Magnitudes in the survey's native system
 inv_magnitude : Convert magnitudes to flux
     Inverse of magnitude conversion
 luptitude : Convert flux to asinh magnitudes
@@ -96,7 +96,10 @@ __all__ = [
 
 def magnitude(phot, err, zeropoints=1.0):
     """
-    Convert photometry to AB magnitudes.
+    Convert photometry to magnitudes.
+
+    Magnitudes are in the survey's native system, with the zero point set
+    by `zeropoints`.
 
     Parameters
     ----------
@@ -130,7 +133,10 @@ def magnitude(phot, err, zeropoints=1.0):
 
 def inv_magnitude(mag, err, zeropoints=1.0):
     """
-    Convert AB magnitudes to photometry.
+    Convert magnitudes to photometry.
+
+    Magnitudes are in the survey's native system, with the zero point set
+    by `zeropoints`.
 
     Parameters
     ----------
@@ -164,9 +170,7 @@ def inv_magnitude(mag, err, zeropoints=1.0):
 
 def luptitude(phot, err, skynoise=1.0, zeropoints=1.0):
     """
-    Convert photometry to asinh magnitudes (i.e. "Luptitudes"). See Lupton et.
-
-    al. (1999) for more details.
+    Convert photometry to asinh magnitudes ("Luptitudes", Lupton et al. 1999).
 
     Parameters
     ----------
@@ -343,18 +347,23 @@ def phot_loglike(
         dimensionality prior is applied. This keeps auxiliary Gaussian
         constraints in the same chi-square "measure" as the photometry when
         `dim_prior=True` (mirroring how `BruteForce` counts parallax as an
-        extra band). Note that for `dim_prior=False` the Gaussian
-        normalization constant of the extra term is *not* added; callers
+        extra band). With `dim_prior=False` the Gaussian normalization of
+        the extra term is not added in full (see `extra_dims`); callers
         needing a proper density should add it themselves.
 
     extra_dims : `~numpy.ndarray` with shape (Nobj,), optional
-        Additional dimensionality (number of extra data points) associated
-        with `extra_chi2`, added to the per-object effective DOF.
+        Number of extra data points behind `extra_chi2`, added to the
+        degrees of freedom of the dimensionality prior. Use it with
+        `dim_prior=True`. With `dim_prior=False` it adds only the
+        ``ln(2 pi)`` part of the normalization of the extra term, not the
+        ``ln(var)`` part.
 
     Returns
     -------
     lnl : `~numpy.ndarray` with shape (Nobj, Nmod)
-        Log-likelihood values.
+        Log-likelihood values. With `dim_prior=True`, an object with no
+        degrees of freedom (``Ndim - dof_reduction <= 0``) gets 0 for every
+        model, so it adds nothing to a sum over objects.
 
     See Also
     --------
@@ -435,16 +444,8 @@ def phot_loglike(
         # Guard against tiny negative values from floating-point cancellation.
         np.maximum(chi2, 0.0, out=chi2)
     else:
-        # Mask fluxes and model fluxes.
-        flux_masked = flux[:, None, :] * mask[:, None, :]  # (Nobj, 1, Nfilt)
-        mfluxes_masked = mfluxes * mask[:, None, :]  # (Nobj, Nmod, Nfilt)
-        var_masked = var[:, None, :] * mask[:, None, :]  # (Nobj, 1, Nfilt)
-
-        # Compute residuals.
-        resid = flux_masked - mfluxes_masked  # (Nobj, Nmod, Nfilt)
-
-        # Compute chi-squared.
-        chi2 = np.sum(resid**2 / np.where(var_masked > 0, var_masked, np.inf), axis=2)
+        w = mask / var  # (Nobj, Nfilt); zero in masked bands
+        chi2 = np.sum((flux[:, None, :] - mfluxes) ** 2 * w[:, None, :], axis=2)
 
     # Fold in any auxiliary chi-square contributions (e.g. parallax) so they
     # share the same measure as the photometry under the dimensionality prior.
@@ -472,8 +473,8 @@ def phot_loglike(
         a = 0.5 * dof[:, None]  # shape (Nobj, 1)
         mask_valid_dof = dof > 0  # shape (Nobj,)
 
-        # Broadcast chi2 to (Nobj, Nmod)
-        lnl_dim = np.full_like(lnl, -np.inf)
+        # An object with no degrees of freedom carries no information: 0.
+        lnl_dim = np.zeros_like(lnl)
         valid_idx = np.where(mask_valid_dof)[0]
         if valid_idx.size > 0:
             chi2_valid = chi2[valid_idx]
@@ -538,7 +539,7 @@ def chisquare_outlier_loglike(
     -------
     lnl_outlier : array-like, shape (Nobj,)
         Log-likelihood for outlier model for each object. Objects with no
-        usable bands (DOF <= 0) get -inf.
+        degrees of freedom (DOF <= 0) get 0, as in `phot_loglike`.
     """
     from scipy.stats import chi2 as chisquare
 
@@ -567,7 +568,7 @@ def chisquare_outlier_loglike(
     # where the chi-square distribution is undefined and scipy returns NaN).
     dof_safe = np.where(dof > 0, dof, 1)
     chi2_threshold = chisquare.ppf(1.0 - p_value_cut, dof_safe)
-    lnl_outlier = np.where(dof > 0, chisquare.logpdf(chi2_threshold, dof_safe), -np.inf)
+    lnl_outlier = np.where(dof > 0, chisquare.logpdf(chi2_threshold, dof_safe), 0.0)
 
     return lnl_outlier
 
@@ -623,13 +624,9 @@ def uniform_outlier_loglike(
 
     Notes
     -----
-    The previous implementation returned
-    ``-sum(log(2 * sigma_clip * err / range))``, which is dimensionless
-    (a flux density to the power 0) and *increases* as measurement errors
-    shrink. Mixing that with the Gaussian inlier density made the
-    inlier/outlier classification depend on the absolute flux units and
-    could make the outlier model beat the inlier model precisely for the
-    best-measured objects. The corrected version is a proper density.
+    The result is a proper density in flux units, like the Gaussian inlier
+    density, so the inlier/outlier classification does not depend on the
+    absolute flux units.
     """
     flux = np.asarray(flux)
     err = np.asarray(err)

@@ -32,7 +32,7 @@ class TestStellarPriors:
         # Below hydrogen burning limit
         low_masses = np.array([0.05, 0.07])
         logp_low = logp_imf(low_masses)
-        assert np.all(logp_low == -np.inf)
+        assert np.all(logp_low == -1e300)
 
         # Valid masses
         valid_masses = np.array([0.1, 0.5, 1.0, 10.0])
@@ -142,7 +142,7 @@ class TestNumericalStability:
         # Very large masses beyond default mass_max=100 should return -inf
         large_masses = np.array([1e6, 1e10])
         logp_imf_large = logp_imf(large_masses)
-        assert np.all(logp_imf_large == -np.inf)
+        assert np.all(logp_imf_large == -1e300)
 
         # Large masses within custom mass_max should be finite
         logp_imf_custom = logp_imf(large_masses, mass_max=1e11)
@@ -334,3 +334,19 @@ class TestIMFNormalization:
             logp_imf(np.array([1.0]), mass_min=2.0, mass_max=1.0)
         with pytest.raises(ValueError):
             logp_imf(np.array([1.0]), mass_min=0.0)
+
+    @pytest.mark.parametrize(
+        "kwargs, name",
+        [
+            ({"mass_break": np.nan}, "mass_break"),
+            ({"mass_break": -0.5}, "mass_break"),
+            ({"alpha_low": np.nan}, "alpha_low"),
+            ({"alpha_high": np.inf}, "alpha_high"),
+        ],
+    )
+    def test_invalid_hyperparameter_raises_naming_it(self, kwargs, name):
+        with pytest.raises(ValueError, match=name):
+            logp_imf(np.array([0.1, 0.3, 1.0, 5.0]), **kwargs)
+
+    def test_infinite_mass_max_is_normalized(self):
+        assert np.isclose(self._integral(0.08, np.inf), 1.0)

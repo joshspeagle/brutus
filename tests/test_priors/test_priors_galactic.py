@@ -169,7 +169,7 @@ def _make_labels(feh, loga):
 
 class TestFehLogaArrayPaths:
     """Plain feh/loga arrays must produce the same prior as structured
-    labels on EVERY code path (fused kernel, small-N numpy, fallback)."""
+    labels on every code path (fused kernel and small-N numpy)."""
 
     COORD = (90.0, 30.0)
 
@@ -202,29 +202,6 @@ class TestFehLogaArrayPaths:
         )
         assert np.array_equal(via_arrays, via_labels)
 
-    def test_fused_kernel_failure_falls_back_with_priors(self, monkeypatch):
-        # Old code: the numpy fallback dropped the feh/loga terms entirely
-        import brutus.priors.galactic as gal
-
-        def boom(*args, **kwargs):
-            raise RuntimeError("simulated kernel failure")
-
-        N = 2000
-        rng = np.random.default_rng(1)
-        d = np.linspace(0.1, 5.0, N)
-        feh = rng.normal(-0.5, 0.5, N)
-        loga = rng.uniform(8.5, 10.1, N)
-
-        expected = logp_galactic_structure(d, self.COORD, feh=feh, loga=loga)
-        spatial_only = logp_galactic_structure(d, self.COORD)
-
-        monkeypatch.setattr(gal, "_galactic_prior_fused", boom)
-        with pytest.warns(RuntimeWarning, match="falling back to numpy"):
-            fallback = gal.logp_galactic_structure(d, self.COORD, feh=feh, loga=loga)
-
-        assert np.allclose(fallback, expected, rtol=1e-10, atol=1e-12)
-        assert not np.allclose(fallback, spatial_only)
-
     def test_float32_and_list_inputs_normalized(self):
         N = 2000
         d = np.linspace(0.1, 5.0, N)
@@ -233,7 +210,7 @@ class TestFehLogaArrayPaths:
         ref = logp_galactic_structure(d, self.COORD, feh=feh64, loga=loga64)
 
         with warnings.catch_warnings():
-            warnings.simplefilter("error")  # no fallback warnings allowed
+            warnings.simplefilter("error")
             via_f32 = logp_galactic_structure(
                 d, self.COORD, feh=feh64.astype(np.float32), loga=loga64
             )
@@ -511,3 +488,60 @@ class TestLegacyImportFallback:
         # The fact that this works means logsumexp was imported correctly
         assert np.all(np.isfinite(logp))
         assert len(logp) == 3
+
+
+class TestLogZeroBeyondMaxAge:
+    def test_fused_and_numpy_paths_agree_beyond_max_age(self):
+        # Arrays of more than 1000 distances take the fused kernel.
+        for n in (1000, 1001):
+            lnp = logp_galactic_structure(
+                np.full(n, 1.0),
+                (30.0, 10.0),
+                feh=np.zeros(n),
+                loga=np.full(n, 10.2),
+            )
+            np.testing.assert_array_equal(lnp, -1e300)
+
+    def test_age_prior_accepts_scalar_age(self):
+        from brutus.priors.galactic import logp_age_from_feh
+
+        lnp = logp_age_from_feh(5.0)
+        assert np.isfinite(lnp)
+        assert lnp == logp_age_from_feh(np.array([5.0]))[0]
+
+
+class TestLabelsValidation:
+    @pytest.mark.parametrize("n", [10, 2000])
+    def test_labels_length_mismatch_raises(self, n):
+        # 2000 distances take the fused kernel, which would read past labels.
+        labels = np.zeros(5, dtype=[("feh", float), ("loga", float)])
+        with pytest.raises(ValueError, match="labels"):
+            logp_galactic_structure(
+                np.linspace(0.1, 5.0, n), (30.0, 10.0), labels=labels
+            )
+
+    def test_scalar_distance_with_labels_is_finite(self):
+        labels = np.array([(0.0, 9.5)], dtype=[("feh", float), ("loga", float)])
+        with_labels = logp_galactic_structure(1.0, (90.0, 30.0), labels=labels)
+        with_feh = logp_galactic_structure(1.0, (90.0, 30.0), feh=[0.0])
+        assert np.all(np.isfinite(with_labels))
+        assert np.isfinite(with_feh)
+        assert np.ndim(logp_galactic_structure(1.0, (90.0, 30.0))) == 0
+
+    @pytest.mark.parametrize("shape", [(3, 2), (600, 2)])
+    def test_labels_matching_multidimensional_dists_broadcast(self, shape):
+        # 1200 distances would take the fused kernel, which is 1-D only.
+        n = int(np.prod(shape))
+        labels = np.zeros(shape, dtype=[("feh", float), ("loga", float)])
+        labels["loga"] = 9.5
+        lnp = logp_galactic_structure(np.full(shape, 1.0), (90.0, 30.0), labels=labels)
+        flat = logp_galactic_structure(
+            np.full(n, 1.0), (90.0, 30.0), labels=labels.ravel()
+        )
+        assert lnp.shape == shape
+        np.testing.assert_allclose(lnp.ravel(), flat, rtol=1e-12)
+
+    def test_single_label_record_with_scalar_distance(self):
+        labels = np.array([(0.0, 9.5)], dtype=[("feh", float), ("loga", float)])
+        lnp = logp_galactic_structure(1.0, (90.0, 30.0), labels=labels[0])
+        assert np.isfinite(lnp)

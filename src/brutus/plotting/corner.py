@@ -32,7 +32,7 @@ def cornerplot(
     params,
     lndistprior=None,
     coord=None,
-    avlim=(0.0, 6.0),
+    avlim=(0.0, 20.0),
     rvlim=(1.0, 8.0),
     weights=None,
     parallax=None,
@@ -79,7 +79,9 @@ def cornerplot(
         `(dists, reds, dreds)` that were saved, or a collection of
         `(scales, avs, rvs, covs_sar)` that will be used to regenerate
         `(dists, reds, dreds)` in conjunction with any applied distance
-        and/or parallax priors.
+        and/or parallax priors. Prefer the saved draws: regeneration applies
+        only the distance and parallax priors, not the dust-map and
+        label-dependent priors of the fit.
 
     params : structured `~numpy.ndarray` with shape `(Nmodels,)`
         Set of parameters corresponding to the input set of models. Note that
@@ -94,7 +96,8 @@ def cornerplot(
         `lndistprior`.
 
     avlim : 2-tuple, optional
-        The Av limits used to truncate results. Default is `(0., 6.)`.
+        The Av limits used to truncate regenerated draws. Default is
+        `(0., 20.)`, the `BruteForce.fit` default.
 
     rvlim : 2-tuple, optional
         The Rv limits used to truncate results. Default is `(1., 8.)`.

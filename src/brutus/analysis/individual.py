@@ -88,6 +88,7 @@ from ..priors.galactic import logp_galactic_structure
 from ..priors.stellar import logp_imf, logp_ps1_luminosity_function
 
 # Import utility functions
+from ..utils.math import LOG_ZERO
 from ..utils.math import inverse3 as _inverse3
 from ..utils.photometry import magnitude
 from ..utils.sampling import sample_multivariate_normal
@@ -98,10 +99,6 @@ __all__ = ["BruteForce"]
 # ============================================================================
 # Numerical constants
 # ============================================================================
-
-# Proxy for log(0) or negative infinity in log-probability calculations.
-# Used instead of -np.inf to avoid numerical issues with arithmetic operations.
-LOG_ZERO = -1e300
 
 # Minimum allowed scale factor to prevent division by zero or log(0).
 MIN_SCALE = 1e-20
@@ -1650,7 +1647,7 @@ class BruteForce:
         # before inversion for numerical stability. Small alpha (e.g., 0.05)
         # regularizes the off-diagonal cross-terms which carry the most
         # inversion error at high condition numbers. Default: no shrinkage
-        # (alpha=0), relying on the exact eigvalsh regularization in _inverse3.
+        # (alpha=0), relying on the eigenvalue regularization in _inverse3.
         if precision_shrinkage > 0:
             off_diag_mask = ~np.eye(3, dtype=bool)
             icov_lnd[:, off_diag_mask] *= 1.0 - precision_shrinkage

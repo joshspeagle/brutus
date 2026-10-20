@@ -92,6 +92,15 @@ class TestSedUtilsCoverage:
         with pytest.raises(ValueError, match="av"):
             get_seds(mag_coeffs, av=np.full((Nmodels, 1), 0.1), rv=3.1)
 
+    @pytest.mark.parametrize("shape", [(4, 5, 2), (4, 5)])
+    def test_get_seds_rejects_mag_coeffs_without_three_coefficients(self, shape):
+        """Regression: two coefficients per band made the kernel read past
+        the coefficient axis (silent garbage with JIT)."""
+        from brutus.core.sed_utils import get_seds
+
+        with pytest.raises(ValueError, match="mag_coeffs"):
+            get_seds(np.ones(shape), av=1.0, return_drvec=True)
+
     def test_get_seds_scalar_like_inputs(self):
         """Numpy scalars, 0-d arrays, and lists must all be accepted and
         agree with the plain-float path (old code raised numba TypingError

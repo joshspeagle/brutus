@@ -52,6 +52,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `model_idx = -99`, `obj_Nbands = 0` and NaN values, and `fit` warns once
   with the number of such objects. The output file now closes on every exit
   path.
+- **`quantile` drops samples with zero weight** before it builds the CDF.
+  A zero-weight sample still got a CDF node, so `quantile([0, 1, 100],
+  [0.5, 0.9], weights=[1, 1, 0])` gave `[0.5, 60.4]` instead of
+  `[0.5, 1.0]`. Negative or non-finite weights, or weights that sum to 0,
+  raise `ValueError`.
+- **An object with no degrees of freedom adds 0 to a cluster fit.** With
+  `dim_prior=True`, `phot_loglike` and `chisquare_outlier_loglike` gave
+  such an object (`Ndim - dof_reduction <= 0`, for example all bands NaN)
+  `-inf`, which made the cluster log-likelihood `-inf` for every parameter.
+  It now gets 0, the same as with `dim_prior=False`.
+- **`truncnorm_logpdf` and `logp_imf` return `LOG_ZERO` (-1e300)** for
+  zero probability, not `-inf`, as the rest of brutus does. The fused and
+  numpy paths of `logp_galactic_structure` now agree for ages above
+  `max_age` (they gave -1e300 and -inf). `truncnorm_logpdf` and
+  `truncnorm_pdf` accept numpy scalars and 0-d arrays, so
+  `logp_age_from_feh(5.0)` no longer raises `TypeError`. The value
+  `LOG_ZERO` lives in `brutus.utils.math`.
+- **`logp_extinction` normalizes its truncated normal stably in the
+  tails.** It took the mass on `avlim` from an `erf` difference with a
+  `1e-300` floor, so a map mean far outside `avlim` (for example 9 mag
+  with `avlim=(0, 6)`) gave a log-prior near +631 instead of about +1. It
+  now uses `log_ndtr` in the numpy path and a mirrored `erfc` in the fused
+  kernel; both agree with `scipy.stats.truncnorm.logpdf`.
+- **Batched `inverse3(regularize=True)` regularizes like the single-matrix
+  path.** Its smallest-eigenvalue check cancelled for ill-conditioned
+  matrices and shifted some that needed no shift. The saved results of the
+  `bench/fullfit.py` fits do not change.
+- **`draw_sar` and the plots that regenerate draws use `avlim=(0, 20)`**,
+  the `BruteForce.fit` default, not `(0, 6)`. This affects `cornerplot`,
+  `dist_vs_red` and `bin_pdfs_distred`. A star with A(V) above 6 mag got
+  every draw replaced by its mean. Without `span`, the A(V) axis of
+  `dist_vs_red` and `bin_pdfs_distred` now covers 0 to 20 mag, also for
+  saved draws, so the default bins and smoothing are 3.3 times wider; pass
+  `span` for a narrower range. `draw_sar` pads a distribution with its mean after
+  100 passes with no accepted draw, instead of after `max_attempts`.
 
 ### Changed
 
@@ -67,6 +102,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `brutus.core` no longer exports the private `_get_seds`; import it from
   `brutus.core.sed_utils`. `brutus.dust.__version__` is removed.
 - `StarGrid` is in `brutus.core.individual.__all__`.
+- `logp_extinction` no longer accepts `avlim=None`, which gave masked map
+  bins an improper `ln p = 0` next to normalized Gaussians in reliable
+  bins. Pass the A(V) support of the fit instead; `None` raises
+  `ValueError`.
+- `brutus.utils` re-exports `chisquare_outlier_loglike` and
+  `uniform_outlier_loglike`. The private, unused `_function_wrapper` is
+  removed from `brutus.utils.math`.
 - Package metadata declares the license as the SPDX expression `MIT`
   (`License-Expression: MIT`) instead of a license table and classifier.
   Only `LICENSE` is packaged as a license file; `AUTHORS.md` stays in the
@@ -80,6 +122,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `logp_extinction` raises `ValueError` for a 3D dust map called without
+  `distance`, and `TypeError` when `dustmap.query` returns something other
+  than a tuple, list or array of length 2 or 3. Both cases returned the
+  uniform prior with no warning, which turned off the dust prior. A list or
+  array result is now read like a tuple.
+- `logp_galactic_structure` raises `ValueError` when `labels` does not have
+  one entry per distance. With JIT on and more than 1000 distances, it read
+  past the end of `labels`; otherwise it warned and dropped the metallicity
+  and age priors. A scalar distance with `labels` or `feh` now works. The
+  fused kernels of the Galactic and extinction priors no longer catch every
+  error and fall back to numpy with a warning.
+- `logp_imf` raises `ValueError` naming the argument for a `mass_min` or
+  `mass_break` that is not finite and positive, a `mass_max` that does not
+  exceed `mass_min`, or a slope that is not finite. A NaN `mass_break`
+  returned `-inf` everywhere.
+- `inverse3` converts `A` to float and raises `ValueError` unless its shape
+  is `(3, 3)` or `(N, 3, 3)`. An integer matrix gave an integer inverse that
+  truncated 0.5 to 0.
+- `sample_multivariate_normal` converts `mean` and `cov` to float and raises
+  `ValueError` when `cov` does not have shape `(Ndist, dim, dim)`. An
+  integer `cov` shrank the spread of the draws, and a short `cov` returned
+  garbage with JIT on.
+- `core.sed_utils.get_seds` raises `ValueError` unless `mag_coeffs` has
+  shape `(Nmodels, Nbands, 3)`. With fewer coefficients, the JIT kernel
+  read past the coefficient axis.
 - `plotting.posterior_predictive` treats an integer 0/1 `data_mask` as a
   mask and raises `ValueError` for a mask of the wrong shape. It plotted
   band 0 and repeated band 1 in place of the unmasked bands.

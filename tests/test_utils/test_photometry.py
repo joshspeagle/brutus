@@ -319,15 +319,12 @@ class TestPhotLoglike:
         small_errors = flux_errors[:, :2]
         small_models = model_fluxes[:, :, :2]
 
-        # With dof_reduction=3, dof = 2 - 3 = -1 (should give -inf)
+        # With dof_reduction=3, dof = 2 - 3 = -1: no information, so 0
         lnl_small = phot_loglike(
             small_fluxes, small_errors, small_models, dim_prior=True, dof_reduction=3
         )
         assert lnl_small.shape == (nobjs, nmods)
-        # Should be -inf when dof <= 0
-        assert np.all(
-            lnl_small == -np.inf
-        ), "Should be -inf when degrees of freedom <= 0"
+        np.testing.assert_array_equal(lnl_small, 0.0)
 
     def test_phot_loglike_with_dof_reduction(self):
         """Test phot_loglike function with dof_reduction parameter."""
@@ -510,3 +507,58 @@ class TestOutlierModels:
 
         assert len(lnl_chi) == 1 and len(lnl_unif) == 1
         assert np.all(np.isfinite([lnl_chi[0], lnl_unif[0]]))
+
+
+def _reference_loglike(flux, err, mfluxes, mask, dim_prior, dof_reduction, extra):
+    """Direct per-object, per-model loop for phot_loglike."""
+    from scipy.stats import chi2 as chisquare
+
+    extra_chi2, extra_dims = extra
+    nobj, nmod = mfluxes.shape[:2]
+    out = np.empty((nobj, nmod))
+    for i in range(nobj):
+        m = mask[i].astype(bool)
+        var = err[i, m] ** 2
+        ndim = m.sum() + extra_dims[i]
+        for j in range(nmod):
+            resid = flux[i, m] - mfluxes[i, j, m]
+            chi2 = np.sum(resid**2 / var) + extra_chi2[i, j]
+            if dim_prior:
+                out[i, j] = chisquare.logpdf(chi2, ndim - dof_reduction)
+            else:
+                out[i, j] = -0.5 * (
+                    chi2 + ndim * np.log(2 * np.pi) + np.sum(np.log(var))
+                )
+    return out
+
+
+class TestPhotLoglikeReference:
+    @pytest.fixture
+    def data(self):
+        rng = np.random.RandomState(216)
+        nobj, nmod, nfilt = 6, 7, 5
+        mfluxes = rng.uniform(1.0, 2.0, (nmod, nfilt))
+        flux = mfluxes[rng.randint(0, nmod, nobj)] * rng.normal(1, 0.05, (nobj, nfilt))
+        err = rng.uniform(0.02, 0.1, (nobj, nfilt))
+        mask = rng.uniform(size=(nobj, nfilt)) > 0.2
+        mask[:, :4] = True  # at least 4 bands per object
+        extra = (rng.uniform(0, 3, (nobj, nmod)), np.ones(nobj, dtype=int))
+        return flux, err, mfluxes, mask, extra
+
+    @pytest.mark.parametrize("dim_prior", [False, True])
+    @pytest.mark.parametrize("shared", [False, True])
+    def test_phot_loglike_matches_direct_loop(self, data, dim_prior, shared):
+        flux, err, mfluxes, mask, extra = data
+        mf3 = np.broadcast_to(mfluxes, (len(flux),) + mfluxes.shape)
+        lnl = phot_loglike(
+            flux,
+            err,
+            mfluxes if shared else mf3,
+            mask=mask,
+            dim_prior=dim_prior,
+            dof_reduction=1,
+            extra_chi2=extra[0],
+            extra_dims=extra[1],
+        )
+        ref = _reference_loglike(flux, err, mf3, mask, dim_prior, 1, extra)
+        np.testing.assert_allclose(lnl, ref, rtol=1e-10)

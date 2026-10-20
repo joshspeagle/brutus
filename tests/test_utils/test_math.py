@@ -170,44 +170,20 @@ class TestStatisticalDistributions:
         """Test truncated normal log-PDF outside bounds."""
         from brutus.utils.math import truncnorm_logpdf
 
-        # Values outside bounds should have log-PDF = -inf
-        x = np.array([-5.0, 5.0])
-        a, b = -2.0, 2.0
+        # Values outside bounds get LOG_ZERO, not -inf
+        result = truncnorm_logpdf(np.array([-5.0, 5.0]), -2.0, 2.0)
+        np.testing.assert_array_equal(result, [-1e300, -1e300])
 
-        result = truncnorm_logpdf(x, a, b)
-        expected = np.array([-np.inf, -np.inf])
+    @pytest.mark.parametrize(
+        "x", [0.5, np.asarray(0.5), np.float32(0.5), np.float64(0.5), np.int64(0)]
+    )
+    def test_truncnorm_accepts_scalars(self, x):
+        from brutus.utils.math import truncnorm_logpdf, truncnorm_pdf
 
-        np.testing.assert_array_equal(result, expected)
-
-
-class TestFunctionWrapper:
-    """Unit tests for the function wrapper utility."""
-
-    def test_function_wrapper_basic(self):
-        """Test basic function wrapper functionality."""
-        from brutus.utils.math import _function_wrapper
-
-        def test_func(x, a, b=2):
-            return x * a + b
-
-        wrapped = _function_wrapper(test_func, args=(3,), kwargs={"b": 5}, name="test")
-
-        result = wrapped(10)
-        expected = 10 * 3 + 5  # = 35
-
-        assert result == expected
-
-    def test_function_wrapper_error_handling(self):
-        """Test function wrapper error handling."""
-        from brutus.utils.math import _function_wrapper
-
-        def failing_func(x):
-            raise ValueError("Test error")
-
-        wrapped = _function_wrapper(failing_func, args=(), kwargs={}, name="failing")
-
-        with pytest.raises(ValueError, match="Test error"):
-            wrapped(1)
+        lnp = truncnorm_logpdf(x, -1.0, 1.0)
+        assert np.ndim(lnp) == 0
+        assert lnp == truncnorm_logpdf(np.array([float(x)]), -1.0, 1.0)[0]
+        assert truncnorm_pdf(x, -1.0, 1.0) == np.exp(lnp)
 
 
 class TestMathEdgeCases:

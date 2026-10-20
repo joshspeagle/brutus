@@ -66,6 +66,9 @@ from numba import jit, prange
 
 __all__ = ["quantile", "draw_sar", "sample_multivariate_normal"]
 
+# draw_sar pads a distribution with no accepted draw after this many passes.
+_DRAW_SAR_EMPTY_PASSES = 100
+
 
 def quantile(x, q, weights=None):
     """
@@ -88,17 +91,20 @@ def quantile(x, q, weights=None):
 
     weights : `~numpy.ndarray` with shape `(nsamps,)`, optional
         The associated weight from each sample. If None, all samples
-        are weighted equally.
+        are weighted equally. Samples with zero weight are dropped before
+        the CDF is built, so they never move a quantile.
 
     Returns
     -------
-    quantiles : `~numpy.ndarray` with shape `(nquantiles,)` or float
-        The (weighted) sample quantiles computed at `q`.
+    quantiles : `~numpy.ndarray` with shape `(nquantiles,)`
+        The (weighted) sample quantiles computed at `q`. A scalar `q` gives
+        shape `(1,)`.
 
     Raises
     ------
     ValueError
-        If quantiles are outside [0, 1] or if dimensions don't match.
+        If quantiles are outside [0, 1], if dimensions don't match, or if
+        a weight is negative or not finite, or the weights sum to 0.
 
     Examples
     --------
@@ -126,9 +132,15 @@ def quantile(x, q, weights=None):
     if weights is None:
         weights = np.ones(len(x))
     else:
-        weights = np.atleast_1d(weights)
+        weights = np.atleast_1d(np.asarray(weights, dtype=float))
         if len(x) != len(weights):
             raise ValueError("Dimension mismatch: len(weights) != len(x).")
+        if not np.all(np.isfinite(weights) & (weights >= 0)) or weights.sum() <= 0:
+            raise ValueError(
+                "weights must be finite and non-negative, with a positive sum"
+            )
+        keep = weights > 0
+        x, weights = x[keep], weights[keep]
 
     idx = np.argsort(x)  # sort samples
     sw = weights[idx]  # sort weights
@@ -143,7 +155,7 @@ def draw_sar(
     rvs,
     covs_sar,
     ndraws=500,
-    avlim=(0.0, 6.0),
+    avlim=(0.0, 20.0),
     rvlim=(1.0, 8.0),
     rstate=None,
     max_attempts=10000,
@@ -174,7 +186,8 @@ def draw_sar(
         The number of desired random draws. Default is `500`.
 
     avlim : 2-tuple, optional
-        The A_V limits used to truncate results. Default is `(0., 6.)`.
+        The A_V limits used to truncate results. Default is `(0., 20.)`,
+        the `BruteForce.fit` default.
 
     rvlim : 2-tuple, optional
         The R_V limits used to truncate results. Default is `(1., 8.)`.
@@ -188,7 +201,8 @@ def draw_sar(
     max_attempts : int, optional
         Maximum number of rejection-sampling passes per posterior sample
         before the remaining slots are padded with the mean values (with a
-        warning). Default is `10000`.
+        warning). A sample with no accepted draw after 100 passes is padded
+        at once. Default is `10000`.
 
     Returns
     -------
@@ -205,16 +219,14 @@ def draw_sar(
     -----
     The function samples from multivariate normal distributions defined by
     the means (scales, avs, rvs) and covariances (covs_sar), then applies
-    rejection sampling to ensure all samples fall within the specified
-    limits for A_V and R_V.
+    rejection sampling to keep the samples within the specified limits for
+    A_V and R_V. A sample that cannot fill `ndraws` this way is padded with
+    its mean, which can lie outside the limits.
 
     All `Nsamps` distributions are drawn in a single batched
     `sample_multivariate_normal` call per rejection pass (rather than one
     `numpy.random.multivariate_normal` call per distribution), which avoids
-    per-call dispatch and per-matrix SVD overhead. The accepted draws follow
-    the same truncated Gaussian distribution as before, but the underlying
-    RNG stream differs, so individual draws are not reproducible against
-    older versions even with a fixed seed.
+    per-call dispatch and per-matrix SVD overhead.
 
     Examples
     --------
@@ -275,15 +287,14 @@ def draw_sar(
                 rdraws[i, fill] = r_mc[k, sel]
                 nfilled[i] += take
         active = active[nfilled[active] < ndraws]
+        if n_attempts == _DRAW_SAR_EMPTY_PASSES:
+            # A mean far outside the limits, or a NaN, accepts nothing.
+            active = active[nfilled[active] > 0]
 
-    # Any distribution still deficient after `max_attempts` passes gets its
-    # remaining slots padded with the mean values (matching the historical
-    # per-sample fallback).
-    for i in active:
+    for i in np.flatnonzero(nfilled < ndraws):
         warnings.warn(
             f"draw_sar: only collected {nfilled[i]}/{ndraws} "
-            f"in-bounds samples after {max_attempts} attempts for "
-            f"sample {i}. Padding with mean values.",
+            f"in-bounds samples for sample {i}. Padding with mean values.",
             RuntimeWarning,
             stacklevel=2,
         )
@@ -448,6 +459,12 @@ def sample_multivariate_normal(
         Sampled values. For a single distribution, returns `(dim, size)`.
         For multiple distributions, returns `(dim, size, Ndist)`.
 
+    Raises
+    ------
+    ValueError
+        If `mean` is not 1-D or 2-D, or if `cov` does not have shape
+        `(Ndist, dim, dim)` for a 2-D `mean`.
+
     Notes
     -----
     Provided covariances must be positive semi-definite. Use the `isPSD`
@@ -461,15 +478,15 @@ def sample_multivariate_normal(
     --------
     >>> import numpy as np
     >>> # Single distribution
-    >>> mean = np.array([0, 1])
-    >>> cov = np.array([[1, 0.5], [0.5, 1]])
+    >>> mean = np.array([0.0, 1.0])
+    >>> cov = np.array([[1.0, 0.5], [0.5, 1.0]])
     >>> samples = sample_multivariate_normal(mean, cov, size=100)
     >>> samples.shape
     (2, 100)
 
     >>> # Multiple distributions
-    >>> means = np.array([[0, 1], [2, 3]])  # 2 distributions, 2D each
-    >>> covs = np.array([[[1, 0], [0, 1]], [[2, 0.5], [0.5, 2]]])
+    >>> means = np.array([[0.0, 1.0], [2.0, 3.0]])  # 2 distributions, 2D each
+    >>> covs = np.array([[[1.0, 0.0], [0.0, 1.0]], [[2.0, 0.5], [0.5, 2.0]]])
     >>> samples = sample_multivariate_normal(means, covs, size=50)
     >>> samples.shape
     (2, 50, 2)
@@ -482,8 +499,17 @@ def sample_multivariate_normal(
         samples = rstate.multivariate_normal(mean, cov, size=size)
         return samples.T  # Transpose to match expected (dim, size) format
 
-    # For multiple distributions, check dimension compatibility
-    N, d = np.shape(mean)
+    mean = np.asarray(mean, dtype=float)
+    cov = np.asarray(cov, dtype=float)
+    if mean.ndim != 2:
+        raise ValueError(
+            f"`mean` must have shape (dim,) or (Ndist, dim); got {mean.shape}."
+        )
+    N, d = mean.shape
+    if cov.shape != (N, d, d):
+        raise ValueError(
+            f"`cov` must have shape {(N, d, d)} to match `mean`; got {cov.shape}."
+        )
 
     if d == 3:
         # Use numba-accelerated version for 3D case

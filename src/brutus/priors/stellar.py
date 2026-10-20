@@ -33,8 +33,9 @@ stellar parameters:
 - **Luminosity function priors** weight absolute magnitudes according to
   observed stellar populations, useful when fitting distance and extinction
 
-The priors are normalized and return log-probabilities suitable for direct
-use in MCMC or nested sampling codes.
+The IMF prior is normalized; the luminosity function prior is not. Both
+return log-probabilities suitable for direct use in MCMC or nested sampling
+codes.
 
 Examples
 --------
@@ -64,6 +65,8 @@ Luminosity function prior:
 
 import numpy as np
 
+from ..utils.math import LOG_ZERO
+
 __all__ = ["logp_imf", "logp_ps1_luminosity_function"]
 
 
@@ -79,6 +82,20 @@ def _powerlaw_mass_integral(m_lo, m_hi, alpha):
     if np.isclose(alpha, 1.0):
         return np.log(m_hi / m_lo)
     return (m_hi ** (1.0 - alpha) - m_lo ** (1.0 - alpha)) / (1.0 - alpha)
+
+
+def _log_imf_unnormalized(mgrid, alpha_low, alpha_high, mass_min, mass_break, mass_max):
+    mgrid = np.asarray(mgrid)
+    logp = np.full_like(mgrid, LOG_ZERO, dtype=float)
+    valid_mass = (mgrid >= mass_min) & (mgrid <= mass_max)
+    low_mass = valid_mass & (mgrid <= mass_break)
+    logp[low_mass] = -alpha_low * np.log(mgrid[low_mass])
+    # The high-mass piece is scaled to be continuous at mass_break.
+    high_mass = valid_mass & (mgrid > mass_break)
+    logp[high_mass] = -alpha_high * np.log(mgrid[high_mass]) + (
+        alpha_high - alpha_low
+    ) * np.log(mass_break)
+    return logp
 
 
 def logp_imf(
@@ -117,13 +134,21 @@ def logp_imf(
         Minimum mass for normalization (hydrogen burning limit).
         Default is 0.08 solar masses.
     mass_max : float, optional
-        Maximum mass for normalization. Default is 100.0 solar masses.
+        Maximum mass for normalization. It may be ``np.inf`` when
+        ``alpha_high > 1``. Default is 100.0 solar masses.
 
     Returns
     -------
     logp : array_like
         Normalized log-prior probability density for the input mass grid(s).
-        Returns -inf for masses below mass_min or above mass_max.
+        Masses below mass_min or above mass_max get `LOG_ZERO` (-1e300).
+
+    Raises
+    ------
+    ValueError
+        If ``mass_min`` or ``mass_break`` is not finite and positive, if
+        ``mass_max`` does not exceed ``mass_min``, or if a slope is not
+        finite.
 
     See Also
     --------
@@ -146,34 +171,30 @@ def logp_imf(
     ----------
     Kroupa, P. (2001), MNRAS, 322, 231
     """
-    mgrid = np.asarray(mgrid)
+    for name, value in (
+        ("mass_min", mass_min),
+        ("mass_break", mass_break),
+    ):
+        if not (np.isfinite(value) and value > 0):
+            raise ValueError(f"`{name}` must be finite and > 0; got {value}.")
+    if not mass_max > mass_min:
+        raise ValueError(
+            f"`mass_max` must exceed `mass_min`; got mass_min={mass_min}, "
+            f"mass_max={mass_max}."
+        )
+    for name, value in (("alpha_low", alpha_low), ("alpha_high", alpha_high)):
+        if not np.isfinite(value):
+            raise ValueError(f"`{name}` must be finite; got {value}.")
 
-    # Initialize log-prior with -inf for invalid masses
-    logp = np.full_like(mgrid, -np.inf, dtype=float)
-
-    # Valid mass range
-    valid_mass = (mgrid >= mass_min) & (mgrid <= mass_max)
-
-    # Low-mass regime: M ≤ mass_break
-    low_mass = valid_mass & (mgrid <= mass_break)
-    logp[low_mass] = -alpha_low * np.log(mgrid[low_mass])
-
-    # High-mass regime: M > mass_break
-    high_mass = valid_mass & (mgrid > mass_break)
-    logp[high_mass] = -alpha_high * np.log(mgrid[high_mass]) + (
-        alpha_high - alpha_low
-    ) * np.log(mass_break)
+    logp = _log_imf_unnormalized(
+        mgrid, alpha_low, alpha_high, mass_min, mass_break, mass_max
+    )
 
     # Compute normalization factor over [mass_min, mass_max], integrating
     # only over the power-law regime(s) the range actually overlaps. The
     # high-mass piece carries the continuity factor
     # mass_break^(alpha_high - alpha_low) so the density is continuous at
     # mass_break.
-    if mass_min <= 0 or mass_max <= mass_min:
-        raise ValueError(
-            f"Invalid mass range: require 0 < mass_min < mass_max, "
-            f"got mass_min={mass_min}, mass_max={mass_max}."
-        )
     continuity_factor = mass_break ** (alpha_high - alpha_low)
     if mass_min < mass_break <= mass_max:
         # Range straddles the break: both regimes contribute
@@ -198,22 +219,9 @@ def logp_imf(
 
     # Handle binary component if provided
     if mgrid2 is not None:
-        mgrid2 = np.asarray(mgrid2)
-
-        # Compute prior for secondary
-        logp2 = np.full_like(mgrid2, -np.inf, dtype=float)
-
-        valid_mass2 = (mgrid2 >= mass_min) & (mgrid2 <= mass_max)
-        low_mass2 = valid_mass2 & (mgrid2 <= mass_break)
-        high_mass2 = valid_mass2 & (mgrid2 > mass_break)
-
-        logp2[low_mass2] = -alpha_low * np.log(mgrid2[low_mass2])
-        logp2[high_mass2] = -alpha_high * np.log(mgrid2[high_mass2]) + (
-            alpha_high - alpha_low
-        ) * np.log(mass_break)
-
-        # Combined log-prior for binary system
-        logp = logp + logp2
+        logp = logp + _log_imf_unnormalized(
+            mgrid2, alpha_low, alpha_high, mass_min, mass_break, mass_max
+        )
 
         # Updated normalization for binary (independent sampling)
         norm = norm**2
@@ -242,8 +250,10 @@ def logp_ps1_luminosity_function(Mr):
     Returns
     -------
     logp : array_like
-        Log-prior probability density for the given absolute magnitudes.
-        Interpolates from empirical Pan-STARRS 1 luminosity function.
+        Unnormalized log-prior for the given absolute magnitudes:
+        ``exp(logp)`` integrates to about 0.086. It interpolates the
+        luminosity function tabulated for Mr in [-1, 20] and extrapolates
+        linearly outside that range.
 
     See Also
     --------

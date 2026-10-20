@@ -72,7 +72,6 @@ Combined Galactic structure prior:
 >>> log_prior = logp_galactic_structure(distances, coord)
 """
 
-import warnings
 from math import erf, exp, log, pi, sqrt
 
 import numpy as np
@@ -80,7 +79,7 @@ from numba import jit, prange
 
 # Import utility functions from brutus.utils
 from brutus.utils import truncnorm_logpdf
-from brutus.utils.math import galactic_to_galactocentric_cyl
+from brutus.utils.math import LOG_ZERO, galactic_to_galactocentric_cyl
 
 _LOG_2PI = log(2.0 * pi)
 _SQRT2 = sqrt(2.0)
@@ -305,7 +304,7 @@ def _galactic_prior_fused(
                 ln_w_halo = lnp_halo - logp_total
 
             # Compute truncated normal for each component
-            age_lnp_total = -1e300
+            age_lnp_total = LOG_ZERO
             for comp_idx in range(3):
                 if comp_idx == 0:
                     ln_w = ln_w_thin
@@ -320,7 +319,7 @@ def _galactic_prior_fused(
 
                 # Bounds check
                 if age_val < min_age or age_val > max_age:
-                    age_comp = -1e300
+                    age_comp = LOG_ZERO
 
                 # Accumulate logsumexp
                 if age_comp > age_lnp_total:
@@ -614,12 +613,13 @@ def logp_age_from_feh(
 
     where c is the central metallicity and s is the scale length.
 
-    The age dispersion decreases for younger (more metal-rich) stars:
+    The age dispersion increases for younger (more metal-rich) stars:
 
     .. math::
         \\sigma_t = \\min\\left(\\max\\left(\\frac{t_{\\max} - \\langle t \\rangle}{n\\sigma}, \\sigma_{\\min}\\right), \\sigma_{\\max}\\right)
 
-    Ages are drawn from a truncated normal distribution bounded by [min_age, max_age].
+    The age density is a truncated normal distribution bounded by
+    [min_age, max_age].
 
     References
     ----------
@@ -633,7 +633,7 @@ def logp_age_from_feh(
         1.0 + np.exp((feh_mean - feh_age_ctr) / feh_age_scale)
     ) + min_age
 
-    # Age dispersion (younger stars have smaller dispersion)
+    # Age dispersion (younger stars have larger dispersion)
     age_sigma_pred = (max_age - age_mean_pred) / nsigma_from_max_age
     age_sigma_pred = np.clip(age_sigma_pred, min_sigma, max_sigma)
 
@@ -697,13 +697,14 @@ def logp_galactic_structure(
     coord : tuple of floats
         Galactic coordinates (l, b) in degrees.
     labels : structured array, optional
-        Stellar labels containing 'feh' and/or 'loga' for metallicity/age priors.
+        Stellar labels containing 'feh' and/or 'loga' for metallicity/age
+        priors, with one entry per distance.
     feh : array_like, optional
         Per-point [Fe/H] as a plain float array, an alternative to ``labels``
         for the metallicity prior. Lets callers (e.g. ``logpost_grid``) avoid
         tiling a structured ``labels`` array; equivalent to passing the same
-        values via ``labels``. Honored on every code path (fused kernel,
-        numpy fallback, and small arrays). If both ``labels`` and
+        values via ``labels``. Honored on both code paths (fused kernel
+        and numpy). If both ``labels`` and
         ``feh``/``loga`` are given, the plain arrays take precedence.
     loga : array_like, optional
         Per-point log10(age/yr) as a plain float array, an alternative to
@@ -774,6 +775,12 @@ def logp_galactic_structure(
     components : dict, optional
         Individual component contributions (if return_components=True).
 
+    Raises
+    ------
+    ValueError
+        If ``labels``, ``feh`` or ``loga`` does not have one entry per
+        distance.
+
     Notes
     -----
     The Galactic model combines three stellar populations:
@@ -817,6 +824,13 @@ def logp_galactic_structure(
         # coord is a tuple of (l, b) in degrees
         ell, b = coord[0], coord[1]
 
+    n = dists.size
+    if labels is not None and np.size(labels) != n:
+        raise ValueError(
+            f"`labels` must have one entry per distance ({n}); "
+            f"got {np.size(labels)}."
+        )
+
     # Callers may pass the per-point ``feh`` / ``loga`` as plain float arrays
     # directly (instead of a structured ``labels`` array). This is the hot path
     # from logpost_grid, where it avoids tiling a structured array across all MC
@@ -830,17 +844,17 @@ def logp_galactic_structure(
         # actionable error rather than failing later inside the kernel.
         if feh is not None:
             feh = np.ascontiguousarray(feh, dtype=np.float64)
-            if feh.ndim != 1 or feh.shape[0] != len(dists):
+            if feh.ndim != 1 or feh.shape[0] != n:
                 raise ValueError(
-                    f"`feh` must be a 1D array matching len(dists)="
-                    f"{len(dists)}; got shape {np.shape(feh)}."
+                    f"`feh` must be a 1D array with one entry per distance "
+                    f"({n}); got shape {np.shape(feh)}."
                 )
         if loga is not None:
             loga = np.ascontiguousarray(loga, dtype=np.float64)
-            if loga.ndim != 1 or loga.shape[0] != len(dists):
+            if loga.ndim != 1 or loga.shape[0] != n:
                 raise ValueError(
-                    f"`loga` must be a 1D array matching len(dists)="
-                    f"{len(dists)}; got shape {np.shape(loga)}."
+                    f"`loga` must be a 1D array with one entry per distance "
+                    f"({n}); got shape {np.shape(loga)}."
                 )
         # A plain array overrides only its own field. Any field not supplied
         # as an array is sourced from a caller-provided structured `labels`,
@@ -860,7 +874,8 @@ def logp_galactic_structure(
     if (
         (labels is not None or use_arrays)
         and not return_components
-        and len(dists) > 1000
+        and n > 1000
+        and dists.ndim == 1
         and np.ndim(ell) == 0
         and np.ndim(b) == 0
     ):
@@ -876,55 +891,47 @@ def logp_galactic_structure(
             loga_arr = labels["loga"] if has_loga else np.empty(0)
         ell_rad = np.deg2rad(float(ell))
         b_rad = np.deg2rad(float(b))
-        try:
-            return _galactic_prior_fused(
-                dists,
-                np.sin(ell_rad),
-                np.cos(ell_rad),
-                np.sin(b_rad),
-                np.cos(b_rad),
-                feh_arr,
-                loga_arr,
-                has_feh,
-                has_loga,
-                R_solar,
-                Z_solar,
-                R_thin,
-                Z_thin,
-                Rs_thin,
-                R_thick,
-                Z_thick,
-                Rs_thick,
-                f_thick,
-                Rs_halo,
-                eta_halo,
-                q_halo_ctr,
-                q_halo_inf,
-                r_q_halo,
-                f_halo,
-                feh_thin,
-                feh_thin_sigma,
-                feh_thick,
-                feh_thick_sigma,
-                feh_halo,
-                feh_halo_sigma,
-                max_age,
-                min_age,
-                feh_age_ctr,
-                feh_age_scale,
-                nsigma_from_max_age,
-                max_sigma,
-                min_sigma,
-            )
-        except Exception as e:
-            warnings.warn(
-                f"Numba fused galactic prior failed, falling back to numpy: {e}",
-                RuntimeWarning,
-                stacklevel=2,
-            )
+        return _galactic_prior_fused(
+            dists,
+            np.sin(ell_rad),
+            np.cos(ell_rad),
+            np.sin(b_rad),
+            np.cos(b_rad),
+            feh_arr,
+            loga_arr,
+            has_feh,
+            has_loga,
+            R_solar,
+            Z_solar,
+            R_thin,
+            Z_thin,
+            Rs_thin,
+            R_thick,
+            Z_thick,
+            Rs_thick,
+            f_thick,
+            Rs_halo,
+            eta_halo,
+            q_halo_ctr,
+            q_halo_inf,
+            r_q_halo,
+            f_halo,
+            feh_thin,
+            feh_thin_sigma,
+            feh_thick,
+            feh_thick_sigma,
+            feh_halo,
+            feh_halo_sigma,
+            max_age,
+            min_age,
+            feh_age_ctr,
+            feh_age_scale,
+            nsigma_from_max_age,
+            max_sigma,
+            min_sigma,
+        )
 
-    # ---- Numpy path (small arrays, return_components, array coordinates,
-    # or fused-kernel fallback; also the NUMBA_DISABLE_JIT coverage path) ----
+    # ---- Numpy path (small arrays, return_components, array coordinates) ----
 
     # Volume correction factor (dV ∝ r² dr); the fused kernel computes this
     # per point, so it is only materialized here.
@@ -944,11 +951,11 @@ def logp_galactic_structure(
             _dtype.append(("feh", np.float64))
         if loga is not None:
             _dtype.append(("loga", np.float64))
-        labels = np.empty(len(dists), dtype=_dtype)
+        labels = np.empty(dists.shape, dtype=_dtype)
         if feh is not None:
-            labels["feh"] = feh
+            labels["feh"] = feh.reshape(dists.shape)
         if loga is not None:
-            labels["loga"] = loga
+            labels["loga"] = loga.reshape(dists.shape)
 
     # Thin disk component
     logp_thin = logn_disk(
@@ -1009,96 +1016,44 @@ def logp_galactic_structure(
         age_w_thick = lnprior_thick
         age_w_halo = lnprior_halo
 
-        # Metallicity prior — fused computation to minimize temporaries
         if "feh" in labels.dtype.names:
-            try:
-                feh = labels["feh"]
+            feh = labels["feh"]
+            feh_lnp_thin = logp_feh(feh, feh_thin, feh_thin_sigma) + lnprior_thin
+            feh_lnp_thick = logp_feh(feh, feh_thick, feh_thick_sigma) + lnprior_thick
+            feh_lnp_halo = logp_feh(feh, feh_halo, feh_halo_sigma) + lnprior_halo
+            feh_lnp = _logsumexp3(feh_lnp_thin, feh_lnp_thick, feh_lnp_halo)
+            logp += feh_lnp
+            components["feh"] = [feh_lnp_thin, feh_lnp_thick, feh_lnp_halo]
 
-                # Inline Gaussian logpdf for all 3 components at once
-                # logp_feh(feh, mu, sigma) = -0.5*((feh-mu)^2/sigma^2 + log(2*pi*sigma^2))
-                feh_lnp_thin = (
-                    -0.5
-                    * (
-                        (feh - feh_thin) ** 2 / feh_thin_sigma**2
-                        + np.log(2.0 * np.pi * feh_thin_sigma**2)
-                    )
-                    + lnprior_thin
-                )
-                feh_lnp_thick = (
-                    -0.5
-                    * (
-                        (feh - feh_thick) ** 2 / feh_thick_sigma**2
-                        + np.log(2.0 * np.pi * feh_thick_sigma**2)
-                    )
-                    + lnprior_thick
-                )
-                feh_lnp_halo = (
-                    -0.5
-                    * (
-                        (feh - feh_halo) ** 2 / feh_halo_sigma**2
-                        + np.log(2.0 * np.pi * feh_halo_sigma**2)
-                    )
-                    + lnprior_halo
-                )
+            # Metallicity-updated membership weights for the age mixture
+            age_w_thin = feh_lnp_thin - feh_lnp
+            age_w_thick = feh_lnp_thick - feh_lnp
+            age_w_halo = feh_lnp_halo - feh_lnp
 
-                feh_lnp = _logsumexp3(feh_lnp_thin, feh_lnp_thick, feh_lnp_halo)
-                logp += feh_lnp
-                components["feh"] = [feh_lnp_thin, feh_lnp_thick, feh_lnp_halo]
-
-                # Metallicity-updated membership weights for the age mixture
-                age_w_thin = feh_lnp_thin - feh_lnp
-                age_w_thick = feh_lnp_thick - feh_lnp
-                age_w_halo = feh_lnp_halo - feh_lnp
-            except (KeyError, IndexError, ValueError) as e:
-                warnings.warn(
-                    f"Metallicity prior computation failed: {e}",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-
-        # Age prior — fused computation
         if "loga" in labels.dtype.names:
-            try:
-                age = 10.0 ** labels["loga"] / 1e9  # Convert log(age) to Gyr
-
-                # Compute age priors for all 3 components with shared parameters.
-                # logp_age_from_feh computes a truncated normal; inline the core
-                # computation to avoid 3 separate function calls + temporaries.
-                age_params = []
+            age = 10.0 ** labels["loga"] / 1e9  # Convert log(age) to Gyr
+            age_lnp_thin, age_lnp_thick, age_lnp_halo = (
+                logp_age_from_feh(
+                    age,
+                    feh_mean=fm,
+                    max_age=max_age,
+                    min_age=min_age,
+                    feh_age_ctr=feh_age_ctr,
+                    feh_age_scale=feh_age_scale,
+                    nsigma_from_max_age=nsigma_from_max_age,
+                    max_sigma=max_sigma,
+                    min_sigma=min_sigma,
+                )
+                + lnp_comp
                 for fm, lnp_comp in [
                     (feh_thin, age_w_thin),
                     (feh_thick, age_w_thick),
                     (feh_halo, age_w_halo),
-                ]:
-                    age_mean = (max_age - min_age) / (
-                        1.0 + np.exp((fm - feh_age_ctr) / feh_age_scale)
-                    ) + min_age
-                    age_sigma = np.clip(
-                        (max_age - age_mean) / nsigma_from_max_age,
-                        min_sigma,
-                        max_sigma,
-                    )
-                    age_params.append(
-                        truncnorm_logpdf(
-                            age,
-                            (min_age - age_mean) / age_sigma,
-                            (max_age - age_mean) / age_sigma,
-                            loc=age_mean,
-                            scale=age_sigma,
-                        )
-                        + lnp_comp
-                    )
-
-                age_lnp_thin, age_lnp_thick, age_lnp_halo = age_params
-                age_lnp = _logsumexp3(age_lnp_thin, age_lnp_thick, age_lnp_halo)
-                logp += age_lnp
-                components["age"] = [age_lnp_thin, age_lnp_thick, age_lnp_halo]
-            except (KeyError, IndexError, ValueError) as e:
-                warnings.warn(
-                    f"Age prior computation failed: {e}",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
+                ]
+            )
+            age_lnp = _logsumexp3(age_lnp_thin, age_lnp_thick, age_lnp_halo)
+            logp += age_lnp
+            components["age"] = [age_lnp_thin, age_lnp_thick, age_lnp_halo]
 
     if return_components:
         return logp, components

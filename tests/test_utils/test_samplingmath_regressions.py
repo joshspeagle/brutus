@@ -82,9 +82,10 @@ class TestTruncnormTailStability:
             scipy.stats.truncnorm.pdf(x, -2.0, 2.0),
             rtol=1e-12,
         )
+        # brutus returns LOG_ZERO (-1e300) where scipy returns -inf
         np.testing.assert_allclose(
             truncnorm_logpdf(x, -2.0, 2.0),
-            scipy.stats.truncnorm.logpdf(x, -2.0, 2.0),
+            np.maximum(scipy.stats.truncnorm.logpdf(x, -2.0, 2.0), -1e300),
             rtol=1e-12,
         )
         # loc/scale
@@ -170,6 +171,41 @@ class TestInverse3RelativeThreshold:
         A = np.diag([1e10, 1e-10, 1.0])
         np.testing.assert_allclose(inverse3(A), np.diag([1e-10, 1e10, 1.0]), rtol=1e-12)
 
+    def test_batch_regularization_matches_single_matrix_path(self):
+        """Ill-conditioned correlation matrices: the batched min-eigenvalue
+        check cancelled and shifted matrices the single path left alone."""
+        from scipy.stats import special_ortho_group
+
+        from brutus.utils import inverse3
+
+        rng = np.random.default_rng(3)
+        N = 5000
+        Q = special_ortho_group.rvs(3, size=N, random_state=4)
+        lam = np.stack(
+            [10 ** rng.uniform(-9.5, -2, N), rng.uniform(0.1, 1, N), np.ones(N)], 1
+        )
+        P = np.einsum("nij,nj,nkj->nik", Q, lam, Q)
+        d = 1 / np.sqrt(np.diagonal(P, axis1=1, axis2=2))
+        P = P * d[:, :, None] * d[:, None, :]
+        single = np.stack([inverse3(p, regularize=True) for p in P])
+        np.testing.assert_allclose(inverse3(P, regularize=True), single, rtol=1e-6)
+
+    @pytest.mark.parametrize("regularize", [False, True])
+    @pytest.mark.parametrize("shape", [(3, 3), (2, 3, 3)])
+    def test_integer_input_gives_float_inverse(self, regularize, shape):
+        from brutus.utils import inverse3
+
+        A = np.broadcast_to(2 * np.eye(3, dtype=int), shape)
+        expected = np.broadcast_to(0.5 * np.eye(3), shape)
+        np.testing.assert_allclose(inverse3(A, regularize=regularize), expected)
+
+    @pytest.mark.parametrize("shape", [(3,), (2, 4, 3, 3), (2, 3, 4)])
+    def test_bad_shape_raises(self, shape):
+        from brutus.utils import inverse3
+
+        with pytest.raises(ValueError, match="`A`"):
+            inverse3(np.ones(shape))
+
 
 # ---------------------------------------------------------------------------
 # 3. PSD-safe Cholesky and singular covariances in the batched sampler
@@ -228,6 +264,25 @@ class TestCholeskyPSD:
         np.testing.assert_allclose(out[:, :, 0].std(axis=1), 1.0, atol=0.1)
         np.testing.assert_allclose(out[:, :, 2].std(axis=1), np.sqrt(2.0), atol=0.1)
 
+    def test_sampler_integer_covariance_keeps_variance(self):
+        """An integer cov gave an integer Cholesky factor: sqrt(2) became 1."""
+        from brutus.utils.sampling import sample_multivariate_normal
+
+        covs = np.tile(2 * np.eye(3, dtype=int), (4, 1, 1))
+        out = sample_multivariate_normal(
+            np.zeros((4, 3)), covs, size=20000, rstate=np.random.RandomState(5)
+        )
+        # The standard error of each std is about sqrt(2) / sqrt(40000) = 0.007.
+        np.testing.assert_allclose(out.std(axis=1), np.sqrt(2.0), atol=0.05)
+
+    def test_sampler_mismatched_covariance_raises(self):
+        from brutus.utils.sampling import sample_multivariate_normal
+
+        with pytest.raises(ValueError, match="`cov`"):
+            sample_multivariate_normal(
+                np.zeros((5, 3)), np.tile(np.eye(3), (2, 1, 1)), rstate=np.random
+            )
+
 
 # ---------------------------------------------------------------------------
 # 4. quantile convention consistency
@@ -280,6 +335,28 @@ class TestQuantileConsistency:
             quantile(x, [1.1])
         with pytest.raises(ValueError, match="Dimension mismatch"):
             quantile(x, 0.5, weights=np.ones(2))
+
+    def test_zero_weight_samples_do_not_move_quantiles(self):
+        from brutus.utils.sampling import quantile
+
+        q = [0.02, 0.5, 0.9, 0.98]
+        np.testing.assert_array_equal(
+            quantile([0.0, 1.0, 100.0], q, weights=[1, 1, 0]),
+            quantile([0.0, 1.0], q),
+        )
+        np.testing.assert_array_equal(
+            quantile([-100.0, 0.0, 1.0], q, weights=[0, 1, 1]),
+            quantile([0.0, 1.0], q),
+        )
+
+    @pytest.mark.parametrize(
+        "weights", [[0.0, 0.0], [1.0, -1.0], [1.0, np.nan], [1.0, np.inf]]
+    )
+    def test_invalid_weights_raise(self, weights):
+        from brutus.utils.sampling import quantile
+
+        with pytest.raises(ValueError, match="weights"):
+            quantile([0.0, 1.0], 0.5, weights=weights)
 
 
 # ---------------------------------------------------------------------------
@@ -385,6 +462,7 @@ class TestDrawSarBatched:
             self.rvs,
             self.covs,
             ndraws=ndraws,
+            avlim=(0.0, 6.0),
             rstate=np.random.RandomState(4321),
         )
         qgrid = np.array([0.05, 0.16, 0.5, 0.84, 0.95])
@@ -416,6 +494,7 @@ class TestDrawSarBatched:
             self.rvs,
             self.covs,
             ndraws=2000,
+            avlim=(0.0, 6.0),
             rstate=np.random.RandomState(5),
         )
         assert np.all(s >= 0.0)
@@ -454,6 +533,46 @@ class TestDrawSarBatched:
         np.testing.assert_array_equal(r[1], np.full(10, 3.1))
         assert np.all((a[0] >= 0.0) & (a[0] <= 6.0))
         assert len(np.unique(a[0])) > 1
+
+    def test_default_limits_sample_high_extinction(self):
+        """The old default avlim=(0, 6) padded an A(V) = 8 star with its mean."""
+        from brutus.utils.sampling import draw_sar
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            s, a, r = draw_sar(
+                [1.0],
+                [8.0],
+                [3.3],
+                np.diag([0.01, 0.04, 0.01])[None],
+                ndraws=500,
+                rstate=np.random.RandomState(2),
+            )
+        # The standard error of the mean is 0.2 / sqrt(500) = 0.009.
+        assert abs(a.mean() - 8.0) < 0.05
+        assert abs(a.std() - 0.2) < 0.02
+
+    def test_hopeless_distribution_stops_after_100_passes(self):
+        from brutus.utils.sampling import draw_sar
+
+        class CountingState(np.random.RandomState):
+            calls = 0
+
+            def normal(self, *args, **kwargs):
+                CountingState.calls += 1
+                return super().normal(*args, **kwargs)
+
+        with pytest.warns(RuntimeWarning, match="only collected 0/10"):
+            s, a, r = draw_sar(
+                [1.0],
+                [50.0],
+                [3.1],
+                np.diag([0.01, 0.01, 0.01])[None],
+                ndraws=10,
+                rstate=CountingState(0),
+            )
+        assert CountingState.calls == 100
+        np.testing.assert_array_equal(a, 50.0)
 
     def test_rstate_compatibility(self):
         """np.random module, RandomState, and Generator must all work."""
