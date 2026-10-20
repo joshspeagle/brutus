@@ -461,6 +461,19 @@ class TestCacheVersioning:
             assert attr not in cached_data
 
 
+def test_single_afe_grid_is_padded_by_a_view_and_cached_unpadded(tmp_path):
+    mistfile = _make_synthetic_mist_file(tmp_path / "tracks.h5")
+    tracks = EEPTracks(mistfile=mistfile, predictions=PREDICTIONS, verbose=False)
+    assert tracks.ygrid.shape[-2] == 1
+    assert tracks.interpolator.values.shape[-2] == 2
+    assert np.shares_memory(tracks.interpolator.values, tracks.ygrid)
+
+    with open(next(iter(tmp_path.glob("*.pkl"))), "rb") as f:
+        cached = pickle.load(f)
+    assert cached["ygrid"].shape == tracks.ygrid.shape
+    assert "interpolator" not in cached
+
+
 class TestBuildFromFile:
     """EEPTracks built from a small HDF5 file reproduces the stored tracks."""
 

@@ -209,6 +209,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unknown keyword now raises `TypeError`. `cornerplot` no longer sets a
   default `alpha` for the 2-D histograms, which `hist2d` never applied;
   the figures do not change.
+- **`EEPTracks` drops the unused attributes `null` and `binwidths`.** Its
+  `ygrid` attribute holds the unpadded grid (one [α/Fe] layer when the
+  tracks have one [α/Fe] value); `xgrid` and `grid_dims` still describe the
+  padded grid of the interpolator.
 - **`StarEvolTrack.get_seds`, `StarGrid.get_seds` and
   `StarGrid.get_predictions` no longer accept `**kwargs`.** They ignored
   unknown keywords, so a misspelled argument such as `Av=5.0` or `fe_h=-1`
@@ -487,6 +491,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `grid_mist_v9.h5` with 5 bands, a KD-tree `get_seds` call takes a median
   0.11 ms instead of 35 ms, and a multilinear call 0.14 ms instead of
   0.19 ms (5 interleaved runs, 4 CPUs).
+- `EEPTracks` pads a single [α/Fe] value with a broadcast view instead of a
+  copy, and its cache stores the unpadded grid. On `MIST_1.2_EEPtrk.h5`, the
+  cache falls from 255 MB to 128 MB, the peak memory of a build from 945 MB
+  to 750 MB and of a cached load from 459 MB to 337 MB. Predictions are
+  bitwise identical. The cache file is now `*_cachev3.pkl`; the first load
+  rebuilds it.
 - `EEPTracks` computes the age weights with one numpy path (a stable
   `np.lexsort` by track and EEP, then `np.gradient` per track) instead of
   a pandas groupby with a slower loop when pandas is absent. The weights

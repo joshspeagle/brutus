@@ -104,19 +104,17 @@ __all__ = ["EEPTracks", "StarEvolTrack", "StarGrid"]
 
 # EEPTracks pickle-cache format version. Bump whenever the set of cached
 # attributes (or their semantics) changes so that stale caches written by
-# older versions are ignored rather than mis-loaded. v2: caches only the
-# runtime attribute whitelist (construction intermediates X/libparams/output
-# are no longer stored or retained).
-_EEPTRACKS_CACHE_VERSION = 2
+# older versions are ignored rather than mis-loaded.
+_EEPTRACKS_CACHE_VERSION = 3
 
-# Runtime attributes required after construction; everything else is a
-# construction-only intermediate and is neither cached nor retained.
+# Cached attributes. The interpolator and its padded axes are rebuilt from
+# `gridpoints` and the unpadded `ygrid` on load: pickling them would store a
+# padded single-afe grid at twice the size.
 _EEPTRACKS_CACHE_ATTRS = (
     "labels",
     "predictions",
     "ndim",
     "npred",
-    "null",
     "mini_idx",
     "eep_idx",
     "feh_idx",
@@ -125,13 +123,9 @@ _EEPTRACKS_CACHE_ATTRS = (
     "logg_idx",
     "_ageidx",
     "mistfile",
-    "grid_dims",
     "gridpoints",
-    "binwidths",
     "mini_bound",
-    "xgrid",
     "ygrid",
-    "interpolator",
 )
 
 
@@ -299,7 +293,6 @@ class EEPTracks:
         self.labels = list(np.array(labels))
         self.predictions = list(np.array(predictions))
         self.ndim, self.npred = len(self.labels), len(self.predictions)
-        self.null = np.zeros(self.npred) + np.nan
 
         # Set label references for fast indexing
         self.mini_idx = np.where(np.array(self.labels) == "mini")[0][0]
@@ -346,6 +339,7 @@ class EEPTracks:
                     # Restore all cached attributes
                     for attr, value in cached_data.items():
                         setattr(self, attr, value)
+                    self._make_interpolator()
 
                     if verbose:
                         sys.stderr.write("Cached EEPTracks loaded successfully!\n")
@@ -517,16 +511,13 @@ class EEPTracks:
         -----
         This method populates the following attributes:
         - gridpoints: dict of unique values for each parameter
-        - binwidths: dict of grid spacings for each parameter
         - X: array of grid indices for each library point
         - mini_bound: minimum initial mass in the grid
         """
         # Get unique grid points in each dimension
         self.gridpoints = {}
-        self.binwidths = {}
         for p in self.labels:
             self.gridpoints[p] = np.unique(self.libparams[p])
-            self.binwidths[p] = np.diff(self.gridpoints[p])
 
         # Digitize library parameters to grid indices
         X = np.array(
@@ -592,53 +583,46 @@ class EEPTracks:
 
     def _build_interpolator(self):
         """
+        Fill the output grid `ygrid` from the library and build the interpolator.
+
+        `ygrid` has shape (Nmini, Neep, Nfeh, Nafe, Npred + agewt), with NaN
+        where the library has no model.
+        """
+        grid_dims = [len(self.gridpoints[p]) for p in self.labels]
+        self.ygrid = np.full(grid_dims + [self.output.shape[-1]], np.nan)
+        if len(self.X) > 0:
+            self.ygrid[tuple(self.X.T)] = self.output
+        self._make_interpolator()
+
+    def _make_interpolator(self):
+        """
         Build the RegularGridInterpolator for fast predictions.
 
-        Creates a scipy RegularGridInterpolator object that enables fast
-        multi-linear interpolation of stellar parameters across the
-        4-dimensional grid (mini, eep, feh, afe).
+        Creates a scipy RegularGridInterpolator over (mini, eep, feh, afe)
+        that predicts all stellar parameters at once, with linear
+        interpolation and NaN outside the grid. It sets `xgrid` and
+        `grid_dims`, the axes and shape of the interpolated grid.
 
         Notes
         -----
-        Handles the special case where alpha enhancement has only one value
-        by padding the grid dimension to enable interpolation. Uses linear
-        interpolation with NaN fill values for out-of-bounds queries.
-
-        The interpolator maps from (mini, eep, feh, afe) input coordinates
-        to all predicted stellar parameters simultaneously.
+        A single afe value is padded to two nodes, 1e-5 on either side,
+        that share its values. The padding is a broadcast view of `ygrid`,
+        not a copy.
         """
-        # Set up grid dimensions
-        self.grid_dims = np.append(
-            [len(self.gridpoints[p]) for p in self.labels], self.output.shape[-1]
-        )
-        self.xgrid = tuple([self.gridpoints[lbl] for lbl in self.labels])
-
-        # Initialize output grid
-        self.ygrid = np.zeros(self.grid_dims) + np.nan
-
-        # Fill grid using optimized indexing
-        if len(self.X) > 0:
-            indices = tuple(self.X.T)
-            self.ygrid[indices] = self.output
-
-        # Handle singular alpha enhancement dimension
-        if self.grid_dims[-2] == 1:
-            afe_val = self.xgrid[-1][0]
-            xgrid = list(self.xgrid)
+        xgrid = [self.gridpoints[lbl] for lbl in self.labels]
+        ygrid = self.ygrid
+        if len(xgrid[-1]) == 1:
+            afe_val = xgrid[-1][0]
             xgrid[-1] = np.array([afe_val - 1e-5, afe_val + 1e-5])
-            self.xgrid = tuple(xgrid)
+            shape = list(ygrid.shape)
+            shape[-2] = 2
+            ygrid = np.broadcast_to(ygrid, shape)
+        self.xgrid = tuple(xgrid)
+        self.grid_dims = np.array(ygrid.shape)
 
-            # Duplicate values in padded dimension
-            self.grid_dims[-2] += 1
-            ygrid = np.empty(self.grid_dims)
-            ygrid[:, :, :, 0, :] = self.ygrid[:, :, :, 0, :]
-            ygrid[:, :, :, 1, :] = self.ygrid[:, :, :, 0, :]
-            self.ygrid = ygrid
-
-        # Initialize interpolator
         self.interpolator = RegularGridInterpolator(
             self.xgrid,
-            self.ygrid,
+            ygrid,
             method="linear",
             bounds_error=False,
             fill_value=np.nan,
