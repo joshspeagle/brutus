@@ -164,6 +164,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `load_offsets` warns for a filter name that is neither in `brutus.FILTERS`
   nor in the file, and its verbose summary prints each offset as a signed percentage, such as
   `+12.34%`.
+- `Bayestar.get_query_size` is removed. Nothing called it, and it gave
+  twice the result size for an `[l, b]` array.
 - **`ltol_subthresh` is removed** from `loglike_grid`, `fit` and `_fit`.
   Each model's fit now checks its own convergence. `ltol` must be positive.
 - `logpost_grid` takes `return_precision=True` to return the precision
@@ -219,6 +221,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `lb2pix` returns -1 for a NaN or infinite longitude, as for an invalid
   latitude. It returned a valid pixel, so `Bayestar.query` could give such
   a star the extinction profile of another sightline.
+- `Bayestar.query` raises `ValueError` naming `coords` when an array input
+  does not have shape `(2,)` or `(Ncoords, 2)`. A `(2, 3)` array of
+  `[l values, b values]` was read row by row, and an `(N, 3)` array lost its
+  third column. `query_gal` with a scalar `ell` and `b` returns profiles of
+  shape `(n_dist,)`, as `query_equ` does; it returned `(1, n_dist)`.
 - `logp_extinction` raises `ValueError` for a 3D dust map called without
   `distance`, and `TypeError` when `dustmap.query` returns something other
   than a tuple, list or array of length 2 or 3. Both cases returned the

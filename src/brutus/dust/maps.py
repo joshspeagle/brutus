@@ -95,10 +95,9 @@ class DustMap:
         if isinstance(b, units.Quantity):
             b = b.to(units.deg).value
 
-        # Pass (l, b) arrays directly to query, avoiding SkyCoord overhead
-        ell = np.atleast_1d(np.asarray(ell, dtype=float))
-        b = np.atleast_1d(np.asarray(b, dtype=float))
-        coords = np.column_stack([ell, b])
+        # Pass (l, b) arrays directly to query, avoiding SkyCoord overhead.
+        # A scalar pair gives a (2,) array, so query returns (n_dist,).
+        coords = np.stack(np.broadcast_arrays(ell, b), axis=-1).astype(float)
 
         return self.query(coords, **kwargs)
 
@@ -222,7 +221,6 @@ class Bayestar(DustMap):
             self._distances = f["dists"][:]
             self._av_mean = f["av_mean"][:]
             self._av_std = f["av_std"][:]
-            self._n_distances = len(self._distances)
 
             # Load per-pixel reliability metadata (Green et al. 2019):
             # convergence flags and the distance-modulus range over which
@@ -350,23 +348,6 @@ class Bayestar(DustMap):
 
         return pix_idx
 
-    def get_query_size(self, coords):
-        """
-        Estimate the total size of a query result.
-
-        Parameters
-        ----------
-        coords : astropy.coordinates.SkyCoord
-            Coordinates that would be queried.
-
-        Returns
-        -------
-        int
-            Estimated total number of data points that would be returned.
-        """
-        n_coords = np.prod(coords.shape, dtype=int)
-        return n_coords * self._n_distances
-
     def query(self, coords, apply_reliability_mask=None):
         """
         Query extinction at the specified coordinates.
@@ -395,6 +376,13 @@ class Bayestar(DustMap):
             Standard deviation of A(V) extinction values (same shape as
             ``av_mean``).
 
+        Raises
+        ------
+        ValueError
+            If array `coords` does not have shape ``(2,)`` or
+            ``(Ncoords, 2)``. A ``(2, 2)`` array is read as two ``[l, b]``
+            pairs; pass separate longitudes and latitudes to `query_gal`.
+
         Notes
         -----
         For coordinates outside the map coverage, NaN values are returned.
@@ -418,8 +406,14 @@ class Bayestar(DustMap):
             b_deg = gal_coords.b.deg
         except AttributeError:
             # Handle as array of coordinates [l, b] in degrees
-            single_pair = np.ndim(coords) == 1
-            coords_arr = np.atleast_2d(coords)
+            coords_arr = np.asarray(coords, dtype=float)
+            if coords_arr.ndim not in (1, 2) or coords_arr.shape[-1] != 2:
+                raise ValueError(
+                    "coords must be a SkyCoord, an [l, b] pair or an "
+                    f"(Ncoords, 2) array of [l, b]; got shape {coords_arr.shape}."
+                ) from None
+            single_pair = coords_arr.ndim == 1
+            coords_arr = np.atleast_2d(coords_arr)
             l_deg = coords_arr[:, 0]
             b_deg = coords_arr[:, 1]
 
