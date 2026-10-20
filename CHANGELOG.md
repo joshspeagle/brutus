@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed — statistical correctness *(output-changing)*
 
+- **`loglike_grid` fits each model to its best (scale, A(V), R(V)).**
+  The flux-space R(V) step left out the factor A(V) in `df/dR(V)`, so the
+  refinement stopped at a point that gave the R(V) prior too much weight
+  when A(V) > 1. The magnitude-space fit alternated A(V) and R(V) steps and
+  stopped far from its minimum when the two are correlated, so the first
+  cut could drop the best model of a star that no model fits exactly. Both
+  fits now take Gauss-Newton steps in (A(V), R(V)) with the distance
+  profiled out, hold a parameter at its bound while they fit the other,
+  retry a step that does not improve the fit with Levenberg-Marquardt
+  damping, and stop each model when the predicted gain
+  in log-posterior is below `ltol`, whose default is now `1e-3` (was
+  `3e-2`). On 24 Orion stars, master's best-model `lnl` was up to 9.8 too
+  low.
 - **`fit(apply_dlabels=False)` evaluates the Galactic prior without model
   labels.** `logpost_grid` replaced `dlabels=None` with the grid labels, so
   the option had no effect. `logpost_grid` and `_fit` now default to the
@@ -118,6 +131,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`ltol_subthresh` is removed** from `loglike_grid`, `fit` and `_fit`.
+  Each model's fit now checks its own convergence. `ltol` must be positive.
 - `logpost_grid` takes `return_precision=True` to return the precision
   matrices of the selected models in place of their covariances. `fit`
   uses it to invert only the resampled models.
