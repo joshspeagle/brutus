@@ -69,6 +69,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `truncnorm_pdf` accept numpy scalars and 0-d arrays, so
   `logp_age_from_feh(5.0)` no longer raises `TypeError`. The value
   `LOG_ZERO` lives in `brutus.utils.math`.
+- **`chisquare_logpdf` returns `LOG_ZERO` (-1e300)** where the density is
+  zero, not `-inf`, like `truncnorm_logpdf`. At `x == loc` it now agrees
+  with `scipy.stats.chi2.logpdf` (`-ln 2` for `df = 2`, `+inf` for
+  `df < 2`), and float32 input no longer overflows to `-inf`.
 - **`logp_extinction` normalizes its truncated normal stably in the
   tails.** It took the mass on `avlim` from an `erf` difference with a
   `1e-300` floor, so a map mean far outside `avlim` (for example 9 mag

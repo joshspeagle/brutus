@@ -59,7 +59,7 @@ from math import lgamma, log
 
 import numpy as np
 from numba import jit, prange
-from scipy.special import log_ndtr
+from scipy.special import log_ndtr, xlogy
 
 # Proxy for log(0) in log-probabilities. It stays finite under arithmetic,
 # where -inf would give NaN (for example -inf - -inf).
@@ -461,29 +461,18 @@ def chisquare_logpdf(x, df, loc=0, scale=1):
     Returns
     -------
     ans : `~numpy.ndarray` of shape `(N)` or float
-        The natural log of the PDF values.
+        The natural log of the PDF values: `LOG_ZERO` (-1e300) where the
+        density is zero (``x < loc``, or ``x == loc`` with ``df > 2``).
     """
-    if isinstance(x, list):
-        x = np.asarray(x)
+    y = np.asarray((np.asarray(x, dtype=float) - loc) / scale)
+    outside = y < 0
+    y = np.where(outside, 1.0, y)  # placeholder; these entries get LOG_ZERO
 
-    y = (x - loc) / scale
-    is_scalar = isinstance(y, (float, int))
+    ans = -(df / 2.0) * log(2) - lgamma(df / 2.0) - log(scale)
+    ans = ans + xlogy(df / 2.0 - 1.0, y) - y / 2.0
+    ans = np.where(outside | np.isneginf(ans), LOG_ZERO, ans)
 
-    if is_scalar:
-        if y <= 0:
-            return -np.inf
-    else:
-        keys = y <= 0
-        y = np.where(keys, 0.1, y)  # temporary value, will be set to -inf below
-
-    # Compute log-pdf
-    ans = -(df / 2.0) * log(2) - lgamma(df / 2.0)
-    ans = ans + (df / 2.0 - 1.0) * np.log(y) - y / 2.0 - log(scale)
-
-    if not is_scalar:
-        ans = np.where(keys, -np.inf, ans)
-
-    return ans
+    return ans[()]
 
 
 def _truncnorm_lognorm(a, b):

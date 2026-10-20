@@ -106,14 +106,16 @@ class TestStatisticalDistributions:
 
     def test_chisquare_logpdf_edge_cases(self):
         """Test chi-square log-PDF edge cases."""
-        from brutus.utils.math import chisquare_logpdf
+        from brutus.utils.math import LOG_ZERO, chisquare_logpdf
 
-        # Zero and negative values should give -inf
-        x_neg = np.array([-1.0, 0.0])
-        df = 2
-
-        result = chisquare_logpdf(x_neg, df)
-        assert np.all(result == -np.inf)
+        # Zero density gives LOG_ZERO, not -inf; x == loc follows scipy.
+        x = np.array([-1.0, 0.0, 2.0])
+        for df in (1, 2, 3):
+            ref = np.maximum(scipy.stats.chi2.logpdf(x, df), LOG_ZERO)
+            np.testing.assert_allclose(chisquare_logpdf(x, df), ref, rtol=1e-12)
+        assert chisquare_logpdf(2.0, 2, loc=3.0) == LOG_ZERO
+        x32 = np.array([-1.0, 1.0], dtype=np.float32)
+        assert chisquare_logpdf(x32, 3)[0] == LOG_ZERO
 
     def test_truncnorm_pdf_basic(self):
         """Test truncated normal PDF computation."""
