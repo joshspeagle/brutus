@@ -587,23 +587,11 @@ class StellarPop:
             filters = np.array(FILTERS)
         self.filters = filters
 
-        # Set default neural network file
-        if nnfile is None:
-            from ..data.loader import find_nn_file
-
-            nnfile = find_nn_file()
-
-        # Initialize neural network predictor
-        try:
-            self.predictor = FastNNPredictor(
-                filters=filters, nnfile=nnfile, verbose=verbose
-            )
-        except Exception as e:
-            if verbose:
-                sys.stderr.write(
-                    f"Warning: Neural network initialization failed: {e}\n"
-                )
-            self.predictor = None
+        # Initialize neural network predictor. FastNNPredictor resolves the
+        # default model path when nnfile is None.
+        self.predictor = FastNNPredictor(
+            filters=filters, nnfile=nnfile, verbose=verbose
+        )
 
     def _evaluate_seds(self, params, valid_mask, av, rv, dist, label=""):
         """
@@ -936,9 +924,6 @@ apply_corr, corr_params, return_dict
         params : dict
             ``params_arr`` keyed by prediction name (column views).
         """
-        if self.predictor is None:
-            raise RuntimeError("Neural network predictor not available")
-
         # Generate stellar parameters using isochrone
         try:
             params_arr = self.isochrone.get_predictions(

@@ -363,3 +363,16 @@ def test_sed_batch_matches_loop_over_sed(nn_file):
     )
     assert np.isfinite(batch[:4]).all() and np.isnan(batch[4:]).all()
     npt.assert_allclose(batch, loop, rtol=1e-12, equal_nan=True)
+
+
+def test_missing_filter_raises_value_error(tmp_path):
+    """Report missing filters by name instead of exposing an HDF5 KeyError."""
+    path = str(tmp_path / "missing-filter.h5")
+    bounds = (
+        [2500.0, -1.0, -4.0, -0.2, 0.0, 2.0],
+        [5.0e4, 5.5, 0.5, 0.6, 6.0, 5.0],
+    )
+    _write_nn_file(path, {"SDSS_g": bounds})
+
+    with pytest.raises(ValueError, match=r"filters: BOGUS_V"):
+        FastNNPredictor(filters=["BOGUS_V"], nnfile=path, verbose=False)

@@ -168,6 +168,12 @@ class TestStellarPopInitialization:
             assert hasattr(pop, "filters")
             assert hasattr(pop, "predictor")
 
+    def test_neural_network_initialization_errors_propagate(self, mock_isochrone):
+        with mock_nn_predictor("brutus.core.populations") as mock_nn:
+            mock_nn.side_effect = OSError("model file is unavailable")
+            with pytest.raises(OSError, match="model file is unavailable"):
+                StellarPop(isochrone=mock_isochrone, verbose=False)
+
     def test_stellarpop_custom_filters(self, mock_isochrone):
         """Test StellarPop initialization with custom filters."""
         custom_filters = ["U", "B", "V", "R", "I"]

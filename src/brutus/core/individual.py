@@ -923,23 +923,11 @@ class StarEvolTrack:
             filters = np.array(FILTERS)
         self.filters = filters
 
-        # Set default neural network file
-        if nnfile is None:
-            from ..data.loader import find_nn_file
-
-            nnfile = find_nn_file()
-
-        # Initialize neural network predictor
-        try:
-            self.predictor = FastNNPredictor(
-                filters=filters, nnfile=nnfile, verbose=verbose
-            )
-        except Exception as e:
-            if verbose:
-                sys.stderr.write(
-                    f"Warning: Neural network initialization failed: {e}\n"
-                )
-            self.predictor = None
+        # Initialize neural network predictor. FastNNPredictor resolves the
+        # default model path when nnfile is None.
+        self.predictor = FastNNPredictor(
+            filters=filters, nnfile=nnfile, verbose=verbose
+        )
 
     def get_seds(
         self,
@@ -1078,9 +1066,6 @@ class StarEvolTrack:
         ...     mini=1.2, eep=400, feh=-0.2, afe=0.1, smf=0.7
         ... )
         """
-        if self.predictor is None:
-            raise RuntimeError("Neural network predictor not available")
-
         # Grab input labels
         labels = {"mini": mini, "eep": eep, "feh": feh, "afe": afe}
         labels = np.array([labels[lbl] for lbl in self.tracks.labels])

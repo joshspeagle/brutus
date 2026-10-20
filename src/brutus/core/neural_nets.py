@@ -165,6 +165,13 @@ class FastNN:
         - /{filter}/xmin, xmax : input parameter scaling bounds
         """
         with h5py.File(nnfile, "r") as f:
+            missing_filters = [fltr for fltr in filters if fltr not in f]
+            if missing_filters:
+                missing = ", ".join(map(str, missing_filters))
+                raise ValueError(
+                    f"Neural network file {nnfile!s} is missing filters: {missing}"
+                )
+
             # Store weights and bias for each layer and filter
             self.w1 = np.array([f[fltr]["w1"] for fltr in filters])
             self.b1 = np.array([f[fltr]["b1"] for fltr in filters])

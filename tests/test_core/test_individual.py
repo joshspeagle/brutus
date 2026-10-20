@@ -54,6 +54,12 @@ class TestStarEvolTrackInitialization:
             assert hasattr(star_track, "filters")
             assert hasattr(star_track, "predictor")
 
+    def test_neural_network_initialization_errors_propagate(self, mock_eep_tracks):
+        with mock_nn_predictor("brutus.core.individual") as mock_nn:
+            mock_nn.side_effect = OSError("model file is unavailable")
+            with pytest.raises(OSError, match="model file is unavailable"):
+                StarEvolTrack(tracks=mock_eep_tracks, verbose=False)
+
     def test_star_evol_track_custom_filters(self, mock_eep_tracks):
         """Test StarEvolTrack initialization with custom filters."""
         custom_filters = ["U", "B", "V", "R", "I"]

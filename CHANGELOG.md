@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — neural-network initialization *(output-changing)*
+
+- Missing neural-network filters now raise a `ValueError` during model construction, and model-loading failures surface when `StarEvolTrack` or `StellarPop` is initialized instead of appearing later as an unrelated runtime error.
+
 ### Fixed — statistical correctness *(output-changing)*
 
 - **Dust-map A(V) prior scatter restored**: `logp_extinction` again adds a
