@@ -105,8 +105,8 @@ Each sample is still marginally N(mean,cov), so the estimator is unbiased, but:
   models for cohort objects 9, 29, 39 and 52 (seeds 0 and 1, Nmc=50). The
   median seed-to-seed difference in `lnp` fell from 1.02-1.27 unaligned to
   1.3e-5-5.5e-5 aligned. The antithetic-vs-plain ratio at the cap has not been
-  re-measured. Both tools now pass `subsample_mode="topk"`, so every seed keeps
-  the same models.
+  re-measured. Both tools now fix one capped selection of models per object
+  (`harness.fixed_models_lnprior`), so every seed keeps the same models.
 
   *Adversarial review (resolved).* A reviewer initially objected that antithetic
   increases variance for even-symmetric integrands. Reconciliation: the brutus

@@ -369,7 +369,7 @@ class TestBruteForcePosterior:
             rstate=np.random.RandomState(379),
         )
 
-        sel, cov, lnp, dist_mc, av_mc, rv_mc, lnp_mc, mc_ess = results
+        sel, cov, lnp, dist_mc, av_mc, rv_mc, lnp_mc, mc_ess, _ = results
 
         assert len(sel) > 0  # Some models selected
         assert cov.shape == (len(sel), 3, 3)
@@ -470,7 +470,7 @@ class TestBruteForcePosterior:
             rstate=np.random.RandomState(465),
         )
 
-        sel, cov, lnp, dist_mc, av_mc, rv_mc, lnp_mc, mc_ess = results
+        sel, cov, lnp, dist_mc, av_mc, rv_mc, lnp_mc, mc_ess, _ = results
 
         # Check distance samples are positive
         assert np.all(dist_mc > 0)
@@ -696,7 +696,7 @@ class TestBruteForceRealGrid:
         )
 
         # Verify basic posterior computation works
-        sel, cov_sar, lnp, dist_mc, av_mc, rv_mc, lnp_mc, mc_ess = results_basic
+        sel, cov_sar, lnp, dist_mc, av_mc, rv_mc, lnp_mc, mc_ess, _ = results_basic
 
         # Basic validation - ensure we get reasonable outputs
         assert len(sel) > 0, "No models selected by posterior"
@@ -730,7 +730,7 @@ class TestBruteForceRealGrid:
         )
 
         # Verify galactic prior integration works
-        sel_gal, _, lnp_gal, _, _, _, _, _ = results_galactic
+        sel_gal, _, lnp_gal, *_ = results_galactic
         assert len(sel_gal) > 0, "Galactic prior eliminated all models"
 
         print(f"✓ With galactic prior: {len(sel_gal)} models selected")
@@ -747,7 +747,7 @@ class TestBruteForceRealGrid:
             rstate=np.random.RandomState(732),
         )
 
-        sel_cdf, _, _, _, _, _, _, _ = results_cdf
+        sel_cdf = results_cdf[0]
         assert len(sel_cdf) > 0, "CDF threshold eliminated all models"
 
         print(f"✓ CDF selection: {len(sel_cdf)} models selected")
@@ -1031,7 +1031,7 @@ class TestBruteForceCoverageCompletion:
             rstate=np.random.RandomState(1015),
         )
 
-        sel, cov, lnp, dist_mc, av_mc, rv_mc, lnp_mc, mc_ess = results
+        sel, cov, lnp, dist_mc, av_mc, rv_mc, lnp_mc, mc_ess, _ = results
         assert len(sel) > 0
 
 
@@ -1585,6 +1585,47 @@ def _make_loglike_results(scales, cov_list, ndim=5):
     return (lnlike, ndim, chi2, np.asarray(scales, dtype=float), avs, rvs, icovs)
 
 
+def test_capped_fit_keeps_the_evidence_of_the_uncapped_fit(fitter, observation):
+    """Regression (#89): _fit weights each model kept by the max_models cap
+    by 1 / pi, so the mean capped evidence matches the uncapped one."""
+    flux, flux_err, mask = observation
+    kwargs = dict(Nmc_prior=5, Ndraws=20, wt_thresh=1e-12, return_distreds=False)
+    nseed = 100
+    capped = [
+        fitter._fit(
+            flux,
+            flux_err,
+            mask,
+            max_models=6,
+            rstate=np.random.RandomState(t),
+            **kwargs,
+        )[7]
+        for t in range(nseed)
+    ]
+    full = [
+        fitter._fit(
+            flux,
+            flux_err,
+            mask,
+            max_models=None,
+            rstate=np.random.RandomState(t),
+            **kwargs,
+        )[7]
+        for t in range(20)
+    ]
+    ratio = np.exp(np.array(capped) - np.mean(full))
+    full_ratio = np.exp(np.array(full) - np.mean(full))
+    se = np.hypot(ratio.std() / np.sqrt(nseed), full_ratio.std() / np.sqrt(20))
+    assert abs(ratio.mean() - full_ratio.mean()) < 4 * se
+
+
+@pytest.mark.parametrize("max_models", [0, -1, 2.5])
+def test_invalid_max_models_raises(fitter, observation, max_models):
+    flux, flux_err, mask = observation
+    with pytest.raises(ValueError, match="max_models"):
+        fitter._fit(flux, flux_err, mask, max_models=max_models, Nmc_prior=5)
+
+
 class TestSetupLnpriorNotMutated:
     def test_user_lnprior_array_unchanged(self, fitter):
         data = 10 ** (-0.4 * np.array([15, 14.8, 14.7, 14.6, 14.55]))
@@ -2013,7 +2054,7 @@ class TestTruncatedDraws:
             like[3][1] = 1e-14  # 1e7 kpc, beyond the 1e6 kpc limit
         else:
             like[4 if param == "av" else 5][1] = -5.0 if param == "av" else 20.0
-        sel, _, lnp, d_mc, a_mc, r_mc, _, mc_ess = fitter.logpost_grid(
+        sel, _, lnp, d_mc, a_mc, r_mc, _, mc_ess, _ = fitter.logpost_grid(
             tuple(like),
             wt_thresh=None,
             cdf_thresh=None,
@@ -2241,7 +2282,7 @@ def test_galactic_prior_gets_each_draw_paired_with_its_model_labels(
         [(name, "f8") for name in fitter.models_labels.dtype.names]
     )
     kwargs = dict(coord=(120.0, 45.0), Nmc_prior=100, dlabels=dlabels)
-    sel, _, _, dist_mc, _, _, lnp_mc, _ = fitter.logpost_grid(
+    sel, _, _, dist_mc, _, _, lnp_mc, *_ = fitter.logpost_grid(
         like, lngalprior=lngalprior, rstate=np.random.RandomState(5), **kwargs
     )
     Nsel, Nmc = dist_mc.shape

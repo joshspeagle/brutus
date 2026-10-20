@@ -66,6 +66,7 @@ def measure(M=40, Nmc=50, nobj=6):
                 parallax=s["parallax"][i],
                 parallax_err=s["parallax_err"][i],
             )
+            lnprior = H.fixed_models_lnprior(bf, lr, s, i)
             lnps = []
             for m in range(M):
                 r = bf.logpost_grid(
@@ -75,7 +76,8 @@ def measure(M=40, Nmc=50, nobj=6):
                     coord=tuple(s["coords"][i]),
                     Nmc_prior=Nmc,
                     wt_thresh=1e-3,
-                    subsample_mode="topk",  # same models for every seed
+                    lnprior=lnprior,  # same models for every seed
+                    max_models=None,
                     rstate=np.random.RandomState(m),
                 )
                 lnps.append(r[2])  # lnp per selected model

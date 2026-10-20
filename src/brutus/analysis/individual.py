@@ -153,6 +153,14 @@ def _check_threshold(name, value):
         raise ValueError(f"{name} must be a number in (0, 1), got {value!r}")
 
 
+def _check_max_models(value):
+    """Raise ValueError unless `value` is None or a positive integer."""
+    if value is not None and not (isinstance(value, numbers.Integral) and value > 0):
+        raise ValueError(
+            f"max_models must be None or a positive integer, got {value!r}"
+        )
+
+
 def _check_positive(name, value):
     """Raise ValueError naming `name` unless `value` is a positive finite
     real number."""
@@ -543,6 +551,25 @@ def _get_sed_mle(
         icov_sar[i][2][1] = ar_mix[i]  # Av-Rv cross-term
 
     return models, rvecs, drvecs, scale, icov_sar, resid
+
+
+def _inclusion_probabilities(weights, size):
+    """Return inclusion probabilities ``min(1, c * weights)`` that sum to `size`.
+
+    `weights` must have more than `size` positive entries. The models with the
+    largest weights get probability 1 when ``c * weight`` would exceed 1.
+    """
+    total = weights.sum()
+    if size * weights.max() < total:
+        # No model is certain, so no sort is needed.
+        return weights * (size / total)
+    ws = np.sort(weights)[::-1]
+    tail = np.cumsum(ws[::-1])[::-1]  # tail[k] = sum(ws[k:])
+    k = np.arange(size)
+    # The k largest weights are certain when the next one, scaled by
+    # c = (size - k) / tail[k], stays below 1.
+    ncert = np.argmax((size - k) * ws[:size] < tail[:size])
+    return np.minimum(weights * (size - ncert) / tail[ncert], 1.0)
 
 
 class BruteForce:
@@ -1214,7 +1241,6 @@ class BruteForce:
         cdf_thresh=2e-3,
         max_models=50000,
         precision_shrinkage=0.0,
-        subsample_mode="representative",
         lngalprior=None,
         lndustprior=None,
         dustfile=None,
@@ -1275,11 +1301,17 @@ class BruteForce:
         lnp_mc : `~numpy.ndarray` of shape `(Nsel, Nmc)`
             Log-posterior weight of each draw: the model's log-likelihood and
             ``lnprior``, the log-distance Jacobian, and the Galactic, dust and
-            parallax terms at the draw.
+            parallax terms at the draw. To pool draws across models, subtract
+            ``ln_incl[:, None]``.
         mc_ess : `~numpy.ndarray` of shape `(Nsel,)`
             ``1 / sum(w**2)`` of the normalized weights of each model's draws.
             The draws are antithetic pairs, so this measures how concentrated
             the weights are, not a count of independent draws.
+        ln_incl : `~numpy.ndarray` of shape `(Nsel,)`
+            Log-probability that each selected model was kept by the
+            ``max_models`` subsampling; 0 when there was none. Use
+            ``lnp - ln_incl`` as the log-weights to sum (evidence) or to
+            resample models.
         """
         # The dust-map prior is a function of sky position; without one it
         # would crash deep inside the map query with an opaque IndexError.
@@ -1290,6 +1322,7 @@ class BruteForce:
                 "to fit())."
             )
 
+        _check_max_models(max_models)
         if dlabels is _GRID_LABELS:
             dlabels = self.models_labels
 
@@ -1394,27 +1427,20 @@ class BruteForce:
 
         Nsel = len(sel)
 
-        # Subsample if Nsel exceeds max_models
+        # Above max_models, keep models by systematic sampling with
+        # probability proportional to their selection weight
+        # (Horvitz-Thompson). Models of zero weight are dropped first.
+        ln_incl = np.zeros(Nsel)
         if max_models is not None and Nsel > max_models:
-            if subsample_mode == "representative":
-                # Gumbel-max trick: add Gumbel noise to log-weights,
-                # take top-k. This gives exact weighted sampling without
-                # replacement in O(N) via argpartition.
-                gumbel_noise = -np.log(
-                    -np.log(rstate.uniform(size=Nsel) + 1e-300) + 1e-300
-                )
-                perturbed = lnprob_sel[sel] + gumbel_noise
-                top_k = np.argpartition(perturbed, -max_models)[-max_models:]
-                sel = sel[top_k]
-            elif subsample_mode == "topk":
-                # Deterministic: keep highest-weight models
-                top_k = np.argpartition(lnprob_sel[sel], -max_models)[-max_models:]
-                sel = sel[top_k]
-            else:
-                raise ValueError(
-                    f"Unknown subsample_mode '{subsample_mode}'. "
-                    f"Must be 'representative' or 'topk'."
-                )
+            lnprob_selected = lnprob_sel[sel]
+            w = np.exp(lnprob_selected - lnprob_selected.max())
+            sel, w = sel[w > 0], w[w > 0]
+            ln_incl = np.zeros(len(sel))
+            if len(sel) > max_models:
+                pi = _inclusion_probabilities(w, max_models)
+                edges = np.concatenate(([0.0], np.cumsum(pi))) - rstate.uniform()
+                kept = np.diff(np.floor(edges)) > 0
+                sel, ln_incl = sel[kept], np.log(pi[kept])
             Nsel = len(sel)
 
         # Select precision matrices for the chosen models.
@@ -1642,7 +1668,17 @@ class BruteForce:
             matrices = icovs_selected
         else:
             matrices = _inverse3(icovs_selected, regularize=True)
-        return sel, matrices, lnp, dist_mc.T, a_mc.T, r_mc.T, lnp_mc.T, mc_ess
+        return (
+            sel,
+            matrices,
+            lnp,
+            dist_mc.T,
+            a_mc.T,
+            r_mc.T,
+            lnp_mc.T,
+            mc_ess,
+            ln_incl,
+        )
 
     def fit(
         self,
@@ -1681,7 +1717,6 @@ class BruteForce:
         mem_lim=8000.0,
         max_models=50000,
         precision_shrinkage=0.0,
-        subsample_mode="representative",
         verbose=True,
         R_solar=8.2,
         Z_solar=0.025,
@@ -1825,21 +1860,18 @@ class BruteForce:
             Whether to print progress to stderr. Default is True.
 
         max_models : int, optional
-            When the number of models selected for an object exceeds this, the
-            models are subsampled (see ``subsample_mode``) to bound memory and
-            runtime. Default is 50000.
+            When more models than this are selected for an object, about
+            `max_models` of them are kept at random, each with a probability
+            proportional to its weight (at most 1), to bound memory and
+            runtime. The evidence and the posterior draws divide each kept
+            model's weight by that probability, so they stay unbiased. None
+            keeps every selected model. Default is 50000.
 
         precision_shrinkage : float, optional
             Fractional shrinkage applied to the off-diagonal terms of the 3x3
             (scale, A(V), R(V)) precision matrix before Monte Carlo sampling,
             which stabilizes strongly-correlated fits. 0 disables it; ~0.03 is a
             reasonable nonzero value. Default is 0.0.
-
-        subsample_mode : str, optional
-            Strategy used to thin models when the selection exceeds
-            ``max_models``: ``'representative'`` (Gumbel-max sampling weighted by
-            likelihood) or ``'topk'`` (the highest-likelihood models). Default
-            is ``'representative'``.
 
         R_solar : float, optional
             Solar galactocentric radius in kpc, used by the Galactic structure
@@ -1861,8 +1893,9 @@ class BruteForce:
             ``data_labels``, ``parallax``, ``parallax_err``, ``data_coords``
             or ``lnprior`` disagree, if
             only one of ``parallax`` and ``parallax_err`` is given, if
-            ``logl_initthresh`` is not in (0, 1), or if ``ltol`` is not
-            positive. These checks run before the output file is created.
+            ``logl_initthresh`` is not in (0, 1), if ``ltol`` is not positive,
+            or if ``max_models`` is neither None nor a positive integer. These
+            checks run before the output file is created.
 
         Notes
         -----
@@ -1942,6 +1975,7 @@ class BruteForce:
             )
         _check_threshold("logl_initthresh", logl_initthresh)
         _check_positive("ltol", ltol)
+        _check_max_models(max_models)
 
         # Load dust map from file path (str or os.PathLike) if needed
         # (once for all objects)
@@ -2064,7 +2098,6 @@ class BruteForce:
                         mem_lim=mem_lim,
                         precision_shrinkage=precision_shrinkage,
                         max_models=max_models,
-                        subsample_mode=subsample_mode,
                         rstate=rstate,
                         return_distreds=save_dar_draws,
                         R_solar=R_solar,
@@ -2148,7 +2181,6 @@ class BruteForce:
         mem_lim=8000.0,
         max_models=50000,
         precision_shrinkage=0.0,
-        subsample_mode="representative",
         rstate=None,
         return_distreds=True,
         R_solar=8.2,
@@ -2283,14 +2315,13 @@ class BruteForce:
             mem_lim=mem_lim,
             precision_shrinkage=precision_shrinkage,
             max_models=max_models,
-            subsample_mode=subsample_mode,
             rstate=rstate,
             R_solar=R_solar,
             Z_solar=Z_solar,
             return_precision=True,
         )
 
-        sel, icov_sar_sel, lnp, dist_mc, a_mc, r_mc, lnp_mc, mc_ess_sel = (
+        sel, icov_sar_sel, lnp, dist_mc, a_mc, r_mc, lnp_mc, mc_ess_sel, ln_incl = (
             logpost_results
         )
         Nsel = len(sel)
@@ -2307,12 +2338,14 @@ class BruteForce:
 
         # Compute goodness-of-fit metrics (over ALL models, not just posterior-selected)
         chi2min = np.min(chi2_with_par)
-        levid = logsumexp(lnp)
+        # Models kept by the max_models subsampling count 1 / pi times.
+        lnwt = lnp - ln_incl
+        levid = logsumexp(lnwt)
 
         # Resample from posterior
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            wt = np.exp(lnp - levid)
+            wt = np.exp(lnwt - levid)
             wt_sum = wt.sum()
             if wt_sum > 0:
                 wt /= wt_sum
