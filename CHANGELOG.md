@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed — statistical correctness *(output-changing)*
 
+- **`fit(apply_dlabels=False)` evaluates the Galactic prior without model
+  labels.** `logpost_grid` replaced `dlabels=None` with the grid labels, so
+  the option had no effect. `logpost_grid` and `_fit` now default to the
+  grid labels, and `dlabels=None` passes `labels=None` to the prior.
 - **Dust-map A(V) prior scatter restored**: `logp_extinction` again adds a
   0.2 mag systematic scatter in quadrature to the map spread (new `scatter`
   argument, default `0.2`, as in brutus <= 0.8.3; the 1.x refactor had
@@ -114,6 +118,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `logpost_grid` takes `return_precision=True` to return the precision
+  matrices of the selected models in place of their covariances. `fit`
+  uses it to invert only the resampled models.
 - The default fit limits are the constants `brutus.utils.math.AVLIM`,
   (0, 20) mag, and `RVLIM`, (1, 8). Every function that takes `avlim` or
   `rvlim` uses them as its default.

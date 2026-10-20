@@ -1,13 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-"""
-Tests for brutus plotting utilities.
+"""Tests of hist2d in brutus.plotting.utils."""
 
-This test suite provides comprehensive coverage for the hist2d function
-and other plotting utility functions.
-"""
-
+import logging
 import warnings
 
 import matplotlib
@@ -16,393 +12,161 @@ import pytest
 
 matplotlib.use("Agg")  # Use non-interactive backend for testing
 import matplotlib.pyplot as plt
+from matplotlib.contour import ContourSet
 
 from brutus.plotting.utils import hist2d
-
-
-class TestHist2d:
-    """Comprehensive tests for hist2d function."""
-
-    @pytest.fixture
-    def sample_data(self):
-        """Generate sample 2D data for testing."""
-        rng = np.random.RandomState(42)
-        n_samples = 200
-
-        # Create correlated 2D data
-        mean = [0, 0]
-        cov = [[1, 0.7], [0.7, 1]]  # Some correlation
-        data = rng.multivariate_normal(mean, cov, n_samples)
-        x, y = data.T
-
-        return x, y
-
-    @pytest.fixture
-    def weighted_sample_data(self):
-        """Generate sample 2D data with weights."""
-        rng = np.random.RandomState(42)
-        n_samples = 100
-
-        x = rng.normal(0, 1, n_samples)
-        y = rng.normal(0, 1, n_samples)
-        weights = rng.exponential(1, n_samples)  # Exponential weights
-
-        return x, y, weights
-
-    def test_hist2d_basic(self, sample_data):
-        """Test basic hist2d functionality."""
-        x, y = sample_data
-
-        plt.figure(figsize=(6, 6))
-        hist2d(x, y)
-
-        # Should complete without errors
-        plt.close()
-
-    def test_hist2d_with_weights(self, weighted_sample_data):
-        """Test hist2d with sample weights."""
-        x, y, weights = weighted_sample_data
-
-        plt.figure(figsize=(6, 6))
-        hist2d(x, y, weights=weights)
-
-        plt.close()
-
-    def test_hist2d_custom_span(self, sample_data):
-        """Test custom span specification."""
-        x, y = sample_data
-
-        plt.figure(figsize=(6, 6))
-
-        # Test with explicit bounds
-        hist2d(x, y, span=[(-2, 2), (-2, 2)])
-        plt.close()
-
-        # Test with fraction specification
-        plt.figure(figsize=(6, 6))
-        hist2d(x, y, span=[0.95, 0.95])
-        plt.close()
-
-    def test_hist2d_levels(self, sample_data):
-        """Test custom contour levels."""
-        x, y = sample_data
-
-        plt.figure(figsize=(6, 6))
-        custom_levels = [0.68, 0.95]  # 1 and 2 sigma equivalent
-        hist2d(x, y, levels=custom_levels)
-
-        plt.close()
-
-    def test_hist2d_color_options(self, sample_data):
-        """Test different color specifications."""
-        x, y = sample_data
-
-        # Test custom color
-        plt.figure(figsize=(6, 6))
-        hist2d(x, y, color="red")
-        plt.close()
-
-        # Test different color
-        plt.figure(figsize=(6, 6))
-        hist2d(x, y, color="blue")
-        plt.close()
-
-    def test_hist2d_plot_options(self, sample_data):
-        """Test different plotting mode combinations."""
-        x, y = sample_data
-
-        # Plot datapoints only
-        plt.figure(figsize=(6, 6))
-        hist2d(x, y, plot_datapoints=True, plot_density=False, plot_contours=False)
-        plt.close()
-
-        # Plot density only
-        plt.figure(figsize=(6, 6))
-        hist2d(x, y, plot_datapoints=False, plot_density=True, plot_contours=False)
-        plt.close()
-
-        # Plot contours only
-        plt.figure(figsize=(6, 6))
-        hist2d(x, y, plot_datapoints=False, plot_density=False, plot_contours=True)
-        plt.close()
-
-    def test_hist2d_contour_options(self, sample_data):
-        """Test contour-specific options."""
-        x, y = sample_data
-
-        # Test no fill contours
-        plt.figure(figsize=(6, 6))
-        hist2d(x, y, no_fill_contours=True)
-        plt.close()
-
-        # Test unfilled contours
-        plt.figure(figsize=(6, 6))
-        hist2d(x, y, fill_contours=False)
-        plt.close()
-
-        # Test filled contours
-        plt.figure(figsize=(6, 6))
-        hist2d(x, y, fill_contours=True)
-        plt.close()
-
-    def test_hist2d_kwargs(self, sample_data):
-        """Test additional keyword arguments."""
-        x, y = sample_data
-
-        plt.figure(figsize=(6, 6))
-
-        contour_kwargs = {"linewidths": 2, "alpha": 0.8}
-        contourf_kwargs = {"alpha": 0.6}
-        data_kwargs = {"marker": "s", "alpha": 0.3}
-
-        hist2d(
-            x,
-            y,
-            contour_kwargs=contour_kwargs,
-            contourf_kwargs=contourf_kwargs,
-            data_kwargs=data_kwargs,
-            plot_datapoints=True,
-        )
-
-        plt.close()
-
-    def test_hist2d_smoothing(self, sample_data):
-        """Test different smoothing options."""
-        x, y = sample_data
-
-        # Test different smoothing values
-        for smooth in [0.01, 0.05, [0.02, 0.03]]:
-            plt.figure(figsize=(6, 6))
-            hist2d(x, y, smooth=smooth)
-            plt.close()
-
-        # Test integer smoothing (bin-based)
-        for smooth in [10, 20, [15, 25]]:
-            plt.figure(figsize=(6, 6))
-            hist2d(x, y, smooth=smooth)
-            plt.close()
-
-    def test_hist2d_edge_cases(self):
-        """Test edge cases and error conditions."""
-        # Very small dataset
-        x_small = np.array([0, 1])
-        y_small = np.array([0, 1])
-
-        plt.figure(figsize=(6, 6))
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")  # May produce warnings for small dataset
-            hist2d(x_small, y_small)
-        plt.close()
-
-        # Single point (should handle gracefully)
-        x_single = np.array([0])
-        y_single = np.array([0])
-
-        plt.figure(figsize=(6, 6))
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")  # May produce warnings for single point
-            hist2d(x_single, y_single)
-        plt.close()
-
-    def test_hist2d_no_dynamic_range_warning(self):
-        """Test warning when data has no dynamic range."""
-        # All points the same
-        x_constant = np.ones(10)
-        y_constant = np.ones(10)
-
-        plt.figure(figsize=(6, 6))
-
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            hist2d(x_constant, y_constant)
-            # Should produce warnings about identical axis limits
-            assert len(w) >= 1
-            # Check that at least one warning is about axis limits
-            warning_messages = [str(warning.message) for warning in w]
-            assert any("identical" in msg and "lims" in msg for msg in warning_messages)
-
-        plt.close()
-
-    def test_hist2d_insufficient_points_warning(self):
-        """Test warning when too few points for contours."""
-        # Very sparse data that may trigger contour warnings
-        x_sparse = np.array([0, 1, 2])
-        y_sparse = np.array([0, 1, 2])
-
-        plt.figure(figsize=(6, 6))
-
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            hist2d(x_sparse, y_sparse)
-            # May or may not produce warnings depending on the data
-
-        plt.close()
-
-    def test_hist2d_span_dimension_mismatch(self, sample_data):
-        """Test error when span dimensions don't match."""
-        x, y = sample_data
-
-        plt.figure(figsize=(6, 6))
-
-        with pytest.raises(ValueError, match="Dimension mismatch"):
-            hist2d(x, y, span=[0.95])  # Only 1 element, should be 2
-
-        plt.close()
-
-    def test_hist2d_with_ax_parameter(self, sample_data):
-        """Test providing custom axes."""
-        x, y = sample_data
-
-        fig, ax = plt.subplots(figsize=(6, 6))
-        hist2d(x, y, ax=ax)
-
-        plt.close()
-
-    def test_hist2d_quantile_span_processing(self, sample_data):
-        """Test span processing with quantiles."""
-        x, y = sample_data
-
-        plt.figure(figsize=(6, 6))
-
-        # Mixed span types
-        hist2d(x, y, span=[(-1, 1), 0.9])  # Explicit bounds + quantile
-
-        plt.close()
-
-    def test_hist2d_weighted_quantiles(self, weighted_sample_data):
-        """Test quantile calculation with weights."""
-        x, y, weights = weighted_sample_data
-
-        plt.figure(figsize=(6, 6))
-        hist2d(x, y, weights=weights, span=[0.8, 0.8])
-
-        plt.close()
-
-    def test_hist2d_colormap_generation(self, sample_data):
-        """Test internal colormap generation."""
-        x, y = sample_data
-
-        # This tests the internal LinearSegmentedColormap creation
-        plt.figure(figsize=(6, 6))
-        hist2d(x, y, color="green", plot_density=True)
-
-        plt.close()
-
-    def test_hist2d_contour_level_processing(self, sample_data):
-        """Test contour level computation and sorting."""
-        x, y = sample_data
-
-        plt.figure(figsize=(6, 6))
-
-        # Test with levels that might create duplicates
-        custom_levels = [0.1, 0.5, 0.9]
-        hist2d(x, y, levels=custom_levels)
-
-        plt.close()
-
-    def test_hist2d_histogram_extension(self, sample_data):
-        """Test histogram extension for contour edges."""
-        x, y = sample_data
-
-        # This tests the H2 extension logic for contour plotting at edges
-        plt.figure(figsize=(6, 6))
-        hist2d(x, y, smooth=5)  # Integer smoothing to test different code path
-
-        plt.close()
-
-    @pytest.mark.parametrize(
-        "plot_datapoints,plot_density,plot_contours",
-        [
-            (True, True, True),
-            (True, True, False),
-            (True, False, True),
-            (False, True, True),
-            (True, False, False),
-            (False, True, False),
-            (False, False, True),
-        ],
+from brutus.utils.sampling import quantile
+
+
+@pytest.fixture
+def sample_data():
+    """200 correlated 2-D Gaussian samples."""
+    rng = np.random.RandomState(42)
+    return rng.multivariate_normal([0, 0], [[1, 0.7], [0.7, 1]], 200).T
+
+
+@pytest.fixture
+def ax():
+    fig, ax = plt.subplots()
+    yield ax
+    plt.close(fig)
+
+
+def _artists(ax):
+    """Count the artists hist2d draws: point markers, filled contour sets,
+    line contour sets and density meshes."""
+    filled = [c for c in ax.collections if isinstance(c, ContourSet) and c.filled]
+    lines = [c for c in ax.collections if isinstance(c, ContourSet) and not c.filled]
+    mesh = [c for c in ax.collections if not isinstance(c, ContourSet)]
+    return len(ax.lines), len(filled), len(lines), len(mesh)
+
+
+@pytest.mark.parametrize(
+    "options, expected",
+    [
+        # (points, filled contour sets, line contour sets, density meshes).
+        # The first filled set is the white base fill under contours or density.
+        ({}, (0, 2, 1, 0)),
+        (dict(plot_datapoints=True), (1, 2, 1, 0)),
+        (dict(plot_density=False), (0, 2, 1, 0)),
+        (dict(plot_contours=False), (0, 1, 0, 1)),
+        (dict(fill_contours=False), (0, 1, 1, 1)),
+        (dict(no_fill_contours=True), (0, 1, 1, 0)),
+        (dict(plot_density=False, plot_contours=False), (0, 0, 0, 0)),
+        (
+            dict(plot_datapoints=True, plot_density=False, plot_contours=False),
+            (1, 0, 0, 0),
+        ),
+    ],
+)
+def test_plot_options_draw_the_matching_artists(sample_data, ax, options, expected):
+    x, y = sample_data
+    hist2d(x, y, ax=ax, **options)
+    assert _artists(ax) == expected
+
+
+def test_datapoints_are_the_samples_with_their_style(sample_data, ax):
+    x, y = sample_data
+    hist2d(x, y, ax=ax, plot_datapoints=True, data_kwargs={"marker": "s", "alpha": 0.3})
+    (line,) = ax.lines
+    np.testing.assert_array_equal(line.get_xdata(), x)
+    np.testing.assert_array_equal(line.get_ydata(), y)
+    assert line.get_marker() == "s"
+    assert line.get_alpha() == 0.3
+
+
+def test_drawing_goes_to_the_given_axes(sample_data):
+    x, y = sample_data
+    fig, (ax1, ax2) = plt.subplots(1, 2)
+    plt.sca(ax1)
+    hist2d(x, y, ax=ax2)
+    assert not ax1.collections
+    assert ax2.collections
+    plt.close(fig)
+
+
+def test_explicit_span_sets_the_axis_limits(sample_data, ax):
+    x, y = sample_data
+    hist2d(x, y, ax=ax, span=[(-2.0, 2.0), (-1.0, 3.0)])
+    assert ax.get_xlim() == (-2.0, 2.0)
+    assert ax.get_ylim() == (-1.0, 3.0)
+
+
+def test_fractional_span_sets_limits_to_central_weighted_quantiles(sample_data, ax):
+    x, y = sample_data
+    weights = np.random.RandomState(1).exponential(1.0, len(x))
+    hist2d(x, y, ax=ax, weights=weights, span=[(-1.0, 1.0), 0.8])
+    assert ax.get_xlim() == (-1.0, 1.0)
+    np.testing.assert_allclose(
+        ax.get_ylim(), quantile(y, [0.1, 0.9], weights=weights), rtol=1e-12
     )
-    def test_hist2d_all_combinations(
-        self, sample_data, plot_datapoints, plot_density, plot_contours
-    ):
-        """Test all valid combinations of plotting options."""
-        x, y = sample_data
-
-        plt.figure(figsize=(6, 6))
-        hist2d(
-            x,
-            y,
-            plot_datapoints=plot_datapoints,
-            plot_density=plot_density,
-            plot_contours=plot_contours,
-        )
-
-        plt.close()
-
-    def test_hist2d_return_value(self, sample_data):
-        """Test that hist2d doesn't return anything (pure plotting function)."""
-        x, y = sample_data
-
-        plt.figure(figsize=(6, 6))
-        result = hist2d(x, y)
-
-        # hist2d should not return anything
-        assert result is None
-
-        plt.close()
 
 
-class TestHist2dIntegration:
-    """Integration tests for hist2d with other components."""
+def test_default_span_is_the_central_99_percent(sample_data, ax):
+    x, y = sample_data
+    hist2d(x, y, ax=ax)
+    np.testing.assert_allclose(ax.get_xlim(), quantile(x, [0.005, 0.995]), rtol=1e-12)
+    np.testing.assert_allclose(ax.get_ylim(), quantile(y, [0.005, 0.995]), rtol=1e-12)
 
-    def test_hist2d_realistic_astronomical_data(self):
-        """Test with realistic astronomical data distributions."""
-        rng = np.random.RandomState(42)
 
-        # Simulate stellar parameters with realistic distributions
-        # Distance modulus vs. reddening
-        n_stars = 300
+@pytest.mark.parametrize("levels", [[0.5, 0.9], [0.1, 0.5, 0.9]])
+def test_contour_levels_enclose_the_requested_mass(levels, ax):
+    """With an integer `smooth` (bins, no smoothing), each contour level V is
+    the density at which the mass in bins above it reaches the requested
+    fraction: mass(H > V) <= level < mass(H >= V) + V."""
+    x, y = np.random.RandomState(3).normal(size=(2, 5000))
+    span = [(-3.0, 3.0), (-3.0, 3.0)]
+    hist2d(x, y, ax=ax, smooth=10, span=span, levels=levels)
+    H = np.histogram2d(x, y, bins=10, range=span)[0]
+    (contours,) = [
+        c for c in ax.collections if isinstance(c, ContourSet) and not c.filled
+    ]
+    V = np.asarray(contours.levels) / H.sum()
+    H = H / H.sum()
+    assert len(V) == len(levels)
+    # A larger mass fraction encloses a lower density.
+    for v, level in zip(V, sorted(levels, reverse=True)):
+        assert H[H > v].sum() <= level < H[H >= v].sum() + v
 
-        # Distance moduli clustered around a few values (like star clusters)
-        dm_clusters = [12.0, 14.5, 16.0]
-        dm = []
-        av = []
 
-        for dm_center in dm_clusters:
-            n_cluster = n_stars // len(dm_clusters)
-            dm_cluster = rng.normal(dm_center, 0.3, n_cluster)
-            # Reddening correlated with distance for realistic ISM
-            av_cluster = rng.exponential(0.2 * (dm_center - 10), n_cluster)
-            av_cluster = np.maximum(av_cluster, 0)  # No negative reddening
+def test_constant_data_warns_about_identical_limits(ax):
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        hist2d(np.ones(10), np.ones(10), ax=ax)
+    messages = [str(warning.message) for warning in w]
+    assert any("identical" in msg and "lims" in msg for msg in messages)
 
-            dm.extend(dm_cluster)
-            av.extend(av_cluster)
 
-        dm = np.array(dm)
-        av = np.array(av)
+def test_too_few_points_logs_a_contour_warning(ax, caplog):
+    with caplog.at_level(logging.WARNING):
+        # Three points in three of 100 bins: every level maps to one count.
+        hist2d(np.array([0.0, 1.0, 2.0]), np.array([0.0, 1.0, 2.0]), ax=ax, smooth=10)
+    assert "Too few points to create valid contours." in caplog.messages
 
-        plt.figure(figsize=(8, 6))
-        hist2d(
-            dm,
-            av,
-            plot_datapoints=True,
-            plot_contours=True,
-            data_kwargs={"alpha": 0.3, "ms": 1},
-        )
 
-        plt.xlabel("Distance Modulus")
-        plt.ylabel("Reddening (mag)")
-        plt.close()
+def test_span_with_wrong_length_raises(sample_data, ax):
+    x, y = sample_data
+    with pytest.raises(ValueError, match="Dimension mismatch"):
+        hist2d(x, y, ax=ax, span=[0.95])
 
-    def test_hist2d_performance_large_dataset(self):
-        """Test performance with larger dataset."""
-        rng = np.random.RandomState(42)
-        n_large = 2000
 
-        x = rng.standard_t(3, n_large)  # Heavy-tailed distribution
-        y = rng.standard_t(3, n_large)
+@pytest.mark.parametrize(
+    "options",
+    [
+        dict(smooth=[0.02, 0.03]),
+        dict(smooth=[15, 25]),
+        dict(contour_kwargs={"linewidths": 2}, contourf_kwargs={"alpha": 0.6}),
+    ],
+)
+def test_hist2d_options_run(sample_data, ax, options):
+    """Smoke test: these options draw without raising."""
+    assert hist2d(*sample_data, ax=ax, **options) is None
 
-        plt.figure(figsize=(6, 6))
-        hist2d(x, y, smooth=0.02)
 
-        plt.close()
+@pytest.mark.parametrize("n", [1, 2])
+def test_hist2d_tiny_inputs_run(ax, n):
+    """Smoke test: one or two points draw without raising."""
+    x = np.arange(float(n))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert hist2d(x, x, ax=ax) is None

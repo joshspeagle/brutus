@@ -104,6 +104,16 @@ __all__ = ["BruteForce"]
 MIN_SCALE = 1e-20
 
 
+class _GridLabels:
+    # Default of `dlabels`: the labels of the loaded model grid. It differs
+    # from `dlabels=None`, which evaluates the Galactic prior without labels.
+    def __repr__(self):
+        return "<model grid labels>"
+
+
+_GRID_LABELS = _GridLabels()
+
+
 def _has_parallax(parallax, parallax_err):
     """Return True for a usable parallax, as the parallax priors define it."""
     return (
@@ -726,8 +736,8 @@ def _get_sed_mle(
             s_num[i] += models[i][j] * data[j] * inv_tot_var[j]
             s_den[i] += models[i][j] * models[i][j] * inv_tot_var[j]
         scale[i] = s_num[i] / s_den[i]  # MLE scalefactor
-        if scale[i] <= 1e-20:
-            scale[i] = 1e-20
+        if scale[i] <= MIN_SCALE:
+            scale[i] = MIN_SCALE
 
     # Derive reddening terms.
     sr_mix, sa_mix = np.zeros(Nmodel), np.zeros(Nmodel)
@@ -1007,24 +1017,16 @@ class BruteForce:
         data,
         data_err,
         data_mask,
-        data_labels=None,
         phot_offsets=None,
-        parallax=None,
-        parallax_err=None,
         lnprior=None,
-        wt_thresh=1e-3,
-        cdf_thresh=2e-3,
         apply_agewt=True,
         apply_grad=True,
         lngalprior=None,
         lndustprior=None,
         dustfile=None,
         data_coords=None,
-        ltol_subthresh=1e-2,
-        logl_initthresh=5e-3,
         mag_max=50.0,
         merr_max=0.25,
-        rstate=None,
         R_solar=8.2,
         Z_solar=0.025,
     ):
@@ -1430,7 +1432,7 @@ class BruteForce:
         lngalprior=None,
         lndustprior=None,
         dustfile=None,
-        dlabels=None,
+        dlabels=_GRID_LABELS,
         avlim=AVLIM,
         rvlim=RVLIM,
         mem_lim=8000.0,
@@ -1438,6 +1440,7 @@ class BruteForce:
         apply_av_prior=True,
         R_solar=8.2,
         Z_solar=0.025,
+        return_precision=False,
     ):
         """
         Compute log-posterior over the stellar model grid.
@@ -1454,15 +1457,43 @@ class BruteForce:
             subset with the same indices, and the returned ``sel`` indexes
             that subset.
 
+        dlabels : structured `~numpy.ndarray` of shape `(Nmodels,)` or None, optional
+            Model labels passed to the Galactic prior. By default, the labels
+            of the loaded model grid. With None, the prior gets
+            ``labels=None``.
+
         apply_av_prior : bool, optional
             Whether to apply the dust-map extinction prior when ``dustfile``
             is provided. Default is True.
+
+        return_precision : bool, optional
+            Return the (scale, A(V), R(V)) precision matrices of the selected
+            models in place of their covariances, which skips the inversion.
+            Default is False.
 
         Other parameters mirror the corresponding ``fit()`` options.
 
         Returns
         -------
-        Results from logpost_grid.
+        sel : `~numpy.ndarray` of shape `(Nsel,)`
+            Indices of the selected models in ``results``.
+        cov_sar : `~numpy.ndarray` of shape `(Nsel, 3, 3)`
+            Covariances of (scale, A(V), R(V)) of the selected models, or
+            their precisions with ``return_precision=True``.
+        lnp : `~numpy.ndarray` of shape `(Nsel,)`
+            Log-posterior of each selected model.
+        dist_mc : `~numpy.ndarray` of shape `(Nsel, Nmc)`
+            Monte Carlo distance draws, in kpc.
+        a_mc, r_mc : `~numpy.ndarray` of shape `(Nsel, Nmc)`
+            Monte Carlo A(V) and R(V) draws.
+        lnp_mc : `~numpy.ndarray` of shape `(Nsel, Nmc)`
+            Log-posterior weight of each draw: the model's log-likelihood and
+            ``lnprior``, the log-distance Jacobian, and the Galactic, dust and
+            parallax terms at the draw.
+        mc_ess : `~numpy.ndarray` of shape `(Nsel,)`
+            ``1 / sum(w**2)`` of the normalized weights of each model's draws.
+            The draws are antithetic pairs, so this measures how concentrated
+            the weights are, not a count of independent draws.
         """
         # The dust-map prior is a function of sky position; without one it
         # would crash deep inside the map query with an opaque IndexError.
@@ -1473,8 +1504,7 @@ class BruteForce:
                 "to fit())."
             )
 
-        # Use instance's labels if not provided
-        if dlabels is None:
+        if dlabels is _GRID_LABELS:
             dlabels = self.models_labels
 
         # Implementation of grid-based posterior computation
@@ -1655,9 +1685,6 @@ class BruteForce:
         # Invert precision to get covariance in (ln d, Av, Rv)
         cov_lnd = _inverse3(icov_lnd, regularize=True)
 
-        # Also compute cov_sar for backward-compatible output.
-        cov_sar = _inverse3(icovs_selected, regularize=True)
-
         # Prepare means in (ln d, Av, Rv) space
         eta_sel = -0.5 * np.log(s_sel)  # ln(d) = -0.5*ln(s)
         means = np.column_stack([eta_sel, avs[sel], rvs[sel]])  # Shape: (Nsel, 3)
@@ -1687,8 +1714,10 @@ class BruteForce:
 
         # Convert ln(d) to distance. Draws outside the support are truncated:
         # they get zero weight below. Their values are clipped only so that
-        # the priors stay finite and no saved draw leaves the support.
-        dist_raw = np.exp(eta_samples)
+        # the priors stay finite and no saved draw leaves the support. A scale
+        # clamped to MIN_SCALE gives ln(d) draws that overflow to inf here.
+        with np.errstate(over="ignore"):
+            dist_raw = np.exp(eta_samples)
         dist_mc = np.clip(dist_raw, 0.001, 1e6)
         outside = dist_mc != dist_raw
         a_clip = np.clip(a_mc, avlim[0], avlim[1])
@@ -1823,7 +1852,11 @@ class BruteForce:
         # its weights above would be spuriously uniform.
         mc_ess = np.where(lw_max.ravel() > LOG_ZERO, mc_ess, 0.0)
 
-        return sel, cov_sar, lnp, dist_mc.T, a_mc.T, r_mc.T, lnp_mc.T, mc_ess
+        if return_precision:
+            matrices = icovs_selected
+        else:
+            matrices = _inverse3(icovs_selected, regularize=True)
+        return sel, matrices, lnp, dist_mc.T, a_mc.T, r_mc.T, lnp_mc.T, mc_ess
 
     def fit(
         self,
@@ -1963,7 +1996,8 @@ class BruteForce:
             ``Bayestar`` object.
 
         apply_dlabels : bool, optional
-            Whether to pass model labels to Galactic prior. Default is True.
+            Whether to pass model labels to the Galactic prior. With False,
+            the prior gets ``labels=None``. Default is True.
 
         data_coords : numpy.ndarray of shape (Ndata, 2), optional
             Galactic (l, b) coordinates for each object in degrees.
@@ -2135,24 +2169,16 @@ class BruteForce:
             data,
             data_err,
             data_mask,
-            data_labels=data_labels,
             phot_offsets=phot_offsets,
-            parallax=parallax,
-            parallax_err=parallax_err,
             lnprior=lnprior,
-            wt_thresh=wt_thresh,
-            cdf_thresh=cdf_thresh,
             apply_agewt=apply_agewt,
             apply_grad=apply_grad,
             lngalprior=lngalprior,
             lndustprior=lndustprior,
             dustfile=dustfile,
             data_coords=data_coords,
-            ltol_subthresh=ltol_subthresh,
-            logl_initthresh=logl_initthresh,
             mag_max=mag_max,
             merr_max=merr_max,
-            rstate=rstate,
             R_solar=R_solar,
             Z_solar=Z_solar,
         )
@@ -2330,7 +2356,7 @@ class BruteForce:
         lngalprior=None,
         lndustprior=None,
         dustfile=None,
-        dlabels=None,
+        dlabels=_GRID_LABELS,
         logl_dim_prior=True,
         ltol=3e-2,
         ltol_subthresh=1e-2,
@@ -2386,8 +2412,9 @@ class BruteForce:
         dustfile : str, path-like, or `~brutus.dust.Bayestar`, optional
             Path to a 3D dust map file (loaded automatically), or a
             pre-loaded ``Bayestar`` object.
-        dlabels : numpy.ndarray, optional
-            Model labels for prior evaluation.
+        dlabels : structured numpy.ndarray or None, optional
+            Model labels for the Galactic prior, as in `logpost_grid`.
+            Default is the labels of the loaded model grid.
         logl_dim_prior : bool, optional
             Whether to apply dimensional prior correction.
         ltol : float, optional
@@ -2479,13 +2506,12 @@ class BruteForce:
             rstate=rstate,
             R_solar=R_solar,
             Z_solar=Z_solar,
+            return_precision=True,
         )
 
-        # Unpack posterior results
-        # sel: selected model indices, cov_sar: covariances for selected models
-        # lnp: log-posteriors, dist_mc/a_mc/r_mc: MC samples, lnp_mc: MC log-posteriors
-        # mc_ess: effective sample size per selected model
-        sel, cov_sar_sel, lnp, dist_mc, a_mc, r_mc, lnp_mc, mc_ess_sel = logpost_results
+        sel, icov_sar_sel, lnp, dist_mc, a_mc, r_mc, lnp_mc, mc_ess_sel = (
+            logpost_results
+        )
         Nsel = len(sel)
 
         # Add parallax contribution to chi2 and Ndim if provided
@@ -2518,7 +2544,9 @@ class BruteForce:
         scales = scales_all[sidxs]
         avs = avs_all[sidxs]
         rvs = rvs_all[sidxs]
-        covs_sar = cov_sar_sel[idxs_local]
+        # Invert each drawn model once.
+        drawn, which = np.unique(idxs_local, return_inverse=True)
+        covs_sar = _inverse3(icov_sar_sel[drawn], regularize=True)[which]
         lnprob = lnp[idxs_local]
         mc_ess = mc_ess_sel[idxs_local]
 

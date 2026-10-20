@@ -310,6 +310,48 @@ class TestMathEdgeCases:
 
         np.testing.assert_almost_equal(result, expected, decimal=10)
 
+    # A matrix with an infinite cross-term has no finite analytic inverse, so
+    # the preconditioned inverses fall back to the diagonal 1 / P_ii.
+    BAD_PRECISION = np.array(
+        [
+            [4.0, np.inf, 0.5],
+            [np.inf, 2.0, 0.1],
+            [0.5, 0.1, 8.0],
+        ]
+    )
+
+    def test_preconditioned_inverse_falls_back_to_diagonal_for_nonfinite_matrix(
+        self,
+    ):
+        """inverse3(P, regularize=True) returns diag(1 / P_ii) when P has a
+        non-finite entry."""
+        from brutus.utils.math import inverse3
+
+        # The determinant evaluates inf - inf; numpy warns, compiled numba not.
+        with np.errstate(invalid="ignore"):
+            inv = inverse3(self.BAD_PRECISION, regularize=True)
+        np.testing.assert_array_equal(inv, np.diag([0.25, 0.5, 0.125]))
+
+    def test_batch_preconditioned_inverse_falls_back_only_for_nonfinite_matrix(
+        self,
+    ):
+        """In a batch, the non-finite matrix gets diag(1 / P_ii) and the others
+        get their exact inverse."""
+        from brutus.utils.math import inverse3
+
+        good = np.array(
+            [
+                [[10.0, 1.0, 0.5], [1.0, 8.0, 0.3], [0.5, 0.3, 6.0]],
+                [[1e4, 50.0, 5.0], [50.0, 200.0, 3.0], [5.0, 3.0, 31.0]],
+            ]
+        )
+        batch = np.stack([good[0], self.BAD_PRECISION, good[1]])
+        # The batched determinant of the bad matrix evaluates inf - inf.
+        with np.errstate(invalid="ignore"):
+            inv = inverse3(batch, regularize=True)
+        np.testing.assert_array_equal(inv[1], np.diag([0.25, 0.5, 0.125]))
+        np.testing.assert_allclose(inv[[0, 2]], np.linalg.inv(good), rtol=1e-12)
+
 
 class TestMathIntegration:
     """Integration tests for mathematical functions."""

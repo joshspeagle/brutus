@@ -3,10 +3,12 @@
 import h5py
 import numpy as np
 import pytest
+import scipy.stats
 from conftest import split_labels
 
 from brutus.analysis.individual import BruteForce
 from brutus.core.individual import StarGrid
+from brutus.priors.galactic import logp_galactic_structure
 from brutus.utils import inv_magnitude
 
 
@@ -242,16 +244,14 @@ class TestBruteForceLikelihood:
         """Test likelihood identifies true model as good fit."""
         flux, flux_err, mask, true_idx = synthetic_observation
 
+        # A noiseless SED is fit exactly (chi2 = 0) by its own model. The
+        # check needs no other model to fit it as well, which a distinct grid
+        # makes likely but does not guarantee.
         lnl, ndim, chi2 = bruteforce_fitter.loglike_grid(
             flux, flux_err, mask, return_vals=False
         )
 
-        # True model should have reasonable likelihood (within top 10)
-        # The optimization may find better fits due to extinction/distance fitting
-        best_indices = np.argsort(lnl)[-10:]
-        assert (
-            true_idx in best_indices
-        ), f"True model {true_idx} not in top 10: {best_indices[-5:]}"
+        assert np.argmax(lnl) == true_idx
 
     def test_loglike_with_noisy_data(
         self, bruteforce_fitter, noisy_synthetic_observation
@@ -913,9 +913,9 @@ class TestBruteForceEdgeCases:
 
         proc_data, proc_err, proc_mask, lnprior, gal_prior, dust_prior = results
 
-        # Data should be modified by offsets
-        expected_data = data * offsets
-        np.testing.assert_allclose(proc_data, expected_data)
+        # Offsets multiply both the fluxes and their errors.
+        np.testing.assert_array_equal(proc_data, data * offsets)
+        np.testing.assert_array_equal(proc_err, data_err * offsets)
 
     def test_setup_basic_functionality(self, bruteforce_fitter):
         """Test _setup method basic functionality."""
@@ -1334,8 +1334,6 @@ class TestBruteForceFitMethod:
         with h5py.File(result_file, "r") as f:
             # Results should be valid
             assert np.all(np.isfinite(f["obj_log_evid"][:]))
-            # Nbands should include parallax contribution
-            assert np.all(f["obj_Nbands"][:] >= 5)
 
     def test_fit_file_extension_handling(self, mock_fitter, tmp_path):
         """Test that .h5 extension is added if not present."""
@@ -1547,11 +1545,10 @@ class TestBruteForceFitIntegration:
             assert np.all(sampled_indices >= 0)
             assert np.all(sampled_indices < fitter.nmodels)
 
-            # Chi2 should be reasonable (not wildly off)
-            chi2min = f["obj_chi2min"][0]
-            nbands = f["obj_Nbands"][0]
-            reduced_chi2 = chi2min / max(nbands - 3, 1)
-            assert reduced_chi2 < 100, f"Reduced chi2 unreasonably high: {reduced_chi2}"
+            # A noiseless SED from the grid must be a good fit (CLAUDE.md,
+            # Fit quality).
+            dof = max(f["obj_Nbands"][0] - 3, 1)
+            assert scipy.stats.chi2.sf(f["obj_chi2min"][0], dof) > 1e-3
 
             # Log-evidence should be finite
             assert np.isfinite(f["obj_log_evid"][0])
@@ -2111,7 +2108,7 @@ class TestSubsetResults:
         with pytest.raises(ValueError, match="dlabels"):
             fitter.logpost_grid(like, coord=(120.0, 45.0), Nmc_prior=5)
         with pytest.raises(ValueError, match="lnprior"):
-            fitter.logpost_grid(like, lnprior=np.zeros(27), dlabels=None, Nmc_prior=5)
+            fitter.logpost_grid(like, lnprior=np.zeros(27), Nmc_prior=5)
 
     def test_subset_labels_are_accepted(self, fitter, observation):
         flux, flux_err, mask = observation
@@ -2173,6 +2170,49 @@ class TestUnfittedObjects:
         assert excinfo.traceback
 
 
+@pytest.mark.parametrize("apply_dlabels", [True, False])
+def test_apply_dlabels_controls_galactic_prior_labels(
+    fitter, batch, tmp_path, apply_dlabels
+):
+    seen = []
+
+    def lngalprior(dists, coord, labels=None):
+        seen.append(labels)
+        return np.zeros_like(dists)
+
+    fitter.fit(
+        save_file=str(tmp_path / "out"),
+        lngalprior=lngalprior,
+        apply_dlabels=apply_dlabels,
+        Ndraws=10,
+        Nmc_prior=5,
+        rstate=np.random.RandomState(3),
+        verbose=False,
+        **batch,
+    )
+    assert len(seen) == 2
+    if apply_dlabels:
+        assert all(labels.dtype == fitter.models_labels.dtype for labels in seen)
+    else:
+        assert all(labels is None for labels in seen)
+
+
+def test_precision_return_inverts_to_the_returned_covariances(fitter, observation):
+    """_fit inverts only the resampled precisions; that must match the
+    covariances logpost_grid returns, bitwise."""
+    from brutus.utils.math import inverse3
+
+    flux, flux_err, mask = observation
+    like = fitter.loglike_grid(flux, flux_err, mask, return_vals=True)
+    kwargs = dict(Nmc_prior=5, wt_thresh=0.1)
+    cov = fitter.logpost_grid(like, rstate=np.random.RandomState(1), **kwargs)[1]
+    icov = fitter.logpost_grid(
+        like, rstate=np.random.RandomState(1), return_precision=True, **kwargs
+    )[1]
+    pick = np.array([0, len(icov) - 1, 0])
+    np.testing.assert_array_equal(inverse3(icov[pick], regularize=True), cov[pick])
+
+
 def test_misspelled_keyword_raises(fitter, observation):
     flux, flux_err, mask = observation
     with pytest.raises(TypeError, match="av_gaus"):
@@ -2180,3 +2220,73 @@ def test_misspelled_keyword_raises(fitter, observation):
     like = fitter.loglike_grid(flux, flux_err, mask, return_vals=True)
     with pytest.raises(TypeError, match="Nmc"):
         fitter.logpost_grid(like, Nmc=10)
+
+
+def test_galactic_prior_gets_each_draw_paired_with_its_model_labels(
+    fitter, observation
+):
+    """Draws are flattened draw-major, so the labels are tiled, not repeated;
+    the fused default-prior branch must give the same weights."""
+    flux, flux_err, mask = observation
+    like = fitter.loglike_grid(flux, flux_err, mask, return_vals=True)
+    seen = {}
+
+    def lngalprior(dists, coord, labels=None):
+        seen["dists"], seen["labels"] = dists, labels
+        return logp_galactic_structure(dists, coord, labels=labels)
+
+    # float64 labels: with NUMBA_DISABLE_JIT=1, float32 labels make the two
+    # branches differ by float32 rounding (relative 4e-9).
+    dlabels = fitter.models_labels.astype(
+        [(name, "f8") for name in fitter.models_labels.dtype.names]
+    )
+    kwargs = dict(coord=(120.0, 45.0), Nmc_prior=100, dlabels=dlabels)
+    sel, _, _, dist_mc, _, _, lnp_mc, _ = fitter.logpost_grid(
+        like, lngalprior=lngalprior, rstate=np.random.RandomState(5), **kwargs
+    )
+    Nsel, Nmc = dist_mc.shape
+    # The default prior takes its fused branch only above 1000 draws in all.
+    assert Nsel > 1 and Nmc * Nsel > 1000
+    np.testing.assert_array_equal(seen["dists"], dist_mc.T.ravel())
+    np.testing.assert_array_equal(seen["labels"], np.tile(dlabels[sel], Nmc))
+
+    fused = fitter.logpost_grid(like, rstate=np.random.RandomState(5), **kwargs)
+    np.testing.assert_array_equal(fused[6], lnp_mc)
+
+
+@pytest.mark.parametrize("parallax", [None, 1.2])
+def test_saved_band_count_and_chi2min_include_the_parallax(
+    fitter, observation, tmp_path, parallax
+):
+    flux, flux_err, mask = observation
+    parallax_err = None if parallax is None else 0.1
+    path = fitter.fit(
+        flux[None],
+        flux_err[None],
+        mask[None],
+        np.zeros(1, dtype=[("id", "i4")]),
+        str(tmp_path / "out"),
+        parallax=None if parallax is None else np.array([parallax]),
+        parallax_err=None if parallax is None else np.array([parallax_err]),
+        data_coords=np.array([[120.0, 45.0]]),
+        Ndraws=10,
+        Nmc_prior=5,
+        rstate=np.random.RandomState(2),
+        verbose=False,
+    )
+
+    _, ndim, chi2, scale, _, _, _ = fitter.loglike_grid(
+        flux,
+        flux_err,
+        mask,
+        parallax=parallax,
+        parallax_err=parallax_err,
+        return_vals=True,
+    )
+    if parallax is not None:
+        # parallax_mas = 1 / d_kpc = sqrt(scale)
+        chi2 = chi2 + (np.sqrt(scale) - parallax) ** 2 / parallax_err**2
+        ndim += 1
+    with h5py.File(path, "r") as f:
+        assert f["obj_Nbands"][0] == ndim == fitter.nfilters + (parallax is not None)
+        assert f["obj_chi2min"][0] == np.float32(chi2.min())
