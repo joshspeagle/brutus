@@ -70,7 +70,7 @@ models, labels, label_mask = load_models("grid_mist_v9.h5", filters=gaia + tmass
 grid = StarGrid(models, labels)
 ```
 
-`labels` holds the grid parameters and, by default, `loga`, `logl`, `logt`, `logg` and `agewt`; pass `labels=[...]` to choose others, such as `feh_surf`. `label_mask` marks which columns are grid parameters. A constant `afe` column is dropped. Binary models (`smf` > 0) are dropped unless `include_binaries=True`. `include_ms` and `include_postms` keep only the main sequence (EEP ≤ 454) or only later phases. Load only the bands you fit: the grid is held in memory.
+`labels` holds the grid parameters and, by default, `loga`, `logl`, `logt`, `logg` and `agewt`; pass `labels=[...]` to choose others, such as `feh_surf`. `label_mask` marks which columns are grid parameters. Binary models (`smf` > 0) are dropped unless `include_binaries=True`. A constant label, such as `afe` on the single-afe MIST grid or `smf` without binaries, stays as a one-value column, so `StarGrid` raises for a query with another value. `include_ms` and `include_postms` keep only the main sequence (EEP ≤ 454) or only later phases. Load only the bands you fit: the grid is held in memory.
 
 ## Building a grid
 

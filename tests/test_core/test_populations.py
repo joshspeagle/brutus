@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
+import h5py
 import numpy as np
 import pytest
 from conftest import mock_nn_predictor, requires_data
@@ -54,6 +55,13 @@ class TestIsochroneInitialization:
     def test_isochrone_file_not_found_error(self):
         with pytest.raises(FileNotFoundError, match="fetch_isos"):
             Isochrone(mistfile="nonexistent.h5", verbose=False)
+
+    def test_load_error_keeps_its_cause(self, tmp_path):
+        path = tmp_path / "empty.h5"
+        h5py.File(path, "w").close()
+        with pytest.raises(RuntimeError, match="empty.h5") as err:
+            Isochrone(mistfile=path, verbose=False)
+        assert isinstance(err.value.__cause__, KeyError)
 
     def test_isochrone_verbose_output(self, capsys):
         """Test that verbose output is produced when requested."""

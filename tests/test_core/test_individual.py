@@ -527,6 +527,18 @@ class TestBuildFromFile:
         tracks = EEPTracks(mistfile=mistfile, predictions=PREDICTIONS, verbose=False)
         assert np.isfinite(tracks.get_predictions([1.0, 210.0, 0.0, 0.0])).all()
 
+    def test_failed_cache_write_leaves_no_file(self, tmp_path, monkeypatch):
+        import brutus.core.individual as individual
+
+        def fail(obj, f):
+            f.write(b"partial")
+            raise OSError("disk full")
+
+        monkeypatch.setattr(individual.pickle, "dump", fail)
+        mistfile = _make_synthetic_mist_file(tmp_path / "tracks.h5")
+        EEPTracks(mistfile=mistfile, predictions=PREDICTIONS, verbose=False)
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["tracks.h5"]
+
     def test_missing_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError, match="fetch_tracks"):
             EEPTracks(mistfile=tmp_path / "absent.h5", verbose=False)

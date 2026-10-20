@@ -262,6 +262,40 @@ class TestQueryValidation:
         np.testing.assert_allclose(near, edge, rtol=0, atol=1e-6)
 
 
+class TestLabelNotInGrid:
+    """A label that the grid lacks is ignored with a warning, not silently."""
+
+    @pytest.mark.parametrize("use_multilinear", [True, False])
+    def test_label_not_in_the_grid_warns(self, complete_grid, use_multilinear):
+        with pytest.warns(UserWarning, match="afe"):
+            with_afe, _, _ = complete_grid.get_seds(
+                mini=1.0, eep=300.0, feh=0.0, afe=0.4, use_multilinear=use_multilinear
+            )
+        without, _, _ = complete_grid.get_seds(
+            mini=1.0, eep=300.0, feh=0.0, use_multilinear=use_multilinear
+        )
+        np.testing.assert_array_equal(with_afe, without)
+
+    @pytest.mark.parametrize("use_multilinear", [True, False])
+    def test_one_value_label_accepts_its_value_and_rejects_others(
+        self, use_multilinear
+    ):
+        tuples = [(m, e, 0.0, 0.0) for m in (0.5, 1.0) for e in (200.0, 300.0)]
+        grid = _make_grid(tuples, label_names=("mini", "eep", "feh", "afe"))
+        query = dict(mini=1.0, eep=300.0, feh=0.0, use_multilinear=use_multilinear)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with_afe, _, _ = grid.get_seds(afe=0.0, **query)
+        np.testing.assert_array_equal(with_afe, grid.get_seds(**query)[0])
+        with pytest.raises(ValueError, match="afe"):
+            grid.get_seds(afe=0.4, **query)
+
+    def test_smf_on_a_grid_without_smf_warns_once(self, complete_grid):
+        with pytest.warns(UserWarning) as record:
+            complete_grid.get_seds(mini=1.0, eep=300.0, feh=0.0, smf=0.5)
+        assert len(record) == 1 and "smf" in str(record[0].message)
+
+
 class TestUnspecifiedParameterError:
     """Finding: unspecified multi-valued axes were silently pinned to the
     axis minimum; omission now raises instead (there is no sensible
@@ -334,6 +368,31 @@ class TestMultilinearEquivalence:
         wmap = _as_weight_map(idx, w)
         assert wmap.get(0, 0.0) == pytest.approx(1.0)
         assert 1 not in wmap
+
+
+class TestNonFiniteLabels:
+    """A model with a NaN label is not a grid value on either path."""
+
+    def test_nan_label_does_not_make_an_axis_multivalued(self):
+        grid = _make_grid([(0.5, 200.0, 0.0), (1.0, 200.0, 0.0), (1.0, 300.0, np.nan)])
+        assert list(grid.grid_axes["feh"]) == [0.0]
+        grid.get_seds(mini=1.0, eep=200.0)  # feh is single-valued: may be omitted
+
+    def test_kdtree_ignores_models_with_nan_labels(self):
+        tuples = [(m, e, 0.0) for m in (0.5, 1.0) for e in (200.0, 300.0, 400.0)]
+        grid = _make_grid(tuples + [(1.0, np.nan, 0.0)])
+        low, _ = grid._find_neighbors_kdtree(mini=1.0, eep=200.0, feh=0.0)
+        high, _ = grid._find_neighbors_kdtree(mini=1.0, eep=400.0, feh=0.0)
+        assert low[0] == 3 and high[0] == 5
+        assert 6 not in low and 6 not in high
+
+    def test_grid_without_a_fully_finite_model_raises(self):
+        with pytest.raises(ValueError, match="No model"):
+            _make_grid([(0.5, np.nan, 0.0), (1.0, 200.0, np.nan)])
+
+    def test_axis_without_finite_values_raises(self):
+        with pytest.raises(ValueError, match="feh"):
+            _make_grid([(0.5, 200.0, np.nan), (1.0, 200.0, np.nan)])
 
 
 if __name__ == "__main__":

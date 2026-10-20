@@ -160,10 +160,8 @@ class TestBruteForceInitialization:
         # Real MIST grid has different parameter names - just check grid vs predictions exist
         grid_params = sum(1 for is_grid in mask.values() if is_grid)
         pred_params = sum(1 for is_grid in mask.values() if not is_grid)
-        # mini, eep, feh for the published single-afe grid: the default
-        # 'afe' label is dropped when constant, so the schema matches the
-        # pre-1.2 behavior; multi-afe grids would report 4.
-        assert grid_params == 3
+        # mini, eep, feh, and the one-value afe and smf of the published grid
+        assert grid_params == 5
         assert pred_params > 0  # Should have some predictions
 
     def test_verbose_output(self, mock_grid, capsys):

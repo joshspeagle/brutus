@@ -110,7 +110,7 @@ brutus infers stellar properties, distances and extinctions from photometry and 
 
 ## Behaviour to know
 
-- `load_models` keeps the `afe` label only when it varies across the grid, as it does for `smf`. Requesting `afe` explicitly always keeps it.
+- `load_models` returns every requested label, also a constant one (`afe` on a single-afe grid, `smf` without binaries). `StarGrid` treats it as a one-value axis, so a query with another value raises.
 - Bayestar queries apply the map's reliability mask by default: NaN outside each sightline's reliable distance range and in non-converged pixels, and a whole sightline when its bounds are NaN. `Bayestar(apply_reliability_mask=False)` returns raw values.
 - `EEPTracks` caches are versioned (`*_cachev3.pkl`). Caches of other versions are ignored.
 - `quantile` uses the midpoint-CDF convention for weighted and unweighted samples, not `np.percentile`'s interpolation.
