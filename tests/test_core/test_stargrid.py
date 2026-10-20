@@ -227,18 +227,6 @@ class TestStarGridInterpolation:
             all_teff = mock_grid.params["Teff"]
             assert np.min(all_teff) <= pred["Teff"] <= np.max(all_teff)
 
-    def test_extrapolation_fallback(self, mock_grid):
-        """Test behavior outside grid bounds."""
-        # Parameters well outside grid
-        params = {"mini": 10.0, "eep": 1000, "feh": 2.0}
-
-        # Should fall back to nearest neighbor
-        sed, pred, _ = mock_grid.get_seds(**params, use_multilinear=True)
-
-        # Should still return valid SED
-        assert sed is not None
-        assert np.all(np.isfinite(sed))
-
 
 class TestStarGridEdgeCases:
     """Test edge cases and error handling."""
@@ -251,18 +239,16 @@ class TestStarGridEdgeCases:
         with pytest.raises(ValueError, match="feh"):
             mock_grid.get_seds(mini=1.0, eep=300)  # Missing feh
 
-    def test_negative_distance(self, mock_grid):
-        """Test with invalid distance."""
-        params = {"mini": 1.0, "eep": 300, "feh": 0.0}
+    @pytest.mark.parametrize("method", ["get_seds", "get_predictions"])
+    def test_unknown_keywords_raise(self, mock_grid, method):
+        with pytest.raises(TypeError, match="fe_h"):
+            getattr(mock_grid, method)(mini=1.0, eep=300, fe_h=0.0)
 
-        # Negative distance will cause issues with log10
-        # Test that it's handled somehow (may give NaN or use abs)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            sed, _, _ = mock_grid.get_seds(**params, dist=-1000)
-
-        # Result exists but may contain NaNs
-        assert sed is not None
+    @pytest.mark.parametrize("dist", [-1000.0, 0.0, np.nan, None])
+    def test_invalid_distance_raises(self, mock_grid, dist):
+        """A negative distance gave NaN magnitudes; None a TypeError."""
+        with pytest.raises(ValueError, match="dist"):
+            mock_grid.get_seds(mini=1.0, eep=300, feh=0.0, dist=dist)
 
     def test_negative_extinction(self, mock_grid):
         """Test negative extinction values."""
@@ -294,6 +280,24 @@ class TestStarGridEdgeCases:
 
         sed, params, _ = grid.get_seds(mini=0.5, eep=200, feh=-0.5)
         assert sed.shape == (1,)
+
+    def test_one_model_grid_works_on_the_kdtree_path(self):
+        labels = np.array(
+            [(1.0, 300.0, 0.0)], dtype=[(n, "f8") for n in ("mini", "eep", "feh")]
+        )
+        models = np.array([[[15.0, 1.0, 0.1], [14.0, 0.8, 0.05]]])
+        grid = StarGrid(models, labels, verbose=False)
+        sed, _, _ = grid.get_seds(av=0.5, rv=3.0, use_multilinear=False)
+        np.testing.assert_allclose(sed, [15.0 + 0.5 * 1.3, 14.0 + 0.5 * 0.95])
+
+    @pytest.mark.parametrize("use_multilinear", [True, False])
+    def test_query_needs_a_grid_label(self, use_multilinear):
+        """The multilinear path returned model 0 for any query."""
+        grid = StarGrid(
+            np.zeros((2, 1, 3)), np.zeros(2, dtype=[("x", "f8")]), verbose=False
+        )
+        with pytest.raises(ValueError, match="grid label"):
+            grid.get_seds(use_multilinear=use_multilinear)
 
     def test_models_as_dict(self):
         """Test StarGrid initialization with models as a dict."""
@@ -381,8 +385,55 @@ class TestStarGridEdgeCases:
         assert grid.models.shape == (nmodels, 2, 3)
 
 
+class TestStarGridFilters:
+    """Filter selection keeps the requested order and checks names."""
+
+    @pytest.fixture
+    def structured(self):
+        dtype = [("PS_g", "3f8"), ("PS_r", "3f8"), ("PS_i", "3f8")]
+        models = np.zeros(4, dtype=dtype)
+        for k, name in enumerate(["PS_g", "PS_r", "PS_i"]):
+            models[name] = [10.0 + k, 1.0, 0.1]
+        labels = np.zeros(4, dtype=[("mini", "f8")])
+        labels["mini"] = [0.5, 1.0, 1.5, 2.0]
+        return models, labels
+
+    def test_structured_columns_follow_requested_order(self, structured):
+        models, labels = structured
+        grid = StarGrid(models, labels, filters=["PS_i", "PS_g"], verbose=False)
+        assert list(grid.filters) == ["PS_i", "PS_g"]
+        np.testing.assert_array_equal(grid.models[:, :, 0], [[12.0, 10.0]] * 4)
+
+    def test_structured_unknown_filter_warns_and_is_skipped(self, structured):
+        models, labels = structured
+        with pytest.warns(UserWarning, match="nope"):
+            grid = StarGrid(models, labels, filters=["PS_r", "nope"], verbose=False)
+        assert list(grid.filters) == ["PS_r"]
+
+    def test_structured_no_known_filter_raises(self, structured):
+        models, labels = structured
+        with pytest.raises(ValueError, match="None of the requested filters"):
+            StarGrid(models, labels, filters=["nope"], verbose=False)
+
+    def test_filters_length_must_match_models(self, structured):
+        _, labels = structured
+        with pytest.raises(ValueError, match="filters"):
+            StarGrid(np.zeros((4, 3, 3)), labels, filters=["a", "b"], verbose=False)
+
+
 class TestStarGridWithRealData:
     """Tests using real MIST grid (if available)."""
+
+    def test_round_axis_edge_is_inside_the_grid(self, mist_grid):
+        # The stored mini maximum is 2.0000000000000013, not 2.0
+        assert mist_grid.grid_axes["mini"][-1] > 2.0
+        sed, _, _ = mist_grid.get_seds(mini=2.0, eep=350, feh=0.0)
+        assert np.all(np.isfinite(sed))
+
+    @pytest.mark.parametrize("mini", [50.0, np.nan])
+    def test_mass_outside_the_grid_raises(self, mist_grid, mini):
+        with pytest.raises(ValueError, match="mini"):
+            mist_grid.get_seds(mini=mini, eep=350, feh=0.0)
 
     def test_real_grid_dimensions(self, mist_grid):
         """Test real grid has expected structure."""

@@ -417,10 +417,7 @@ class Isochrone:
         labels = np.c_[feh_arr, afe_arr, loga_arr, eep]
 
         # Generate predictions
-        try:
-            preds = self.interpolator(labels)
-        except Exception as e:
-            raise RuntimeError(f"Interpolation failed: {e}")
+        preds = self.interpolator(labels)
 
         # Apply empirical corrections if requested (the same effective map
         # as EEPTracks.get_predictions; see EEPTracks.get_corrections)

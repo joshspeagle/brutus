@@ -46,13 +46,18 @@ def _get_seds(mag_coeffs, av, rv, return_flux=False):
     Returns
     -------
     seds : `~numpy.ndarray` of shape `(Nmodels, Nbands)`
-        Reddened SEDs.
+        Reddened SEDs, in magnitudes, or in maggies if `return_flux`.
 
     rvecs : `~numpy.ndarray` of shape `(Nmodels, Nbands)`
-        Reddening vectors.
+        Reddening vectors. With `return_flux=False`, dm/dA(V) =
+        R + R(V) * dR/dRv, in mag per mag of A(V). With `return_flux=True`,
+        dF/dA(V), in maggies per mag of A(V).
 
     drvecs : `~numpy.ndarray` of shape `(Nmodels, Nbands)`
-        Differential reddening vectors.
+        Differential reddening vectors. With `return_flux=False`,
+        (1 / A(V)) dm/dR(V) = dR/dRv, in mag per mag of A(V). With
+        `return_flux=True`, (1 / A(V)) dF/dR(V), in maggies per mag of
+        A(V).
 
     """
     Nmodels, Nbands, Ncoef = mag_coeffs.shape

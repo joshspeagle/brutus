@@ -31,7 +31,7 @@ Basic usage for SED prediction:
 >>> from brutus.data.filters import FILTERS
 >>>
 >>> # Initialize predictor for specific filters
->>> predictor = FastNNPredictor(filters=['g', 'r', 'i', 'z'])
+>>> predictor = FastNNPredictor(filters=['PS_g', 'PS_r', 'PS_i', 'PS_z'])
 >>>
 >>> # Predict SED for a solar-type star at 1 kpc
 >>> sed = predictor.sed(logt=3.76, logg=4.44, feh_surf=0.0,
@@ -220,13 +220,10 @@ class FastNN:
         The scaling is applied as: x_scaled = (x - xmin) / (xmax - xmin)
         where xmin and xmax are the bounds from the training data.
         """
-        # Dispatch on input dimensionality explicitly. The previous
-        # implementation tried the 1D normalization and fell back to the 2D
-        # form only when broadcasting raised a ValueError; that dispatch is
-        # unsound because a (6, 6) batch -- exactly 6 samples for 6 parameters
-        # -- broadcasts against xmin[None, :] (shape (1, 6)) WITHOUT error and
-        # silently normalized along the wrong axis, producing corrupted
-        # photometry for the N == 6 case only.
+        # Dispatch on input dimensionality explicitly: a (6, 6) batch, 6
+        # samples of 6 parameters, broadcasts against xmin[None, :] without
+        # error, so dispatching on a broadcasting error would normalize it
+        # along the wrong axis.
         x = np.asarray(x)
         if x.ndim == 1:
             # 1D input of shape (Ninput,) -> (Ninput, 1)
@@ -330,7 +327,7 @@ class FastNNPredictor(FastNN):
     --------
     Predict SED for a solar analog:
 
-    >>> predictor = FastNNPredictor(filters=['g', 'r', 'i'])
+    >>> predictor = FastNNPredictor(filters=['PS_g', 'PS_r', 'PS_i'])
     >>> sed = predictor.sed(logt=3.76, logg=4.44, feh_surf=0.0,
     ...                     logl=0.0, dist=1000.)
     >>> print(f"g-r color: {sed[0] - sed[1]:.3f}")
@@ -382,39 +379,43 @@ class FastNNPredictor(FastNN):
         extinction. Uses neural network bolometric corrections combined
         with standard photometric transformations.
 
+        The network inputs (Teff, logg, feh_surf, afe, av, rv) must lie
+        within the training bounds `xmin` and `xmax`; otherwise the SED is
+        NaN. The ranges below are those of the default file `nn_c3k.h5`.
+
         Parameters
         ----------
         logt : float, optional
             Base-10 logarithm of effective temperature in Kelvin.
-            Typical range: [3.3, 4.5] corresponding to ~2000-30000K.
+            Range: [3.40, 4.70] (Teff from 2500 to 50000 K).
             Default is 3.8 (6300K, solar-type).
 
         logg : float, optional
             Base-10 logarithm of surface gravity in cgs units (cm/s^2).
-            Typical range: [0, 5] from supergiants to white dwarfs.
+            Range: [-1, 5.5].
             Default is 4.4 (solar value).
 
         feh_surf : float, optional
             Surface metallicity [Fe/H] in logarithmic units relative to solar.
-            Typical range: [-2.5, 0.5]. Default is 0.0 (solar).
+            Range: [-4, 0.5]. Default is 0.0 (solar).
 
         logl : float, optional
-            Base-10 logarithm of luminosity in solar luminosities.
-            Typical range: [-4, 6] from low-mass MS to supergiants.
-            Default is 0.0 (solar luminosity).
+            Base-10 logarithm of luminosity in solar luminosities. It is not
+            a network input and has no range. Default is 0.0 (solar
+            luminosity).
 
         afe : float, optional
             Alpha element enhancement [alpha/Fe] in logarithmic units relative
-            to solar abundance ratios. Typical range: [-0.2, 0.8].
+            to solar abundance ratios. Range: [-0.2, 0.6].
             Default is 0.0 (solar ratios).
 
         av : float, optional
-            V-band extinction in magnitudes. Must be non-negative.
-            Typical range: [0, 6] mag. Default is 0.0 (no extinction).
+            V-band extinction in magnitudes. Range: [0, 6] mag.
+            Default is 0.0 (no extinction).
 
         rv : float, optional
             Reddening parameter R(V) = A(V)/E(B-V), describing the
-            extinction curve shape. Typical range: [1, 8].
+            extinction curve shape. Range: [2, 5].
             Default is 3.3 (Milky Way average).
 
         dist : float, optional
@@ -429,8 +430,8 @@ class FastNNPredictor(FastNN):
         -------
         sed : numpy.ndarray of shape (Nfilt_subset,)
             Predicted apparent magnitudes in the specified filter subset.
-            Magnitudes are in the AB system and include distance modulus
-            and extinction corrections.
+            Magnitudes are in each survey's native photometric system and
+            include distance modulus and extinction corrections.
 
         Notes
         -----
@@ -440,14 +441,11 @@ class FastNNPredictor(FastNN):
         2. Evaluate neural network for bolometric corrections: BC = NN(params)
         3. Convert to apparent magnitudes: m = -2.5 * logl + 4.74 - BC + mu
 
-        If any input parameters are outside the neural network training
-        bounds, NaN values are returned for safety.
-
         Examples
         --------
         Solar analog at various distances:
 
-        >>> predictor = FastNNPredictor(['V', 'K'])
+        >>> predictor = FastNNPredictor(['Bessell_V', '2MASS_Ks'])
         >>> for d in [100, 1000, 10000]:  # pc
         ...     sed = predictor.sed(dist=d)
         ...     print(f"{d:5d} pc: V={sed[0]:.2f}, K={sed[1]:.2f}")
@@ -512,10 +510,10 @@ class FastNNPredictor(FastNN):
             Base-10 logarithm of luminosity for each star.
         afe : numpy.ndarray of shape (N,)
             Alpha element enhancement [alpha/Fe] for each star.
-        av : float
-            V-band extinction (same for all stars).
-        rv : float
-            Reddening parameter R(V) (same for all stars).
+        av : float or numpy.ndarray of shape (N,)
+            V-band extinction A(V) in mag.
+        rv : float or numpy.ndarray of shape (N,)
+            Reddening parameter R(V).
         dist : float
             Distance in parsecs (same for all stars).
         filt_idxs : slice or array-like, optional

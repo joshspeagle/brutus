@@ -11,10 +11,9 @@ Covers the audit fixes to `brutus.core.individual.StarGrid`:
    from an incomplete grid (falls back to KD-tree instead).
 2. No NaN weights (division by zero) when all surviving corners carry zero
    weight.
-3. The KD-tree must not be frozen with the label set of the first query.
-4. Unspecified grid dimensions with >1 value emit a UserWarning about the
-   pinned default.
-5. The O(1) corner-index lookup must be equivalent to the previous
+3. Both neighbour methods reject queries that omit a multi-valued axis,
+   or that give a non-finite or out-of-range label.
+4. The O(1) corner-index lookup must be equivalent to the previous
    boolean-scan implementation (and faster).
 """
 
@@ -192,6 +191,19 @@ class TestMissingCornerFallback:
         assert wmap.get(4, 0.0) > 0.99
 
 
+class TestZeroWeightCorners:
+    """Corners with zero weight are not looked up."""
+
+    def test_query_on_a_node_next_to_a_missing_corner_does_not_warn(self):
+        # The (0.5, 300) corner is missing; a query on the (1.0, 300) node
+        # gives it weight 0
+        grid = _make_grid([(0.5, 200.0, 0.0), (1.0, 200.0, 0.0), (1.0, 300.0, 0.0)])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            idx, w = grid._find_neighbors_multilinear(mini=1.0, eep=300.0, feh=0.0)
+        assert _as_weight_map(idx, w) == {2: 1.0}
+
+
 class TestZeroWeightNormalization:
     """Finding: zero surviving weight must not produce NaN weights/SEDs."""
 
@@ -214,51 +226,40 @@ class TestZeroWeightNormalization:
         assert np.isfinite(params["pidx"])
 
 
-class TestKDTreeNotFrozen:
-    """Finding: KD-tree frozen with the first query's label set."""
+class TestQueryValidation:
+    """Both neighbour methods reject queries they cannot answer."""
 
-    def test_partial_query_does_not_poison_full_queries(self):
-        tuples = [
-            (m, e, z) for m in (0.5, 1.0) for e in (200.0, 300.0) for z in (-0.5, 0.0)
-        ]
-        grid = _make_grid(tuples)
+    @pytest.mark.parametrize("use_multilinear", [True, False])
+    def test_omitted_multivalued_axis_raises(self, complete_grid, use_multilinear):
+        with pytest.raises(ValueError, match="feh"):
+            complete_grid.get_seds(mini=1.0, eep=300.0, use_multilinear=use_multilinear)
 
-        # First query uses only `mini` -> previously froze a 1-D tree
-        grid._find_neighbors_kdtree(mini=0.5)
-
-        # A full query must resolve the exact matching model, not average
-        # over all mini=1.0 models with eep/feh silently ignored
-        idx, w = grid._find_neighbors_kdtree(mini=1.0, eep=300.0, feh=0.0)
-        top = int(np.asarray(idx)[np.argmax(w)])
-        expected = int(
-            np.where(
-                (grid.labels["mini"] == 1.0)
-                & (grid.labels["eep"] == 300.0)
-                & (grid.labels["feh"] == 0.0)
-            )[0][0]
-        )
-        assert top == expected
-        assert np.max(w) > 0.99
-
-    def test_poisoning_via_public_api(self):
-        tuples = [
-            (m, e, z) for m in (0.5, 1.0) for e in (200.0, 300.0) for z in (-0.5, 0.0)
-        ]
-        grid = _make_grid(tuples)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            grid.get_predictions(mini=0.5, use_multilinear=False)
-            preds = grid.get_predictions(
-                mini=1.0, eep=300.0, feh=0.0, use_multilinear=False
+    @pytest.mark.parametrize("use_multilinear", [True, False])
+    @pytest.mark.parametrize("mini", [np.nan, np.inf, 1.5, 0.1])
+    def test_nonfinite_or_out_of_range_label_raises(
+        self, complete_grid, use_multilinear, mini
+    ):
+        # mini spans [0.5, 1.0]; these values used to return the edge model
+        with pytest.raises(ValueError, match="mini"):
+            complete_grid.get_seds(
+                mini=mini, eep=300.0, feh=0.0, use_multilinear=use_multilinear
             )
-        expected = int(
-            np.where(
-                (grid.labels["mini"] == 1.0)
-                & (grid.labels["eep"] == 300.0)
-                & (grid.labels["feh"] == 0.0)
-            )[0][0]
+        with pytest.raises(ValueError, match="mini"):
+            complete_grid.get_predictions(
+                mini=mini, eep=300.0, feh=0.0, use_multilinear=use_multilinear
+            )
+
+    @pytest.mark.parametrize("use_multilinear", [True, False])
+    def test_query_within_edge_tolerance_returns_edge_model(
+        self, complete_grid, use_multilinear
+    ):
+        edge, _, _ = complete_grid.get_seds(
+            mini=1.0, eep=300.0, feh=0.0, use_multilinear=use_multilinear
         )
-        assert np.isclose(preds["pidx"], expected, atol=1e-6)
+        near, _, _ = complete_grid.get_seds(
+            mini=1.0 + 1e-9, eep=300.0, feh=0.0, use_multilinear=use_multilinear
+        )
+        np.testing.assert_allclose(near, edge, rtol=0, atol=1e-6)
 
 
 class TestUnspecifiedParameterError:
@@ -300,43 +301,29 @@ class TestMultilinearEquivalence:
         grid = _make_grid(tuples)
 
         queries = []
-        # Random interior/exterior queries
+        # Random interior queries
         for _ in range(50):
             queries.append(
                 dict(
-                    mini=rng.uniform(0.3, 1.6),
-                    eep=rng.uniform(150.0, 450.0),
-                    feh=rng.uniform(-1.5, 0.5),
+                    mini=rng.uniform(0.5, 1.3),
+                    eep=rng.uniform(200.0, 400.0),
+                    feh=rng.uniform(-1.0, 0.0),
                 )
             )
         # Exact grid points and axis values
         for tup in tuples[::5]:
             queries.append(dict(mini=tup[0], eep=tup[1], feh=tup[2]))
-        # Out-of-bounds on all axes
-        queries.append(dict(mini=10.0, eep=1000.0, feh=2.0))
-        queries.append(dict(mini=0.01, eep=10.0, feh=-9.0))
 
         for q in queries:
             new = grid._find_neighbors_multilinear(**q)
             ref = _reference_multilinear(grid, **q)
             assert ref is not None
             new_map = _as_weight_map(*new)
-            ref_map = _as_weight_map(*ref)
+            # Corners with zero weight are skipped
+            ref_map = {k: v for k, v in _as_weight_map(*ref).items() if v > 0}
             assert set(new_map) == set(ref_map), q
             for k in ref_map:
                 assert np.isclose(new_map[k], ref_map[k], atol=1e-12), q
-
-    def test_omitted_axis_now_raises_instead_of_pinning(self):
-        # The old implementation pinned an omitted multi-valued axis to its
-        # minimum; that behavior is retired in favor of an immediate error
-        # (see TestUnspecifiedParameterError), so no pinned-equivalence
-        # check remains.
-        tuples = [
-            (m, e, z) for m in (0.5, 1.0) for e in (200.0, 300.0) for z in (-0.5, 0.0)
-        ]
-        grid = _make_grid(tuples)
-        with pytest.raises(ValueError, match="feh"):
-            grid._find_neighbors_multilinear(mini=0.75, eep=250.0)
 
     def test_first_model_wins_on_duplicate_labels(self):
         # Two models share identical labels; the first must win (matches

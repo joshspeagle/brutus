@@ -7,7 +7,7 @@ The data module manages all external data dependencies for brutus, including MIS
 brutus requires several types of external data:
 
 1. **Model grid**: a precomputed grid of stellar models and their spectral energy distributions (SEDs), `grid_mist_v9.h5` from `fetch_grids` (~780 MB)
-2. **MIST EEP tracks**: evolutionary tracks for `EEPTracks`, `MIST_1.2_EEPtrk.h5` from `fetch_tracks` (~1.1 GB). By default, the first load writes a cache of ~0.26 GB (`*_cachev2.pkl`) next to the file.
+2. **MIST EEP tracks**: evolutionary tracks for `EEPTracks`, `MIST_1.2_EEPtrk.h5` from `fetch_tracks` (~1.1 GB). By default, the first load writes a cache of ~0.13 GB (`*_cachev3.pkl`) next to the file.
 3. **MIST Isochrones**: tabulated isochrones for population synthesis, from `fetch_isos` (~260 MB)
 4. **Dust Maps**: HEALPix 3-D extinction maps (Bayestar19, from `fetch_dustmaps`, ~2.2 GB)
 5. **Neural Networks**: trained weights for bolometric corrections, from `fetch_nns` (~250 KB)

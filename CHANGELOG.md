@@ -194,6 +194,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   2.0e-6 (relative 2.7e-7). A multi-dimensional `labels` must have the
   shape of `dists`; one of the same size but another shape now raises
   `ValueError`, where it could pair distances with the wrong labels.
+- **`StarGrid.get_seds` and `get_predictions` reject queries they cannot
+  answer.** A NaN, infinite or out-of-range grid label raises `ValueError`
+  that names it; before, it returned the edge model with no warning
+  (`grid_mist_v9.h5`: `mini=50` and `mini=NaN` gave the `mini=2` SED).
+  Values within a relative 1e-6 of an axis edge are accepted. With
+  `use_multilinear=False`, an omitted multi-valued axis now raises
+  `ValueError`, as with the default; before, the KD-tree ignored it.
 
 ### Changed
 
@@ -202,6 +209,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unknown keyword now raises `TypeError`. `cornerplot` no longer sets a
   default `alpha` for the 2-D histograms, which `hist2d` never applied;
   the figures do not change.
+- `StarEvolTrack.get_seds` and `Isochrone.get_predictions` pass errors of
+  the tracks, the interpolator and the neural network through with their
+  own type. `get_seds` wrapped a track error in `RuntimeError`, and turned
+  an error in the primary or companion SED into a `RuntimeWarning` with a
+  NaN or single-star SED; the companion EEP search turned errors into a
+  NaN EEP. `Isochrone.get_predictions` wrapped interpolator errors in
+  `RuntimeError`. `EEPTracks` still rebuilds any cache that it cannot load,
+  and skips the cache write only on `OSError`.
+- **`GridGenerator.make_grid` has no `dist` argument.** Grids are always
+  computed at 1 kpc, the distance that `load_models`, `StarGrid` and
+  `BruteForce` assume; a grid made at another `dist` gave distances off by
+  a factor of (dist / 1000)^2. Passing `dist` now raises `TypeError`.
+- `GridGenerator.make_grid` raises `ValueError` naming the argument when
+  `av_grid` or `rv_grid` has a non-finite value or fewer than 2 distinct
+  values, or when `av_wt` or `rv_wt` has a non-finite value or a different
+  shape from its grid. Before, a one-value lattice gave a rank-deficient
+  fit with only a `RankWarning`, so the reddening coefficients that it
+  could not determine were arbitrary; a NaN marked every model invalid.
+  Tutorial 3 now passes 4 R(V) values.
+- **`EEPTracks` drops the unused attributes `null` and `binwidths`.** Its
+  `ygrid` attribute holds the unpadded grid (one [α/Fe] layer when the
+  tracks have one [α/Fe] value); `xgrid` and `grid_dims` still describe the
+  padded grid of the interpolator.
+- **`StarEvolTrack.get_seds`, `StarGrid.get_seds` and
+  `StarGrid.get_predictions` no longer accept `**kwargs`.** They ignored
+  unknown keywords, so a misspelled argument such as `Av=5.0` or `fe_h=-1`
+  gave a wrong result or a misleading error. An unknown keyword now raises
+  `TypeError`.
 - **`subsample_mode` is removed** from `fit`, `_fit` and `logpost_grid`,
   with its `"topk"` option, which truncated the posterior. `logpost_grid`
   returns a ninth value, `ln_incl`, the log-probability that each selected
@@ -312,6 +347,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `logpost_grid` raises `ValueError` that names `dlabels` when the default
   Galactic prior gets a plain, not structured, `dlabels` array. It raised a
   `TypeError` about `NoneType`.
+- `StarGrid` keeps the requested `filters` order for a structured `models`
+  array, as `load_models` does. It ordered the columns as in the file and
+  dropped unknown names silently; it now warns with the skipped names and
+  raises `ValueError` when none exists. For an unstructured `models`
+  array, a `filters` list of the wrong length raises `ValueError`.
+- `StarGrid` no longer warns about missing grid corners that carry zero
+  weight. On `grid_mist_v9.h5`, 96 of 3000 queries on grid nodes warned;
+  the SEDs do not change.
+- `StarGrid.get_seds(use_multilinear=False)` works on a grid of one
+  model; it raised `AttributeError`. On a grid with no grid label (`mini`,
+  `eep`, `feh`, `afe` or `smf`), both neighbour methods raise `ValueError`;
+  the default method returned the first model for any query. A `dist` that
+  is not a finite distance > 0 raises `ValueError`; a negative `dist` gave
+  NaN magnitudes.
 - `find_nn_file`, `EEPTracks` and `Isochrone` look for their default data
   files in the brutus download directory (`strato.path`, which
   `ASTRO_BRUTUS_DATA_DIR` sets) first, then in `data/DATAFILES`. They
@@ -455,6 +504,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once, instead of scanning every object for each bin. The maps are bitwise
   identical. With 3000 objects, 5 bands, 20 draws and 50 x 50 bins, a call
   takes a median 0.54 s instead of 0.71 s (3 alternated runs, 4 CPUs).
+- `StarGrid.get_seds` and `get_predictions` with `use_multilinear=False`
+  keep the scaling of the grid axes with the KD-tree instead of scanning
+  every model per query. Results are bitwise identical. On
+  `grid_mist_v9.h5` with 5 bands, a KD-tree `get_seds` call takes a median
+  0.11 ms instead of 35 ms, and a multilinear call 0.14 ms instead of
+  0.19 ms (5 interleaved runs, 4 CPUs).
+- `GridGenerator.make_grid` computes each model without a companion once
+  per (mini, eep, feh, afe) and copies it to the other `smf_grid` values.
+  The saved values are bitwise identical. A 960-model grid with 6 `smf`
+  values takes a median 0.78 s instead of 1.29 s (3 interleaved runs).
+- `EEPTracks` pads a single [α/Fe] value with a broadcast view instead of a
+  copy, and its cache stores the unpadded grid. On `MIST_1.2_EEPtrk.h5`, the
+  cache falls from 255 MB to 128 MB, the peak memory of a build from 945 MB
+  to 750 MB and of a cached load from 459 MB to 337 MB. Predictions are
+  bitwise identical. The cache file is now `*_cachev3.pkl`; the first load
+  rebuilds it.
+- `EEPTracks` computes the age weights with one numpy path (a stable
+  `np.lexsort` by track and EEP, then `np.gradient` per track) instead of
+  a pandas groupby with a slower loop when pandas is absent. The weights
+  are bitwise identical on `MIST_1.2_EEPtrk.h5`, and computing them takes
+  a median 0.72 s instead of 1.08 s with pandas (5 interleaved runs).
 - The bootstrap of `analysis.photometric_offsets` draws each sample by a
   per-row binary search of the weight CDF, in a jitted helper, instead of
   comparing every CDF entry. The medians are bitwise identical. With 20,000
@@ -474,6 +544,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- The docstring examples of `core.individual`, `core.neural_nets` and
+  `core.grid_generation` run on the shipped data: binary examples use
+  [α/Fe] = 0 (the MIST tracks have no other value) and filter names are
+  real ones such as `PS_g` and `Bessell_V`. `FastNNPredictor.sed` gives the
+  input ranges of `nn_c3k.h5` (R(V) in [2, 5], [α/Fe] in [-0.2, 0.6]) and
+  says that magnitudes are in each survey's native system, not AB.
+  `_get_seds` gives the meaning and units of `rvecs` and `drvecs`.
+- The `GridGenerator` docstrings give the default grid size (4,093,100
+  labels before masking, not ~300,000), drop the unmeasured run times and
+  memory figures, say that cost is linear in `len(av_grid) *
+  len(rv_grid)`, and give the `mini_grid` and `av_grid` defaults that the
+  code uses.
 - New SVG logo, with light and dark variants, and a favicon. The isochrone
   "S" is drawn as model-grid points coloured by temperature, over a faint
   posterior across the grid.

@@ -159,6 +159,10 @@ class TestStarEvolTrackMethods:
         assert isinstance(sed, np.ndarray)
         assert np.all(np.isfinite(sed))
 
+    def test_get_seds_rejects_unknown_keywords(self, mock_star_evol_track):
+        with pytest.raises(TypeError, match="Av"):
+            mock_star_evol_track.get_seds(mini=1.0, eep=350, feh=0.0, Av=5.0)
+
     def test_get_seds_with_distance(self, mock_star_evol_track):
         """Test get_seds with distance modulus."""
         sed, params, params2 = mock_star_evol_track.get_seds(
@@ -246,6 +250,20 @@ class TestStarEvolTrackMethods:
             )
         assert np.all(np.isfinite(np.asarray(sed_s[0])))
 
+    def test_companion_search_errors_propagate(self, mock_star_evol_track):
+        tracks = mock_star_evol_track.tracks
+        tracks.gridpoints = {"eep": np.arange(200.0, 500.0)}
+        primary = tracks.get_predictions.return_value
+
+        def get_predictions(labels, **kwargs):
+            if np.ndim(labels) == 2:  # the age curve of the companion
+                raise ValueError("bad curve")
+            return primary
+
+        tracks.get_predictions.side_effect = get_predictions
+        with pytest.raises(ValueError, match="bad curve"):
+            mock_star_evol_track.get_seds(mini=1.0, eep=350, feh=0.0, smf=0.7)
+
     def test_get_seds_multiple_stars(self, mock_star_evol_track):
         """Test get_seds with different stellar parameters."""
         # Test with single star but different parameters to exercise more code paths
@@ -269,11 +287,9 @@ class TestStarEvolTrackMethods:
         assert isinstance(params, np.ndarray)  # Should be array when return_dict=False
         assert isinstance(params2, np.ndarray)
 
-    def test_get_seds_error_handling(self):
-        """Test get_seds error handling paths."""
-        # Test with tracks that fail prediction
+    def test_get_seds_passes_track_errors_through(self):
         tracks = MagicMock()
-        tracks.get_predictions.side_effect = Exception("Prediction failed")
+        tracks.get_predictions.side_effect = ValueError("Prediction failed")
         tracks.labels = ["mini", "eep", "feh", "afe"]
         tracks.predictions = ["loga", "logl", "logt", "logg", "feh_surf", "afe_surf"]
 
@@ -284,10 +300,7 @@ class TestStarEvolTrackMethods:
             star_track = StarEvolTrack(tracks=tracks, verbose=False)
             star_track.predictor = mock_predictor
 
-            # Should raise RuntimeError when prediction fails (line 842)
-            with pytest.raises(
-                RuntimeError, match="Failed to generate stellar parameters"
-            ):
+            with pytest.raises(ValueError, match="Prediction failed"):
                 star_track.get_seds(mini=1.0, eep=350, feh=0.0, afe=0.0)
 
     def test_tracks_without_sed_labels_raise(self):
@@ -457,6 +470,19 @@ class TestCacheVersioning:
             assert attr not in cached_data
 
 
+def test_single_afe_grid_is_padded_by_a_view_and_cached_unpadded(tmp_path):
+    mistfile = _make_synthetic_mist_file(tmp_path / "tracks.h5")
+    tracks = EEPTracks(mistfile=mistfile, predictions=PREDICTIONS, verbose=False)
+    assert tracks.ygrid.shape[-2] == 1
+    assert tracks.interpolator.values.shape[-2] == 2
+    assert np.shares_memory(tracks.interpolator.values, tracks.ygrid)
+
+    with open(next(iter(tmp_path.glob("*.pkl"))), "rb") as f:
+        cached = pickle.load(f)
+    assert cached["ygrid"].shape == tracks.ygrid.shape
+    assert "interpolator" not in cached
+
+
 class TestBuildFromFile:
     """EEPTracks built from a small HDF5 file reproduces the stored tracks."""
 
@@ -477,15 +503,29 @@ class TestBuildFromFile:
         assert tracks.predictions == PREDICTIONS + ["agewt"]
         np.testing.assert_allclose(preds, expected, rtol=1e-12)
 
-    def test_corrupt_cache_falls_back_to_the_hdf5_file(self, tmp_path):
+    @pytest.mark.parametrize(
+        "content", [b"not a pickle", b"", pickle.dumps({"labels": ["mini"]})]
+    )
+    def test_corrupt_cache_falls_back_to_the_hdf5_file(self, tmp_path, content):
         mistfile = _make_synthetic_mist_file(tmp_path / "tracks.h5")
         EEPTracks(mistfile=mistfile, predictions=PREDICTIONS, verbose=False)
         cache_file = next(iter(tmp_path.glob("*.pkl")))
-        cache_file.write_bytes(b"not a pickle")
+        cache_file.write_bytes(content)
 
         tracks = EEPTracks(mistfile=mistfile, predictions=PREDICTIONS, verbose=False)
         preds = tracks.get_predictions([1.0, 210.0, 0.0, 0.0], apply_corr=False)
         np.testing.assert_allclose(preds[0], np.log10(AGE_SLOPE * 210.0), rtol=1e-12)
+
+    def test_unwritable_cache_still_builds(self, tmp_path, monkeypatch):
+        import brutus.core.individual as individual
+
+        def fail(*args):
+            raise OSError("read-only file system")
+
+        monkeypatch.setattr(individual.pickle, "dump", fail)
+        mistfile = _make_synthetic_mist_file(tmp_path / "tracks.h5")
+        tracks = EEPTracks(mistfile=mistfile, predictions=PREDICTIONS, verbose=False)
+        assert np.isfinite(tracks.get_predictions([1.0, 210.0, 0.0, 0.0])).all()
 
     def test_missing_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError, match="fetch_tracks"):
@@ -561,6 +601,33 @@ class TestMakeLibSinglePass:
 
 class TestAgeWeightJacobian:
     """agewt must be d(age)/d(EEP), not Delta(age) per array index."""
+
+    def test_matches_a_per_track_gradient_on_unsorted_tracks(self):
+        rng = np.random.default_rng(3)
+        rows = []
+        for mini, feh, n in [(0.5, 0.0, 7), (1.0, 0.0, 5), (1.0, -1.0, 1)]:
+            eeps = 200.0 + np.cumsum(rng.uniform(0.5, 3.0, n))  # non-uniform
+            for eep in eeps:
+                rows.append((mini, eep, feh, 0.0, np.log10(1e7 * eep**1.5)))
+        rows = [rows[i] for i in rng.permutation(len(rows))]
+
+        tracks = EEPTracks.__new__(EEPTracks)
+        tracks.libparams = np.array(
+            [r[:4] for r in rows],
+            dtype=[(n, "f8") for n in ("mini", "eep", "feh", "afe")],
+        )
+        tracks.output = np.array([[r[4]] for r in rows])
+        tracks.predictions, tracks._ageidx = ["loga"], 0
+        tracks._add_age_weights(verbose=False)
+
+        lib = tracks.libparams
+        expected = np.zeros(len(rows))
+        for mini, feh in [(0.5, 0.0), (1.0, 0.0)]:
+            idx = np.flatnonzero((lib["mini"] == mini) & (lib["feh"] == feh))
+            idx = idx[np.argsort(lib["eep"][idx])]
+            expected[idx] = np.gradient(10 ** tracks.output[idx, 0], lib["eep"][idx])
+        np.testing.assert_array_equal(tracks.output[:, 1], expected)
+        assert tracks.predictions == ["loga", "agewt"]
 
     def test_unit_spacing_matches_analytic_jacobian(self, tmp_path):
         mistfile = _make_synthetic_mist_file(tmp_path / "unit.h5", eep_step=1.0)

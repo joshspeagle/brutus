@@ -49,7 +49,7 @@ Advanced usage with binary stars:
 
 >>> # Model binary system with mass ratio 0.7
 >>> sed, params, params2 = star_track.get_seds(
->>>     mini=1.2, eep=400, feh=-0.2, afe=0.1,
+>>>     mini=1.2, eep=400, feh=-0.2, afe=0.0,
 >>>     smf=0.7, av=0.15, dist=1500.0
 >>> )
 
@@ -104,19 +104,17 @@ __all__ = ["EEPTracks", "StarEvolTrack", "StarGrid"]
 
 # EEPTracks pickle-cache format version. Bump whenever the set of cached
 # attributes (or their semantics) changes so that stale caches written by
-# older versions are ignored rather than mis-loaded. v2: caches only the
-# runtime attribute whitelist (construction intermediates X/libparams/output
-# are no longer stored or retained).
-_EEPTRACKS_CACHE_VERSION = 2
+# older versions are ignored rather than mis-loaded.
+_EEPTRACKS_CACHE_VERSION = 3
 
-# Runtime attributes required after construction; everything else is a
-# construction-only intermediate and is neither cached nor retained.
+# Cached attributes. The interpolator and its padded axes are rebuilt from
+# `gridpoints` and the unpadded `ygrid` on load: pickling them would store a
+# padded single-afe grid at twice the size.
 _EEPTRACKS_CACHE_ATTRS = (
     "labels",
     "predictions",
     "ndim",
     "npred",
-    "null",
     "mini_idx",
     "eep_idx",
     "feh_idx",
@@ -125,13 +123,9 @@ _EEPTRACKS_CACHE_ATTRS = (
     "logg_idx",
     "_ageidx",
     "mistfile",
-    "grid_dims",
     "gridpoints",
-    "binwidths",
     "mini_bound",
-    "xgrid",
     "ygrid",
-    "interpolator",
 )
 
 
@@ -299,7 +293,6 @@ class EEPTracks:
         self.labels = list(np.array(labels))
         self.predictions = list(np.array(predictions))
         self.ndim, self.npred = len(self.labels), len(self.predictions)
-        self.null = np.zeros(self.npred) + np.nan
 
         # Set label references for fast indexing
         self.mini_idx = np.where(np.array(self.labels) == "mini")[0][0]
@@ -329,6 +322,7 @@ class EEPTracks:
 
         # Try to load from cache first
         if use_cache and cache_file.exists():
+            state = dict(vars(self))
             try:
                 # Check if cache is newer than original file
                 cache_mtime = cache_file.stat().st_mtime
@@ -346,6 +340,7 @@ class EEPTracks:
                     # Restore all cached attributes
                     for attr, value in cached_data.items():
                         setattr(self, attr, value)
+                    self._make_interpolator()
 
                     if verbose:
                         sys.stderr.write("Cached EEPTracks loaded successfully!\n")
@@ -356,6 +351,12 @@ class EEPTracks:
                             "Cache is older than data file, regenerating...\n"
                         )
             except Exception as e:
+                # A cache that cannot be loaded (unreadable, truncated,
+                # corrupt, or written by another numpy) is rebuilt from the
+                # data file, which gives the same result. A cache that loaded
+                # but held bad values must not leave them behind.
+                vars(self).clear()
+                vars(self).update(state)
                 if verbose:
                     sys.stderr.write(
                         f"Cache loading failed ({e}), loading from original file...\n"
@@ -380,7 +381,7 @@ class EEPTracks:
 
         # Free construction-only intermediates: nothing reads them after
         # the interpolator exists, and retaining them roughly doubles the
-        # memory footprint (and, previously, the cache size on disk).
+        # memory footprint.
         for attr in ("libparams", "output", "X"):
             if hasattr(self, attr):
                 delattr(self, attr)
@@ -401,7 +402,8 @@ class EEPTracks:
                 if verbose:
                     sys.stderr.write(f"EEPTracks cached to {cache_file}\n")
 
-            except Exception as e:
+            except OSError as e:
+                # A read-only data directory only costs a rebuild next time
                 if verbose:
                     sys.stderr.write(f"Warning: Failed to cache EEPTracks ({e})\n")
 
@@ -517,16 +519,13 @@ class EEPTracks:
         -----
         This method populates the following attributes:
         - gridpoints: dict of unique values for each parameter
-        - binwidths: dict of grid spacings for each parameter
         - X: array of grid indices for each library point
         - mini_bound: minimum initial mass in the grid
         """
         # Get unique grid points in each dimension
         self.gridpoints = {}
-        self.binwidths = {}
         for p in self.labels:
             self.gridpoints[p] = np.unique(self.libparams[p])
-            self.binwidths[p] = np.diff(self.gridpoints[p])
 
         # Digitize library parameters to grid indices
         X = np.array(
@@ -556,10 +555,9 @@ class EEPTracks:
 
         Notes
         -----
-        Uses pandas for vectorized computation if available, otherwise falls
-        back to a slower loop-based implementation. The age weights are
-        appended to the predictions array and "agewt" is added to the
-        predictions list.
+        The age weights are appended to the predictions array and "agewt"
+        is added to the predictions list. A track (fixed mini, feh, afe)
+        with one point gets weight 0.
 
         The gradient is computed as d(age)/d(EEP) where age is in linear
         (not logarithmic) units, even though ages are stored as log(age).
@@ -572,65 +570,20 @@ class EEPTracks:
         if verbose:
             sys.stderr.write("  Computing age weights...\n")
 
-        # Use vectorized approach with pandas if available
-        try:
-            import pandas as pd
+        lib = self.libparams
+        eeps = lib["eep"].astype(float)
+        # Sort by track, then by EEP; lexsort is stable
+        order = np.lexsort((eeps, lib["afe"], lib["feh"], lib["mini"]))
+        keys = np.column_stack([lib[name][order] for name in ("mini", "feh", "afe")])
+        new_track = np.any(keys[1:] != keys[:-1], axis=1)
+        bounds = np.concatenate(([0], np.flatnonzero(new_track) + 1, [len(order)]))
 
-            age_ind = self._ageidx
-            df_data = {
-                "mini": self.libparams["mini"],
-                "feh": self.libparams["feh"],
-                "afe": self.libparams["afe"],
-                "eep": self.libparams["eep"],
-                "loga": self.output[:, age_ind],
-                "index": np.arange(len(self.libparams)),
-            }
-            df = pd.DataFrame(df_data)
-
-            ageweights = np.zeros(len(self.libparams))
-
-            for (m, z, a), group in df.groupby(["mini", "feh", "afe"]):
-                indices = group["index"].values
-                log_ages = group["loga"].values
-                eeps = group["eep"].values.astype(float)
-
-                if len(log_ages) > 1:
-                    # d(age)/d(EEP): differentiate against the EEP coordinate
-                    order = np.argsort(eeps, kind="stable")
-                    linear_ages = 10 ** log_ages[order]
-                    age_gradients = np.gradient(linear_ages, eeps[order])
-                    ageweights[indices[order]] = age_gradients
-
-        except ImportError:
-            # Fallback to original method
-            if verbose:
-                sys.stderr.write("    Using fallback method (pandas not available)\n")
-
-            age_ind = self._ageidx
-            ageweights = np.zeros(len(self.libparams))
-
-            for i, m in enumerate(self.gridpoints["mini"]):
-                for j, z in enumerate(self.gridpoints["feh"]):
-                    for k, a in enumerate(self.gridpoints["afe"]):
-                        inds = np.where(
-                            (self.libparams["mini"] == m)
-                            & (self.libparams["feh"] == z)
-                            & (self.libparams["afe"] == a)
-                        )[0]
-                        if len(inds) < 2:
-                            continue
-                        # d(age)/d(EEP): differentiate against the EEP
-                        # coordinate, sorted by EEP within each track
-                        eeps = self.libparams["eep"][inds].astype(float)
-                        order = np.argsort(eeps, kind="stable")
-                        inds = inds[order]
-                        try:
-                            agewts = np.gradient(
-                                10 ** self.output[inds, age_ind], eeps[order]
-                            )
-                            ageweights[inds] = agewts
-                        except (ValueError, IndexError):
-                            pass
+        linear_ages = 10 ** self.output[order, self._ageidx]
+        ageweights = np.zeros(len(lib))
+        for start, stop in zip(bounds[:-1], bounds[1:]):
+            if stop - start > 1:
+                track = order[start:stop]
+                ageweights[track] = np.gradient(linear_ages[start:stop], eeps[track])
 
         # Append to outputs
         self.output = np.hstack([self.output, ageweights[:, None]])
@@ -638,53 +591,46 @@ class EEPTracks:
 
     def _build_interpolator(self):
         """
+        Fill the output grid `ygrid` from the library and build the interpolator.
+
+        `ygrid` has shape (Nmini, Neep, Nfeh, Nafe, Npred + agewt), with NaN
+        where the library has no model.
+        """
+        grid_dims = [len(self.gridpoints[p]) for p in self.labels]
+        self.ygrid = np.full(grid_dims + [self.output.shape[-1]], np.nan)
+        if len(self.X) > 0:
+            self.ygrid[tuple(self.X.T)] = self.output
+        self._make_interpolator()
+
+    def _make_interpolator(self):
+        """
         Build the RegularGridInterpolator for fast predictions.
 
-        Creates a scipy RegularGridInterpolator object that enables fast
-        multi-linear interpolation of stellar parameters across the
-        4-dimensional grid (mini, eep, feh, afe).
+        Creates a scipy RegularGridInterpolator over (mini, eep, feh, afe)
+        that predicts all stellar parameters at once, with linear
+        interpolation and NaN outside the grid. It sets `xgrid` and
+        `grid_dims`, the axes and shape of the interpolated grid.
 
         Notes
         -----
-        Handles the special case where alpha enhancement has only one value
-        by padding the grid dimension to enable interpolation. Uses linear
-        interpolation with NaN fill values for out-of-bounds queries.
-
-        The interpolator maps from (mini, eep, feh, afe) input coordinates
-        to all predicted stellar parameters simultaneously.
+        A single afe value is padded to two nodes, 1e-5 on either side,
+        that share its values. The padding is a broadcast view of `ygrid`,
+        not a copy.
         """
-        # Set up grid dimensions
-        self.grid_dims = np.append(
-            [len(self.gridpoints[p]) for p in self.labels], self.output.shape[-1]
-        )
-        self.xgrid = tuple([self.gridpoints[lbl] for lbl in self.labels])
-
-        # Initialize output grid
-        self.ygrid = np.zeros(self.grid_dims) + np.nan
-
-        # Fill grid using optimized indexing
-        if len(self.X) > 0:
-            indices = tuple(self.X.T)
-            self.ygrid[indices] = self.output
-
-        # Handle singular alpha enhancement dimension
-        if self.grid_dims[-2] == 1:
-            afe_val = self.xgrid[-1][0]
-            xgrid = list(self.xgrid)
+        xgrid = [self.gridpoints[lbl] for lbl in self.labels]
+        ygrid = self.ygrid
+        if len(xgrid[-1]) == 1:
+            afe_val = xgrid[-1][0]
             xgrid[-1] = np.array([afe_val - 1e-5, afe_val + 1e-5])
-            self.xgrid = tuple(xgrid)
+            shape = list(ygrid.shape)
+            shape[-2] = 2
+            ygrid = np.broadcast_to(ygrid, shape)
+        self.xgrid = tuple(xgrid)
+        self.grid_dims = np.array(ygrid.shape)
 
-            # Duplicate values in padded dimension
-            self.grid_dims[-2] += 1
-            ygrid = np.empty(self.grid_dims)
-            ygrid[:, :, :, 0, :] = self.ygrid[:, :, :, 0, :]
-            ygrid[:, :, :, 1, :] = self.ygrid[:, :, :, 0, :]
-            self.ygrid = ygrid
-
-        # Initialize interpolator
         self.interpolator = RegularGridInterpolator(
             self.xgrid,
-            self.ygrid,
+            ygrid,
             method="linear",
             bounds_error=False,
             fill_value=np.nan,
@@ -929,7 +875,7 @@ class StarEvolTrack:
 
     >>> # Model binary with 70% mass ratio secondary
     >>> sed, params, params2 = star_track.get_seds(
-    ...     mini=1.2, eep=400, feh=-0.2, afe=0.1,
+    ...     mini=1.2, eep=400, feh=-0.2, afe=0.0,
     ...     smf=0.7, av=0.15, dist=1500.0
     ... )
     """
@@ -973,7 +919,6 @@ class StarEvolTrack:
         return_dict=True,
         combine_seds=True,
         tol=1e-2,
-        **kwargs,
     ):
         r"""
         Generate synthetic SED for an individual star.
@@ -1038,9 +983,7 @@ class StarEvolTrack:
             for the secondary's EEP in a binary. A companion whose age cannot be
             matched to within ``tol`` is treated as non-existent and a
             primary-only SED is returned (rather than discarding the model).
-            Default is 1e-2. The previous default (1e-6) was far tighter than
-            the age emulator's own precision and silently dropped most
-            otherwise-valid binary models.
+            Default is 1e-2.
 
         Returns
         -------
@@ -1087,7 +1030,7 @@ class StarEvolTrack:
         Binary system:
 
         >>> sed, params, params2 = star_track.get_seds(
-        ...     mini=1.2, eep=400, feh=-0.2, afe=0.1, smf=0.7
+        ...     mini=1.2, eep=400, feh=-0.2, afe=0.0, smf=0.7
         ... )
         """
         # Grab input labels
@@ -1095,12 +1038,9 @@ class StarEvolTrack:
         labels = np.array([labels[lbl] for lbl in self.tracks.labels])
 
         # Generate primary component predictions
-        try:
-            params_arr = self.tracks.get_predictions(
-                labels, apply_corr=apply_corr, corr_params=corr_params
-            )
-        except Exception as e:
-            raise RuntimeError(f"Failed to generate stellar parameters: {e}")
+        params_arr = self.tracks.get_predictions(
+            labels, apply_corr=apply_corr, corr_params=corr_params
+        )
 
         # Convert to dictionary format
         params = dict(zip(self.tracks.predictions, params_arr))
@@ -1112,30 +1052,22 @@ class StarEvolTrack:
         params2 = dict(zip(self.tracks.predictions, params_arr2))
 
         # Generate primary SED
-        mini_min = max(getattr(self.tracks, "mini_bound", 0.08), mini_bound)
         loga = params["loga"]
 
         if loga <= loga_max:
-            try:
-                sed = self.predictor.sed(
-                    logl=params["logl"],
-                    logt=params["logt"],
-                    logg=params["logg"],
-                    feh_surf=params["feh_surf"],
-                    afe=params["afe_surf"],
-                    av=av,
-                    rv=rv,
-                    dist=dist,
-                )
-            except Exception as e:
-                warnings.warn(
-                    f"Primary SED generation failed for (mini={mini}, eep={eep}): {e}",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
+            sed = self.predictor.sed(
+                logl=params["logl"],
+                logt=params["logt"],
+                logg=params["logg"],
+                feh_surf=params["feh_surf"],
+                afe=params["afe_surf"],
+                av=av,
+                rv=rv,
+                dist=dist,
+            )
 
             # Add binary companion if requested
-            if smf > 0.0 and eep <= eep_binary_max and mini * smf >= mini_min:
+            if self._tries_companion(mini, eep, smf, mini_bound, eep_binary_max):
                 # Generate secondary parameters
                 if eep2 is None:
                     eep2 = self._get_eep_for_secondary(
@@ -1163,34 +1095,25 @@ class StarEvolTrack:
                     }
                     labels2 = np.array([labels2[lbl] for lbl in self.tracks.labels])
 
-                    try:
-                        params_arr2 = self.tracks.get_predictions(
-                            labels2, apply_corr=apply_corr, corr_params=corr_params
-                        )
-                        params2 = dict(zip(self.tracks.predictions, params_arr2))
+                    params_arr2 = self.tracks.get_predictions(
+                        labels2, apply_corr=apply_corr, corr_params=corr_params
+                    )
+                    params2 = dict(zip(self.tracks.predictions, params_arr2))
 
-                        # Generate secondary SED
-                        sed2 = self.predictor.sed(
-                            logl=params2["logl"],
-                            logt=params2["logt"],
-                            logg=params2["logg"],
-                            feh_surf=params2["feh_surf"],
-                            afe=params2["afe_surf"],
-                            av=av,
-                            rv=rv,
-                            dist=dist,
-                        )
-                        if combine_seds:
-                            # Combine SEDs (magnitude addition)
-                            sed = add_mag(sed, sed2)
-
-                    except Exception as e:
-                        warnings.warn(
-                            f"Secondary SED generation failed for binary "
-                            f"(mini={mini}, smf={smf}, eep2={eep2}): {e}",
-                            RuntimeWarning,
-                            stacklevel=2,
-                        )
+                    # Generate secondary SED
+                    sed2 = self.predictor.sed(
+                        logl=params2["logl"],
+                        logt=params2["logt"],
+                        logg=params2["logg"],
+                        feh_surf=params2["feh_surf"],
+                        afe=params2["afe_surf"],
+                        av=av,
+                        rv=rv,
+                        dist=dist,
+                    )
+                    if combine_seds:
+                        # Combine SEDs (magnitude addition)
+                        sed = add_mag(sed, sed2)
 
         # Format output
         if not return_dict:
@@ -1203,6 +1126,11 @@ class StarEvolTrack:
             return sed, params, params2, eep2
         else:
             return sed, params, params2
+
+    def _tries_companion(self, mini, eep, smf, mini_bound, eep_binary_max):
+        """Return whether `get_seds` looks for a companion for these labels."""
+        mini_min = max(getattr(self.tracks, "mini_bound", 0.08), mini_bound)
+        return smf > 0.0 and eep <= eep_binary_max and mini * smf >= mini_min
 
     def _get_eep_for_secondary(self, loga, mini, eep, feh, afe, smf, tol):
         r"""
@@ -1273,38 +1201,19 @@ class StarEvolTrack:
             if isinstance(x, np.ndarray) and x.size == 1:
                 x = x[0]
             # Get predicted age for secondary star with mass mini*smf at EEP x
-            try:
-                loga_pred = self.tracks.get_predictions(
-                    [mini2, x, feh, afe], apply_corr=False
-                )[aidx]
-                return (loga_pred - loga) ** 2
-            except Exception:
-                # Return large loss if prediction fails
-                return 1e6
+            loga_pred = self.tracks.get_predictions(
+                [mini2, x, feh, afe], apply_corr=False
+            )[aidx]
+            return (loga_pred - loga) ** 2
 
         # Find best-fit EEP that minimizes age difference
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")  # ignore bad values during optimization
-                res = minimize(loss, eep, method="Nelder-Mead")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # ignore bad values during optimization
+            res = minimize(loss, eep, method="Nelder-Mead")
 
-            # Check if solution meets tolerance. loss is the squared log-age
-            # difference, so this accepts matches with |dloga| < tol (in dex).
-            if res.fun < tol**2:
-                eep2 = res.x[0]
-            else:
-                eep2 = np.nan
-
-        except Exception as e:
-            warnings.warn(
-                f"EEP optimization failed for secondary star "
-                f"(mini={mini}, smf={smf}): {e}",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-            eep2 = np.nan
-
-        return eep2
+        # Check if solution meets tolerance. loss is the squared log-age
+        # difference, so this accepts matches with |dloga| < tol (in dex).
+        return res.x[0] if res.fun < tol**2 else np.nan
 
     def _invert_age_curve(self, loga, mini2, feh, afe, aidx, tol):
         """
@@ -1335,24 +1244,18 @@ class StarEvolTrack:
         -------
         eep2 : float or None
             The matching EEP; NaN if no EEP matches the target age within
-            `tol`; None if this method is unusable for these inputs (caller
-            should fall back to the scalar Nelder-Mead solve).
+            `tol`; None if the age curve is not monotone (the caller then
+            falls back to the scalar Nelder-Mead solve).
         """
-        try:
-            eep_axis = np.asarray(self.tracks.gridpoints["eep"], dtype=float)
-            values = {"mini": mini2, "eep": eep_axis, "feh": feh, "afe": afe}
-            labels = np.column_stack(
-                [
-                    np.broadcast_to(values[lbl], eep_axis.shape)
-                    for lbl in self.tracks.labels
-                ]
-            )
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                preds = self.tracks.get_predictions(labels, apply_corr=False)
-            loga_curve = np.asarray(preds, dtype=float)[:, aidx]
-        except Exception:
-            return None
+        eep_axis = np.asarray(self.tracks.gridpoints["eep"], dtype=float)
+        values = {"mini": mini2, "eep": eep_axis, "feh": feh, "afe": afe}
+        labels = np.column_stack(
+            [np.broadcast_to(values[lbl], eep_axis.shape) for lbl in self.tracks.labels]
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            preds = self.tracks.get_predictions(labels, apply_corr=False)
+        loga_curve = np.asarray(preds, dtype=float)[:, aidx]
 
         # Restrict to the EEP range where the track exists (NaN = off-track)
         finite = np.isfinite(loga_curve)
@@ -1369,18 +1272,12 @@ class StarEvolTrack:
 
         # Acceptance check against the actual interpolant (also rejects
         # targets outside the track's age range, which np.interp clamps)
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                check = self.tracks.get_predictions(
-                    [
-                        values[lbl] if lbl != "eep" else eep2
-                        for lbl in self.tracks.labels
-                    ],
-                    apply_corr=False,
-                )[aidx]
-        except Exception:
-            return None
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            check = self.tracks.get_predictions(
+                [values[lbl] if lbl != "eep" else eep2 for lbl in self.tracks.labels],
+                apply_corr=False,
+            )[aidx]
 
         if np.isfinite(check) and abs(check - loga) < tol:
             return eep2
@@ -1401,9 +1298,9 @@ class StarGrid:
 
     Parameters
     ----------
-    models : numpy.ndarray of shape (Nmodel, Nfilt, Ncoef) or dict/h5py file
+    models : numpy.ndarray of shape (Nmodel, Nfilt, Ncoef) or dict
         Pre-computed model grid containing photometric coefficients.
-        If dict or h5py file, should contain 'mag_coeffs' key.
+        A dict must contain the 'mag_coeffs' key.
         Each model contains 3 coefficients per filter:
         - Unreddened magnitude
         - Reddening vector for R_V = 0
@@ -1417,8 +1314,10 @@ class StarGrid:
         If not provided, these won't be available in predictions.
 
     filters : list of str, optional
-        Filter names for photometry. If None, uses all available filters
-        from the models.
+        Filter names for photometry. For a structured `models` array, the
+        filters to keep, in this order; names not in `models` are skipped
+        with a warning. Otherwise, one name per filter of `models`. If
+        None, uses all available filters from the models.
 
     verbose : bool, optional
         Whether to print progress messages. Default is True.
@@ -1445,6 +1344,12 @@ class StarGrid:
 
     param_names : list
         Names of available parameters
+
+    Raises
+    ------
+    ValueError
+        If no requested filter is in a structured `models` array, or if
+        `filters` does not give one name per filter of `models`.
 
     Notes
     -----
@@ -1477,7 +1382,7 @@ class StarGrid:
         """Initialize the StarGrid with model data."""
         # Handle different input formats
         if isinstance(models, dict):
-            # Dictionary input (e.g., from h5py file)
+            # Dictionary input
             if "mag_coeffs" in models:
                 mag_coeffs = models["mag_coeffs"]
             else:
@@ -1510,11 +1415,25 @@ class StarGrid:
         else:
             # Handle structured array from actual data files
             if models.dtype.names is not None:
-                # Extract filter names and reshape
+                # Columns follow the requested order, as in `load_models`
                 filter_names = list(models.dtype.names)
                 if filters is not None:
-                    # Filter to requested filters
-                    filter_names = [f for f in filter_names if f in filters]
+                    missing = [f for f in filters if f not in filter_names]
+                    filter_names = [f for f in filters if f in filter_names]
+                    if not filter_names:
+                        raise ValueError(
+                            f"None of the requested filters {list(filters)} "
+                            f"exist in models. Available filters: "
+                            f"{list(models.dtype.names)}."
+                        )
+                    if missing:
+                        warnings.warn(
+                            f"Requested filters not found in models and "
+                            f"skipped: {missing}. The model columns correspond "
+                            f"(in order) to: {filter_names}.",
+                            UserWarning,
+                            stacklevel=2,
+                        )
 
                 self.filters = np.array(filter_names)
                 self.nfilters = len(self.filters)
@@ -1531,6 +1450,11 @@ class StarGrid:
         # Set filter names if not already set
         if not hasattr(self, "filters"):
             if filters is not None:
+                if len(filters) != self.nfilters:
+                    raise ValueError(
+                        f"filters has {len(filters)} names, but models has "
+                        f"{self.nfilters} filters."
+                    )
                 self.filters = np.array(filters)
             else:
                 # Generate default filter names
@@ -1554,10 +1478,8 @@ class StarGrid:
         # Build lookup indices for efficient interpolation
         self._build_grid_indices()
 
-        # Initialize KD-tree placeholders (built lazily, cached per label set)
+        # The KD-tree is built on first use
         self.kdtree = None
-        self._kdtree_labels = None  # Labels of the most recently used KD-tree
-        self._kdtree_cache = {}  # tuple(active_labels) -> cKDTree or None
 
         if verbose:
             print(
@@ -1587,6 +1509,11 @@ class StarGrid:
                 unique_vals = np.unique(self.labels[label])
                 self.grid_axes[label] = unique_vals
                 self.grid_shape.append(len(unique_vals))
+        # Finite (low, high) of each axis, for checking queries
+        self._axis_range = {
+            name: (np.nanmin(vals), np.nanmax(vals))
+            for name, vals in self.grid_axes.items()
+        }
 
         # Corner-index lookup: axis indices -> model row (first match wins)
         self._axis_names = list(self.grid_axes.keys())
@@ -1607,10 +1534,10 @@ class StarGrid:
             )
             shape = tuple(len(self.grid_axes[name]) for name in self._axis_names)
             if np.prod(shape, dtype=np.int64) <= 20_000_000:
-                # The FIRST model at duplicated coordinates must win (matches
-                # the previous scan behavior); fancy assignment with repeated
-                # indices has no write-order guarantee, so resolve duplicates
-                # explicitly via np.unique (returns first occurrences).
+                # The FIRST model at duplicated coordinates must win; fancy
+                # assignment with repeated indices has no write-order
+                # guarantee, so resolve duplicates explicitly via np.unique
+                # (returns first occurrences).
                 flat = np.ravel_multi_index(coords, shape)
                 uniq, first = np.unique(flat, return_index=True)
                 idx_map = np.full(shape, -1, dtype=np.int64)
@@ -1628,62 +1555,69 @@ class StarGrid:
             return self._grid_idx_map.get(axis_indices, -1)
         return int(self._grid_idx_map[axis_indices])
 
-    def _build_kdtree(self, **kwargs):
-        """
-        Build (or fetch a cached) KD-tree for this query's active label set.
+    def _check_query(self, **query):
+        """Return the given grid-axis values of a query, or raise ValueError.
 
-        Trees are cached per active label set: a query specifying only
-        ``mini`` and a query specifying (mini, eep, feh) use different trees,
-        so an early partial query can no longer freeze the tree with a
-        reduced label set and silently ignore parameters of later queries.
-
-        Sets ``self.kdtree`` / ``self._kdtree_labels`` to the tree matching
-        THIS call's active labels.
+        Every multi-valued axis must be given. Each given value must be
+        finite and inside its axis range, with a relative tolerance of 1e-6
+        at the edges: stored edges are not round (the MIST mini maximum is
+        2.0000000000000013).
         """
+        if not self._axis_names:
+            raise ValueError(
+                "StarGrid needs at least one grid label (mini, eep, feh, afe or "
+                f"smf) to answer a query; models_labels has {self.label_names}."
+            )
+        values = {
+            name: value
+            for name, value in query.items()
+            if name in self.grid_axes and value is not None
+        }
+        missing = [
+            name
+            for name in self._axis_names
+            if name not in values and len(self.grid_axes[name]) > 1
+        ]
+        if missing:
+            ranges = {name: self._axis_range[name] for name in missing}
+            raise ValueError(
+                f"Grid parameter(s) {missing} not specified. These axes span "
+                f"{ranges}. Specify them explicitly."
+            )
+        for name, value in values.items():
+            if not np.isfinite(value):
+                raise ValueError(f"{name} must be finite, got {value}.")
+            low, high = self._axis_range[name]
+            tol = 1e-6 * max(abs(low), abs(high), 1.0)
+            if not low - tol <= value <= high + tol:
+                raise ValueError(
+                    f"{name}={value} is outside the grid range [{low}, {high}]."
+                )
+        return values
+
+    def _build_kdtree(self):
+        """Build the KD-tree over all grid axes, each scaled to [0, 1]."""
         from scipy.spatial import cKDTree
 
-        # Determine which labels to use for KD-tree
-        active_labels = []
-        for label in ["mini", "eep", "feh", "afe", "smf"]:
-            if (
-                label in self.label_names
-                and label in kwargs
-                and kwargs[label] is not None
-            ):
-                active_labels.append(label)
-
-        if not active_labels:
-            # Use all available labels
-            active_labels = [
-                lbl
-                for lbl in ["mini", "eep", "feh", "afe", "smf"]
-                if lbl in self.label_names
-            ]
-
-        key = tuple(active_labels)
-        if key in self._kdtree_cache:
-            self.kdtree = self._kdtree_cache[key]
-            self._kdtree_labels = active_labels if self.kdtree is not None else None
-            return
-
-        # Build normalized coordinates for KD-tree
+        # A fixed axis order keeps the distances, summed over axes, independent
+        # of the column order of models_labels
+        # Per-axis (minimum, span), kept for scaling the queries
+        self._kdtree_scale = {}
         coords = []
-        for label in active_labels:
+        for label in ["mini", "eep", "feh", "afe", "smf"]:
+            if label not in self.grid_axes:
+                continue
             vals = self.labels[label]
-            # Normalize to [0, 1] for balanced distance metrics
             val_min, val_max = vals.min(), vals.max()
-            if val_max > val_min:
-                normalized = (vals - val_min) / (val_max - val_min)
+            span = val_max - val_min
+            self._kdtree_scale[label] = (val_min, span)
+            if span > 0:
+                coords.append((vals - val_min) / span)
             else:
-                normalized = np.zeros_like(vals)
-            coords.append(normalized)
+                coords.append(np.zeros_like(vals))
+        self.kdtree = cKDTree(np.column_stack(coords))
 
-        tree = cKDTree(np.column_stack(coords)) if coords else None
-        self._kdtree_cache[key] = tree
-        self.kdtree = tree
-        self._kdtree_labels = active_labels if tree is not None else None
-
-    def _find_neighbors_multilinear(self, **kwargs):
+    def _find_neighbors_multilinear(self, **req_params):
         """
         Find bracketing grid points and compute multi-linear interpolation weights.
 
@@ -1692,8 +1626,8 @@ class StarGrid:
 
         Parameters
         ----------
-        **kwargs : keyword arguments
-            Stellar parameters (mini, eep, feh, afe, smf)
+        **req_params : keyword arguments
+            Grid-axis values checked by `_check_query`.
 
         Returns
         -------
@@ -1714,12 +1648,6 @@ class StarGrid:
         Corners are resolved via the precomputed corner-index lookup (O(1)
         per corner) rather than boolean scans over all models.
 
-        Grid axes with more than one value MUST be specified in the query;
-        omitting one raises a ``ValueError``. (The historical behavior
-        silently evaluated at the axis minimum — e.g. ``feh = -3.0`` for
-        MIST — which corrupted results without any signal.) Single-valued
-        axes may be omitted since there is nothing to choose.
-
         Falls back to the KD-tree method when the bracketing corners are
         missing from the (incomplete) grid: entirely, or when the surviving
         corners carry less than half of the total interpolation weight.
@@ -1727,33 +1655,6 @@ class StarGrid:
         far-away model (e.g. beyond a truncated track's last EEP).
         """
         import itertools
-
-        # Get requested parameters
-        req_params = {}
-        for key in ["mini", "eep", "feh", "afe", "smf"]:
-            if key in kwargs and kwargs[key] is not None:
-                req_params[key] = kwargs[key]
-
-        # Omitting a multi-valued grid axis has no sensible default: the old
-        # behavior silently evaluated at the axis MINIMUM (e.g. feh = -3 for
-        # MIST), corrupting results without any error. There is no value we
-        # can substitute that the caller plausibly meant, so fail fast.
-        # Single-valued axes are exempt (there is nothing to choose).
-        missing = [
-            name
-            for name in self._axis_names
-            if name not in req_params and len(self.grid_axes[name]) > 1
-        ]
-        if missing:
-            ranges = {
-                name: (self.grid_axes[name][0], self.grid_axes[name][-1])
-                for name in missing
-            }
-            raise ValueError(
-                f"Grid parameter(s) {missing} not specified. These axes span "
-                f"{ranges} and have no sensible default (the old behavior "
-                f"silently used the axis minimum). Specify them explicitly."
-            )
 
         if not req_params:
             # Degenerate grid (every axis single-valued): return the first
@@ -1798,27 +1699,27 @@ class StarGrid:
         weights = []
         n_missing = 0
 
-        if self._grid_idx_map is None:
-            # No grid axes at all: degenerate to the first model
-            return np.array([0]), np.array([1.0])
-
         for combo in itertools.product(*axis_brackets):
+            # Weight is product of all dimension weights; a query on a grid
+            # node gives its neighbours weight 0, which need no model
+            weight = float(np.prod([c[1] for c in combo]))
+            if weight == 0.0:
+                continue
             model_idx = self._lookup_corner(tuple(c[0] for c in combo))
             if model_idx >= 0:
                 indices.append(model_idx)
-                # Weight is product of all dimension weights
-                weights.append(float(np.prod([c[1] for c in combo])))
+                weights.append(weight)
             else:
                 n_missing += 1
 
-        wsum = float(np.sum(weights)) if weights else 0.0
-        if not indices or wsum < 0.5:
+        wsum = float(np.sum(weights))
+        if wsum < 0.5:
             # All bracketing corners are missing, or the surviving corners
             # carry a minority of the interpolation weight (the query's
             # dominant corner is absent from the grid). Renormalizing the
             # survivors would silently snap to a far-away model, so use the
             # nearest-neighbor fallback instead.
-            return self._find_neighbors_kdtree(**kwargs)
+            return self._find_neighbors_kdtree(**req_params)
 
         if n_missing > 0:
             warnings.warn(
@@ -1843,7 +1744,7 @@ class StarGrid:
         Parameters
         ----------
         **kwargs : keyword arguments
-            Stellar parameters (mini, eep, feh, afe, smf)
+            Grid-axis values checked by `_check_query`.
 
         Returns
         -------
@@ -1862,46 +1763,19 @@ class StarGrid:
         The KD-tree is built lazily on first call and cached for
         subsequent queries.
         """
-        # Build KD-tree on first use
-        self._build_kdtree(**kwargs)
-
         if self.kdtree is None:
-            # KD-tree couldn't be built, use simple nearest neighbor
-            distances = np.zeros(self.nmodels)
-            for label in ["mini", "eep", "feh", "afe", "smf"]:
-                if (
-                    label in kwargs
-                    and kwargs[label] is not None
-                    and label in self.label_names
-                ):
-                    label_vals = self.labels[label]
-                    val_range = label_vals.max() - label_vals.min()
-                    if val_range > 0:
-                        distances += ((label_vals - kwargs[label]) / val_range) ** 2
+            self._build_kdtree()
 
-            nearest_idx = np.argmin(distances)
-            return np.array([nearest_idx]), np.array([1.0])
+        # A single-valued axis scales to 0 and may be omitted
+        query_point = [
+            (kwargs[label] - val_min) / span if span > 0 else 0.0
+            for label, (val_min, span) in self._kdtree_scale.items()
+        ]
 
-        # Build query point
-        query_point = []
-        for label in self._kdtree_labels:
-            if label in kwargs and kwargs[label] is not None:
-                val = kwargs[label]
-            else:
-                val = self.grid_axes[label][0] if label in self.grid_axes else 0
-
-            # Normalize
-            vals = self.labels[label]
-            val_min, val_max = vals.min(), vals.max()
-            if val_max > val_min:
-                normalized = (val - val_min) / (val_max - val_min)
-            else:
-                normalized = 0.0
-            query_point.append(normalized)
-
-        # Query KD-tree for nearest neighbors
         k = min(8, self.nmodels)  # Use up to 8 neighbors
         distances, indices = self.kdtree.query(query_point, k=k)
+        # A 1-model grid returns scalars
+        distances, indices = np.atleast_1d(distances, indices)
 
         # Convert distances to weights (inverse distance weighting)
         epsilon = 1e-10
@@ -1909,6 +1783,29 @@ class StarGrid:
         weights /= weights.sum()
 
         return indices, weights
+
+    def _neighbors(self, use_multilinear, **labels):
+        """Return the checked query and the indices and weights of its neighbours."""
+        query = self._check_query(**labels)
+        if use_multilinear:
+            return (query, *self._find_neighbors_multilinear(**query))
+        return (query, *self._find_neighbors_kdtree(**query))
+
+    def _interpolate_params(self, query, indices, weights):
+        """Return the query labels and the weighted parameters as a dict.
+
+        Without parameters, return the weighted labels instead.
+        """
+        if self.params is not None and self.param_names:
+            predictions = dict(query)
+            neighbors = self.params[indices]
+            for param in self.param_names:
+                predictions[param] = np.sum(neighbors[param] * weights)
+            return predictions
+        return {
+            label: np.sum(self.labels[label][indices] * weights)
+            for label in self.label_names
+        }
 
     def get_predictions(
         self,
@@ -1918,7 +1815,6 @@ class StarGrid:
         afe=None,
         smf=None,
         use_multilinear=True,
-        **kwargs,
     ):
         """
         Get stellar parameter predictions from the grid.
@@ -1947,28 +1843,25 @@ class StarGrid:
             Use multi-linear interpolation (True) or KD-tree nearest neighbor (False).
             Default is True.
 
-        **kwargs : additional parameters
-            Any additional selection criteria
-
         Returns
         -------
         predictions : dict or numpy.ndarray
             Predicted stellar parameters. Returns dict with parameter names
             as keys if parameters are available, otherwise returns array.
 
+        Raises
+        ------
+        ValueError
+            If a grid dimension with more than one value is omitted, or if a
+            given grid label is not finite or lies outside its axis range
+            (with a relative tolerance of 1e-6 at the edges). Single-valued
+            dimensions may be omitted and take their only value.
+
         See Also
         --------
         get_seds : Generate photometry along with parameter predictions
         _find_neighbors_multilinear : Multi-linear interpolation method
         _find_neighbors_kdtree : KD-tree nearest neighbor method
-
-        Notes
-        -----
-        Every grid dimension with more than one value must be specified;
-        omitting one raises a ``ValueError`` (e.g. omitting ``feh`` on a
-        MIST grid would otherwise silently select the most metal-poor
-        models). Single-valued dimensions may be omitted and take their
-        only value.
 
         Examples
         --------
@@ -1977,41 +1870,11 @@ class StarGrid:
         >>> print(f"log(age) = {preds['loga']:.2f}")
         >>> print(f"log(L) = {preds['logl']:.2f}")
         """
-        # Find neighboring grid points
-        if use_multilinear:
-            indices, weights = self._find_neighbors_multilinear(
-                mini=mini, eep=eep, feh=feh, afe=afe, smf=smf, **kwargs
-            )
-        else:
-            indices, weights = self._find_neighbors_kdtree(
-                mini=mini, eep=eep, feh=feh, afe=afe, smf=smf, **kwargs
-            )
+        query, indices, weights = self._neighbors(
+            use_multilinear, mini=mini, eep=eep, feh=feh, afe=afe, smf=smf
+        )
 
-        # Interpolate parameters if available
-        if self.params is not None and self.param_names:
-            predictions = {}
-
-            # Add input labels to predictions
-            for label in ["mini", "eep", "feh", "afe", "smf"]:
-                value = locals()[label]
-                if label in self.label_names and value is not None:
-                    predictions[label] = value
-
-            # Interpolate each parameter
-            for param in self.param_names:
-                param_vals = self.params[param][indices]
-                predictions[param] = np.sum(param_vals * weights)
-
-            return predictions
-
-        else:
-            # Return weighted average of labels only
-            predictions = {}
-            for label in self.label_names:
-                label_vals = self.labels[label][indices]
-                predictions[label] = np.sum(label_vals * weights)
-
-            return predictions
+        return self._interpolate_params(query, indices, weights)
 
     def get_seds(
         self,
@@ -2027,7 +1890,6 @@ class StarGrid:
         return_flux=False,
         return_predictions=True,
         use_multilinear=True,
-        **kwargs,
     ):
         r"""
         Generate synthetic SED from the grid.
@@ -2078,9 +1940,6 @@ class StarGrid:
             Use multi-linear interpolation (True) or KD-tree nearest neighbor (False).
             Default is True.
 
-        **kwargs : additional parameters
-            Passed to interpolation methods
-
         Returns
         -------
         sed : numpy.ndarray of shape (Nfilt,)
@@ -2092,6 +1951,12 @@ class StarGrid:
         params2 : dict or numpy.ndarray or None
             Secondary star parameters (empty placeholder - full binary
             implementation requires dedicated binary grid)
+
+        Raises
+        ------
+        ValueError
+            As in `get_predictions`, or if `dist` is not a finite distance
+            greater than 0.
 
         See Also
         --------
@@ -2110,10 +1975,6 @@ class StarGrid:
         where :math:`m_0` is the unreddened magnitude, :math:`r_0` and :math:`dr`
         are the reddening vector coefficients from the grid.
 
-        Every grid dimension with more than one value must be specified;
-        omitting one raises a ``ValueError``. Single-valued dimensions may
-        be omitted (see `get_predictions`).
-
         Examples
         --------
         >>> grid = StarGrid(models, labels)
@@ -2123,10 +1984,10 @@ class StarGrid:
         ... )
         >>> print(f"G magnitude: {sed[0]:.2f}")
         """
+        if dist is None or not np.isfinite(dist) or dist <= 0:
+            raise ValueError(f"dist must be a finite distance > 0 in pc; got {dist}.")
         # Warning for binary support limitations
         if smf is not None and smf > 0:
-            import warnings
-
             warnings.warn(
                 "Binary star support in StarGrid is limited. Secondary parameters "
                 "(params2) will be empty. For full binary modeling, use StarEvolTrack "
@@ -2135,72 +1996,23 @@ class StarGrid:
                 stacklevel=2,
             )
 
-        # Find neighboring grid points using chosen interpolation method
-        if use_multilinear:
-            indices, weights = self._find_neighbors_multilinear(
-                mini=mini, eep=eep, feh=feh, afe=afe, smf=smf, **kwargs
-            )
-        else:
-            indices, weights = self._find_neighbors_kdtree(
-                mini=mini, eep=eep, feh=feh, afe=afe, smf=smf, **kwargs
-            )
-
-        # Get weighted average of magnitude coefficients
-        weighted_coeffs = np.zeros((self.nfilters, 3))
-        for idx, weight in zip(indices, weights):
-            weighted_coeffs += self.models[idx] * weight
-
-        # Apply extinction and distance modulus using sed_utils
-        from .sed_utils import _get_seds
-
-        # Get reddened magnitudes
-        # _get_seds expects (Nmodels, Nbands, Ncoef) and arrays for av/rv
-        weighted_coeffs_3d = weighted_coeffs[np.newaxis, :, :]
-        av_array = np.array([av])
-        rv_array = np.array([rv])
-        seds_array, _, _ = _get_seds(
-            weighted_coeffs_3d, av_array, rv_array, return_flux=False
+        query, indices, weights = self._neighbors(
+            use_multilinear, mini=mini, eep=eep, feh=feh, afe=afe, smf=smf
         )
-        mags = seds_array[0]  # Extract the single model result
 
-        # Apply distance modulus (grid magnitudes stored at 1 kpc = 1000 pc reference)
-        # Note: Grid files are generated at 1 kpc distance for consistency with
-        # Gaia parallax measurements (1 mas = 1 kpc)
-        if dist is not None and dist != 1000.0:  # Grid reference is 1 kpc
-            dist_mod = 5.0 * np.log10(dist / 1000.0)
-            mags += dist_mod
+        # Weighted average of the magnitude coefficients (np.sum adds the rows
+        # in order; np.tensordot can change the last bit), reddened as in
+        # `_get_seds`. Grid magnitudes are at 1 kpc.
+        coeffs = np.sum(self.models[indices] * weights[:, None, None], axis=0)
+        mags = (
+            coeffs[:, 0]
+            + av * (coeffs[:, 1] + rv * coeffs[:, 2])
+            + 5.0 * np.log10(dist / 1000.0)
+        )
+        sed = 10 ** (-0.4 * mags) if return_flux else mags
 
-        # Convert to flux if requested
-        if return_flux:
-            from ..utils.photometry import inv_magnitude
-
-            # Use zero errors for now (could be improved with proper error propagation)
-            sed, _ = inv_magnitude(mags, np.zeros_like(mags))
-        else:
-            sed = mags
-
-        # Get parameter predictions using same neighbors (avoid redundant computation)
         if return_predictions:
-            # Interpolate parameters using already-found neighbors
-            if self.params is not None and self.param_names:
-                params = {}
-
-                # Add input labels
-                for label in ["mini", "eep", "feh", "afe", "smf"]:
-                    value = locals()[label]
-                    if label in self.label_names and value is not None:
-                        params[label] = value
-
-                # Interpolate parameters
-                for param in self.param_names:
-                    param_vals = self.params[param][indices]
-                    params[param] = np.sum(param_vals * weights)
-            else:
-                # Interpolate labels only
-                params = {}
-                for label in self.label_names:
-                    label_vals = self.labels[label][indices]
-                    params[label] = np.sum(label_vals * weights)
+            params = self._interpolate_params(query, indices, weights)
         else:
             params = None
 
