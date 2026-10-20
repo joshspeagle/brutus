@@ -118,6 +118,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `logpost_grid` takes `return_precision=True` to return the precision
+  matrices of the selected models in place of their covariances. `fit`
+  uses it to invert only the resampled models.
 - The default fit limits are the constants `brutus.utils.math.AVLIM`,
   (0, 20) mag, and `RVLIM`, (1, 8). Every function that takes `avlim` or
   `rvlim` uses them as its default.

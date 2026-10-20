@@ -1448,6 +1448,7 @@ class BruteForce:
         apply_av_prior=True,
         R_solar=8.2,
         Z_solar=0.025,
+        return_precision=False,
     ):
         """
         Compute log-posterior over the stellar model grid.
@@ -1473,11 +1474,34 @@ class BruteForce:
             Whether to apply the dust-map extinction prior when ``dustfile``
             is provided. Default is True.
 
+        return_precision : bool, optional
+            Return the (scale, A(V), R(V)) precision matrices of the selected
+            models in place of their covariances, which skips the inversion.
+            Default is False.
+
         Other parameters mirror the corresponding ``fit()`` options.
 
         Returns
         -------
-        Results from logpost_grid.
+        sel : `~numpy.ndarray` of shape `(Nsel,)`
+            Indices of the selected models in ``results``.
+        cov_sar : `~numpy.ndarray` of shape `(Nsel, 3, 3)`
+            Covariances of (scale, A(V), R(V)) of the selected models, or
+            their precisions with ``return_precision=True``.
+        lnp : `~numpy.ndarray` of shape `(Nsel,)`
+            Log-posterior of each selected model.
+        dist_mc : `~numpy.ndarray` of shape `(Nsel, Nmc)`
+            Monte Carlo distance draws, in kpc.
+        a_mc, r_mc : `~numpy.ndarray` of shape `(Nsel, Nmc)`
+            Monte Carlo A(V) and R(V) draws.
+        lnp_mc : `~numpy.ndarray` of shape `(Nsel, Nmc)`
+            Log-posterior weight of each draw: the model's log-likelihood and
+            ``lnprior``, the log-distance Jacobian, and the Galactic, dust and
+            parallax terms at the draw.
+        mc_ess : `~numpy.ndarray` of shape `(Nsel,)`
+            ``1 / sum(w**2)`` of the normalized weights of each model's draws.
+            The draws are antithetic pairs, so this measures how concentrated
+            the weights are, not a count of independent draws.
         """
         # The dust-map prior is a function of sky position; without one it
         # would crash deep inside the map query with an opaque IndexError.
@@ -1669,9 +1693,6 @@ class BruteForce:
         # Invert precision to get covariance in (ln d, Av, Rv)
         cov_lnd = _inverse3(icov_lnd, regularize=True)
 
-        # Also compute cov_sar for backward-compatible output.
-        cov_sar = _inverse3(icovs_selected, regularize=True)
-
         # Prepare means in (ln d, Av, Rv) space
         eta_sel = -0.5 * np.log(s_sel)  # ln(d) = -0.5*ln(s)
         means = np.column_stack([eta_sel, avs[sel], rvs[sel]])  # Shape: (Nsel, 3)
@@ -1837,7 +1858,11 @@ class BruteForce:
         # its weights above would be spuriously uniform.
         mc_ess = np.where(lw_max.ravel() > LOG_ZERO, mc_ess, 0.0)
 
-        return sel, cov_sar, lnp, dist_mc.T, a_mc.T, r_mc.T, lnp_mc.T, mc_ess
+        if return_precision:
+            matrices = icovs_selected
+        else:
+            matrices = _inverse3(icovs_selected, regularize=True)
+        return sel, matrices, lnp, dist_mc.T, a_mc.T, r_mc.T, lnp_mc.T, mc_ess
 
     def fit(
         self,
@@ -2495,13 +2520,12 @@ class BruteForce:
             rstate=rstate,
             R_solar=R_solar,
             Z_solar=Z_solar,
+            return_precision=True,
         )
 
-        # Unpack posterior results
-        # sel: selected model indices, cov_sar: covariances for selected models
-        # lnp: log-posteriors, dist_mc/a_mc/r_mc: MC samples, lnp_mc: MC log-posteriors
-        # mc_ess: effective sample size per selected model
-        sel, cov_sar_sel, lnp, dist_mc, a_mc, r_mc, lnp_mc, mc_ess_sel = logpost_results
+        sel, icov_sar_sel, lnp, dist_mc, a_mc, r_mc, lnp_mc, mc_ess_sel = (
+            logpost_results
+        )
         Nsel = len(sel)
 
         # Add parallax contribution to chi2 and Ndim if provided
@@ -2534,7 +2558,9 @@ class BruteForce:
         scales = scales_all[sidxs]
         avs = avs_all[sidxs]
         rvs = rvs_all[sidxs]
-        covs_sar = cov_sar_sel[idxs_local]
+        # Invert each drawn model once.
+        drawn, which = np.unique(idxs_local, return_inverse=True)
+        covs_sar = _inverse3(icov_sar_sel[drawn], regularize=True)[which]
         lnprob = lnp[idxs_local]
         mc_ess = mc_ess_sel[idxs_local]
 

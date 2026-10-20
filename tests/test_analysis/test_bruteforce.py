@@ -2200,6 +2200,22 @@ def test_apply_dlabels_controls_galactic_prior_labels(
         assert all(labels is None for labels in seen)
 
 
+def test_precision_return_inverts_to_the_returned_covariances(fitter, observation):
+    """_fit inverts only the resampled precisions; that must match the
+    covariances logpost_grid returns, bitwise."""
+    from brutus.utils.math import inverse3
+
+    flux, flux_err, mask = observation
+    like = fitter.loglike_grid(flux, flux_err, mask, return_vals=True)
+    kwargs = dict(Nmc_prior=5, wt_thresh=0.1)
+    cov = fitter.logpost_grid(like, rstate=np.random.RandomState(1), **kwargs)[1]
+    icov = fitter.logpost_grid(
+        like, rstate=np.random.RandomState(1), return_precision=True, **kwargs
+    )[1]
+    pick = np.array([0, len(icov) - 1, 0])
+    np.testing.assert_array_equal(inverse3(icov[pick], regularize=True), cov[pick])
+
+
 def test_misspelled_keyword_raises(fitter, observation):
     flux, flux_err, mask = observation
     with pytest.raises(TypeError, match="av_gaus"):
