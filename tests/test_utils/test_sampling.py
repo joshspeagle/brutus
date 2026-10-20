@@ -1,6 +1,7 @@
 """Tests of brutus.utils.sampling."""
 
 import numpy as np
+import pytest
 
 
 class TestQuantileFunction:
@@ -173,6 +174,45 @@ class TestSampleMultivariateNormal:
 
         assert samples.shape == (2, 10)
         assert np.all(np.isfinite(samples))
+
+
+class TestAntitheticDraws:
+    """Test the antithetic standard normals and the 3-D sampler that uses them."""
+
+    @pytest.mark.parametrize("size", [6, 7])
+    def test_second_half_of_draws_negates_the_first(self, size):
+        """z[..., nh:] == -z[..., :size - nh], with nh = ceil(size / 2)."""
+        from brutus.utils.sampling import _antithetic_normals
+
+        z = _antithetic_normals(np.random.RandomState(397), 4, 3, size)
+        nh = (size + 1) // 2
+        assert z.shape == (4, 3, size)
+        np.testing.assert_array_equal(z[..., nh:], -z[..., : size - nh])
+        # The first nh draws are independent normals, not pairs of each other.
+        assert np.unique(z[..., :nh]).size == z[..., :nh].size
+
+    def test_antithetic_samples_equal_mean_plus_cholesky_times_draws(self):
+        """sample_multivariate_normal(..., antithetic=True) returns
+        mean + L @ z, with L = cholesky(cov) and z the antithetic draws."""
+        from brutus.utils.sampling import (
+            _antithetic_normals,
+            sample_multivariate_normal,
+        )
+
+        rng = np.random.RandomState(417)
+        mean = rng.normal(size=(5, 3))
+        a = rng.normal(size=(5, 3, 3))
+        cov = a @ np.swapaxes(a, 1, 2) + 0.1 * np.eye(3)
+        size = 7
+
+        samples = sample_multivariate_normal(
+            mean, cov, size=size, rstate=np.random.RandomState(1), antithetic=True
+        )
+        z = _antithetic_normals(np.random.RandomState(1), 5, 3, size)
+        expected = mean[:, :, None] + np.linalg.cholesky(cov) @ z  # (N, d, size)
+        np.testing.assert_allclose(
+            samples, np.transpose(expected, (1, 2, 0)), rtol=1e-12, atol=1e-14
+        )
 
 
 class TestSamplingEdgeCases:

@@ -15,6 +15,7 @@ weights and effective sample size of ``BruteForce.logpost_grid``, the
 import numpy as np
 import numpy.testing as npt
 import pytest
+import scipy.stats
 
 from brutus.analysis.individual import (
     BruteForce,
@@ -24,7 +25,8 @@ from brutus.analysis.individual import (
 )
 from brutus.core.individual import StarGrid
 from brutus.core.sed_utils import _get_seds
-from brutus.utils.math import inverse3, isPSD
+from brutus.utils.math import LOG_ZERO, inverse3, isPSD
+from brutus.utils.sampling import quantile
 
 # ============================================================================
 # Shared fixtures
@@ -873,3 +875,65 @@ class TestJittedLikelihoodHelpers:
         npt.assert_array_equal(
             _chi2_from_resid(resid, tot_var), np.sum(resid**2 / tot_var, axis=1)
         )
+
+
+# ============================================================================
+# Part 7 -- logpost_grid: analytic distance posterior and scale guards
+# ============================================================================
+
+
+class TestLogpostGridDistancePosterior:
+    """Compare logpost_grid with an analytic posterior and test its guards."""
+
+    def test_weighted_distance_quantiles_match_the_analytic_posterior(
+        self, logpost_fitter
+    ):
+        """With flat priors in d, the weighted ln d draws follow
+        N(eta0 + sigma**2, sigma**2).
+
+        The draws are N(eta0, sigma**2) in eta = ln d. A flat prior in d is
+        the weight |dd/deta| = exp(eta), and
+        N(eta; eta0, sigma**2) * exp(eta) is proportional to
+        N(eta; eta0 + sigma**2, sigma**2).
+        """
+        scale = 0.25  # 2 kpc
+        icov = _sar_precision(2 * scale * 0.3, 0.1, 0.2, SAR_CORR)  # sd(ln d) = 0.3
+        results = _results_tuple([0.0], [scale], [5.0], [3.3], [icov])
+        _, _, _, dist_mc, _, _, lnp_mc, _ = logpost_fitter.logpost_grid(
+            results, Nmc_prior=20000, rstate=np.random.RandomState(214)
+        )
+        weights = np.exp(lnp_mc[0] - lnp_mc[0].max())
+        weights /= weights.sum()
+
+        sigma2 = np.linalg.inv(_lnd_precision(icov, scale))[0, 0]
+        sigma = np.sqrt(sigma2)
+        q = np.array([0.16, 0.5, 0.84])
+        z_q = scipy.stats.norm.ppf(q)
+        expected = -0.5 * np.log(scale) + sigma2 + sigma * z_q
+        # Standard error of a sample quantile from n independent draws:
+        # sigma * sqrt(q (1 - q)) / (sqrt(n) * phi(z_q)), with n the Kish
+        # size 1 / sum(w**2). Antithetic pairs anticorrelate the indicators
+        # 1(eta < eta_q), so this bound is conservative. The Jacobian shifts
+        # the quantiles by sigma2 = 0.09, 27 to 32 standard errors.
+        n_eff = 1.0 / np.sum(weights**2)
+        stderr = (
+            sigma * np.sqrt(q * (1 - q)) / (np.sqrt(n_eff) * scipy.stats.norm.pdf(z_q))
+        )
+        found = quantile(np.log(dist_mc[0]), q, weights=weights)
+        npt.assert_array_less(np.abs(found - expected), 5 * stderr)
+
+    def test_nonpositive_scale_gives_finite_posterior(self, logpost_fitter):
+        """Models with scale 0 or < 0 give finite lnp and no NaN draws."""
+        scales = [0.0, -0.5, 0.25]
+        icovs = [_sar_precision(0.01, 0.1, 0.2, SAR_CORR)] * 3
+        results = _results_tuple(np.zeros(3), scales, [1.0] * 3, [3.3] * 3, icovs)
+        sel, _, lnp, dist_mc, a_mc, r_mc, lnp_mc, mc_ess = logpost_fitter.logpost_grid(
+            results, Nmc_prior=50, rstate=np.random.RandomState(1634)
+        )
+        npt.assert_array_equal(sel, np.arange(3))
+        assert np.all(np.isfinite(lnp))
+        # Every draw of the clamped models leaves the distance support.
+        npt.assert_array_equal(lnp[:2], LOG_ZERO)
+        npt.assert_array_equal(mc_ess[:2], 0.0)
+        for draws in (dist_mc, a_mc, r_mc, lnp_mc, mc_ess):
+            assert not np.any(np.isnan(draws))
