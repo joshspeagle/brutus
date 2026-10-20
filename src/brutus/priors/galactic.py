@@ -9,19 +9,6 @@ including disk and halo number densities, metallicity distributions,
 and age-metallicity relations. These priors encode our knowledge of the
 Milky Way's stellar populations and are essential for distance estimation.
 
-Functions
----------
-logn_disk : Disk number density
-    Exponential disk model
-logn_halo : Halo number density
-    Flattened power-law halo
-logp_feh : Metallicity distribution
-    Gaussian metallicity distribution
-logp_age_from_feh : Age-metallicity relation
-    Age distribution conditional on metallicity
-logp_galactic_structure : Combined prior
-    Full Galactic structure prior combining disk and halo
-
 See Also
 --------
 brutus.analysis.individual.BruteForce : Uses Galactic priors for distance fitting

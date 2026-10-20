@@ -9,13 +9,6 @@ the initial mass function (IMF) and luminosity functions. These priors
 are used in Bayesian inference of stellar parameters to incorporate
 physical constraints from stellar populations.
 
-Functions
----------
-logp_imf : Initial mass function prior
-    Kroupa-like broken power-law IMF
-logp_ps1_luminosity_function : Luminosity function prior
-    Pan-STARRS 1 r-band luminosity function
-
 See Also
 --------
 brutus.analysis.individual.BruteForce : Uses these priors for stellar fitting

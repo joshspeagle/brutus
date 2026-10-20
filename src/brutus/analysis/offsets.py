@@ -14,24 +14,6 @@ to account for systematic calibration differences, photometric system
 transformations, or model systematics. The offsets are computed by analyzing
 model/data flux ratios across a sample of well-fit objects.
 
-Classes
--------
-PhotometricOffsetsConfig : Configuration container
-    Encapsulates all configuration parameters with validation
-
-Functions
----------
-photometric_offsets : Compute offsets
-    Main function for computing multiplicative photometric offsets
-_vectorized_bootstrap_median : Bootstrap implementation
-    Vectorized bootstrap for performance
-_loo_weights : Leave-one-out importance weights
-    Reweight full-posterior draws to the leave-one-out posterior
-_generate_seds : Chunked model SED generation
-    Bounds peak memory for large samples
-_validate_inputs : Input validation
-    Validate input arrays for consistency
-
 See Also
 --------
 brutus.analysis.individual.BruteForce : Provides fitted parameters for offset computation

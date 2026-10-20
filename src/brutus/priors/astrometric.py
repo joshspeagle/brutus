@@ -9,15 +9,6 @@ including parallax priors and coordinate transformations. These priors
 are essential for incorporating Gaia astrometry into stellar parameter
 estimation.
 
-Functions
----------
-logp_parallax : Parallax prior
-    Gaussian prior from measured parallax
-logp_parallax_scale : Scale factor prior
-    Prior on distance scale (s = 1/d^2)
-convert_parallax_to_scale : Coordinate transform
-    Convert parallax to flux scale factor
-
 See Also
 --------
 brutus.priors.galactic : Galactic structure distance priors

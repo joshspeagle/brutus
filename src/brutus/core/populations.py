@@ -16,18 +16,6 @@ This design is consistent with the individual star modeling pattern:
 - EEPTracks: Stellar parameter predictions for individuals
 - StarEvolTrack: SED/photometry generation for individuals
 
-Classes
--------
-Isochrone : Stellar population parameter predictions
-    Interpolates MIST isochrones to predict stellar parameters (mass, age,
-    temperature, etc.) as a function of metallicity, alpha enhancement,
-    age, and evolutionary phase.
-
-StellarPop : Stellar population photometry synthesis
-    Generates synthetic photometry for stellar populations using neural
-    network bolometric corrections, with support for binary stars, dust
-    extinction, and complex evolutionary modeling.
-
 Examples
 --------
 Basic stellar population modeling:

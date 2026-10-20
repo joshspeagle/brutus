@@ -8,21 +8,6 @@ This module contains mathematical utility functions including matrix operations,
 statistical distributions, and numerical utilities. Many functions are JIT-compiled
 with numba for performance.
 
-Functions
----------
-galactic_to_galactocentric_cyl : Coordinate transform
-    Convert Galactic (l, b, distance) to galactocentric cylindrical (R, phi, Z)
-inverse3 : Matrix inversion
-    Fast 3x3 matrix inversion with optional diagonal preconditioning
-isPSD : Matrix check
-    Check if matrix is positive semi-definite
-chisquare_logpdf : Chi-square log-PDF
-    Log-probability density for chi-square distribution
-truncnorm_pdf : Truncated normal PDF
-    Probability density for truncated normal
-truncnorm_logpdf : Truncated normal log-PDF
-    Log-probability density for truncated normal
-
 See Also
 --------
 brutus.utils.sampling : Sampling utilities

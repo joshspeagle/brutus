@@ -115,6 +115,14 @@ q16, q50, q84 = quantile(data, [0.16, 0.5, 0.84], weights=weights)
 .. autofunction:: phot_loglike
 ```
 
+```{eval-rst}
+.. autofunction:: chisquare_outlier_loglike
+```
+
+```{eval-rst}
+.. autofunction:: uniform_outlier_loglike
+```
+
 ## Constants
 
 ```{eval-rst}

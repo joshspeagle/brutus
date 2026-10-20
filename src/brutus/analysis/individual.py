@@ -14,23 +14,6 @@ likelihood extinction and distance for each grid point, then computes
 Bayesian posteriors incorporating priors on stellar parameters, Galactic
 structure, dust maps, and astrometry.
 
-Classes
--------
-BruteForce : Grid-based stellar parameter estimation
-    Performs Bayesian inference over pre-computed stellar model grids
-    to estimate stellar parameters, distances, and extinction for
-    individual stars. Provides methods for computing log-likelihoods
-    and log-posteriors over the grid.
-
-Functions
----------
-_bounded_step : Damped Newton step in extinction within its bounds
-_mag_objective : Magnitude-space objective of one model
-_optimize_fit_mag : Optimize extinction in magnitude space
-_flux_objective : Flux-space objective and its gradient in extinction
-_newton_step_flux : Trial extinction step in flux space
-_get_sed_mle : Compute maximum likelihood SED parameters
-
 See Also
 --------
 brutus.core.StarGrid : Pre-computed stellar model grids

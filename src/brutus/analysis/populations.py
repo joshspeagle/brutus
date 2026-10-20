@@ -14,21 +14,6 @@ accounts for field contamination by applying the mixture model at each grid poin
 before integrating over stellar parameters. This differs from traditional approaches
 that marginalize first and mix later, which can produce biased results.
 
-Functions
----------
-isochrone_population_loglike : Main likelihood function
-    Compute log-likelihood for coeval stellar population
-generate_isochrone_population_grid : Grid generation
-    Generate (mass, SMF) grid for population modeling
-compute_isochrone_cluster_loglike : Cluster likelihood
-    Compute membership likelihood for each grid point
-compute_isochrone_outlier_loglike : Outlier likelihood
-    Compute field contamination likelihood
-apply_isochrone_mixture_model : Mixture model
-    Apply mixture before marginalization
-marginalize_isochrone_grid : Marginalization
-    Integrate over stellar parameters with geometric jacobians
-
 See Also
 --------
 brutus.core.populations.StellarPop : Stellar population synthesis

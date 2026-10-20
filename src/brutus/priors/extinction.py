@@ -8,11 +8,6 @@ This module provides log-prior functions for dust extinction modeling
 using 3D dust maps. These priors incorporate spatial dust distribution
 information to constrain extinction in stellar fitting.
 
-Functions
----------
-logp_extinction : Dust map extinction prior
-    Gaussian prior from 3D dust maps (e.g., Bayestar)
-
 See Also
 --------
 brutus.dust.maps : 3D dust map utilities

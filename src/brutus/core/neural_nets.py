@@ -13,16 +13,6 @@ computation of bolometric corrections across multiple photometric bands,
 significantly speeding up stellar parameter inference compared to full spectral
 synthesis.
 
-Classes
--------
-FastNN : Base neural network class
-    Provides core neural network functionality for bolometric correction
-    prediction using pre-trained weights and biases.
-
-FastNNPredictor : SED prediction class
-    Extends FastNN to generate complete spectral energy distributions
-    for multiple filters with distance modulus and reddening corrections.
-
 Examples
 --------
 Basic usage for SED prediction:

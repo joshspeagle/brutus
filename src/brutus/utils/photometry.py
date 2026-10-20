@@ -8,25 +8,6 @@ This module contains functions for converting between magnitudes and fluxes,
 handling asinh magnitudes ("luptitudes"), and computing photometric likelihoods.
 These utilities are fundamental for all photometric analysis in brutus.
 
-Functions
----------
-magnitude : Convert flux to magnitudes
-    Magnitudes in the survey's native system
-inv_magnitude : Convert magnitudes to flux
-    Inverse of magnitude conversion
-luptitude : Convert flux to asinh magnitudes
-    Asinh magnitude system (Lupton et al. 1999)
-inv_luptitude : Convert asinh magnitudes to flux
-    Inverse of luptitude conversion
-add_mag : Combine magnitudes
-    Add fluxes in magnitude space
-phot_loglike : Photometric log-likelihood
-    Core likelihood function for stellar fitting
-chisquare_outlier_loglike : Chi-square outlier model
-    Outlier likelihood for mixture models
-uniform_outlier_loglike : Uniform outlier model
-    Alternative outlier likelihood
-
 See Also
 --------
 brutus.analysis.individual.BruteForce : Uses phot_loglike for fitting
