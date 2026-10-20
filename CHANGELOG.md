@@ -194,6 +194,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   2.0e-6 (relative 2.7e-7). A multi-dimensional `labels` must have the
   shape of `dists`; one of the same size but another shape now raises
   `ValueError`, where it could pair distances with the wrong labels.
+- **`StarGrid.get_seds` and `get_predictions` reject queries they cannot
+  answer.** A NaN, infinite or out-of-range grid label raises `ValueError`
+  that names it; before, it returned the edge model with no warning
+  (`grid_mist_v9.h5`: `mini=50` and `mini=NaN` gave the `mini=2` SED).
+  Values within a relative 1e-6 of an axis edge are accepted. With
+  `use_multilinear=False`, an omitted multi-valued axis now raises
+  `ValueError`, as with the default; before, the KD-tree ignored it.
 
 ### Changed
 

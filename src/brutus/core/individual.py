@@ -1554,10 +1554,8 @@ class StarGrid:
         # Build lookup indices for efficient interpolation
         self._build_grid_indices()
 
-        # Initialize KD-tree placeholders (built lazily, cached per label set)
+        # The KD-tree is built on first use
         self.kdtree = None
-        self._kdtree_labels = None  # Labels of the most recently used KD-tree
-        self._kdtree_cache = {}  # tuple(active_labels) -> cKDTree or None
 
         if verbose:
             print(
@@ -1587,6 +1585,11 @@ class StarGrid:
                 unique_vals = np.unique(self.labels[label])
                 self.grid_axes[label] = unique_vals
                 self.grid_shape.append(len(unique_vals))
+        # Finite (low, high) of each axis, for checking queries
+        self._axis_range = {
+            name: (np.nanmin(vals), np.nanmax(vals))
+            for name, vals in self.grid_axes.items()
+        }
 
         # Corner-index lookup: axis indices -> model row (first match wins)
         self._axis_names = list(self.grid_axes.keys())
@@ -1628,47 +1631,54 @@ class StarGrid:
             return self._grid_idx_map.get(axis_indices, -1)
         return int(self._grid_idx_map[axis_indices])
 
-    def _build_kdtree(self, **kwargs):
-        """
-        Build (or fetch a cached) KD-tree for this query's active label set.
+    def _check_query(self, **query):
+        """Return the given grid-axis values of a query, or raise ValueError.
 
-        Trees are cached per active label set: a query specifying only
-        ``mini`` and a query specifying (mini, eep, feh) use different trees,
-        so an early partial query can no longer freeze the tree with a
-        reduced label set and silently ignore parameters of later queries.
-
-        Sets ``self.kdtree`` / ``self._kdtree_labels`` to the tree matching
-        THIS call's active labels.
+        Every multi-valued axis must be given. Each given value must be
+        finite and inside its axis range, with a relative tolerance of 1e-6
+        at the edges: stored edges are not round (the MIST mini maximum is
+        2.0000000000000013).
         """
+        values = {
+            name: query[name]
+            for name in self._axis_names
+            if query.get(name) is not None
+        }
+        missing = [
+            name
+            for name in self._axis_names
+            if name not in values and len(self.grid_axes[name]) > 1
+        ]
+        if missing:
+            ranges = {name: self._axis_range[name] for name in missing}
+            raise ValueError(
+                f"Grid parameter(s) {missing} not specified. These axes span "
+                f"{ranges}. Specify them explicitly."
+            )
+        for name, value in values.items():
+            if not np.isfinite(value):
+                raise ValueError(f"{name} must be finite, got {value}.")
+            low, high = self._axis_range[name]
+            tol = 1e-6 * max(abs(low), abs(high), 1.0)
+            if not low - tol <= value <= high + tol:
+                raise ValueError(
+                    f"{name}={value} is outside the grid range [{low}, {high}]."
+                )
+        return values
+
+    def _build_kdtree(self):
+        """Build the KD-tree over all grid axes, each scaled to [0, 1]."""
         from scipy.spatial import cKDTree
 
-        # Determine which labels to use for KD-tree
-        active_labels = []
-        for label in ["mini", "eep", "feh", "afe", "smf"]:
-            if (
-                label in self.label_names
-                and label in kwargs
-                and kwargs[label] is not None
-            ):
-                active_labels.append(label)
-
-        if not active_labels:
-            # Use all available labels
-            active_labels = [
-                lbl
-                for lbl in ["mini", "eep", "feh", "afe", "smf"]
-                if lbl in self.label_names
-            ]
-
-        key = tuple(active_labels)
-        if key in self._kdtree_cache:
-            self.kdtree = self._kdtree_cache[key]
-            self._kdtree_labels = active_labels if self.kdtree is not None else None
-            return
-
-        # Build normalized coordinates for KD-tree
+        # A fixed axis order keeps the distances, summed over axes, independent
+        # of the column order of models_labels
+        self._kdtree_axes = [
+            name
+            for name in ["mini", "eep", "feh", "afe", "smf"]
+            if name in self.grid_axes
+        ]
         coords = []
-        for label in active_labels:
+        for label in self._kdtree_axes:
             vals = self.labels[label]
             # Normalize to [0, 1] for balanced distance metrics
             val_min, val_max = vals.min(), vals.max()
@@ -1678,12 +1688,9 @@ class StarGrid:
                 normalized = np.zeros_like(vals)
             coords.append(normalized)
 
-        tree = cKDTree(np.column_stack(coords)) if coords else None
-        self._kdtree_cache[key] = tree
-        self.kdtree = tree
-        self._kdtree_labels = active_labels if tree is not None else None
+        self.kdtree = cKDTree(np.column_stack(coords)) if coords else None
 
-    def _find_neighbors_multilinear(self, **kwargs):
+    def _find_neighbors_multilinear(self, **req_params):
         """
         Find bracketing grid points and compute multi-linear interpolation weights.
 
@@ -1692,8 +1699,8 @@ class StarGrid:
 
         Parameters
         ----------
-        **kwargs : keyword arguments
-            Stellar parameters (mini, eep, feh, afe, smf)
+        **req_params : keyword arguments
+            Grid-axis values checked by `_check_query`.
 
         Returns
         -------
@@ -1714,12 +1721,6 @@ class StarGrid:
         Corners are resolved via the precomputed corner-index lookup (O(1)
         per corner) rather than boolean scans over all models.
 
-        Grid axes with more than one value MUST be specified in the query;
-        omitting one raises a ``ValueError``. (The historical behavior
-        silently evaluated at the axis minimum — e.g. ``feh = -3.0`` for
-        MIST — which corrupted results without any signal.) Single-valued
-        axes may be omitted since there is nothing to choose.
-
         Falls back to the KD-tree method when the bracketing corners are
         missing from the (incomplete) grid: entirely, or when the surviving
         corners carry less than half of the total interpolation weight.
@@ -1727,33 +1728,6 @@ class StarGrid:
         far-away model (e.g. beyond a truncated track's last EEP).
         """
         import itertools
-
-        # Get requested parameters
-        req_params = {}
-        for key in ["mini", "eep", "feh", "afe", "smf"]:
-            if key in kwargs and kwargs[key] is not None:
-                req_params[key] = kwargs[key]
-
-        # Omitting a multi-valued grid axis has no sensible default: the old
-        # behavior silently evaluated at the axis MINIMUM (e.g. feh = -3 for
-        # MIST), corrupting results without any error. There is no value we
-        # can substitute that the caller plausibly meant, so fail fast.
-        # Single-valued axes are exempt (there is nothing to choose).
-        missing = [
-            name
-            for name in self._axis_names
-            if name not in req_params and len(self.grid_axes[name]) > 1
-        ]
-        if missing:
-            ranges = {
-                name: (self.grid_axes[name][0], self.grid_axes[name][-1])
-                for name in missing
-            }
-            raise ValueError(
-                f"Grid parameter(s) {missing} not specified. These axes span "
-                f"{ranges} and have no sensible default (the old behavior "
-                f"silently used the axis minimum). Specify them explicitly."
-            )
 
         if not req_params:
             # Degenerate grid (every axis single-valued): return the first
@@ -1798,10 +1772,6 @@ class StarGrid:
         weights = []
         n_missing = 0
 
-        if self._grid_idx_map is None:
-            # No grid axes at all: degenerate to the first model
-            return np.array([0]), np.array([1.0])
-
         for combo in itertools.product(*axis_brackets):
             model_idx = self._lookup_corner(tuple(c[0] for c in combo))
             if model_idx >= 0:
@@ -1818,7 +1788,7 @@ class StarGrid:
             # dominant corner is absent from the grid). Renormalizing the
             # survivors would silently snap to a far-away model, so use the
             # nearest-neighbor fallback instead.
-            return self._find_neighbors_kdtree(**kwargs)
+            return self._find_neighbors_kdtree(**req_params)
 
         if n_missing > 0:
             warnings.warn(
@@ -1843,7 +1813,7 @@ class StarGrid:
         Parameters
         ----------
         **kwargs : keyword arguments
-            Stellar parameters (mini, eep, feh, afe, smf)
+            Grid-axis values checked by `_check_query`.
 
         Returns
         -------
@@ -1862,8 +1832,8 @@ class StarGrid:
         The KD-tree is built lazily on first call and cached for
         subsequent queries.
         """
-        # Build KD-tree on first use
-        self._build_kdtree(**kwargs)
+        if self.kdtree is None:
+            self._build_kdtree()
 
         if self.kdtree is None:
             # KD-tree couldn't be built, use simple nearest neighbor
@@ -1882,19 +1852,14 @@ class StarGrid:
             nearest_idx = np.argmin(distances)
             return np.array([nearest_idx]), np.array([1.0])
 
-        # Build query point
+        # Build query point; a single-valued axis scales to 0 and may be
+        # omitted
         query_point = []
-        for label in self._kdtree_labels:
-            if label in kwargs and kwargs[label] is not None:
-                val = kwargs[label]
-            else:
-                val = self.grid_axes[label][0] if label in self.grid_axes else 0
-
-            # Normalize
+        for label in self._kdtree_axes:
             vals = self.labels[label]
             val_min, val_max = vals.min(), vals.max()
             if val_max > val_min:
-                normalized = (val - val_min) / (val_max - val_min)
+                normalized = (kwargs[label] - val_min) / (val_max - val_min)
             else:
                 normalized = 0.0
             query_point.append(normalized)
@@ -1956,19 +1921,19 @@ class StarGrid:
             Predicted stellar parameters. Returns dict with parameter names
             as keys if parameters are available, otherwise returns array.
 
+        Raises
+        ------
+        ValueError
+            If a grid dimension with more than one value is omitted, or if a
+            given grid label is not finite or lies outside its axis range
+            (with a relative tolerance of 1e-6 at the edges). Single-valued
+            dimensions may be omitted and take their only value.
+
         See Also
         --------
         get_seds : Generate photometry along with parameter predictions
         _find_neighbors_multilinear : Multi-linear interpolation method
         _find_neighbors_kdtree : KD-tree nearest neighbor method
-
-        Notes
-        -----
-        Every grid dimension with more than one value must be specified;
-        omitting one raises a ``ValueError`` (e.g. omitting ``feh`` on a
-        MIST grid would otherwise silently select the most metal-poor
-        models). Single-valued dimensions may be omitted and take their
-        only value.
 
         Examples
         --------
@@ -1977,15 +1942,11 @@ class StarGrid:
         >>> print(f"log(age) = {preds['loga']:.2f}")
         >>> print(f"log(L) = {preds['logl']:.2f}")
         """
-        # Find neighboring grid points
+        query = self._check_query(mini=mini, eep=eep, feh=feh, afe=afe, smf=smf)
         if use_multilinear:
-            indices, weights = self._find_neighbors_multilinear(
-                mini=mini, eep=eep, feh=feh, afe=afe, smf=smf, **kwargs
-            )
+            indices, weights = self._find_neighbors_multilinear(**query)
         else:
-            indices, weights = self._find_neighbors_kdtree(
-                mini=mini, eep=eep, feh=feh, afe=afe, smf=smf, **kwargs
-            )
+            indices, weights = self._find_neighbors_kdtree(**query)
 
         # Interpolate parameters if available
         if self.params is not None and self.param_names:
@@ -2093,6 +2054,11 @@ class StarGrid:
             Secondary star parameters (empty placeholder - full binary
             implementation requires dedicated binary grid)
 
+        Raises
+        ------
+        ValueError
+            As in `get_predictions`.
+
         See Also
         --------
         get_predictions : Get stellar parameters without photometry
@@ -2109,10 +2075,6 @@ class StarGrid:
 
         where :math:`m_0` is the unreddened magnitude, :math:`r_0` and :math:`dr`
         are the reddening vector coefficients from the grid.
-
-        Every grid dimension with more than one value must be specified;
-        omitting one raises a ``ValueError``. Single-valued dimensions may
-        be omitted (see `get_predictions`).
 
         Examples
         --------
@@ -2135,15 +2097,11 @@ class StarGrid:
                 stacklevel=2,
             )
 
-        # Find neighboring grid points using chosen interpolation method
+        query = self._check_query(mini=mini, eep=eep, feh=feh, afe=afe, smf=smf)
         if use_multilinear:
-            indices, weights = self._find_neighbors_multilinear(
-                mini=mini, eep=eep, feh=feh, afe=afe, smf=smf, **kwargs
-            )
+            indices, weights = self._find_neighbors_multilinear(**query)
         else:
-            indices, weights = self._find_neighbors_kdtree(
-                mini=mini, eep=eep, feh=feh, afe=afe, smf=smf, **kwargs
-            )
+            indices, weights = self._find_neighbors_kdtree(**query)
 
         # Get weighted average of magnitude coefficients
         weighted_coeffs = np.zeros((self.nfilters, 3))

@@ -227,18 +227,6 @@ class TestStarGridInterpolation:
             all_teff = mock_grid.params["Teff"]
             assert np.min(all_teff) <= pred["Teff"] <= np.max(all_teff)
 
-    def test_extrapolation_fallback(self, mock_grid):
-        """Test behavior outside grid bounds."""
-        # Parameters well outside grid
-        params = {"mini": 10.0, "eep": 1000, "feh": 2.0}
-
-        # Should fall back to nearest neighbor
-        sed, pred, _ = mock_grid.get_seds(**params, use_multilinear=True)
-
-        # Should still return valid SED
-        assert sed is not None
-        assert np.all(np.isfinite(sed))
-
 
 class TestStarGridEdgeCases:
     """Test edge cases and error handling."""
@@ -383,6 +371,17 @@ class TestStarGridEdgeCases:
 
 class TestStarGridWithRealData:
     """Tests using real MIST grid (if available)."""
+
+    def test_round_axis_edge_is_inside_the_grid(self, mist_grid):
+        # The stored mini maximum is 2.0000000000000013, not 2.0
+        assert mist_grid.grid_axes["mini"][-1] > 2.0
+        sed, _, _ = mist_grid.get_seds(mini=2.0, eep=350, feh=0.0)
+        assert np.all(np.isfinite(sed))
+
+    @pytest.mark.parametrize("mini", [50.0, np.nan])
+    def test_mass_outside_the_grid_raises(self, mist_grid, mini):
+        with pytest.raises(ValueError, match="mini"):
+            mist_grid.get_seds(mini=mini, eep=350, feh=0.0)
 
     def test_real_grid_dimensions(self, mist_grid):
         """Test real grid has expected structure."""
