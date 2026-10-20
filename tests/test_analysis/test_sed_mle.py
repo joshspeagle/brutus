@@ -22,6 +22,7 @@ from brutus.analysis.individual import (
     BruteForce,
     _flux_objective,
     _get_sed_mle,
+    _inclusion_probabilities,
     _newton_step_flux,
     _optimize_fit_mag,
 )
@@ -459,7 +460,7 @@ class TestLogpostGridDraws:
         covariance inv(J^-T P J^-1)."""
         results = self._results()
         nmc = 4000
-        sel, _, _, dist_mc, a_mc, r_mc, _, _ = logpost_fitter.logpost_grid(
+        sel, _, _, dist_mc, a_mc, r_mc, *_ = logpost_fitter.logpost_grid(
             results, Nmc_prior=nmc, rstate=np.random.RandomState(118)
         )
         npt.assert_array_equal(sel, np.arange(3))
@@ -1027,7 +1028,7 @@ class TestLogpostGridDistancePosterior:
         scale = 0.25  # 2 kpc
         icov = _sar_precision(2 * scale * 0.3, 0.1, 0.2, SAR_CORR)  # sd(ln d) = 0.3
         results = _results_tuple([0.0], [scale], [5.0], [3.3], [icov])
-        _, _, _, dist_mc, _, _, lnp_mc, _ = logpost_fitter.logpost_grid(
+        _, _, _, dist_mc, _, _, lnp_mc, *_ = logpost_fitter.logpost_grid(
             results, Nmc_prior=20000, rstate=np.random.RandomState(214)
         )
         weights = np.exp(lnp_mc[0] - lnp_mc[0].max())
@@ -1055,8 +1056,10 @@ class TestLogpostGridDistancePosterior:
         scales = [0.0, -0.5, 0.25]
         icovs = [_sar_precision(0.01, 0.1, 0.2, SAR_CORR)] * 3
         results = _results_tuple(np.zeros(3), scales, [1.0] * 3, [3.3] * 3, icovs)
-        sel, _, lnp, dist_mc, a_mc, r_mc, lnp_mc, mc_ess = logpost_fitter.logpost_grid(
-            results, Nmc_prior=50, rstate=np.random.RandomState(1634)
+        sel, _, lnp, dist_mc, a_mc, r_mc, lnp_mc, mc_ess, _ = (
+            logpost_fitter.logpost_grid(
+                results, Nmc_prior=50, rstate=np.random.RandomState(1634)
+            )
         )
         npt.assert_array_equal(sel, np.arange(3))
         assert np.all(np.isfinite(lnp))
@@ -1086,37 +1089,70 @@ class TestLogpostGridSubsampling:
         results = _results_tuple(lnlike, [0.25] * 20, [1.0] * 20, [3.3] * 20, icovs)
         return results, rank
 
-    def _logpost(self, fitter, results, mode):
+    def _logpost(self, fitter, results, seed, max_models):
         return fitter.logpost_grid(
             results,
-            Nmc_prior=10,
-            max_models=self.max_models,
-            subsample_mode=mode,
-            rstate=np.random.RandomState(1581),
+            Nmc_prior=2,
+            max_models=max_models,
+            rstate=np.random.RandomState(seed),
         )
 
-    def test_topk_keeps_the_models_with_the_highest_log_probability(
-        self, logpost_fitter
-    ):
-        """subsample_mode="topk" keeps the max_models best models."""
-        results, rank = self._results()
-        sel, _, lnp, *_ = self._logpost(logpost_fitter, results, "topk")
-        npt.assert_array_equal(np.sort(rank[sel]), np.arange(self.max_models))
-        assert lnp.shape == (self.max_models,)
+    def test_inclusion_probabilities_sum_to_size_and_follow_weights(self):
+        """The probabilities sum to the sample size, and below 1 they are
+        proportional to the weights."""
+        weights = np.exp(-0.5 * np.arange(14.0))
+        pi = _inclusion_probabilities(weights, 5)
+        npt.assert_allclose(pi.sum(), 5.0)
+        assert np.all(pi <= 1.0)
+        # Below 1, pi is proportional to the weight.
+        below = pi < 1.0
+        ratio = pi[below] / weights[below]
+        npt.assert_allclose(ratio, ratio[0])
+        # With nearly equal weights no model is certain.
+        npt.assert_allclose(_inclusion_probabilities(np.ones(14), 5), 5 / 14)
 
-    def test_representative_keeps_max_models_distinct_models_above_threshold(
-        self, logpost_fitter
-    ):
-        """subsample_mode="representative" keeps max_models distinct models,
-        all from the models that pass the threshold."""
+    def test_cap_keeps_max_models_distinct_models_above_threshold(self, logpost_fitter):
+        """The cap keeps max_models distinct models, all above the cut."""
         results, rank = self._results()
-        sel, _, lnp, *_ = self._logpost(logpost_fitter, results, "representative")
+        sel, _, lnp, *_, ln_incl = self._logpost(
+            logpost_fitter, results, 1581, self.max_models
+        )
         assert np.unique(sel).size == self.max_models
         assert np.all(rank[sel] <= 13)
-        assert lnp.shape == (self.max_models,)
+        assert lnp.shape == ln_incl.shape == (self.max_models,)
 
-    def test_unknown_subsample_mode_raises(self, logpost_fitter):
-        """An unknown subsample_mode raises ValueError naming the argument."""
-        results, _ = self._results()
-        with pytest.raises(ValueError, match="subsample_mode"):
-            self._logpost(logpost_fitter, results, "random")
+    def test_kept_frequencies_and_evidence_match_the_uncapped_selection(
+        self, logpost_fitter
+    ):
+        """Each model is kept with probability exp(ln_incl), and
+        sum(exp(lnp - ln_incl)) is an unbiased estimate of the uncapped
+        evidence (#89)."""
+        results, rank = self._results()
+        passed = rank <= 13
+        prob = np.zeros(20)
+        prob[passed] = _inclusion_probabilities(
+            np.exp(-0.5 * rank[passed]), self.max_models
+        )
+        nseed = 200
+        kept = np.zeros(20)
+        evid_capped, evid_full = np.zeros(nseed), np.zeros(20)
+        for seed in range(nseed):
+            sel, _, lnp, *_, ln_incl = self._logpost(
+                logpost_fitter, results, seed, self.max_models
+            )
+            kept[sel] += 1
+            npt.assert_allclose(np.exp(ln_incl), prob[sel])
+            evid_capped[seed] = np.sum(np.exp(lnp - ln_incl))
+        # The uncapped evidence varies only through the Monte Carlo draws.
+        for seed in range(20):
+            lnp_full = self._logpost(logpost_fitter, results, seed, None)[2]
+            evid_full[seed] = np.sum(np.exp(lnp_full))
+        freq = kept[passed] / nseed
+        se = np.sqrt(prob[passed] * (1 - prob[passed]) / nseed)
+        assert np.all(np.abs(freq - prob[passed]) <= 4 * se + 1e-12)
+        ratio = evid_capped / evid_full.mean()
+        se = np.hypot(
+            ratio.std() / np.sqrt(nseed),
+            evid_full.std() / evid_full.mean() / np.sqrt(len(evid_full)),
+        )
+        assert abs(ratio.mean() - 1) < 4 * se

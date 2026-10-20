@@ -17,14 +17,14 @@ Each row is one star, in the order of the input. $N_d$ is the number of draws (`
 | `ml_scale`, `ml_av`, `ml_rv` | $(N, N_d)$ | best-fit scale factor, $A_V$ and $R_V$ of each draw's model |
 | `ml_cov_sar` | $(N, N_d, 3, 3)$ | covariance of (scale, $A_V$, $R_V$) of each draw's model |
 | `obj_log_post` | $(N, N_d)$ | log posterior weight of each draw's model |
-| `obj_log_evid` | $(N,)$ | log-{term}`evidence`: the log of the sum of the weights of the models kept by the selection |
+| `obj_log_evid` | $(N,)$ | log-{term}`evidence`: the log of the sum of the weights of the models kept by the selection, each divided by its probability of being kept under `max_models` |
 | `obj_chi2min` | $(N,)$ | smallest $\chi^2$ over all models, with the parallax term if given |
 | `obj_Nbands` | $(N,)$ | bands used, plus 1 if a parallax was given |
 | `mc_ess` | $(N, N_d)$ | concentration of the Monte Carlo weights of each draw's model |
 
 The `samps_*` fields are written only with `save_dar_draws=True` (the default). {doc}`scientific_background` describes how the draws are made.
 
-The draws are already drawn from the posterior: give each one equal weight. Do not reweight them by `samps_logp` or `obj_log_post`.
+The draws are already drawn from the posterior: give each one equal weight. Do not reweight them by `samps_logp` or `obj_log_post`. When more than `max_models` models pass the selection, `obj_log_post` is still each model's own log-posterior; the draws and `obj_log_evid` already include the correction for the models that were left out.
 
 With `running_io=True` (the default), each star is written as soon as it is fitted; rows not yet fitted hold `model_idx = -99`.
 

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed — statistical correctness *(output-changing)*
 
+- **The `max_models` cap no longer biases the posterior.** Above the
+  cap, `logpost_grid` kept a weighted sample of models but gave them their
+  full weights, which narrowed the distance posterior by up to 31% and
+  lowered `obj_log_evid` by up to 0.49. It now keeps model i with probability
+  `min(1, c * w_i)` by systematic sampling, returns that log-probability as
+  `ln_incl`, and `fit` divides each kept model's weight by it. Fits below the
+  cap do not change.
 - **`loglike_grid` fits each model to its best (scale, A(V), R(V)).**
   The flux-space R(V) step left out the factor A(V) in `df/dR(V)`, so the
   refinement stopped at a point that gave the R(V) prior too much weight
@@ -138,6 +145,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`subsample_mode` is removed** from `fit`, `_fit` and `logpost_grid`,
+  with its `"topk"` option, which truncated the posterior. `logpost_grid`
+  returns a ninth value, `ln_incl`, the log-probability that each selected
+  model was kept by the `max_models` cap.
+- **`max_models` must be None or a positive integer**; `fit` and
+  `logpost_grid` raise `ValueError` otherwise. With the old cap, `0` kept
+  every model.
 - **`ltol_subthresh` is removed** from `loglike_grid`, `fit` and `_fit`.
   Each model's fit now checks its own convergence. `ltol` must be positive.
 - `logpost_grid` takes `return_precision=True` to return the precision

@@ -168,6 +168,29 @@ def _warmup(bf, phot, err, mask, par, parerr, coord):
     )
 
 
+def fixed_models_lnprior(bf, lr, s, i):
+    """Return an `lnprior` that keeps one capped selection of models.
+
+    With it and ``max_models=None``, every seed of a `logpost_grid` comparison
+    sees the same models, and `mem_lim` does not cut `Nmc` for objects above
+    the cap.
+    """
+    from brutus.utils.math import LOG_ZERO
+
+    sel = bf.logpost_grid(
+        lr,
+        parallax=s["parallax"][i],
+        parallax_err=s["parallax_err"][i],
+        coord=tuple(s["coords"][i]),
+        Nmc_prior=1,
+        wt_thresh=1e-3,
+        rstate=np.random.RandomState(0),
+    )[0]
+    lnprior = np.full(len(lr[0]), LOG_ZERO)
+    lnprior[sel] = 0.0
+    return lnprior
+
+
 def benchmark(obj_idx=None, repeats=5, Nmc_prior=50, Ndraws=250, wt_thresh=1e-3):
     """Per-object timings using a median-of-repeats estimator per object.
 

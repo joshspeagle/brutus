@@ -19,7 +19,7 @@ import harness as H  # noqa: E402
 from brutus.utils import sampling  # noqa: E402
 
 
-def lnp_for(bf, lr, s, i, Nmc, seed, force):
+def lnp_for(bf, lr, s, i, Nmc, seed, force, lnprior):
     import brutus.analysis.individual as ind
 
     orig = sampling.sample_multivariate_normal
@@ -35,7 +35,8 @@ def lnp_for(bf, lr, s, i, Nmc, seed, force):
         coord=tuple(s["coords"][i]),
         Nmc_prior=Nmc,
         wt_thresh=1e-3,
-        subsample_mode="topk",  # same models for every seed
+        lnprior=lnprior,  # same models for every seed
+        max_models=None,
         rstate=np.random.RandomState(seed),
     )
     ind.sample_multivariate_normal = orig
@@ -78,18 +79,19 @@ def main(nobj=6, Nmc=50, Ngold=4000, ngoldseeds=6, ntrial=12, objs=None):
             parallax=s["parallax"][i],
             parallax_err=s["parallax_err"][i],
         )
+        lnprior = H.fixed_models_lnprior(bf, lr, s, i)
         # Gold: large Nmc, averaged over seeds (antithetic, lowest variance)
-        sel0, _ = lnp_for(bf, lr, s, i, Nmc, 0, True)
+        sel0, _ = lnp_for(bf, lr, s, i, Nmc, 0, True, lnprior)
         gold = np.zeros(len(sel0))
         for g in range(ngoldseeds):
-            _, lg = lnp_for(bf, lr, s, i, Ngold, 1000 + g, True)
+            _, lg = lnp_for(bf, lr, s, i, Ngold, 1000 + g, True, lnprior)
             gold += lg
         gold /= ngoldseeds
         # Trials at test Nmc
         ep, ea = [], []
         for t in range(ntrial):
-            _, lp = lnp_for(bf, lr, s, i, Nmc, t, False)
-            _, la = lnp_for(bf, lr, s, i, Nmc, t, True)
+            _, lp = lnp_for(bf, lr, s, i, Nmc, t, False, lnprior)
+            _, la = lnp_for(bf, lr, s, i, Nmc, t, True, lnprior)
             ep.append(lp - gold)
             ea.append(la - gold)
         ep, ea = np.array(ep), np.array(ea)
