@@ -304,6 +304,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `logpost_grid` raises `ValueError` that names `dlabels` when the default
+  Galactic prior gets a plain, not structured, `dlabels` array. It raised a
+  `TypeError` about `NoneType`.
 - `find_nn_file`, `EEPTracks` and `Isochrone` look for their default data
   files in the brutus download directory (`strato.path`, which
   `ASTRO_BRUTUS_DATA_DIR` sets) first, then in `data/DATAFILES`. They
