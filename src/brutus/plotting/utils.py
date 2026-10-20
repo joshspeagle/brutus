@@ -107,6 +107,9 @@ def hist2d(
 
     if ax is None:
         ax = plt.gca()
+    data_kwargs = dict(data_kwargs or {})
+    contourf_kwargs = dict(contourf_kwargs or {})
+    contour_kwargs = dict(contour_kwargs or {})
 
     # Determine plotting bounds.
     data = [x, y]
@@ -260,12 +263,10 @@ def hist2d(
 
     # Plot the data points.
     if plot_datapoints:
-        if data_kwargs is None:
-            data_kwargs = dict()
-        data_kwargs["color"] = data_kwargs.get("color", color)
-        data_kwargs["ms"] = data_kwargs.get("ms", 2.0)
-        data_kwargs["mec"] = data_kwargs.get("mec", "none")
-        data_kwargs["alpha"] = data_kwargs.get("alpha", 0.1)
+        data_kwargs.setdefault("color", color)
+        data_kwargs.setdefault("ms", 2.0)
+        data_kwargs.setdefault("mec", "none")
+        data_kwargs.setdefault("alpha", 0.1)
         ax.plot(x, y, "o", zorder=-1, rasterized=True, **data_kwargs)
 
     # Plot the base fill to hide the densest data points.
@@ -281,10 +282,8 @@ def hist2d(
         ax.contourf(X2, Y2, H2.T, base_levels, cmap=white_cmap, antialiased=False)
 
     if plot_contours and fill_contours and not degenerate_data:
-        if contourf_kwargs is None:
-            contourf_kwargs = dict()
-        contourf_kwargs["colors"] = contourf_kwargs.get("colors", contour_cmap)
-        contourf_kwargs["antialiased"] = contourf_kwargs.get("antialiased", False)
+        contourf_kwargs.setdefault("colors", contour_cmap)
+        contourf_kwargs.setdefault("antialiased", False)
         ax.contourf(
             X2,
             Y2,
@@ -301,9 +300,7 @@ def hist2d(
 
     # Plot the contour edge colors.
     if plot_contours and not degenerate_data:
-        if contour_kwargs is None:
-            contour_kwargs = dict()
-        contour_kwargs["colors"] = contour_kwargs.get("colors", color)
+        contour_kwargs.setdefault("colors", color)
         ax.contour(X2, Y2, H2.T, V, **contour_kwargs)
 
     ax.set_xlim(span[0])

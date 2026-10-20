@@ -145,15 +145,14 @@ def dist_vs_red(
     """
 
     # Initialize values.
-    if truth_kwargs is None:
-        truth_kwargs = dict()
+    truth_kwargs = dict(truth_kwargs or {})
     if plot_kwargs is None:
         plot_kwargs = dict()
 
     # Set defaults for truth plotting
-    truth_kwargs["linestyle"] = truth_kwargs.get("linestyle", "solid")
-    truth_kwargs["linewidth"] = truth_kwargs.get("linewidth", 2)
-    truth_kwargs["alpha"] = truth_kwargs.get("alpha", 0.7)
+    truth_kwargs.setdefault("linestyle", "solid")
+    truth_kwargs.setdefault("linewidth", 2)
+    truth_kwargs.setdefault("alpha", 0.7)
 
     # Handle single object case - convert to array format expected by bin_pdfs_distred
     # bin_pdfs_distred expects (n_objects, n_samples) shape

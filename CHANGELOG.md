@@ -417,6 +417,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `photometric_offsets_2d` lay out only a figure that they create. With
   `fig=(fig, ax)`, they called `plt.tight_layout()`, which re-laid out the
   current figure, not the one passed.
+- `hist2d` and `dist_vs_red` no longer write their defaults into the
+  keyword dicts the caller passes (`data_kwargs`, `contourf_kwargs`,
+  `contour_kwargs`, `truth_kwargs`). A `contour_kwargs` reused across
+  panels kept the colour of the first call.
 
 ### Performance
 

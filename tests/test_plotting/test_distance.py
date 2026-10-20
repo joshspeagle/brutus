@@ -359,3 +359,15 @@ def test_draws_on_the_given_axes():
     plt.close(other)
     plt.close(fig)
     assert img.axes is ax and ax.get_xlabel() == r"$\mu$"
+
+
+def test_caller_truth_kwargs_are_not_modified():
+    """Regression (#181)."""
+    data = tuple(np.random.RandomState(1).uniform(1, 2, (3, 50)))
+    truth_kwargs = {}
+    fig, ax = plt.subplots()
+    dist_vs_red(
+        data, bins=(5, 4), truths=(12.0, 1.5), truth_kwargs=truth_kwargs, fig=(fig, ax)
+    )
+    plt.close(fig)
+    assert truth_kwargs == {}
