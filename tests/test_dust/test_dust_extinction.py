@@ -94,3 +94,11 @@ class TestCoordinateUtils:
         pix_0 = lb2pix(nside=64, l=0.0, b=0.0)
         # Should be the same pixel (360° = 0°)
         assert pix_360 == pix_0
+
+
+def test_non_finite_longitude_gives_invalid_pixel():
+    assert lb2pix(1024, np.nan, 10.0) == -1
+    assert lb2pix(1024, np.inf, 10.0) == -1
+    pix = lb2pix(1024, np.array([np.nan, 90.0, np.inf]), np.array([10.0, 40.0, 10.0]))
+    assert pix[0] == -1 and pix[2] == -1
+    assert pix[1] >= 0
