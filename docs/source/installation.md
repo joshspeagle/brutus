@@ -28,6 +28,7 @@ brutus fits stars against stellar models that ship separately from the code. Dow
 | Function | File | Size | Needed for |
 |---|---|---|---|
 | `fetch_grids()` | `grid_mist_v9.h5` | 780 MB | Fitting individual stars |
+| `fetch_grids(grid="bayestar_v5")` | `grid_bayestar_v5.h5` | 13 MB | Empirical Pan-STARRS models (optional) |
 | `fetch_offsets()` | `offsets_mist_v9.txt` | < 1 kB | Photometric calibration (recommended) |
 | `fetch_dustmaps()` | `bayestar2019_v1.h5` | 2.2 GB | Dust-map priors on extinction (optional) |
 | `fetch_isos()` | `MIST_1.2_iso_vvcrit0.0.h5` | 264 MB | Star clusters and populations |

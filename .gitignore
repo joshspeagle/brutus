@@ -106,7 +106,6 @@ tutorials/plots/diagnostics/
 docs/source/tutorials/tutorial_*.ipynb
 
 # Intermediates generated in tutorials/ when the notebooks execute there
-# (the committed result files live under tutorials/plots/)
 tutorials/Orion_l209.1_b-19.9_mist.h5
 tutorials/Orion_l209.1_b-19.9_mist_nodust.h5
 tutorials/grid_mist_v9.h5
