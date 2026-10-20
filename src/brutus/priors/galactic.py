@@ -827,70 +827,60 @@ def logp_galactic_structure(
         ell, b = coord[0], coord[1]
 
     n = dists.size
-    if labels is not None and np.size(labels) != n:
+    # Multi-dimensional labels must match `dists` entry by entry, since the
+    # fields are flattened below.
+    if labels is not None and (
+        np.size(labels) != n
+        or (max(np.ndim(labels), dists.ndim) > 1 and np.shape(labels) != dists.shape)
+    ):
         raise ValueError(
-            f"`labels` must have one entry per distance ({n}); "
-            f"got {np.size(labels)}."
+            f"`labels` must have one entry per distance, in the shape of "
+            f"`dists` {dists.shape}; got {np.shape(labels)}."
         )
 
     # Callers may pass the per-point ``feh`` / ``loga`` as plain float arrays
-    # directly (instead of a structured ``labels`` array). This is the hot path
-    # from logpost_grid, where it avoids tiling a structured array across all MC
-    # samples -- a numpy structured-dtype ``np.tile`` is ~100x slower than the
-    # equivalent float tile. The values handed to the fused kernel are identical
-    # either way, so results are bitwise-identical to the structured path.
-    use_arrays = feh is not None or loga is not None
-    if use_arrays:
-        # Normalize to contiguous float64 up front so the numba kernel types
-        # cleanly (lists, float32, object arrays) and misuse gives an
-        # actionable error rather than failing later inside the kernel.
-        if feh is not None:
-            feh = np.ascontiguousarray(feh, dtype=np.float64)
-            if feh.ndim != 1 or feh.shape[0] != n:
-                raise ValueError(
-                    f"`feh` must be a 1D array with one entry per distance "
-                    f"({n}); got shape {np.shape(feh)}."
-                )
-        if loga is not None:
-            loga = np.ascontiguousarray(loga, dtype=np.float64)
-            if loga.ndim != 1 or loga.shape[0] != n:
-                raise ValueError(
-                    f"`loga` must be a 1D array with one entry per distance "
-                    f"({n}); got shape {np.shape(loga)}."
-                )
-        # A plain array overrides only its own field. Any field not supplied
-        # as an array is sourced from a caller-provided structured `labels`,
-        # so mixing the two call styles cannot silently drop the metallicity
-        # or age prior (previously `feh=` alongside labels containing 'loga'
-        # discarded the age term).
-        if labels is not None:
-            if feh is None and "feh" in labels.dtype.names:
-                feh = np.ascontiguousarray(labels["feh"], dtype=np.float64)
-            if loga is None and "loga" in labels.dtype.names:
-                loga = np.ascontiguousarray(labels["loga"], dtype=np.float64)
+    # instead of a structured ``labels`` array. This is the hot path from
+    # logpost_grid, where it avoids tiling a structured array across all MC
+    # samples (a structured-dtype ``np.tile`` is ~100x slower than a float
+    # tile). A plain array overrides only its own field; any other field comes
+    # from ``labels``. Both styles continue as float64 arrays, so
+    # the numba kernel types cleanly and the results are bitwise identical.
+    if labels is not None:
+        if feh is None and "feh" in labels.dtype.names:
+            feh = labels["feh"].reshape(-1)
+        if loga is None and "loga" in labels.dtype.names:
+            loga = labels["loga"].reshape(-1)
+    if feh is not None:
+        feh = np.asarray(feh, dtype=np.float64)
+        if feh.ndim != 1 or feh.shape[0] != n:
+            raise ValueError(
+                f"`feh` must be a 1D array with one entry per distance "
+                f"({n}); got shape {np.shape(feh)}."
+            )
+    if loga is not None:
+        loga = np.asarray(loga, dtype=np.float64)
+        if loga.ndim != 1 or loga.shape[0] != n:
+            raise ValueError(
+                f"`loga` must be a 1D array with one entry per distance "
+                f"({n}); got shape {np.shape(loga)}."
+            )
 
     # Fast path: use fused numba kernel when labels are provided and
     # return_components is not needed. Eliminates ~15 temporary arrays
     # (the coordinate conversion and volume factor are computed per point
     # inside the kernel). Requires a single (scalar) sky position.
     if (
-        (labels is not None or use_arrays)
+        (labels is not None or feh is not None or loga is not None)
         and not return_components
         and n > 1000
         and dists.ndim == 1
         and np.ndim(ell) == 0
         and np.ndim(b) == 0
     ):
-        if use_arrays:
-            has_feh = feh is not None
-            has_loga = loga is not None
-            feh_arr = feh if has_feh else np.empty(0)
-            loga_arr = loga if has_loga else np.empty(0)
-        else:
-            has_feh = "feh" in labels.dtype.names
-            has_loga = "loga" in labels.dtype.names
-            feh_arr = labels["feh"] if has_feh else np.empty(0)
-            loga_arr = labels["loga"] if has_loga else np.empty(0)
+        has_feh = feh is not None
+        has_loga = loga is not None
+        feh_arr = feh if has_feh else np.empty(0)
+        loga_arr = loga if has_loga else np.empty(0)
         ell_rad = np.deg2rad(float(ell))
         b_rad = np.deg2rad(float(b))
         return _galactic_prior_fused(
@@ -944,21 +934,6 @@ def logp_galactic_structure(
         dists, ell, b, R_solar=R_solar, Z_solar=Z_solar
     )
 
-    # Plain feh/loga arrays must receive the exact same priors as the fused
-    # kernel: synthesize a structured labels array so the code below applies
-    # them (previously these were silently dropped on this path).
-    if use_arrays:
-        _dtype = []
-        if feh is not None:
-            _dtype.append(("feh", np.float64))
-        if loga is not None:
-            _dtype.append(("loga", np.float64))
-        labels = np.empty(dists.shape, dtype=_dtype)
-        if feh is not None:
-            labels["feh"] = feh.reshape(dists.shape)
-        if loga is not None:
-            labels["loga"] = loga.reshape(dists.shape)
-
     # Thin disk component
     logp_thin = logn_disk(
         R,
@@ -1004,7 +979,7 @@ def logp_galactic_structure(
     components = {"number_density": [logp_thin, logp_thick, logp_halo]}
 
     # Apply metallicity and age priors if labels provided
-    if labels is not None:
+    if feh is not None or loga is not None:
         # Component membership probabilities (reuse logp_thin/thick/halo)
         lnprior_thin = logp_thin - logp
         lnprior_thick = logp_thick - logp
@@ -1018,8 +993,8 @@ def logp_galactic_structure(
         age_w_thick = lnprior_thick
         age_w_halo = lnprior_halo
 
-        if "feh" in labels.dtype.names:
-            feh = labels["feh"]
+        if feh is not None:
+            feh = feh.reshape(dists.shape)
             feh_lnp_thin = logp_feh(feh, feh_thin, feh_thin_sigma) + lnprior_thin
             feh_lnp_thick = logp_feh(feh, feh_thick, feh_thick_sigma) + lnprior_thick
             feh_lnp_halo = logp_feh(feh, feh_halo, feh_halo_sigma) + lnprior_halo
@@ -1032,8 +1007,8 @@ def logp_galactic_structure(
             age_w_thick = feh_lnp_thick - feh_lnp
             age_w_halo = feh_lnp_halo - feh_lnp
 
-        if "loga" in labels.dtype.names:
-            age = 10.0 ** labels["loga"] / 1e9  # Convert log(age) to Gyr
+        if loga is not None:
+            age = 10.0 ** loga.reshape(dists.shape) / 1e9  # Convert log(age) to Gyr
             age_lnp_thin, age_lnp_thick, age_lnp_halo = (
                 logp_age_from_feh(
                     age,
