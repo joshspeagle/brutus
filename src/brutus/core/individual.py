@@ -973,7 +973,6 @@ class StarEvolTrack:
         return_dict=True,
         combine_seds=True,
         tol=1e-2,
-        **kwargs,
     ):
         r"""
         Generate synthetic SED for an individual star.
@@ -1914,7 +1913,6 @@ class StarGrid:
         afe=None,
         smf=None,
         use_multilinear=True,
-        **kwargs,
     ):
         """
         Get stellar parameter predictions from the grid.
@@ -1942,9 +1940,6 @@ class StarGrid:
         use_multilinear : bool, optional
             Use multi-linear interpolation (True) or KD-tree nearest neighbor (False).
             Default is True.
-
-        **kwargs : additional parameters
-            Any additional selection criteria
 
         Returns
         -------
@@ -2019,7 +2014,6 @@ class StarGrid:
         return_flux=False,
         return_predictions=True,
         use_multilinear=True,
-        **kwargs,
     ):
         r"""
         Generate synthetic SED from the grid.
@@ -2069,9 +2063,6 @@ class StarGrid:
         use_multilinear : bool, optional
             Use multi-linear interpolation (True) or KD-tree nearest neighbor (False).
             Default is True.
-
-        **kwargs : additional parameters
-            Passed to interpolation methods
 
         Returns
         -------

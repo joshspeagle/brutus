@@ -159,6 +159,10 @@ class TestStarEvolTrackMethods:
         assert isinstance(sed, np.ndarray)
         assert np.all(np.isfinite(sed))
 
+    def test_get_seds_rejects_unknown_keywords(self, mock_star_evol_track):
+        with pytest.raises(TypeError, match="Av"):
+            mock_star_evol_track.get_seds(mini=1.0, eep=350, feh=0.0, Av=5.0)
+
     def test_get_seds_with_distance(self, mock_star_evol_track):
         """Test get_seds with distance modulus."""
         sed, params, params2 = mock_star_evol_track.get_seds(

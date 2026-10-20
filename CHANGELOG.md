@@ -209,6 +209,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unknown keyword now raises `TypeError`. `cornerplot` no longer sets a
   default `alpha` for the 2-D histograms, which `hist2d` never applied;
   the figures do not change.
+- **`StarEvolTrack.get_seds`, `StarGrid.get_seds` and
+  `StarGrid.get_predictions` no longer accept `**kwargs`.** They ignored
+  unknown keywords, so a misspelled argument such as `Av=5.0` or `fe_h=-1`
+  gave a wrong result or a misleading error. An unknown keyword now raises
+  `TypeError`.
 - **`subsample_mode` is removed** from `fit`, `_fit` and `logpost_grid`,
   with its `"topk"` option, which truncated the posterior. `logpost_grid`
   returns a ninth value, `ln_incl`, the log-probability that each selected

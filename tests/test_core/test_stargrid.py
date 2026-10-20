@@ -239,6 +239,11 @@ class TestStarGridEdgeCases:
         with pytest.raises(ValueError, match="feh"):
             mock_grid.get_seds(mini=1.0, eep=300)  # Missing feh
 
+    @pytest.mark.parametrize("method", ["get_seds", "get_predictions"])
+    def test_unknown_keywords_raise(self, mock_grid, method):
+        with pytest.raises(TypeError, match="fe_h"):
+            getattr(mock_grid, method)(mini=1.0, eep=300, fe_h=0.0)
+
     def test_negative_distance(self, mock_grid):
         """Test with invalid distance."""
         params = {"mini": 1.0, "eep": 300, "feh": 0.0}
