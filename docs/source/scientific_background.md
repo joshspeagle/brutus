@@ -91,7 +91,7 @@ $$
 
 The factor $d_{ij}$ is the Jacobian of sampling in $\ln d$. Sampling in $s$ instead would bias distances by a factor $d^{-3}$.
 
-The parallax is used three times. During step 1, a first cut drops models whose fit, with the parallax added at the best-fit $s$, is more than a factor 200 worse than the best (`logl_initthresh`). The approximate term in step 2 then decides which models are kept. Only the exact term here sets the weights.
+The parallax is used three times. During step 1, models whose magnitude-space fit, with the parallax added at the best-fit $s$, is more than a factor $10^6$ worse than the best (`logl_initthresh`) keep that fit and are not refined. The approximate term in step 2 then decides which models are kept. Only the exact term here sets the weights.
 
 **4. Draw the posterior.** brutus draws 250 models in proportion to $w_i$ (`Ndraws`), and for each one draws a point $(d, A_V, R_V)$ from its weighted Monte Carlo points. These are the saved posterior draws.
 

@@ -906,7 +906,7 @@ class BruteForce:
         rv_init=None,
         dim_prior=True,
         ltol=1e-3,
-        init_thresh=5e-3,
+        init_thresh=1e-6,
         parallax=None,
         parallax_err=None,
         return_vals=False,
@@ -953,7 +953,7 @@ class BruteForce:
         init_thresh : float, optional
             Models whose magnitude-space fit, with the parallax term, is below
             ``init_thresh`` times the best are not refined in flux space and
-            keep their magnitude-space fit. Default is 5e-3.
+            keep their magnitude-space fit. Default is 1e-6.
 
         parallax : float, optional
             Parallax measurement in mas.
@@ -1672,7 +1672,7 @@ class BruteForce:
         data_coords=None,
         logl_dim_prior=True,
         ltol=1e-3,
-        logl_initthresh=5e-3,
+        logl_initthresh=1e-6,
         mag_max=50.0,
         merr_max=0.25,
         rstate=None,
@@ -1797,7 +1797,9 @@ class BruteForce:
             is 1e-3.
 
         logl_initthresh : float, optional
-            Initial likelihood threshold for model culling. Default is 5e-3.
+            Models whose magnitude-space fit is below this fraction of the
+            best are not refined (``init_thresh`` of `loglike_grid`). Default
+            is 1e-6.
 
         mag_max : float, optional
             Maximum allowed magnitude for valid data. Default is 50.0.
@@ -2142,7 +2144,7 @@ class BruteForce:
         dlabels=_GRID_LABELS,
         logl_dim_prior=True,
         ltol=1e-3,
-        logl_initthresh=5e-3,
+        logl_initthresh=1e-6,
         mem_lim=8000.0,
         max_models=50000,
         precision_shrinkage=0.0,

@@ -961,6 +961,23 @@ class TestFluxRefinement:
                 data, np.sqrt(tot_var), np.ones(len(data), dtype=bool), ltol=0.0
             )
 
+    def test_default_cut_refines_the_models_the_old_cut_left_unrefined(self):
+        # Models differ in colour, so their fits spread over tens of nats.
+        rng = np.random.default_rng(3)
+        mag_coeffs = np.zeros((60, 5, 3))
+        mag_coeffs[:, :, 0] = 15.0 + rng.normal(0.0, 0.05, (60, 5))
+        mag_coeffs[:, :, 1], mag_coeffs[:, :, 2] = RVEC, DRVEC
+        data, tot_var, _ = _make_synthetic_data(mag_coeffs, 2.5, 2.8, 1.0, snr=50.0)
+        fitter = _fitter(mag_coeffs)
+        args = (data, np.sqrt(tot_var), np.ones(5, dtype=bool))
+        lnl_default = fitter.loglike_grid(*args)[0]
+        lnl_all = fitter.loglike_grid(*args, init_thresh=1e-300)[0]
+        # Every model within a factor 1e-6 of the best is refined, and each
+        # model is fit on its own, so both runs give it the same fit.
+        near = lnl_all > lnl_all.max() + np.log(1e-6)
+        assert near.sum() > (lnl_all > lnl_all.max() + np.log(5e-3)).sum()
+        npt.assert_array_equal(lnl_default[near], lnl_all[near])
+
 
 # ============================================================================
 # Part 6 -- Jitted helpers of loglike_grid against numpy

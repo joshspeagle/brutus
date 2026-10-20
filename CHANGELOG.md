@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in log-posterior is below `ltol`, whose default is now `1e-3` (was
   `3e-2`). On 24 Orion stars, master's best-model `lnl` was up to 9.8 too
   low.
+- **The first cut of `loglike_grid` keeps models within a factor `1e-6` of
+  the best** (`init_thresh`, `logl_initthresh`), not `5e-3`. The cut ranks
+  models by their magnitude-space fit, whose chi2 differs from the
+  flux-space fit, so the old cut left models unrefined that carry posterior
+  weight. On 24 Orion stars, the largest total-variation distance between
+  the model weights and those of a fit without the cut falls from 0.106 to
+  0.0005, at the same run time.
 - **`fit(apply_dlabels=False)` evaluates the Galactic prior without model
   labels.** `logpost_grid` replaced `dlabels=None` with the grid labels, so
   the option had no effect. `logpost_grid` and `_fit` now default to the
