@@ -3,20 +3,26 @@
 
 """
 Tests for Fisher information matrix computation, log-distance reparameterization,
-diagonal preconditioning, and ESS computation in brutus.
+diagonal preconditioning, and the Monte Carlo draws of ``logpost_grid``.
 
 These tests validate the numerical correctness of the precision matrix
-(inverse covariance) computed in ``_get_sed_mle``, the coordinate
-transformation from (scale, Av, Rv) to (ln d, Av, Rv) space in
-``logpost_grid``, the ``inverse3`` utility with regularization, and the
-effective sample size calculation.
+(inverse covariance) computed in ``_get_sed_mle``, the (ln d, Av, Rv) draws,
+weights and effective sample size of ``BruteForce.logpost_grid``, the
+``inverse3`` utility with regularization, and the jitted helpers of
+``loglike_grid``.
 """
 
 import numpy as np
 import numpy.testing as npt
 import pytest
 
-from brutus.analysis.individual import _get_sed_mle
+from brutus.analysis.individual import (
+    BruteForce,
+    _chi2_from_resid,
+    _get_sed_mle,
+    _init_mag_resid,
+)
+from brutus.core.individual import StarGrid
 from brutus.core.sed_utils import _get_seds
 from brutus.utils.math import inverse3, isPSD
 
@@ -370,86 +376,125 @@ class TestFisherInformation:
 
 
 # ============================================================================
-# Part 2 -- Log-distance reparameterization
+# Part 2 -- logpost_grid: log-distance draws and effective sample size
 # ============================================================================
 
 
+def _lnd_precision(icov_sar, scale):
+    """Return the (ln d, Av, Rv) precision, J^-T P J^-1 with J^-1 = diag(-2s, 1, 1).
+
+    ``ln d = -0.5 ln s``, so ``ds / d(ln d) = -2s``.
+    """
+    jinv = np.diag([-2.0 * scale, 1.0, 1.0])
+    return jinv.T @ icov_sar @ jinv
+
+
+def _sar_precision(sd_scale, sd_av, sd_rv, corr):
+    """Return the (scale, Av, Rv) precision of a Gaussian with these marginals."""
+    sd = np.array([sd_scale, sd_av, sd_rv])
+    return np.linalg.inv(corr * np.outer(sd, sd))
+
+
+def _results_tuple(lnlike, scales, avs, rvs, icovs_sar):
+    """Build a `loglike_grid(..., return_vals=True)` tuple by hand."""
+    lnlike = np.asarray(lnlike, dtype=float)
+    return (
+        lnlike,
+        5,
+        -2.0 * lnlike,
+        np.asarray(scales, dtype=float),
+        np.asarray(avs, dtype=float),
+        np.asarray(rvs, dtype=float),
+        np.asarray(icovs_sar, dtype=float),
+    )
+
+
+# Correlations of (scale, Av, Rv). Scale and A(V) are strongly correlated, as
+# for a reddened star, so a sign error in the (ln d, Av) term is visible.
+SAR_CORR = np.array(
+    [
+        [1.0, 0.9, 0.3],
+        [0.9, 1.0, 0.2],
+        [0.3, 0.2, 1.0],
+    ]
+)
+
+
+@pytest.fixture(scope="module")
+def logpost_fitter():
+    """BruteForce on a 20-model grid with 5 bands.
+
+    Without ``coord``, `logpost_grid` reads only its ``results`` argument, so
+    the hand-built results tuples below need not match these models.
+    """
+    nmodels = 20
+    models = np.zeros((nmodels, 5, 3))
+    models[:, :, 0] = 15.0
+    models[:, :, 1] = [1.5, 1.2, 1.0, 0.8, 0.7]
+    models[:, :, 2] = [0.15, 0.12, 0.10, 0.08, 0.07]
+    labels = np.zeros(nmodels, dtype=[("mini", "f8"), ("eep", "f8"), ("feh", "f8")])
+    labels["mini"] = np.linspace(0.5, 2.0, nmodels)
+    grid = StarGrid(models, labels, filters=["g", "r", "i", "z", "y"], verbose=False)
+    return BruteForce(grid, verbose=False)
+
+
+class TestLogpostGridDraws:
+    """Test the (ln d, Av, Rv) draws and mc_ess that logpost_grid returns."""
+
+    scales = np.array([0.25, 4.0, 1e-2])  # distances of 2, 0.5 and 10 kpc
+
+    def _results(self):
+        # 4% scale errors are 2% distance errors.
+        icovs = [_sar_precision(0.04 * s, 0.1, 0.2, SAR_CORR) for s in self.scales]
+        return _results_tuple(
+            np.zeros(3), self.scales, [1.0, 2.0, 0.5], [3.3, 3.1, 3.5], icovs
+        )
+
+    def test_draws_follow_the_log_distance_gaussian_of_each_model(self, logpost_fitter):
+        """The (ln d, Av, Rv) draws have mean (-ln(s)/2, Av, Rv) and
+        covariance inv(J^-T P J^-1)."""
+        results = self._results()
+        nmc = 4000
+        sel, _, _, dist_mc, a_mc, r_mc, _, _ = logpost_fitter.logpost_grid(
+            results, Nmc_prior=nmc, rstate=np.random.RandomState(118)
+        )
+        npt.assert_array_equal(sel, np.arange(3))
+        icovs = results[-1]
+        for i in range(3):
+            draws = np.vstack([np.log(dist_mc[i]), a_mc[i], r_mc[i]])
+            mean = [-0.5 * np.log(self.scales[i]), results[4][i], results[5][i]]
+            # Antithetic pairs (z, -z) make the sample mean exact.
+            npt.assert_allclose(draws.mean(axis=1), mean, rtol=0, atol=1e-12)
+
+            cov = np.linalg.inv(_lnd_precision(icovs[i], self.scales[i]))
+            # The standard error of a sample covariance is
+            # sqrt((S_ii S_jj + S_ij^2) / n). A pair (z, -z) contributes the
+            # same (x - mean)(x - mean)^T twice, so n = nmc / 2 pairs.
+            var = np.diag(cov)
+            stderr = np.sqrt((np.outer(var, var) + cov**2) / (nmc / 2))
+            npt.assert_array_less(np.abs(np.cov(draws) - cov), 5 * stderr)
+
+    def test_mc_ess_is_inverse_sum_of_squared_normalized_weights(self, logpost_fitter):
+        """mc_ess equals 1 / sum(w**2) of the normalized lnp_mc weights."""
+        nmc = 200
+        out = logpost_fitter.logpost_grid(
+            self._results(),
+            parallax=1.0,
+            parallax_err=0.2,
+            Nmc_prior=nmc,
+            rstate=np.random.RandomState(7),
+        )
+        lnp_mc, mc_ess = out[6], out[7]
+        weights = np.exp(lnp_mc - lnp_mc.max(axis=1, keepdims=True))
+        weights /= weights.sum(axis=1, keepdims=True)
+        expected = 1.0 / np.sum(weights**2, axis=1)
+        # The parallax and the distance Jacobian make the weights unequal.
+        assert np.all(expected < nmc)
+        npt.assert_allclose(mc_ess, expected, rtol=1e-12)
+
+
 class TestLogDistanceReparameterization:
-    """Test the (scale, Av, Rv) -> (ln d, Av, Rv) precision transform."""
-
-    def _transform_precision(self, icov_sar, scale):
-        """
-        Replicate the precision-matrix transform from logpost_grid.
-
-        Parameters
-        ----------
-        icov_sar : array of shape (3, 3)
-            Precision matrix in (scale, Av, Rv) space.
-        scale : float
-            MLE scale factor.
-
-        Returns
-        -------
-        icov_lnd : array of shape (3, 3)
-            Precision matrix in (ln d, Av, Rv) space.
-        """
-        s = max(scale, 1e-20)
-        icov_lnd = icov_sar.copy()
-        icov_lnd[0, 0] = 4.0 * s**2 * icov_sar[0, 0]
-        icov_lnd[0, 1] = -2.0 * s * icov_sar[0, 1]
-        icov_lnd[1, 0] = -2.0 * s * icov_sar[1, 0]
-        icov_lnd[0, 2] = -2.0 * s * icov_sar[0, 2]
-        icov_lnd[2, 0] = -2.0 * s * icov_sar[2, 0]
-        # (1,1), (1,2), (2,1), (2,2) unchanged
-        return icov_lnd
-
-    def test_precision_transform_explicit_values(self):
-        """
-        For a known precision matrix and scale value, verify each element
-        of the transformed precision matrix.
-        """
-        s = 0.5
-        icov_sar = np.array(
-            [
-                [100.0, 10.0, 5.0],
-                [10.0, 50.0, 3.0],
-                [5.0, 3.0, 30.0],
-            ]
-        )
-
-        icov_lnd = self._transform_precision(icov_sar, s)
-
-        # Check each element
-        npt.assert_allclose(icov_lnd[0, 0], 4 * s**2 * 100.0)
-        npt.assert_allclose(icov_lnd[0, 1], -2 * s * 10.0)
-        npt.assert_allclose(icov_lnd[1, 0], -2 * s * 10.0)
-        npt.assert_allclose(icov_lnd[0, 2], -2 * s * 5.0)
-        npt.assert_allclose(icov_lnd[2, 0], -2 * s * 5.0)
-        # Av-Av, Av-Rv, Rv-Rv unchanged
-        npt.assert_allclose(icov_lnd[1, 1], 50.0)
-        npt.assert_allclose(icov_lnd[1, 2], 3.0)
-        npt.assert_allclose(icov_lnd[2, 1], 3.0)
-        npt.assert_allclose(icov_lnd[2, 2], 30.0)
-
-    def test_precision_transform_matches_jacobian(self):
-        """
-        Verify the transform by computing it via the Jacobian explicitly:
-        icov_lnd = J^{-T} icov_sar J^{-1} where J^{-1} = diag(-2s, 1, 1).
-        """
-        s = 1.5
-        icov_sar = np.array(
-            [
-                [200.0, 15.0, 8.0],
-                [15.0, 80.0, 4.0],
-                [8.0, 4.0, 35.0],
-            ]
-        )
-
-        Jinv = np.diag([-2 * s, 1.0, 1.0])
-        icov_lnd_expected = Jinv.T @ icov_sar @ Jinv
-        icov_lnd_code = self._transform_precision(icov_sar, s)
-
-        npt.assert_allclose(icov_lnd_code, icov_lnd_expected, atol=1e-12)
+    """Test the inversion of the (ln d, Av, Rv) precision matrix."""
 
     @pytest.mark.parametrize(
         "s, label",
@@ -472,7 +517,7 @@ class TestLogDistanceReparameterization:
             ]
         )
 
-        icov_lnd = self._transform_precision(icov_sar, s)
+        icov_lnd = _lnd_precision(icov_sar, s)
         # Use regularized inversion (as the real code does)
         cov_lnd = inverse3(icov_lnd, regularize=True)
 
@@ -480,65 +525,6 @@ class TestLogDistanceReparameterization:
             np.isfinite(cov_lnd)
         ), f"Covariance has non-finite values for s={s} ({label})"
         assert isPSD(cov_lnd), f"Covariance is not PSD for s={s} ({label})"
-
-    def test_jacobian_ln_d_in_mc_weights(self):
-        """
-        Verify that the Jacobian for ln(d)->d (a factor of d = exp(eta))
-        is included in log-posterior MC weights.
-
-        logpost_grid adds np.log(dist_mc) to lnp_mc, which corresponds
-        to the |dd/d(eta)| = d Jacobian for the change-of-variables from
-        distance-space priors to ln(d)-space sampling.
-        """
-        # Simulate what the code does
-        rng = np.random.RandomState(42)
-        Nmc, Nsel = 10, 3
-
-        # Dummy base log-probabilities
-        lnprob_base = np.array([-10.0, -12.0, -11.0])
-        lnp_mc = np.tile(lnprob_base, (Nmc, 1))
-
-        # Dummy distance samples
-        eta_samples = rng.normal(loc=6.0, scale=0.5, size=(Nmc, Nsel))
-        dist_mc = np.exp(eta_samples)
-
-        # Add Jacobian (as the code does on line 1474)
-        lnp_mc_with_jac = lnp_mc + np.log(dist_mc + 1e-300)
-
-        # Without Jacobian, all rows would be identical
-        assert not np.allclose(
-            lnp_mc_with_jac[0], lnp_mc_with_jac[1]
-        ), "With Jacobian, different MC samples should give different weights"
-        # The Jacobian term should be positive (since dist > 0 => ln(dist) can
-        # be positive or negative, but dist > 1 => ln(dist) > 0).
-        # For eta ~ 6 => dist ~ 400, ln(dist) ~ 6 > 0
-        jacobian_terms = np.log(dist_mc + 1e-300)
-        assert np.all(
-            jacobian_terms > 0
-        ), "For distant stars, ln(dist) Jacobian should be positive"
-
-    def test_distance_samples_centered_near_mle(self):
-        """
-        Verify that dist_mc = exp(eta_samples) produces distances centered
-        near 1/sqrt(s_MLE) for a simple case.
-        """
-        # True distance = 500 pc => scale = 1/500^2 = 4e-6
-        s_true = 4e-6
-        eta_true = -0.5 * np.log(s_true)  # ln(d) = ln(500) ~ 6.21
-
-        # Build a tight precision matrix so samples cluster near MLE
-        icov_lnd = np.diag([100.0, 100.0, 100.0])
-        cov_lnd = np.linalg.inv(icov_lnd)
-
-        rng = np.random.RandomState(42)
-        mean = np.array([eta_true, 0.5, 3.3])
-        samples = rng.multivariate_normal(mean, cov_lnd, size=1000)
-        eta_samples = samples[:, 0]
-        dist_samples = np.exp(eta_samples)
-
-        # Median distance should be close to 500
-        d_expected = 1.0 / np.sqrt(s_true)
-        npt.assert_allclose(np.median(dist_samples), d_expected, rtol=0.05)
 
 
 # ============================================================================
@@ -670,108 +656,7 @@ class TestDiagonalPreconditioning:
 
 
 # ============================================================================
-# Part 4 -- ESS computation
-# ============================================================================
-
-
-class TestEffectiveSampleSize:
-    """Test the effective sample size (ESS) computation."""
-
-    @staticmethod
-    def _compute_ess(log_weights):
-        """
-        Replicate the ESS computation from logpost_grid.
-
-        Parameters
-        ----------
-        log_weights : array of shape (Nmc,)
-            Log-weights for a single model's MC samples.
-
-        Returns
-        -------
-        ess : float
-            Effective sample size.
-        """
-        lw_max = np.max(log_weights)
-        w = np.exp(log_weights - lw_max)
-        w_sum = w.sum()
-        if w_sum > 0:
-            w_normed = w / w_sum
-            return 1.0 / np.sum(w_normed**2)
-        return 0.0
-
-    def test_uniform_weights_give_ess_equal_n(self):
-        """All equal weights should give ESS = N."""
-        N = 100
-        log_weights = np.zeros(N)  # All weights = 1
-        ess = self._compute_ess(log_weights)
-        npt.assert_allclose(ess, N, rtol=1e-10)
-
-    def test_single_dominant_weight_gives_ess_near_one(self):
-        """One weight much larger than others should give ESS near 1."""
-        N = 100
-        log_weights = np.full(N, -100.0)
-        log_weights[0] = 0.0  # One dominant weight
-        ess = self._compute_ess(log_weights)
-        npt.assert_allclose(ess, 1.0, atol=1e-5)
-
-    def test_ess_between_one_and_n(self):
-        """For random weights, ESS should be between 1 and N."""
-        rng = np.random.RandomState(42)
-        N = 200
-        log_weights = rng.normal(0, 2, N)
-        ess = self._compute_ess(log_weights)
-        assert 1.0 <= ess <= N, f"ESS = {ess} not in [1, {N}]"
-
-    def test_ess_monotonic_with_weight_concentration(self):
-        """
-        As weights become more concentrated, ESS should decrease.
-        """
-        N = 100
-        # sigma controls how spread out the log-weights are.
-        # Larger sigma => more concentrated (one dominant sample) => lower ESS.
-        ess_values = []
-        for sigma in [0.1, 1.0, 5.0, 20.0]:
-            rng = np.random.RandomState(42)
-            log_weights = rng.normal(0, sigma, N)
-            ess_values.append(self._compute_ess(log_weights))
-
-        # ESS should decrease as sigma increases
-        for i in range(len(ess_values) - 1):
-            assert ess_values[i] >= ess_values[i + 1], (
-                f"ESS should decrease as weights become more concentrated: "
-                f"ESS[sigma={[0.1, 1.0, 5.0, 20.0][i]}]={ess_values[i]} < "
-                f"ESS[sigma={[0.1, 1.0, 5.0, 20.0][i+1]}]={ess_values[i+1]}"
-            )
-
-    def test_ess_shape_and_nonnegativity_batch(self):
-        """
-        Verify ESS values for a batch of models are non-negative and have
-        the correct shape. This mimics the computation in logpost_grid.
-        """
-        rng = np.random.RandomState(42)
-        Nmc, Nsel = 50, 10
-        lnp_mc = rng.normal(-50, 5, (Nmc, Nsel))
-
-        mc_ess = np.zeros(Nsel)
-        for j in range(Nsel):
-            lw = lnp_mc[:, j]
-            lw_max = np.max(lw)
-            w = np.exp(lw - lw_max)
-            w_sum = w.sum()
-            if w_sum > 0:
-                w_normed = w / w_sum
-                mc_ess[j] = 1.0 / np.sum(w_normed**2)
-            else:
-                mc_ess[j] = 0.0
-
-        assert mc_ess.shape == (Nsel,)
-        assert np.all(mc_ess >= 0), "ESS values should be non-negative"
-        assert np.all(mc_ess <= Nmc), "ESS should not exceed number of MC samples"
-
-
-# ============================================================================
-# Part 5 -- Integration: _get_sed_mle with multiple models
+# Part 4 -- Integration: _get_sed_mle with multiple models
 # ============================================================================
 
 
@@ -860,7 +745,7 @@ class TestGetSedMleMultiModel:
 
 
 # ============================================================================
-# Part 6 -- Convergence test for _optimize_fit_mag (M20)
+# Part 5 -- Convergence test for _optimize_fit_mag (M20)
 # ============================================================================
 
 
@@ -950,4 +835,41 @@ class TestOptimizeFitMagConvergence:
         )
         npt.assert_allclose(
             rv_opt[0], rv_true, atol=0.5, err_msg="Rv should converge near true value"
+        )
+
+
+# ============================================================================
+# Part 6 -- Jitted helpers of loglike_grid against numpy
+# ============================================================================
+
+
+class TestJittedLikelihoodHelpers:
+    """Compare the jitted loglike_grid helpers with direct numpy."""
+
+    def test_init_mag_resid_matches_numpy(self):
+        """_init_mag_resid returns the reddened SEDs, R(V)-dependent
+        reddening vectors, their R(V) derivatives and mags - SED."""
+        rng = np.random.RandomState(166)
+        mag_coeffs = rng.normal(size=(7, 5, 3))
+        av = rng.uniform(0.0, 3.0, 7)
+        rv = rng.uniform(2.0, 5.0, 7)
+        mags = rng.normal(15.0, 1.0, 5)
+
+        models, rvecs, drvecs, resid = _init_mag_resid(mag_coeffs, av, rv, mags)
+
+        expected_rvecs = mag_coeffs[:, :, 1] + rv[:, None] * mag_coeffs[:, :, 2]
+        expected_models = mag_coeffs[:, :, 0] + av[:, None] * expected_rvecs
+        npt.assert_array_equal(drvecs, mag_coeffs[:, :, 2])
+        npt.assert_array_equal(rvecs, expected_rvecs)
+        npt.assert_array_equal(models, expected_models)
+        npt.assert_array_equal(resid, mags - expected_models)
+
+    def test_chi2_from_resid_matches_numpy(self):
+        """_chi2_from_resid returns sum_j resid[i, j]**2 / tot_var[j]."""
+        rng = np.random.RandomState(145)
+        resid = rng.normal(size=(7, 5))
+        tot_var = rng.uniform(0.01, 1.0, 5)
+
+        npt.assert_array_equal(
+            _chi2_from_resid(resid, tot_var), np.sum(resid**2 / tot_var, axis=1)
         )
