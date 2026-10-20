@@ -483,6 +483,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-star `cluster_prob`, describe the grid's model selection as the code
   does it, name `EEPTracks`, and use `afe=0.0` in their examples: the
   shipped isochrone file has only [α/Fe] = 0, and other values give NaN.
+- The `cornerplot` docstring says that `labels` are field names of
+  `params` and also the axis text. The `hist2d` docstring documents
+  `smooth` and drops its "internal function" note. The `dist_vs_red`
+  docstring gives the `ebv` default as `None`.
 
 ## [1.2.0] - 2026-07-17
 

@@ -58,7 +58,7 @@ def dist_vs_red(
 
     ebv : bool, optional
         If provided, will convert from Av to E(B-V) when plotting using
-        the provided Rv values. Default is `False`.
+        the provided Rv values. Default is `None` (plot A(V)).
 
     dist_type : str, optional
         The distance format to be plotted. Options include `'parallax'`,

@@ -43,19 +43,25 @@ def hist2d(
     **kwargs,
 ):
     """
-    Internal function used to generate a 2-D histogram/contour of samples.
+    Plot a 2-D histogram and contours of weighted samples.
 
-    This is the refactored version of _hist2d from the original plotting.py.
+    The plot is drawn on `ax`, with its limits set to `span`.
 
     Parameters
     ----------
-    x : interable with shape `(nsamps,)`
+    x : iterable with shape `(nsamps,)`
        Sample positions in the first dimension.
 
     y : iterable with shape `(nsamps,)`
        Sample positions in the second dimension.
 
-    span : iterable with shape `(ndim,)`, optional
+    smooth : int, float or 2-tuple of these, optional
+        The binning of each axis, one value for both or one per axis. A
+        float is the standard deviation of the Gaussian kernel that smooths
+        the histogram, as a fraction of the span. An int is a number of
+        bins, with no smoothing. Default is `0.02`.
+
+    span : iterable with shape `(2,)`, optional
         A list where each element is either a length-2 tuple containing
         lower and upper bounds or a float from `(0., 1.]` giving the
         fraction of (weighted) samples to include. If a fraction is provided,

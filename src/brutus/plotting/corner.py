@@ -163,8 +163,10 @@ def cornerplot(
         Extra keyword arguments to send to the 2-D (smoothed) histograms.
 
     labels : iterable with shape `(ndim,)`, optional
-        A list of names for each parameter. If not provided, the names will
-        be taken from `params.dtype.names`.
+        The field names of `params` to plot, which are also the axis text.
+        A name that is not a field of `params` raises `ValueError`. If not
+        provided, all fields of `params` except `'agewt'` are plotted. The
+        panels `'Av'`, `'Rv'`, `'Parallax'` and `'Distance'` follow.
 
     label_kwargs : dict, optional
         Extra keyword arguments that will be sent to the
