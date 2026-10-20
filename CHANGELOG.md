@@ -593,8 +593,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The data module page says that only the `fetch_*` functions download
   files, and where the loaders look for them. It describes the model grid
   as a precomputed SED grid, adds the 1.1 GB EEP track file and its cache,
-  and corrects the storage totals. Tutorials 00 to 04 give the same file
-  sizes.
+  and corrects the storage totals.
+- The tutorials keep their data requirements in one table in
+  `tutorial_utils.py`, which each setup cell checks, and leave file sizes
+  to the installation page, which now lists the 13 MB Bayestar grid.
+  Tutorial 5 no longer downloads the grid, the offsets and the dust map
+  when it runs, and Tutorials 7 and 8 save their figures to
+  `tutorials/plots/` like the others, not to the working directory.
 - The `Bayestar.query` docstring states that `av_mean` and `av_std` keep
   the storage dtype of the file (float16 for `bayestar2019_v1.h5`), and
   `query_equ` states that it ignores the distance `d`.

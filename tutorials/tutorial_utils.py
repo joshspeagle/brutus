@@ -15,6 +15,42 @@ from pathlib import Path
 import numpy as np
 from matplotlib import rcParams
 
+TUTORIALS_DIR = Path(__file__).resolve().parent
+
+#: Data files of each tutorial, as (required, optional)
+DATA_REQUIREMENTS = {
+    0: ([], ["grid_mist_v9.h5", "grid_bayestar_v5.h5", "offsets_mist_v9.txt"]),
+    1: (["nn_c3k.h5", "MIST_1.2_EEPtrk.h5"], []),
+    2: (["nn_c3k.h5", "MIST_1.2_iso_vvcrit0.0.h5"], []),
+    3: (
+        ["nn_c3k.h5", "MIST_1.2_EEPtrk.h5"],
+        ["grid_mist_v9.h5", "grid_bayestar_v5.h5"],
+    ),
+    4: ([], ["bayestar2019_v1.h5"]),
+    5: (
+        ["grid_mist_v9.h5", "Orion_l209.1_b-19.9.h5"],
+        ["offsets_mist_v9.txt", "bayestar2019_v1.h5"],
+    ),
+    6: (["nn_c3k.h5", "MIST_1.2_iso_vvcrit0.0.h5", "NGC_2682.fits"], []),
+    7: ([], ["Orion_l209.1_b-19.9_mist_nodust.h5"]),
+    8: (["grid_mist_v9.h5"], []),
+    9: ([], []),
+    10: (
+        ["Orion_l209.1_b-19.9_mist.h5"],
+        ["Orion_l209.1_b-19.9.h5", "grid_mist_v9.h5"],
+    ),
+    11: (["Orion_l209.1_b-19.9_mist.h5"], ["Orion_l209.1_b-19.9.h5"]),
+}
+
+#: Data files that a tutorial writes rather than a fetch_* function
+WRITTEN_BY = {
+    "Orion_l209.1_b-19.9_mist.h5": "Tutorial 5",
+    "Orion_l209.1_b-19.9_mist_nodust.h5": "Tutorial 5, with the optional dust map",
+}
+
+# Files recorded by record_file in this session, in order
+_saved_files = {}
+
 
 def set_plot_style():
     """
@@ -64,8 +100,7 @@ def get_plot_dir(tutorial_num):
     plot_dir : Path
         Path to the plot directory for this tutorial.
     """
-    tutorials_dir = Path(__file__).parent
-    plot_dir = tutorials_dir / "plots" / f"tutorial_{tutorial_num:02d}"
+    plot_dir = TUTORIALS_DIR / "plots" / f"tutorial_{tutorial_num:02d}"
     plot_dir.mkdir(parents=True, exist_ok=True)
     return plot_dir
 
@@ -106,9 +141,22 @@ def save_figure(fig, tutorial_num, fig_name, tight=True, **kwargs):
     save_kwargs.update(kwargs)
 
     fig.savefig(save_path, **save_kwargs)
-    print(f"  Saved: {save_path}")
+    record_file(save_path)
+    print(f"  Saved: {os.path.relpath(save_path, TUTORIALS_DIR)}")
 
     return save_path
+
+
+def record_file(path):
+    """Record a file written by this run, for `print_saved_files`."""
+    _saved_files[Path(path)] = None
+
+
+def print_saved_files():
+    """Print the files this run wrote, relative to the tutorials directory."""
+    print("\nGenerated files:")
+    for path in _saved_files:
+        print(f"  - {os.path.relpath(path, TUTORIALS_DIR)}")
 
 
 def print_section(title, char="="):
@@ -153,10 +201,9 @@ def find_brutus_data_file(filename, search_paths=None):
     """
     if search_paths is None:
         # Default search paths
-        tutorials_dir = Path(__file__).parent
         search_paths = [
-            tutorials_dir,  # tutorials directory itself
-            tutorials_dir / "data",
+            TUTORIALS_DIR,
+            TUTORIALS_DIR / "data",
         ]
 
         # Pooch cache directory (used by fetch_* functions and CI)
@@ -178,9 +225,9 @@ def find_brutus_data_file(filename, search_paths=None):
         # Standard project data directories (relative to the repo layout).
         search_paths.extend(
             [
-                tutorials_dir.parent / "data" / "DATAFILES",
-                tutorials_dir.parent / "data" / "benchmarks",
-                tutorials_dir.parent / "data" / "VICs",
+                TUTORIALS_DIR.parent / "data" / "DATAFILES",
+                TUTORIALS_DIR.parent / "data" / "benchmarks",
+                TUTORIALS_DIR.parent / "data" / "VICs",
                 Path("../data/DATAFILES"),
                 Path("../data/benchmarks"),
                 Path("../data/VICs"),
@@ -287,9 +334,18 @@ def load_tutorial_data(dataset_name, **kwargs):
         )
 
 
+def missing_note(filename):
+    """Return a note on where a missing data file comes from, or ''."""
+    source = WRITTEN_BY.get(filename)
+    return "" if source is None else f" (written by {source})"
+
+
 def check_data_requirements(tutorial_num, verbose=True):
     """
-    Check if required data files are available for a tutorial.
+    Check if the data files of a tutorial are available.
+
+    The files are listed in `DATA_REQUIREMENTS`. A missing optional file
+    is reported but does not count as missing.
 
     Parameters
     ----------
@@ -303,53 +359,31 @@ def check_data_requirements(tutorial_num, verbose=True):
     available : bool
         True if all required files are available.
     missing : list of str
-        List of missing files.
+        List of missing required files.
     """
-    # Define requirements per tutorial
-    requirements = {
-        0: [],
-        1: ["nn_c3k.h5", "MIST_1.2_EEPtrk.h5"],
-        2: ["nn_c3k.h5", "MIST_1.2_iso_vvcrit0.0.h5"],
-        3: [
-            "nn_c3k.h5",
-            "MIST_1.2_EEPtrk.h5",
-            "grid_mist_v9.h5",
-        ],
-        4: ["nn_c3k.h5", "MIST_1.2_iso_vvcrit0.0.h5", "bayestar2019_v1.h5"],
-        5: [
-            "grid_mist_v9.h5",
-            "offsets_mist_v9.txt",
-            "bayestar2019_v1.h5",
-            "Orion_l209.1_b-19.9.h5",
-        ],
-        6: [
-            "nn_c3k.h5",
-            "MIST_1.2_iso_vvcrit0.0.h5",
-            "offsets_mist_v9.txt",
-            "NGC_2682.fits",
-        ],
-        7: ["Orion_l209.1_b-19.9_mist_nodust.h5"],
-        8: ["grid_mist_v9.h5", "offsets_mist_v9.txt"],
-        9: [],
-        10: ["Orion_l209.1_b-19.9_mist.h5"],
-        11: ["Orion_l209.1_b-19.9_mist.h5"],
-    }
-
-    required_files = requirements.get(tutorial_num, [])
+    if tutorial_num not in DATA_REQUIREMENTS:
+        raise ValueError(
+            f"tutorial_num must be one of {sorted(DATA_REQUIREMENTS)}; "
+            f"got {tutorial_num}."
+        )
+    required, optional = DATA_REQUIREMENTS[tutorial_num]
     missing = []
 
     if verbose:
         print_section(f"Checking data requirements for Tutorial {tutorial_num}")
 
-    for filename in required_files:
+    for filename in required + optional:
+        is_required = filename in required
+        tag = "" if is_required else " (optional)"
         try:
-            find_brutus_data_file(filename)  # Just check if file exists
+            find_brutus_data_file(filename)
             if verbose:
-                print(f"  Found: {filename}")
+                print(f"  Found: {filename}{tag}")
         except FileNotFoundError:
-            missing.append(filename)
+            if is_required:
+                missing.append(filename)
             if verbose:
-                print(f"  Missing: {filename}")
+                print(f"  Missing: {filename}{tag}{missing_note(filename)}")
 
     if verbose:
         if missing:
