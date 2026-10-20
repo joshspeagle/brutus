@@ -32,7 +32,7 @@ def dist_vs_red(
     cmap="Blues",
     bins=300,
     span=None,
-    smooth=0.015,
+    smooth=(0.015, 0.005),
     plot_kwargs=None,
     truths=None,
     truth_color="red",
@@ -101,19 +101,11 @@ def dist_vs_red(
         The number of bins to be used in each dimension. Default is `300`.
 
     span : iterable with shape `(2, 2)`, optional
-        A list where each element is a length-2 tuple containing
-        lower and upper bounds. If not provided, the x-axis will use the
-        provided Av bounds while the y-axis will span `(4., 19.)` in
-        distance modulus (both appropriately transformed).
+        `(av_bounds, dist_bounds)`, as in `bin_pdfs_distred`.
 
-    smooth : int/float or list of ints/floats with shape `(ndim,)`, optional
-        The standard deviation (either a single value or a different value for
-        each axis) for the Gaussian kernel used to smooth the 2-D
-        marginalized posteriors. If an int is passed, the smoothing will
-        be applied in units of the binning in that dimension. If a float
-        is passed, it is expressed as a fraction of the span.
-        Default is `0.015` (1.5% smoothing).
-        **Cannot smooth by more than the provided parallax will allow.**
+    smooth : float or 2-tuple of floats, optional
+        The smoothing, as in `bin_pdfs_distred`. Default is `(0.015, 0.005)`.
+        The distance smoothing never exceeds what the parallax allows.
 
     plot_kwargs : dict, optional
         Extra keyword arguments to be used when plotting the smoothed

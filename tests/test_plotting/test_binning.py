@@ -218,6 +218,17 @@ class TestBinPdfsDistred:
         assert yedges[0] == expected_ylims[0]
         assert yedges[-1] == expected_ylims[1]
 
+    def test_default_av_smoothing_is_a_tenth_of_a_magnitude(self):
+        # 0.005 of the default avlim range (0, 20).
+        shape = (1, 200)
+        data = (np.full(shape, 2.0), np.full(shape, 3.0), np.full(shape, 3.3))
+        binned, _, yedges = bin_pdfs_distred(data)
+        centers = 0.5 * (yedges[1:] + yedges[:-1])
+        pdf = binned[0].sum(axis=0) / binned[0].sum()
+        mean = np.sum(pdf * centers)
+        std = np.sqrt(np.sum(pdf * (centers - mean) ** 2))
+        assert abs(std - 0.1) < 0.005
+
     def test_bin_pdfs_smoothing_modes(self, direct_test_data):
         """Test different smoothing parameters."""
         # Test with different smoothing values

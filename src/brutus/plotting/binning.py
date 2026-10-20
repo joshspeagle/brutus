@@ -40,7 +40,7 @@ def bin_pdfs_distred(
     Nr=100,
     bins=(750, 300),
     span=None,
-    smooth=0.01,
+    smooth=(0.01, 0.005),
     rstate=None,
     verbose=False,
     R_solar=8.2,
@@ -112,16 +112,19 @@ def bin_pdfs_distred(
         `(750, 300)` (distance, reddening).
 
     span : iterable with shape `(ndim, 2)`, optional
-        A list where each element is a length-2 tuple containing
-        lower and upper bounds. If not provided, the x-axis will use the
-        provided Av bounds while the y-axis will span `(4., 19.)` in
-        distance modulus (both appropriately transformed).
+        `(av_bounds, dist_bounds)`: the A(V) range of the y-axis in mag and
+        the distance range of the x-axis in kpc, converted to `dist_type`.
+        If not provided, the y-axis spans `avlim` and the x-axis spans
+        distance modulus 4 to 19.
 
-    smooth : float or list of floats with shape `(ndim,)`, optional
-        The standard deviation (either a single value or a different value for
-        each subplot) for the Gaussian kernel used to smooth the 2-D
-        marginalized posteriors, expressed as a fraction of the span.
-        Default is `0.01` (1% smoothing).
+    smooth : float or 2-tuple of floats, optional
+        The standard deviation of the Gaussian kernel that smooths the 2-D
+        PDFs, as `(distance, A(V))` or one value for both axes. A value
+        below 1 is a fraction of that axis range, and a value of 1 or more
+        is a number of bins. Without `span`, the A(V) range is `avlim`, so
+        with the default `avlim` an A(V) value of 0.005 is 0.1 mag (of
+        E(B-V) with `ebv=True`, since the axis keeps the `avlim` range).
+        Default is `(0.01, 0.005)`.
 
     rstate : `~numpy.random.RandomState`, optional
         `~numpy.random.RandomState` instance.

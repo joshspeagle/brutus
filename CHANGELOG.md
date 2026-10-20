@@ -92,9 +92,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `dist_vs_red` and `bin_pdfs_distred`. A star with A(V) above 6 mag got
   every draw replaced by its mean. Without `span`, the A(V) axis of
   `dist_vs_red` and `bin_pdfs_distred` now covers 0 to 20 mag, also for
-  saved draws, so the default bins and smoothing are 3.3 times wider; pass
-  `span` for a narrower range. `draw_sar` pads a distribution with its mean after
-  100 passes with no accepted draw, instead of after `max_attempts`.
+  saved draws, so the default bins are 3.3 times wider; pass `span` for a
+  narrower range. `draw_sar` pads a distribution with its mean after 100
+  passes with no accepted draw, instead of after `max_attempts`.
+- **`dist_vs_red` and `bin_pdfs_distred` smooth A(V) by 0.005 of its range
+  by default** (0.1 mag over the default `avlim`): the default `smooth` is
+  `(0.015, 0.005)` and `(0.01, 0.005)`.
 
 ### Changed
 
