@@ -9,15 +9,14 @@ photometric offsets, and other data files into memory for use in
 stellar fitting and analysis.
 """
 
-import os
 import sys
 import warnings
-from pathlib import Path
 
 import h5py
 import numpy as np
 
 # Import filter definitions
+from .download import _find_data_file
 from .filters import FILTERS
 
 __all__ = ["find_nn_file", "load_models", "load_offsets"]
@@ -25,11 +24,12 @@ __all__ = ["find_nn_file", "load_models", "load_offsets"]
 
 def find_nn_file(possible_names=("nn_c3k.h5", "nnMIST_BC.h5")):
     """
-    Find the neural network model file in standard locations.
+    Find the neural network model file in the brutus data directories.
 
     Searches for the neural network HDF5 file used for bolometric correction
-    predictions, checking the local ``data/DATAFILES`` directory first, then
-    the pooch cache directory.
+    predictions in the brutus download directory (the Pooch cache, or
+    ``$ASTRO_BRUTUS_DATA_DIR`` when set), then in ``data/DATAFILES`` in the
+    repository.
 
     Parameters
     ----------
@@ -46,30 +46,15 @@ def find_nn_file(possible_names=("nn_c3k.h5", "nnMIST_BC.h5")):
     ------
     FileNotFoundError
         If none of the candidate files can be found in any searched location.
+    TypeError
+        If `possible_names` is a single string.
     """
-    # Package root: src/brutus/data/loader.py -> four levels up to repo root
-    package_root = Path(__file__).parent.parent.parent.parent
-
-    for nn_name in possible_names:
-        # Check local data directory first
-        local_path = package_root / "data" / "DATAFILES" / nn_name
-        if os.path.exists(str(local_path)):
-            return local_path
-
-        # If not found locally, try pooch cache directory
-        import pooch
-
-        cache_dir = Path(pooch.os_cache("astro-brutus"))
-        cache_path = cache_dir / nn_name
-        if os.path.exists(str(cache_path)):
-            return cache_path
-
-    raise FileNotFoundError(
-        f"Could not find neural network file. "
-        f"Searched for {possible_names} in "
-        f"{package_root / 'data' / 'DATAFILES'} and pooch cache. "
-        f"Run brutus.data.fetch_nns() to download the file."
-    )
+    if isinstance(possible_names, str):
+        raise TypeError(
+            "possible_names must be a tuple of file names, not a string; "
+            f"use ({possible_names!r},)."
+        )
+    return _find_data_file(possible_names, "fetch_nns")
 
 
 def load_models(

@@ -65,6 +65,31 @@ strato.urls = {
 }
 
 
+def _find_data_file(possible_names, fetcher=None):
+    """Return the path of the first of `possible_names` found in a data directory.
+
+    The search order is the brutus download directory (`strato.path`, which
+    ``ASTRO_BRUTUS_DATA_DIR`` sets), then ``data/DATAFILES`` in the repository.
+    `fetcher` names the ``brutus.data`` function that downloads the file, for
+    the error message.
+    """
+    dirs = [
+        strato.abspath,
+        pathlib.Path(__file__).resolve().parents[3] / "data" / "DATAFILES",
+    ]
+    for name in possible_names:
+        for directory in dirs:
+            path = directory / name
+            if path.is_file():  # False for a directory or a broken symlink
+                return path
+    hint = f" Run brutus.data.{fetcher}() to download it." if fetcher else ""
+    raise FileNotFoundError(
+        f"Could not find any of {list(possible_names)} in the brutus data "
+        f"directory {dirs[0]} (strato.path, set by ASTRO_BRUTUS_DATA_DIR) or in "
+        f"{dirs[1]}.{hint}"
+    )
+
+
 def _fetch(name, symlink_dir):
     """
     Fetch file using Pooch, creating a symlink at symlink_dir.

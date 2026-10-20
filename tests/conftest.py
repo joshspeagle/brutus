@@ -9,7 +9,6 @@ keep JIT on so that the compiled code is what runs.
 """
 
 from contextlib import contextmanager
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -27,18 +26,16 @@ SLOW_FIXTURES = {
 def find_brutus_data_file(filename):
     """Return the path of a downloaded data file, or None if it is absent.
 
-    The search order is the download directory of `brutus.data` (the Pooch
-    cache, or ``$ASTRO_BRUTUS_DATA_DIR`` when set), then ``data/DATAFILES`` in
-    the repository (where CI links the files).
+    It searches where the brutus loaders do: the download directory of
+    `brutus.data` (the Pooch cache, or ``$ASTRO_BRUTUS_DATA_DIR`` when set),
+    then ``data/DATAFILES`` in the repository (where CI links the files).
     """
-    from brutus.data.download import strato
+    from brutus.data.download import _find_data_file
 
-    dirs = [strato.abspath, Path(__file__).resolve().parents[1] / "data" / "DATAFILES"]
-    for directory in dirs:
-        path = Path(directory) / filename
-        if path.exists():  # False for a broken symlink
-            return str(path)
-    return None
+    try:
+        return str(_find_data_file((filename,)))
+    except FileNotFoundError:
+        return None
 
 
 def requires_data(filename):

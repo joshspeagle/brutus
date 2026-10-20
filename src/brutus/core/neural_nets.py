@@ -41,8 +41,8 @@ Basic usage for SED prediction:
 Notes
 -----
 The neural networks require pre-trained model files containing weights, biases,
-and input scaling parameters. Default files are stored in the data directory
-and are automatically downloaded when needed.
+and input scaling parameters. `brutus.data.fetch_nns` downloads the default
+file, and `brutus.data.find_nn_file` finds it.
 """
 
 import sys
@@ -76,8 +76,8 @@ class FastNN:
 
     nnfile : str, optional
         Path to the neural network file containing pre-trained weights
-        and biases. Default is `'brutus/data/DATAFILES/nnMIST_BC.h5'` which will
-        be downloaded automatically if not present.
+        and biases. If not provided, `brutus.data.find_nn_file` looks it up
+        in the brutus data directories; `brutus.data.fetch_nns` downloads it.
 
     verbose : bool, optional
         Whether to print initialization progress messages to stderr.
@@ -308,8 +308,8 @@ class FastNNPredictor(FastNN):
 
     nnfile : str, optional
         Path to the neural network file containing pre-trained weights.
-        Default is `'brutus/data/DATAFILES/nnMIST_BC.h5'` which contains networks
-        trained on MIST isochrones with C3K synthetic spectra.
+        If not provided, `brutus.data.find_nn_file` looks it up in the brutus
+        data directories; `brutus.data.fetch_nns` downloads it.
 
     verbose : bool, optional
         Whether to print initialization progress messages. Default is `True`.

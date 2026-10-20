@@ -204,6 +204,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `find_nn_file`, `EEPTracks` and `Isochrone` look for their default data
+  files in the brutus download directory (`strato.path`, which
+  `ASTRO_BRUTUS_DATA_DIR` sets) first, then in `data/DATAFILES`. They
+  ignored `ASTRO_BRUTUS_DATA_DIR`, so they missed files that the `fetch_*`
+  functions had downloaded there. A missing default file raises
+  `FileNotFoundError` that names the directories and the `fetch_*`
+  function to run.
+- `EEPTracks` raises `ValueError` naming `predictions` when it lacks
+  `loga`, `logl`, `logt` or `logg` or has an unknown name, and
+  `FileNotFoundError` with a `fetch_tracks()` hint for a missing
+  `mistfile`; `Isochrone` raises it with a `fetch_isos()` hint. It no longer wraps errors from reading the file in
+  `RuntimeError`.
 - `logp_extinction` raises `ValueError` for a 3D dust map called without
   `distance`, and `TypeError` when `dustmap.query` returns something other
   than a tuple, list or array of length 2 or 3. Both cases returned the

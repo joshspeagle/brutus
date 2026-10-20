@@ -78,7 +78,6 @@ References
   Models", ApJS, 222, 8
 """
 
-import os
 import pickle
 import sys
 import warnings
@@ -88,6 +87,8 @@ import h5py
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 from scipy.optimize import minimize
+
+from ..data.download import _find_data_file
 
 # Import filter definitions
 from ..data.filters import FILTERS
@@ -170,10 +171,15 @@ class EEPTracks:
     ----------
     mistfile : str, optional
         Path to the HDF5 file containing the evolutionary tracks. If not
-        provided, defaults to the standard MIST v1.2 EEP tracks file.
+        provided, `MIST_1.2_EEPtrk.h5` is looked up in the brutus download
+        directory (the Pooch cache, or ``$ASTRO_BRUTUS_DATA_DIR`` when set),
+        then in ``data/DATAFILES`` in the repository.
 
     predictions : iterable of str, optional
-        The names of stellar parameters to predict. Default is:
+        The names of stellar parameters to predict, from `'mass'`,
+        `'feh_surf'`, `'afe_surf'`, `'loga'`, `'logt'`, `'logg'`, `'logl'`
+        and `'logr'`. It must include `'loga'`, `'logl'`, `'logt'` and
+        `'logg'`. Default is:
         `["loga", "logl", "logt", "logg", "feh_surf", "afe_surf"]`.
 
     ageweight : bool, optional
@@ -188,6 +194,14 @@ class EEPTracks:
         processed EEPTracks to a .pkl file for faster subsequent loads, and
         load from cache if available and newer than the original file.
         Default is `True`.
+
+    Raises
+    ------
+    ValueError
+        If `predictions` has an unknown name or lacks a required one.
+    FileNotFoundError
+        If the track file does not exist. `brutus.data.fetch_tracks`
+        downloads it.
 
     Attributes
     ----------
@@ -239,6 +253,14 @@ class EEPTracks:
 
         # Define input parameter labels
         labels = ["mini", "eep", "feh", "afe"]
+        known = [name for name in rename if name not in labels]
+        unknown = [p for p in predictions if p not in known]
+        missing = [p for p in ("loga", "logl", "logt", "logg") if p not in predictions]
+        if unknown or missing:
+            raise ValueError(
+                f"predictions must be names from {known} that include 'loga', "
+                f"'logl', 'logt' and 'logg'; got {list(predictions)}."
+            )
 
         # Initialize values
         self.labels = list(np.array(labels))
@@ -254,22 +276,14 @@ class EEPTracks:
         self.logl_idx = np.where(np.array(self.predictions) == "logl")[0][0]
         self.logg_idx = np.where(np.array(self.predictions) == "logg")[0][0]
 
-        # Set default file path
         if mistfile is None:
-            package_root = Path(__file__).parent.parent.parent.parent
-            mistfile = package_root / "data" / "DATAFILES" / "MIST_1.2_EEPtrk.h5"
-
-            # If default path doesn't exist, try pooch cache directory
-            # Convert to string for os.path.exists() - helps with mock compatibility
-            if not os.path.exists(str(mistfile)):
-                import pooch
-
-                cache_dir = Path(pooch.os_cache("astro-brutus"))
-                cache_path = cache_dir / "MIST_1.2_EEPtrk.h5"
-                if os.path.exists(str(cache_path)):
-                    mistfile = cache_path
-
+            mistfile = _find_data_file(("MIST_1.2_EEPtrk.h5",), "fetch_tracks")
         self.mistfile = Path(mistfile)
+        if not self.mistfile.is_file():
+            raise FileNotFoundError(
+                f"mistfile '{self.mistfile}' does not exist. Run "
+                "brutus.data.fetch_tracks() to download the MIST tracks."
+            )
 
         # Generate cache file path based on original file and configuration.
         # The cache format version is part of the filename so caches written
@@ -319,48 +333,44 @@ class EEPTracks:
             sys.stderr.write(f"Loading evolutionary tracks from {mistfile}...\n")
 
         # Load and process track data
-        try:
-            with h5py.File(self.mistfile, "r") as misth5:
-                self._make_lib(misth5, verbose=verbose)
-            self._lib_as_grid()
+        with h5py.File(self.mistfile, "r") as misth5:
+            self._make_lib(misth5, verbose=verbose)
+        self._lib_as_grid()
 
-            # Construct age weights if requested
-            self._ageidx = self.predictions.index("loga")
-            if ageweight:
-                self._add_age_weights(verbose=verbose)
+        # Construct age weights if requested
+        self._ageidx = self.predictions.index("loga")
+        if ageweight:
+            self._add_age_weights(verbose=verbose)
 
-            # Build interpolation grid
-            self._build_interpolator()
+        # Build interpolation grid
+        self._build_interpolator()
 
-            # Free construction-only intermediates: nothing reads them after
-            # the interpolator exists, and retaining them roughly doubles the
-            # memory footprint (and, previously, the cache size on disk).
-            for attr in ("libparams", "output", "X"):
-                if hasattr(self, attr):
-                    delattr(self, attr)
+        # Free construction-only intermediates: nothing reads them after
+        # the interpolator exists, and retaining them roughly doubles the
+        # memory footprint (and, previously, the cache size on disk).
+        for attr in ("libparams", "output", "X"):
+            if hasattr(self, attr):
+                delattr(self, attr)
 
-            # Save to cache if enabled
-            if use_cache:
-                try:
-                    # Cache only the runtime attribute whitelist
-                    cache_data = {
-                        attr: getattr(self, attr)
-                        for attr in _EEPTRACKS_CACHE_ATTRS
-                        if hasattr(self, attr)
-                    }
+        # Save to cache if enabled
+        if use_cache:
+            try:
+                # Cache only the runtime attribute whitelist
+                cache_data = {
+                    attr: getattr(self, attr)
+                    for attr in _EEPTRACKS_CACHE_ATTRS
+                    if hasattr(self, attr)
+                }
 
-                    with open(cache_file, "wb") as f:
-                        pickle.dump(cache_data, f)
+                with open(cache_file, "wb") as f:
+                    pickle.dump(cache_data, f)
 
-                    if verbose:
-                        sys.stderr.write(f"EEPTracks cached to {cache_file}\n")
+                if verbose:
+                    sys.stderr.write(f"EEPTracks cached to {cache_file}\n")
 
-                except Exception as e:
-                    if verbose:
-                        sys.stderr.write(f"Warning: Failed to cache EEPTracks ({e})\n")
-
-        except Exception as e:
-            raise RuntimeError(f"Failed to initialize EEPTracks: {e}")
+            except Exception as e:
+                if verbose:
+                    sys.stderr.write(f"Warning: Failed to cache EEPTracks ({e})\n")
 
         if verbose:
             sys.stderr.write("done!\n")

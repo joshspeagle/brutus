@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from conftest import requires_data
 
-from brutus.data.loader import load_models, load_offsets
+from brutus.data.loader import find_nn_file, load_models, load_offsets
 
 
 class TestDataLoaderFunctions:
@@ -430,6 +430,34 @@ class TestLoadModelsRegressions:
         )
         assert "afe" in labels.dtype.names
         assert np.all(labels["afe"] == 0.0)
+
+
+def test_find_nn_file_searches_the_data_directory_first(tmp_path, monkeypatch):
+    from brutus.data.download import strato
+
+    nnfile = tmp_path / "nn_c3k.h5"
+    nnfile.touch()
+    monkeypatch.setattr(strato, "path", tmp_path)
+    assert find_nn_file() == nnfile
+
+
+def test_find_nn_file_names_the_data_directory_when_absent(tmp_path, monkeypatch):
+    from brutus.data.download import strato
+
+    monkeypatch.setattr(strato, "path", tmp_path)
+    with pytest.raises(FileNotFoundError, match="ASTRO_BRUTUS_DATA_DIR"):
+        find_nn_file(possible_names=("absent.h5",))
+
+
+def test_find_nn_file_skips_directories_and_rejects_a_string(tmp_path, monkeypatch):
+    from brutus.data.download import strato
+
+    (tmp_path / "nn_c3k.h5").mkdir()
+    monkeypatch.setattr(strato, "path", tmp_path)
+    with pytest.raises(FileNotFoundError):
+        find_nn_file(possible_names=("nn_c3k.h5",))
+    with pytest.raises(TypeError, match="possible_names"):
+        find_nn_file("nn_c3k.h5")
 
 
 class TestLoadOffsetsSingleRow:
