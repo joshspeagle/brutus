@@ -126,12 +126,10 @@ def summary_plot(
 
     # Build parallax kwargs
     plx_kwargs = {}
-    applied_parallax = False
     if parallax is not None and parallax_err is not None:
         if np.isfinite(parallax) and np.isfinite(parallax_err):
             plx_kwargs["parallax"] = parallax
             plx_kwargs["parallax_err"] = parallax_err
-            applied_parallax = True
 
     # Generate the corner plot
     fig, axes = cornerplot(
@@ -139,7 +137,6 @@ def summary_plot(
         (dists, reds, dreds),
         params,
         coord=coord,
-        applied_parallax=applied_parallax,
         weights=weights,
         show_titles=show_titles,
         color=color,

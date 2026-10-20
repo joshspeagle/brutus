@@ -39,7 +39,7 @@ def cornerplot(
     parallax=None,
     parallax_err=None,
     Nr=500,
-    applied_parallax=True,
+    applied_parallax=None,
     pcolor="blue",
     parallax_kwargs=None,
     span=None,
@@ -116,9 +116,12 @@ def cornerplot(
         The number of Monte Carlo realizations used when sampling using the
         provided parallax prior. Default is `500`.
 
-    applied_parallax : bool, optional
-        Whether the parallax was applied when initially computing the fits.
-        Default is `True`.
+    applied_parallax : bool or None, optional
+        Whether to apply the parallax prior to the draws regenerated from
+        `(scales, avs, rvs, covs_sar)`. `None` applies it when both
+        `parallax` and `parallax_err` are given. `True` without both raises
+        `ValueError`. Saved `(dists, reds, dreds)` ignore it. Default is
+        `None`.
 
     pcolor : str, optional
         Color used when plotting the parallax prior. Default is `'blue'`.
@@ -260,11 +263,8 @@ def cornerplot(
         weights = np.ones_like(idxs, dtype="float")
     if rstate is None:
         rstate = np.random
-    if applied_parallax:
-        if parallax is None or parallax_err is None:
-            raise ValueError(
-                "`parallax` and `parallax_err` must be provided " "together."
-            )
+    if applied_parallax is None:
+        applied_parallax = parallax is not None and parallax_err is not None
     if parallax_kwargs is None:
         parallax_kwargs = dict()
     else:
@@ -312,6 +312,10 @@ def cornerplot(
         # Regenerate distance and reddening samples from inputs.
         scales, avs, rvs, covs_sar = copy.deepcopy(data)
 
+        if applied_parallax and (parallax is None or parallax_err is None):
+            raise ValueError(
+                "`applied_parallax=True` needs both `parallax` and `parallax_err`."
+            )
         _is_default_prior = lndistprior is gal_lnprior or (
             hasattr(lndistprior, "func") and lndistprior.func is gal_lnprior
         )

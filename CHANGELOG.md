@@ -281,6 +281,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for a file without the mini, logt, logl or logg label; it warned and
   returned uncorrected predictions. `StellarPop` passes errors of
   `Isochrone.get_predictions` through, not as `RuntimeError`.
+- `cornerplot` defaults `applied_parallax` to `None`, which applies the
+  parallax when both `parallax` and `parallax_err` are given. The default
+  `True` raised for saved `(dists, reds, dreds)` draws given without a
+  parallax, where the flag has no effect. `applied_parallax=True` without
+  both values now raises only for `(scales, avs, rvs, covs_sar)` input.
 
 ### Fixed
 

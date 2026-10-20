@@ -141,19 +141,16 @@ class TestCornerplot:
         assert fig is not None
         plt.close(fig)
 
-    def test_cornerplot_no_parallax_applied(
+    def test_saved_draws_without_parallax_need_no_flag(
         self, sample_indices, basic_params, direct_data
     ):
-        """Test cornerplot with applied_parallax=False."""
+        """Regression (#174): the default `applied_parallax` raised for saved
+        draws given without a parallax."""
         fig, axes = cornerplot(
-            sample_indices,
-            direct_data,
-            basic_params,
-            applied_parallax=False,
-            span=[0.9 for _ in range(7)],
+            sample_indices, direct_data, basic_params, span=[0.9] * 7
         )
 
-        assert fig is not None
+        assert axes.shape == (7, 7)
         plt.close(fig)
 
     def test_cornerplot_with_weights(self, sample_indices, basic_params, direct_data):
@@ -275,12 +272,19 @@ class TestCornerplot:
         n_samples = len(sample_indices)
         dummy_data = (np.ones(n_samples), np.ones(n_samples), np.ones(n_samples))
 
-        # Test parallax error without both parallax and parallax_err
-        with pytest.raises(ValueError, match="must be provided together"):
+        # `applied_parallax=True` on regenerated draws needs both values.
+        sar_data = (
+            np.ones(n_samples),
+            np.ones(n_samples),
+            np.full(n_samples, 3.3),
+            np.tile(np.eye(3) * 0.01, (n_samples, 1, 1)),
+        )
+        with pytest.raises(ValueError, match="applied_parallax.*parallax_err"):
             cornerplot(
                 sample_indices,
-                dummy_data,
+                sar_data,
                 basic_params,
+                coord=(45.0, 30.0),
                 parallax=1.0,  # Missing parallax_err
                 applied_parallax=True,
             )
