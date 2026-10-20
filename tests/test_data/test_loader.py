@@ -416,6 +416,7 @@ class TestLoadModelsRegressions:
             str(p), filters=["PS_g", "PS_r", "PS_i"], verbose=False
         )
         assert "afe" not in labels.dtype.names
+        assert labels.dtype.metadata["constants"] == {"smf": 0.0, "afe": 0.0}
 
     def test_explicit_afe_kept_even_when_constant(self, tmp_path):
         """An explicitly requested 'afe' label is honored even if constant."""
@@ -430,6 +431,7 @@ class TestLoadModelsRegressions:
         )
         assert "afe" in labels.dtype.names
         assert np.all(labels["afe"] == 0.0)
+        assert labels.dtype.metadata["constants"] == {"smf": 0.0}
 
 
 def test_find_nn_file_searches_the_data_directory_first(tmp_path, monkeypatch):

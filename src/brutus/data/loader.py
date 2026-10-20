@@ -123,6 +123,10 @@ def load_models(
     labels : structured `~numpy.ndarray` with dimensions `(Nmodel, Nlabel)`
         A structured array with the labels corresponding to each model.
         Contains stellar parameters like initial mass, metallicity, age, etc.
+        ``labels.dtype.metadata["constants"]`` maps each constant label left
+        out of `labels` to its value: ``"smf"`` (0.0) without
+        `include_binaries`, and ``"afe"`` for a single-afe grid under the
+        default labels. `~brutus.core.StarGrid` checks queries against it.
 
     label_mask : structured `~numpy.ndarray` with dimensions `(1, Nlabel)`
         A structured array that masks ancillary labels associated with
@@ -333,10 +337,14 @@ def load_models(
     elif not include_postms:
         sel &= eep <= 454.0
 
+    # Constant labels left out of `labels`, recorded so that StarGrid can
+    # check a query against them
+    constants = {}
     if not include_binaries:
         if "smf" in cut_columns:
             sel &= cut_columns["smf"] == 0.0
         labels2 = [x for x in labels2 if x != "smf"]
+        constants["smf"] = 0.0
 
     # The default label set includes 'afe' only to disambiguate multi-afe
     # grids. When the file is single-afe the column is constant and carries
@@ -349,6 +357,7 @@ def load_models(
         afe_finite = afe_vals[np.isfinite(afe_vals)]
         if afe_finite.size > 0 and np.all(afe_finite == afe_finite[0]):
             labels2 = [x for x in labels2 if x != "afe"]
+            constants["afe"] = float(afe_finite[0])
             if verbose:
                 sys.stderr.write(
                     "Dropping constant 'afe' label column "
@@ -357,6 +366,9 @@ def load_models(
 
     # Compile results.
     combined_labels = combined_labels[labels2]
+    combined_labels = combined_labels.view(
+        np.dtype(combined_labels.dtype, metadata={"constants": constants})
+    )
     label_mask = label_mask[labels2]
 
     return models[sel], combined_labels[sel], label_mask

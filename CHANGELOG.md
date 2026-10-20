@@ -344,10 +344,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `StarGrid.get_seds` and `get_predictions` warn when a query gives a label
-  that the grid does not have, such as `afe=0.4` on `grid_mist_v9.h5`, where
-  `load_models` drops the constant `afe`. The label was ignored silently,
-  so the result was for [α/Fe] = 0.
+- `StarGrid.get_seds` and `get_predictions` check a label that
+  `load_models` left out as constant. On `grid_mist_v9.h5`, `afe=0.0` is
+  accepted and `afe=0.4` raises `ValueError`; the label was ignored
+  silently, so the result was for [α/Fe] = 0. `load_models` records these
+  constants in `labels.dtype.metadata["constants"]`. Any other label that
+  the grid lacks warns and is ignored.
 - `Isochrone` keeps the `OSError` or `KeyError` of a failed file load as
   the cause of its `RuntimeError`, so the traceback shows the original error.
 - `EEPTracks` writes its cache to a temporary file and renames it. A

@@ -26,11 +26,20 @@ import pytest
 from brutus.core.individual import StarGrid
 
 
-def _make_grid(label_tuples, label_names=("mini", "eep", "feh"), seed=0):
-    """Build a StarGrid from a list of label tuples with distinct coeffs."""
+def _make_grid(
+    label_tuples, label_names=("mini", "eep", "feh"), seed=0, constants=None
+):
+    """Build a StarGrid from a list of label tuples with distinct coeffs.
+
+    `constants` mimics the constant labels that load_models leaves out.
+    """
     rng = np.random.default_rng(seed)
     n = len(label_tuples)
-    labels = np.zeros(n, dtype=[(name, "f8") for name in label_names])
+    dtype = np.dtype(
+        [(name, "f8") for name in label_names],
+        metadata={"constants": constants or {}},
+    )
+    labels = np.zeros(n, dtype=dtype)
     for i, tup in enumerate(label_tuples):
         labels[i] = tup
     models = np.zeros((n, 3, 3))
@@ -275,6 +284,19 @@ class TestLabelNotInGrid:
             mini=1.0, eep=300.0, feh=0.0, use_multilinear=use_multilinear
         )
         np.testing.assert_array_equal(with_afe, without)
+
+    @pytest.mark.parametrize("use_multilinear", [True, False])
+    def test_constant_left_out_by_load_models_is_checked(self, use_multilinear):
+        tuples = [(m, e, 0.0) for m in (0.5, 1.0) for e in (200.0, 300.0)]
+        grid = _make_grid(tuples, constants={"afe": 0.0, "smf": 0.0})
+        query = dict(mini=1.0, eep=300.0, feh=0.0, use_multilinear=use_multilinear)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with_afe, _, _ = grid.get_seds(afe=0.0, smf=0.0, **query)
+        np.testing.assert_array_equal(with_afe, grid.get_seds(**query)[0])
+        for label in ("afe", "smf"):
+            with pytest.raises(ValueError, match=label):
+                grid.get_seds(**{label: 0.4}, **query)
 
     def test_smf_on_a_grid_without_smf_warns_once(self, complete_grid):
         with pytest.warns(UserWarning) as record:
