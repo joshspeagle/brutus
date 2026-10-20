@@ -73,6 +73,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   zero, not `-inf`, like `truncnorm_logpdf`. At `x == loc` it now agrees
   with `scipy.stats.chi2.logpdf` (`-ln 2` for `df = 2`, `+inf` for
   `df < 2`), and float32 input no longer overflows to `-inf`.
+- **The line-of-sight and cluster log-likelihoods return `LOG_ZERO`
+  (-1e300)** for a zero probability, not `-inf`:
+  `los_clouds_loglike_samples`, `kernel_tophat`, `kernel_gauss`,
+  `kernel_lorentz`, `marginalize_isochrone_grid`,
+  `isochrone_population_loglike` and `uniform_outlier_loglike`. With
+  `dim_prior=True`, `phot_loglike` gives `LOG_ZERO` for an exact fit
+  (`chi2 = 0`) with 3 or more degrees of freedom.
 - **The fused Galactic prior normalizes the age prior with the tail-stable
   log-mass of the fused extinction prior.** It used a floored `erf`
   difference. The prior changes by at most 1.8e-15 for valid inputs; the

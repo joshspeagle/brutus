@@ -125,6 +125,8 @@ import warnings
 import numpy as np
 from scipy.special import logsumexp, ndtr, ndtri
 
+from ..utils.math import LOG_ZERO
+
 __all__ = [
     "los_clouds_priortransform",
     "los_clouds_loglike_samples",
@@ -264,7 +266,7 @@ def los_clouds_priortransform(
     The reddening amplitudes are drawn as *independent* uniforms (only the
     distances are sorted). When the likelihood is evaluated with
     ``monotonic=True`` (the default in `los_clouds_loglike_samples`),
-    non-monotone amplitude orderings are rejected with -inf. In the default
+    non-monotone amplitude orderings are rejected with `LOG_ZERO`. In the default
     mode the foreground and the n cloud amplitudes form one ordered chain,
     so only a fraction 1/(n+1)! of the sampled prior volume is retained
     (the nested-sampling evidence carries a -ln((n+1)!) offset); with a
@@ -429,7 +431,8 @@ def los_clouds_loglike_samples(
     Returns
     -------
     loglike : float
-        The computed log-likelihood.
+        The computed log-likelihood; `LOG_ZERO` (-1e300) for a zero
+        likelihood, or when it is NaN.
 
     Examples
     --------
@@ -515,7 +518,7 @@ def los_clouds_loglike_samples(
         # with a template (and no additive foreground), fred is in A_V while
         # cloud values are dimensionless rescalings: no fred comparison
         if not monotone:
-            return -np.inf
+            return LOG_ZERO
 
     # Sub-sample distance and reddening samples
     if Ndraws > dsamps.shape[1]:
@@ -577,7 +580,7 @@ def los_clouds_loglike_samples(
     # Compute total log-likelihood
     loglike = np.sum(logls)
 
-    return loglike
+    return loglike if loglike > LOG_ZERO else LOG_ZERO
 
 
 def kernel_tophat(reds, kp, rlims=None):
@@ -633,7 +636,7 @@ def kernel_tophat(reds, kp, rlims=None):
         norm = 2.0 * kwidth
     else:
         # clip the support to the admissible reddening range; a support that
-        # lies entirely outside the range has no admissible mass (-inf)
+        # lies entirely outside the range has no admissible mass (LOG_ZERO)
         klow = np.maximum(klow, rlims[0])
         khigh = np.minimum(khigh, rlims[1])
         norm = khigh - klow
@@ -643,7 +646,7 @@ def kernel_tophat(reds, kp, rlims=None):
 
     # Compute log-weights, avoiding log(0)
     with np.errstate(divide="ignore", invalid="ignore"):
-        logw = np.where(inbounds & (norm > 0), -np.log(norm), -np.inf)
+        logw = np.where(inbounds & (norm > 0), -np.log(norm), LOG_ZERO)
 
     return logw
 
@@ -704,7 +707,7 @@ def kernel_gauss(reds, kp, rlims=None):
         # Phi((hi - mu)/sig) - Phi((lo - mu)/sig)
         mass = ndtr((rlims[1] - kmean) / kstd) - ndtr((rlims[0] - kmean) / kstd)
         with np.errstate(divide="ignore", invalid="ignore"):
-            logw = np.where(mass > 0, logw - np.log(mass), -np.inf)
+            logw = np.where(mass > 0, logw - np.log(mass), LOG_ZERO)
 
     return logw
 
@@ -770,6 +773,6 @@ def kernel_lorentz(reds, kp, rlims=None):
             - np.arctan((rlims[0] - kmean) / khwhm)
         ) / np.pi
         with np.errstate(divide="ignore", invalid="ignore"):
-            logw = np.where(mass > 0, logw - np.log(mass), -np.inf)
+            logw = np.where(mass > 0, logw - np.log(mass), LOG_ZERO)
 
     return logw
