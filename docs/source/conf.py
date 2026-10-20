@@ -153,8 +153,6 @@ autodoc_default_options = {
 
 # Napoleon settings for NumPy-style docstrings
 napoleon_google_docstring = False
-# Module docstrings list their contents under these headings.
-napoleon_custom_sections = ["Classes", "Functions"]
 
 # autosummary settings
 autosummary_generate = True

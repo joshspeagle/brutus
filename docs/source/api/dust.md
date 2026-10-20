@@ -22,6 +22,12 @@ The dust module provides tools for working with 3D dust maps, including coordina
    :show-inheritance:
 ```
 
+## Coordinates
+
+```{eval-rst}
+.. autofunction:: lb2pix
+```
+
 ## Submodules
 
 For advanced users who need access to internal implementations:

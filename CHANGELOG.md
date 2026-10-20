@@ -344,6 +344,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `logpost_grid` raises `ValueError` when only one of `parallax` and
+  `parallax_err` is given, as `loglike_grid` and `fit` do. It ignored the
+  parallax.
 - `logpost_grid` raises `ValueError` that names `dlabels` when the default
   Galactic prior gets a plain, not structured, `dlabels` array. It raised a
   `TypeError` about `NoneType`.
@@ -590,6 +593,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `params` and also the axis text. The `hist2d` docstring documents
   `smooth` and drops its "internal function" note. The `dist_vs_red`
   docstring gives the `ebv` default as `None`.
+- The `loglike_grid` and `logpost_grid` docstrings document every
+  parameter and each value they return, with shapes and units. The
+  `get_sed_grid` docstring gives the distance in kpc, not parsecs.
+- Module docstrings no longer list their classes and functions; the API
+  pages list each module's members.
+- The equations in 18 docstrings now render on the API pages.
 
 ## [1.2.0] - 2026-07-17
 

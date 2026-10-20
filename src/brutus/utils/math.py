@@ -8,21 +8,6 @@ This module contains mathematical utility functions including matrix operations,
 statistical distributions, and numerical utilities. Many functions are JIT-compiled
 with numba for performance.
 
-Functions
----------
-galactic_to_galactocentric_cyl : Coordinate transform
-    Convert Galactic (l, b, distance) to galactocentric cylindrical (R, phi, Z)
-inverse3 : Matrix inversion
-    Fast 3x3 matrix inversion with optional diagonal preconditioning
-isPSD : Matrix check
-    Check if matrix is positive semi-definite
-chisquare_logpdf : Chi-square log-PDF
-    Log-probability density for chi-square distribution
-truncnorm_pdf : Truncated normal PDF
-    Probability density for truncated normal
-truncnorm_logpdf : Truncated normal log-PDF
-    Log-probability density for truncated normal
-
 See Also
 --------
 brutus.utils.sampling : Sampling utilities
@@ -630,7 +615,7 @@ def truncnorm_logpdf(x, a, b, loc=0.0, scale=1.0):
 
 
 def galactic_to_galactocentric_cyl(dists, ell, b, R_solar=8.2, Z_solar=0.025):
-    """
+    r"""
     Convert Galactic coordinates to Galactocentric cylindrical coordinates.
 
     Converts heliocentric Galactic coordinates (l, b, distance) to
@@ -671,17 +656,17 @@ def galactic_to_galactocentric_cyl(dists, ell, b, R_solar=8.2, Z_solar=0.025):
 
     .. math::
 
-        x = d \\cos(b) \\cos(l)
+        x = d \cos(b) \cos(l)
 
-        y = d \\cos(b) \\sin(l)
+        y = d \cos(b) \sin(l)
 
     And the Galactocentric cylindrical coordinates are:
 
     .. math::
 
-        R = \\sqrt{(x - R_\\odot)^2 + y^2}
+        R = \sqrt{(x - R_\odot)^2 + y^2}
 
-        Z = d \\sin(b) + Z_\\odot
+        Z = d \sin(b) + Z_\odot
 
     See Also
     --------

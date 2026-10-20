@@ -8,25 +8,6 @@ This module contains functions for converting between magnitudes and fluxes,
 handling asinh magnitudes ("luptitudes"), and computing photometric likelihoods.
 These utilities are fundamental for all photometric analysis in brutus.
 
-Functions
----------
-magnitude : Convert flux to magnitudes
-    Magnitudes in the survey's native system
-inv_magnitude : Convert magnitudes to flux
-    Inverse of magnitude conversion
-luptitude : Convert flux to asinh magnitudes
-    Asinh magnitude system (Lupton et al. 1999)
-inv_luptitude : Convert asinh magnitudes to flux
-    Inverse of luptitude conversion
-add_mag : Combine magnitudes
-    Add fluxes in magnitude space
-phot_loglike : Photometric log-likelihood
-    Core likelihood function for stellar fitting
-chisquare_outlier_loglike : Chi-square outlier model
-    Outlier likelihood for mixture models
-uniform_outlier_loglike : Uniform outlier model
-    Alternative outlier likelihood
-
 See Also
 --------
 brutus.analysis.individual.BruteForce : Uses phot_loglike for fitting
@@ -379,17 +360,17 @@ def phot_loglike(
     The log-likelihood without dimensionality prior is:
 
     .. math::
-        \\ln L = -\\frac{1}{2} \\left[ \\chi^2 + N \\ln(2\\pi) + \\ln|\\Sigma| \\right]
+        \ln L = -\frac{1}{2} \left[ \chi^2 + N \ln(2\pi) + \ln|\Sigma| \right]
 
-    where :math:`\\chi^2 = \\sum_i (f_i - m_i)^2/\\sigma_i^2` and
-    :math:`|\\Sigma|` is the determinant of the covariance matrix.
+    where :math:`\chi^2 = \sum_i (f_i - m_i)^2/\sigma_i^2` and
+    :math:`|\Sigma|` is the determinant of the covariance matrix.
 
     With dimensionality prior (dim_prior=True), this becomes the log-PDF
     of a chi-square distribution, which weights models by goodness-of-fit
     relative to the number of degrees of freedom.
 
     For the shared-model (2-D `mfluxes`) fast path, the chi-square is
-    expanded as :math:`\\sum w f^2 - 2 (w f) M^T + w (M^2)^T` and evaluated
+    expanded as :math:`\sum w f^2 - 2 (w f) M^T + w (M^2)^T` and evaluated
     with matrix products. This is algebraically identical to the direct
     residual sum but reassociates the floating-point additions, so results
     can differ from the 3-D path at machine precision.

@@ -14,21 +14,6 @@ accounts for field contamination by applying the mixture model at each grid poin
 before integrating over stellar parameters. This differs from traditional approaches
 that marginalize first and mix later, which can produce biased results.
 
-Functions
----------
-isochrone_population_loglike : Main likelihood function
-    Compute log-likelihood for coeval stellar population
-generate_isochrone_population_grid : Grid generation
-    Generate (mass, SMF) grid for population modeling
-compute_isochrone_cluster_loglike : Cluster likelihood
-    Compute membership likelihood for each grid point
-compute_isochrone_outlier_loglike : Outlier likelihood
-    Compute field contamination likelihood
-apply_isochrone_mixture_model : Mixture model
-    Apply mixture before marginalization
-marginalize_isochrone_grid : Marginalization
-    Integrate over stellar parameters with geometric jacobians
-
 See Also
 --------
 brutus.core.populations.StellarPop : Stellar population synthesis
@@ -209,10 +194,10 @@ def generate_isochrone_population_grid(
        and leaving non-finite SEDs to the likelihood
 
     The jacobians are critical for proper marginalization - they represent
-    the geometric factors :math:`dm` and :math:`d({\\rm SMF})` in the integral:
+    the geometric factors :math:`dm` and :math:`d({\rm SMF})` in the integral:
 
     .. math::
-        P({\\rm data}) = \\int \\int P({\\rm data}|m, {\\rm SMF}) \\, dm \\, d({\\rm SMF})
+        P({\rm data}) = \int \int P({\rm data}|m, {\rm SMF}) \, dm \, d({\rm SMF})
 
     Binary models are only computed for EEP ≤ eep_binary_max (typically
     main sequence) to avoid unphysical binary configurations. Models above
@@ -414,7 +399,7 @@ def compute_isochrone_cluster_loglike(
     The likelihood includes both photometric and parallax components:
 
     .. math::
-        \\ln L_{\\rm cluster} = \\ln L_{\\rm phot} + \\ln L_{\\rm parallax}
+        \ln L_{\rm cluster} = \ln L_{\rm phot} + \ln L_{\rm parallax}
 
     where the photometric likelihood uses either chi-square (dim_prior=True)
     or Gaussian (dim_prior=False) formulation.
@@ -682,18 +667,18 @@ def apply_isochrone_mixture_model(
     The mixture model is applied as:
 
     .. math::
-        P({\\rm data}|m, {\\rm SMF}) = w_c \\cdot P_c + w_o \\cdot P_o
+        P({\rm data}|m, {\rm SMF}) = w_c \cdot P_c + w_o \cdot P_o
 
     where:
-    - :math:`w_c = P_{\\rm cluster} \\cdot (1 - f_{\\rm field})`
+    - :math:`w_c = P_{\rm cluster} \cdot (1 - f_{\rm field})`
     - :math:`w_o = 1 - w_c`
-    - :math:`P_{\\rm cluster}` is the prior probability (cluster_prob)
-    - :math:`f_{\\rm field}` is the field contamination fraction
+    - :math:`P_{\rm cluster}` is the prior probability (cluster_prob)
+    - :math:`f_{\rm field}` is the field contamination fraction
 
     This is computed in log-space using logsumexp for numerical stability:
 
     .. math::
-        \\ln L_{\\rm mix} = \\ln(\\exp(\\ln L_c + \\ln w_c) + \\exp(\\ln L_o + \\ln w_o))
+        \ln L_{\rm mix} = \ln(\exp(\ln L_c + \ln w_c) + \exp(\ln L_o + \ln w_o))
 
     The key distinction from traditional approaches is that this mixture
     is applied **before** marginalization over stellar parameters, which
@@ -759,17 +744,17 @@ def marginalize_isochrone_grid(lnl_mixture, mass_jacobians, smf_jacobians):
     Performs the integration:
 
     .. math::
-        P({\\rm data}|\\theta) = \\int \\int P({\\rm data}|m, {\\rm SMF}, \\theta) \\, dm \\, d({\\rm SMF})
+        P({\rm data}|\theta) = \int \int P({\rm data}|m, {\rm SMF}, \theta) \, dm \, d({\rm SMF})
 
     numerically using a grid-based approach:
 
     .. math::
-        \\ln P \\approx \\ln \\frac{\\sum_{i,j} \\exp(\\ln L_{i,j}) \\cdot \\Delta m_i \\cdot \\Delta({\\rm SMF})_j}{\\sum_{i,j} \\Delta m_i \\cdot \\Delta({\\rm SMF})_j}
+        \ln P \approx \ln \frac{\sum_{i,j} \exp(\ln L_{i,j}) \cdot \Delta m_i \cdot \Delta({\rm SMF})_j}{\sum_{i,j} \Delta m_i \cdot \Delta({\rm SMF})_j}
 
     where:
-    - :math:`\\ln L_{i,j}` is the mixed likelihood at grid point (i,j)
-    - :math:`\\Delta m_i` is the mass grid spacing (mass_jacobians)
-    - :math:`\\Delta({\\rm SMF})_j` is the SMF grid spacing (smf_jacobians)
+    - :math:`\ln L_{i,j}` is the mixed likelihood at grid point (i,j)
+    - :math:`\Delta m_i` is the mass grid spacing (mass_jacobians)
+    - :math:`\Delta({\rm SMF})_j` is the SMF grid spacing (smf_jacobians)
 
     Invalid models (with NaN likelihood) are converted to -∞ before the
     logsumexp operation, so they contribute zero probability. The measure is
@@ -925,10 +910,10 @@ def isochrone_population_loglike(
     workflow:
 
     .. math::
-        \\ln L(\\theta) = \\sum_i \\ln \\left[ \\int \\int \\left( w_c P_c(d_i|m, s, \\theta) + w_o P_o(d_i) \\right) dm \\, ds \\right]
+        \ln L(\theta) = \sum_i \ln \left[ \int \int \left( w_c P_c(d_i|m, s, \theta) + w_o P_o(d_i) \right) dm \, ds \right]
 
     where:
-    - :math:`\\theta = [{\\rm Fe/H}, \\log {\\rm age}, A_V, R_V, d, f_{\\rm field}]` are population parameters
+    - :math:`\theta = [{\rm Fe/H}, \log {\rm age}, A_V, R_V, d, f_{\rm field}]` are population parameters
     - :math:`m` is stellar mass
     - :math:`s` is secondary mass fraction (SMF)
     - :math:`w_c, w_o` are mixture weights

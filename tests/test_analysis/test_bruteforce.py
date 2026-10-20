@@ -2003,6 +2003,13 @@ class TestInputValidation:
         with pytest.raises(ValueError, match=match):
             fitter.loglike_grid(flux, flux_err, mask, **kwargs)
 
+    def test_logpost_grid_rejects_a_parallax_without_its_error(
+        self, fitter, observation
+    ):
+        results = fitter.loglike_grid(*observation, return_vals=True)
+        with pytest.raises(ValueError, match="parallax_err"):
+            fitter.logpost_grid(results, parallax=5.0)
+
     def test_zero_parallax_error_counts_as_no_parallax(self, fitter, observation):
         flux, flux_err, mask = observation
         with_zero = fitter.loglike_grid(

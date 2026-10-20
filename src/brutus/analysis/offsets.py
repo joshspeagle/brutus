@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-"""
+r"""
 Photometric offset analysis for systematic calibration corrections.
 
 This module provides robust photometric offset computation for correcting
@@ -13,24 +13,6 @@ Photometric offsets are multiplicative corrections applied to observed fluxes
 to account for systematic calibration differences, photometric system
 transformations, or model systematics. The offsets are computed by analyzing
 model/data flux ratios across a sample of well-fit objects.
-
-Classes
--------
-PhotometricOffsetsConfig : Configuration container
-    Encapsulates all configuration parameters with validation
-
-Functions
----------
-photometric_offsets : Compute offsets
-    Main function for computing multiplicative photometric offsets
-_vectorized_bootstrap_median : Bootstrap implementation
-    Vectorized bootstrap for performance
-_loo_weights : Leave-one-out importance weights
-    Reweight full-posterior draws to the leave-one-out posterior
-_generate_seds : Chunked model SED generation
-    Bounds peak memory for large samples
-_validate_inputs : Input validation
-    Validate input arrays for consistency
 
 See Also
 --------
@@ -47,7 +29,7 @@ The offset computation workflow:
 3. **Compute flux ratios**: model_flux / observed_flux for each band
 4. **Reweight samples**: For bands used in fitting, importance-reweight the
    full-posterior draws to the leave-one-out posterior :math:`P(M|D_{-i})`
-   using :math:`w \\propto L_{-i}/L_{\\rm full}` to avoid circularity
+   using :math:`w \propto L_{-i}/L_{\rm full}` to avoid circularity
 5. **Bootstrap sampling**: Resample objects and models to estimate median
    offset and uncertainty
 6. **Apply priors** (optional): Incorporate Bayesian prior constraints

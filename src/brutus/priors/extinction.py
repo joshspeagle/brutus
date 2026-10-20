@@ -8,11 +8,6 @@ This module provides log-prior functions for dust extinction modeling
 using 3D dust maps. These priors incorporate spatial dust distribution
 information to constrain extinction in stellar fitting.
 
-Functions
----------
-logp_extinction : Dust map extinction prior
-    Gaussian prior from 3D dust maps (e.g., Bayestar)
-
 See Also
 --------
 brutus.dust.maps : 3D dust map utilities
@@ -226,12 +221,12 @@ def logp_extinction(
     data is available:
 
     .. math::
-        \\log p(A_V | A_{V,\\text{map}}, \\sigma_{A_V}) =
-        -\\frac{1}{2} \\left[ \\frac{(A_V - A_{V,\\text{map}})^2}{\\sigma_{A_V}^2} +
-        \\log(2\\pi\\sigma_{A_V}^2) \\right] - \\log Z
+        \log p(A_V | A_{V,\text{map}}, \sigma_{A_V}) =
+        -\frac{1}{2} \left[ \frac{(A_V - A_{V,\text{map}})^2}{\sigma_{A_V}^2} +
+        \log(2\pi\sigma_{A_V}^2) \right] - \log Z
 
-    where :math:`Z = \\Phi((A_{V,\\max}-\\mu)/\\sigma) -
-    \\Phi((A_{V,\\min}-\\mu)/\\sigma)` normalizes the density over the
+    where :math:`Z = \Phi((A_{V,\max}-\mu)/\sigma) -
+    \Phi((A_{V,\min}-\mu)/\sigma)` normalizes the density over the
     physical support ``avlim``. Because the map mean and spread vary with
     distance, omitting :math:`Z` would under-weight distances where the
     profile sits near the A(V) boundary (a bias of up to ``ln 2``).
@@ -241,7 +236,7 @@ def logp_extinction(
     map's distance-resolved profiles. Distances outside the map range
     use the boundary values.
 
-    The spread :math:`\\sigma_{A_V}` is the map spread with ``scatter``
+    The spread :math:`\sigma_{A_V}` is the map spread with ``scatter``
     added in quadrature.
 
     For regions without dust map coverage (NaN values, including distance

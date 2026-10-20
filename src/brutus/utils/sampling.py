@@ -8,15 +8,6 @@ This module contains functions for statistical sampling, quantile computation,
 and random number generation used in Bayesian inference workflows. These
 utilities are essential for posterior sampling and uncertainty quantification.
 
-Functions
----------
-quantile : Weighted quantiles
-    Compute (weighted) quantiles from samples
-draw_sar : Posterior sampling
-    Draw from (scale, A_V, R_V) posterior
-sample_multivariate_normal : Gaussian sampling
-    Sample from multivariate normal with bounds
-
 See Also
 --------
 brutus.analysis.individual.BruteForce : Uses these for posterior sampling

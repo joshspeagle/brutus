@@ -9,19 +9,6 @@ including disk and halo number densities, metallicity distributions,
 and age-metallicity relations. These priors encode our knowledge of the
 Milky Way's stellar populations and are essential for distance estimation.
 
-Functions
----------
-logn_disk : Disk number density
-    Exponential disk model
-logn_halo : Halo number density
-    Flattened power-law halo
-logp_feh : Metallicity distribution
-    Gaussian metallicity distribution
-logp_age_from_feh : Age-metallicity relation
-    Age distribution conditional on metallicity
-logp_galactic_structure : Combined prior
-    Full Galactic structure prior combining disk and halo
-
 See Also
 --------
 brutus.analysis.individual.BruteForce : Uses Galactic priors for distance fitting
@@ -392,11 +379,11 @@ def logn_disk(R, Z, R_solar=8.2, Z_solar=0.025, R_scale=2.6, Z_scale=0.3, R_smoo
     The disk number density follows:
 
     .. math::
-        n_{\\text{disk}}(R, Z) \\propto \\exp\\left(-\\frac{R_{\\text{eff}} - R_{\\text{eff},\\odot}}{R_{\\text{scale}}} - \\frac{|Z| - |Z_\\odot|}{Z_{\\text{scale}}}\\right)
+        n_{\text{disk}}(R, Z) \propto \exp\left(-\frac{R_{\text{eff}} - R_{\text{eff},\odot}}{R_{\text{scale}}} - \frac{|Z| - |Z_\odot|}{Z_{\text{scale}}}\right)
 
-    where :math:`R_{\\text{eff}} = \\sqrt{R^2 + R_{\\text{smooth}}^2}` provides
+    where :math:`R_{\text{eff}} = \sqrt{R^2 + R_{\text{smooth}}^2}` provides
     smoothing near the Galactic center and
-    :math:`R_{\\text{eff},\\odot} = \\sqrt{R_\\odot^2 + R_{\\text{smooth}}^2}`
+    :math:`R_{\text{eff},\odot} = \sqrt{R_\odot^2 + R_{\text{smooth}}^2}`
     is the smoothed solar radius, so the normalized density is exactly 1 at
     the solar position (consistent with :func:`logn_halo`). This keeps the
     mixture fractions (``f_thick``, ``f_halo``) in
@@ -474,16 +461,16 @@ def logn_halo(
     The halo follows a flattened power-law profile:
 
     .. math::
-        n_{\\text{halo}}(R, Z) \\propto R_{\\text{eff}}^{-\\eta}
+        n_{\text{halo}}(R, Z) \propto R_{\text{eff}}^{-\eta}
 
     where the effective radius includes radius-dependent flattening:
 
     .. math::
-        R_{\\text{eff}} = \\sqrt{R^2 + (Z/q)^2 + R_{\\text{smooth}}^2}
+        R_{\text{eff}} = \sqrt{R^2 + (Z/q)^2 + R_{\text{smooth}}^2}
 
-        q(r) = q_\\infty - (q_\\infty - q_{\\text{ctr}}) e^{1 - r'/r_q}
+        q(r) = q_\infty - (q_\infty - q_{\text{ctr}}) e^{1 - r'/r_q}
 
-        r' = \\sqrt{r^2 + r_q^2}, \\quad r = \\sqrt{R^2 + Z^2}
+        r' = \sqrt{r^2 + r_q^2}, \quad r = \sqrt{R^2 + Z^2}
 
     References
     ----------
@@ -541,7 +528,7 @@ def logp_feh(feh, feh_mean=-0.2, feh_sigma=0.3):
     The metallicity prior follows a normal distribution:
 
     .. math::
-        \\log p([\\text{Fe/H}]) = -\\frac{1}{2}\\left[\\frac{([\\text{Fe/H}] - \\mu_{\\text{Fe/H}})^2}{\\sigma_{\\text{Fe/H}}^2} + \\log(2\\pi\\sigma_{\\text{Fe/H}}^2)\\right]
+        \log p([\text{Fe/H}]) = -\frac{1}{2}\left[\frac{([\text{Fe/H}] - \mu_{\text{Fe/H}})^2}{\sigma_{\text{Fe/H}}^2} + \log(2\pi\sigma_{\text{Fe/H}}^2)\right]
 
     Typical values for different Galactic components:
     - Thin disk: feh_mean = -0.2, feh_sigma = 0.3
@@ -611,14 +598,14 @@ def logp_age_from_feh(
     The age-metallicity relation follows a logistic function:
 
     .. math::
-        \\langle t \\rangle = \\frac{t_{\\max} - t_{\\min}}{1 + \\exp\\left(\\frac{[\\text{Fe/H}] - c}{s}\\right)} + t_{\\min}
+        \langle t \rangle = \frac{t_{\max} - t_{\min}}{1 + \exp\left(\frac{[\text{Fe/H}] - c}{s}\right)} + t_{\min}
 
     where c is the central metallicity and s is the scale length.
 
     The age dispersion increases for younger (more metal-rich) stars:
 
     .. math::
-        \\sigma_t = \\min\\left(\\max\\left(\\frac{t_{\\max} - \\langle t \\rangle}{n\\sigma}, \\sigma_{\\min}\\right), \\sigma_{\\max}\\right)
+        \sigma_t = \min\left(\max\left(\frac{t_{\max} - \langle t \rangle}{n\sigma}, \sigma_{\min}\right), \sigma_{\max}\right)
 
     The age density is a truncated normal distribution bounded by
     [min_age, max_age].

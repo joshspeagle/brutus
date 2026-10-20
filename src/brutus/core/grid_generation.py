@@ -15,15 +15,6 @@ The grid generation process:
 3. Fits polynomial coefficients for reddening dependence
 4. Saves in HDF5 format compatible with StarGrid and load_models()
 
-Classes
--------
-GridGenerator : Main grid generation class
-    Generates pre-computed model grids from evolutionary tracks
-
-Functions
----------
-None (all functionality in GridGenerator class)
-
 Examples
 --------
 Generate a grid from evolutionary tracks:

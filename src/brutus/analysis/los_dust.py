@@ -32,19 +32,6 @@ the first cloud). Cloud values are *not* summed cumulatively: only with
 levels. The kernel (Gaussian, Lorentzian, or top-hat) defines how individual
 stellar extinction samples scatter around that mean.
 
-Functions
----------
-los_clouds_priortransform : Prior transformation
-    Transform unit cube to physical parameters for nested sampling
-los_clouds_loglike_samples : Likelihood function
-    Compute log-likelihood given stellar distance/extinction samples
-kernel_tophat : Top-hat kernel
-    Uniform dispersion of extinction within a fixed range around the mean
-kernel_gauss : Gaussian kernel
-    Gaussian dispersion of extinction around the cloud mean
-kernel_lorentz : Lorentzian kernel
-    Heavy-tailed dispersion of extinction around the cloud mean
-
 See Also
 --------
 brutus.analysis.individual.BruteForce : Provides stellar posterior samples
