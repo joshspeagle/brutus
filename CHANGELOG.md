@@ -158,6 +158,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`max_models` must be None or a positive integer**; `fit` and
   `logpost_grid` raise `ValueError` otherwise. With the old cap, `0` kept
   every model.
+- `load_models` raises `ValueError` for `include_ms=False,
+  include_postms=False` before it reads the file. It warns with a
+  `UserWarning` that lists requested `labels` absent from the file.
+  `load_offsets` warns for a filter name that is neither in `brutus.FILTERS`
+  nor in the file, and its verbose summary prints each offset as a signed percentage, such as
+  `+12.34%`.
 - **`ltol_subthresh` is removed** from `loglike_grid`, `fit` and `_fit`.
   Each model's fit now checks its own convergence. `ltol` must be positive.
 - `logpost_grid` takes `return_precision=True` to return the precision

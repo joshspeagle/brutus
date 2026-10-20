@@ -4,7 +4,6 @@ import pathlib
 from pathlib import Path
 from unittest.mock import patch
 
-import numpy as np
 import pytest
 
 from brutus.data import download
@@ -367,18 +366,3 @@ class TestDataIntegration:
             iso_path = fetch_isos(target_dir="./data/")
 
             assert iso_path == Path("/fake/MIST_1.2_iso_vvcrit0.0.h5")
-
-        with patch("numpy.loadtxt") as mock_loadtxt:
-            mock_loadtxt.return_value = (
-                np.array(["g", "r", "i"], dtype="str"),
-                np.array(["1.02", "0.98", "1.01"], dtype="str"),
-            )
-
-            # Example from load_offsets docstring
-            from brutus.data import load_offsets
-
-            with patch("brutus.data.loader.sys.stderr"):
-                offsets = load_offsets("./data/offsets_mist_v9.txt", verbose=False)
-
-            assert len(offsets) > 0
-            assert np.all(np.isfinite(offsets))

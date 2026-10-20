@@ -28,10 +28,6 @@ class DustMap:
     implementations should follow.
     """
 
-    def __init__(self):
-        """Initialize the dust map."""
-        pass
-
     def __call__(self, coords, **kwargs):
         """
         Convenience method for querying the map.
@@ -209,8 +205,6 @@ class Bayestar(DustMap):
             Default masking behavior for queries (see class docstring).
             Default is True.
         """
-        super().__init__()
-
         # Open the HDF5 file
         try:
             # Try SWMR mode first (for concurrent access)
@@ -326,11 +320,11 @@ class Bayestar(DustMap):
         Returns
         -------
         pix_idx : ndarray
-            Data indices for each coordinate. Invalid coordinates return -1.
+            Data indices for each coordinate, at least 1-D. Invalid
+            coordinates and coordinates outside the map return -1.
         """
-        # Ensure arrays and get shape
-        l_arr = np.asarray(gal_l)
-        b_arr = np.asarray(b)
+        l_arr = np.atleast_1d(gal_l)
+        b_arr = np.atleast_1d(b)
         pix_idx = np.full(l_arr.shape, -1, dtype="i8")
 
         # In NESTED ordering the pixel index at a coarser nside is the
@@ -347,31 +341,12 @@ class Bayestar(DustMap):
             # Derive HEALPix pixel indices at this resolution
             ipix = ipix_max >> (2 * (order_max - (int(nside).bit_length() - 1)))
 
-            # Find insertion points in the sorted pixel list
-            idx = np.searchsorted(self._hp_idx_sorted[k], ipix, side="left")
-
-            # Handle scalar case
-            if np.isscalar(idx):
-                if (
-                    idx < len(self._hp_idx_sorted[k])
-                    and self._hp_idx_sorted[k][idx] == ipix
-                ):
-                    pix_idx[...] = self._data_idx[k][idx]
-            else:
-                # Check bounds for array case
-                in_bounds = idx < len(self._hp_idx_sorted[k])
-
-                if not np.any(in_bounds):
-                    continue
-
-                # Check for exact matches
-                idx = np.where(in_bounds, idx, -1)
-                safe_idx = np.clip(idx, 0, None)
-                match_idx = in_bounds & (self._hp_idx_sorted[k][safe_idx] == ipix)
-
-                if np.any(match_idx):
-                    valid_idx = idx[match_idx]
-                    pix_idx[match_idx] = self._data_idx[k][valid_idx]
+            # Find each pixel in the sorted list; a pixel absent from the map
+            # (or the -1 sentinel) matches no entry.
+            hp_sorted = self._hp_idx_sorted[k]
+            idx = np.minimum(np.searchsorted(hp_sorted, ipix), len(hp_sorted) - 1)
+            match = hp_sorted[idx] == ipix
+            pix_idx[match] = self._data_idx[k][idx[match]]
 
         return pix_idx
 
@@ -448,13 +423,8 @@ class Bayestar(DustMap):
             l_deg = coords_arr[:, 0]
             b_deg = coords_arr[:, 1]
 
-        # Find corresponding data indices
+        # The indices are at least 1-D, so the indexing below copies the map.
         pix_idx = self._find_data_idx(l_deg, b_deg)
-
-        # Promote 0-d (scalar SkyCoord) indices to 1-d so the advanced
-        # indexing below always yields a fresh array (a 0-d index would
-        # return a mutable view into the loaded map).
-        pix_idx = np.atleast_1d(np.asarray(pix_idx))
 
         # Extract extinction data
         in_bounds = pix_idx != -1

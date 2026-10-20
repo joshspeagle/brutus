@@ -100,7 +100,8 @@ def load_models(
 
     labels : iterable of str with length `Nlabel`, optional
         List of labels associated with the set of imported stellar models.
-        Any labels that are not available will be skipped over.
+        Labels that are not in the file are skipped, with a `UserWarning`
+        that lists them; the default set skips its absent labels silently.
         The default set is `['mini', 'feh', 'eep', 'smf', 'afe', 'loga',
         'logl', 'logt', 'logg', 'Mr', 'agewt']`.
 
@@ -145,8 +146,8 @@ def load_models(
     Raises
     ------
     ValueError
-        If neither main sequence nor post-main sequence models are included,
-        or if `include_ms` or `include_postms` is `False` and the file has no
+        If `include_ms` and `include_postms` are both `False`, or if
+        `include_ms` or `include_postms` is `False` and the file has no
         `'eep'` column.
 
     Notes
@@ -175,7 +176,7 @@ def load_models(
 
     >>> models, labels, mask = load_models(
     ...     'grid_mist_v9.h5',
-    ...     filters=['g', 'r', 'i', 'z', 'y']
+    ...     filters=['PS_g', 'PS_r', 'PS_i', 'PS_z', 'PS_y']
     ... )
 
     Loading only main sequence stars:
@@ -194,6 +195,12 @@ def load_models(
     >>> grid = StarGrid(models, labels, mask)
     >>> fitter = BruteForce(grid)
     """
+    if not include_ms and not include_postms:
+        raise ValueError(
+            "include_ms and include_postms are both False, so no models "
+            "would remain."
+        )
+
     # Initialize values.
     if filters is None:
         filters = FILTERS
@@ -269,10 +276,7 @@ def load_models(
 
         # Extract each valid filter from the in-memory data (no more H5 I/O!)
         for i, filt in enumerate(valid_filters):
-            try:
-                models[:, i] = mag_coeffs[filt]  # Extract from memory, not H5!
-            except KeyError:
-                pass
+            models[:, i] = mag_coeffs[filt]  # Extract from memory, not H5!
 
         # Update filters list to only include the ones we actually loaded
         filters = valid_filters
@@ -314,6 +318,14 @@ def load_models(
     labels2 = [
         label for label in labels if not np.all(np.isnan(combined_labels[label]))
     ]
+    missing_labels = [label for label in labels if label not in labels2]
+    if missing_labels and not labels_defaulted:
+        warnings.warn(
+            f"Requested labels not found in '{filepath}' and skipped: "
+            f"{missing_labels}.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     # Apply cuts. Start from a finiteness cut: user-generated grids written
     # by older GridGenerator versions may contain all-NaN rows for invalid
@@ -324,11 +336,6 @@ def load_models(
         sys.stderr.write(
             f"Dropping {n_nonfinite} models with non-finite "
             f"photometric coefficients...\n"
-        )
-    if not include_ms and not include_postms:
-        raise ValueError(
-            "If you don't include the Main Sequence and "
-            "Post-Main Sequence models you have nothing left!"
         )
     eep = cut_columns.get("eep")
     if not (include_ms and include_postms) and eep is None:
@@ -383,8 +390,9 @@ def load_offsets(filepath, filters=None, verbose=True):
     filters : iterable of str with length `Nfilt`, optional
         List of filters that will be loaded. If not provided, will default
         to all available filters. See the internally-defined `FILTERS` variable
-        for more details on filter names. Any filters that are not available
-        will be skipped over.
+        for more details on filter names. A filter that is not in the file
+        gets an offset of 1.0, with a `UserWarning` when the name is not in
+        `FILTERS` either.
 
     verbose : bool, optional
         Whether to print a summary of the offsets. Default is `True`.
@@ -399,7 +407,6 @@ def load_offsets(filepath, filters=None, verbose=True):
     Notes
     -----
     The offset file should contain two columns: filter names and offset values.
-    Filters not found in the file will be assigned an offset of 1.0 (no correction).
 
     Examples
     --------
@@ -409,7 +416,7 @@ def load_offsets(filepath, filters=None, verbose=True):
 
     >>> # Load specific filters
     >>> gri_offsets = load_offsets('./data/DATAFILES/offsets_mist_v9.txt',
-    ...                            filters=['g', 'r', 'i'])
+    ...                            filters=['PS_g', 'PS_r', 'PS_i'])
 
     >>> # Check which filters have significant offsets
     >>> significant = np.abs(offsets - 1.0) > 0.01
@@ -420,20 +427,19 @@ def load_offsets(filepath, filters=None, verbose=True):
         filters = FILTERS
     Nfilters = len(filters)
 
-    # Read in offsets. numpy.loadtxt may return a 2D array (rows x cols)
-    # where transposing gives columns, or tests may mock it to return a
-    # tuple of (filts, vals). Handle both cases robustly.
-    _tmp = np.loadtxt(filepath, dtype="str")
-    if isinstance(_tmp, tuple):
-        filts, vals = _tmp
-    else:
-        # np.loadtxt collapses a single data row to shape (2,); atleast_2d
-        # promotes it back to (Nrows, 2) so a single-filter offsets file does
-        # not crash (the old arr.T unpack yielded 0-d scalars and a later
-        # "nonzero on 0d arrays" ValueError).
-        arr = np.atleast_2d(np.asarray(_tmp))
-        filts, vals = arr[:, 0], arr[:, 1]
-    vals = vals.astype(float)
+    # np.loadtxt collapses a single data row to shape (2,); atleast_2d
+    # promotes it back to (Nrows, 2).
+    arr = np.atleast_2d(np.loadtxt(filepath, dtype="str"))
+    filts, vals = arr[:, 0], arr[:, 1].astype(float)
+
+    unknown_filters = [f for f in filters if f not in FILTERS and f not in filts]
+    if unknown_filters:
+        warnings.warn(
+            f"Filter names {unknown_filters} are neither in brutus.FILTERS nor "
+            f"in '{filepath}', so they get an offset of 1.0.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     # Fill in offsets where appropriate.
     offsets = np.full(Nfilters, np.nan)
@@ -451,6 +457,6 @@ def load_offsets(filepath, filters=None, verbose=True):
 
     if verbose:
         for filt, zp in zip(filters, offsets):
-            sys.stderr.write("{0} ({1:3.2}%)\n".format(filt, 100 * (zp - 1.0)))
+            sys.stderr.write("{0} ({1:+.2f}%)\n".format(filt, 100 * (zp - 1.0)))
 
     return offsets
