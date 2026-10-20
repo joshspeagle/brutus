@@ -556,10 +556,9 @@ class EEPTracks:
 
         Notes
         -----
-        Uses pandas for vectorized computation if available, otherwise falls
-        back to a slower loop-based implementation. The age weights are
-        appended to the predictions array and "agewt" is added to the
-        predictions list.
+        The age weights are appended to the predictions array and "agewt"
+        is added to the predictions list. A track (fixed mini, feh, afe)
+        with one point gets weight 0.
 
         The gradient is computed as d(age)/d(EEP) where age is in linear
         (not logarithmic) units, even though ages are stored as log(age).
@@ -572,65 +571,20 @@ class EEPTracks:
         if verbose:
             sys.stderr.write("  Computing age weights...\n")
 
-        # Use vectorized approach with pandas if available
-        try:
-            import pandas as pd
+        lib = self.libparams
+        eeps = lib["eep"].astype(float)
+        # Sort by track, then by EEP; lexsort is stable
+        order = np.lexsort((eeps, lib["afe"], lib["feh"], lib["mini"]))
+        keys = np.column_stack([lib[name][order] for name in ("mini", "feh", "afe")])
+        new_track = np.any(keys[1:] != keys[:-1], axis=1)
+        bounds = np.concatenate(([0], np.flatnonzero(new_track) + 1, [len(order)]))
 
-            age_ind = self._ageidx
-            df_data = {
-                "mini": self.libparams["mini"],
-                "feh": self.libparams["feh"],
-                "afe": self.libparams["afe"],
-                "eep": self.libparams["eep"],
-                "loga": self.output[:, age_ind],
-                "index": np.arange(len(self.libparams)),
-            }
-            df = pd.DataFrame(df_data)
-
-            ageweights = np.zeros(len(self.libparams))
-
-            for (m, z, a), group in df.groupby(["mini", "feh", "afe"]):
-                indices = group["index"].values
-                log_ages = group["loga"].values
-                eeps = group["eep"].values.astype(float)
-
-                if len(log_ages) > 1:
-                    # d(age)/d(EEP): differentiate against the EEP coordinate
-                    order = np.argsort(eeps, kind="stable")
-                    linear_ages = 10 ** log_ages[order]
-                    age_gradients = np.gradient(linear_ages, eeps[order])
-                    ageweights[indices[order]] = age_gradients
-
-        except ImportError:
-            # Fallback to original method
-            if verbose:
-                sys.stderr.write("    Using fallback method (pandas not available)\n")
-
-            age_ind = self._ageidx
-            ageweights = np.zeros(len(self.libparams))
-
-            for i, m in enumerate(self.gridpoints["mini"]):
-                for j, z in enumerate(self.gridpoints["feh"]):
-                    for k, a in enumerate(self.gridpoints["afe"]):
-                        inds = np.where(
-                            (self.libparams["mini"] == m)
-                            & (self.libparams["feh"] == z)
-                            & (self.libparams["afe"] == a)
-                        )[0]
-                        if len(inds) < 2:
-                            continue
-                        # d(age)/d(EEP): differentiate against the EEP
-                        # coordinate, sorted by EEP within each track
-                        eeps = self.libparams["eep"][inds].astype(float)
-                        order = np.argsort(eeps, kind="stable")
-                        inds = inds[order]
-                        try:
-                            agewts = np.gradient(
-                                10 ** self.output[inds, age_ind], eeps[order]
-                            )
-                            ageweights[inds] = agewts
-                        except (ValueError, IndexError):
-                            pass
+        linear_ages = 10 ** self.output[order, self._ageidx]
+        ageweights = np.zeros(len(lib))
+        for start, stop in zip(bounds[:-1], bounds[1:]):
+            if stop - start > 1:
+                track = order[start:stop]
+                ageweights[track] = np.gradient(linear_ages[start:stop], eeps[track])
 
         # Append to outputs
         self.output = np.hstack([self.output, ageweights[:, None]])

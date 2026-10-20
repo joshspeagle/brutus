@@ -566,6 +566,33 @@ class TestMakeLibSinglePass:
 class TestAgeWeightJacobian:
     """agewt must be d(age)/d(EEP), not Delta(age) per array index."""
 
+    def test_matches_a_per_track_gradient_on_unsorted_tracks(self):
+        rng = np.random.default_rng(3)
+        rows = []
+        for mini, feh, n in [(0.5, 0.0, 7), (1.0, 0.0, 5), (1.0, -1.0, 1)]:
+            eeps = 200.0 + np.cumsum(rng.uniform(0.5, 3.0, n))  # non-uniform
+            for eep in eeps:
+                rows.append((mini, eep, feh, 0.0, np.log10(1e7 * eep**1.5)))
+        rows = [rows[i] for i in rng.permutation(len(rows))]
+
+        tracks = EEPTracks.__new__(EEPTracks)
+        tracks.libparams = np.array(
+            [r[:4] for r in rows],
+            dtype=[(n, "f8") for n in ("mini", "eep", "feh", "afe")],
+        )
+        tracks.output = np.array([[r[4]] for r in rows])
+        tracks.predictions, tracks._ageidx = ["loga"], 0
+        tracks._add_age_weights(verbose=False)
+
+        lib = tracks.libparams
+        expected = np.zeros(len(rows))
+        for mini, feh in [(0.5, 0.0), (1.0, 0.0)]:
+            idx = np.flatnonzero((lib["mini"] == mini) & (lib["feh"] == feh))
+            idx = idx[np.argsort(lib["eep"][idx])]
+            expected[idx] = np.gradient(10 ** tracks.output[idx, 0], lib["eep"][idx])
+        np.testing.assert_array_equal(tracks.output[:, 1], expected)
+        assert tracks.predictions == ["loga", "agewt"]
+
     def test_unit_spacing_matches_analytic_jacobian(self, tmp_path):
         mistfile = _make_synthetic_mist_file(tmp_path / "unit.h5", eep_step=1.0)
         tracks = EEPTracks(

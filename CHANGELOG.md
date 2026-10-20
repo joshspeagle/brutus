@@ -487,6 +487,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `grid_mist_v9.h5` with 5 bands, a KD-tree `get_seds` call takes a median
   0.11 ms instead of 35 ms, and a multilinear call 0.14 ms instead of
   0.19 ms (5 interleaved runs, 4 CPUs).
+- `EEPTracks` computes the age weights with one numpy path (a stable
+  `np.lexsort` by track and EEP, then `np.gradient` per track) instead of
+  a pandas groupby with a slower loop when pandas is absent. The weights
+  are bitwise identical on `MIST_1.2_EEPtrk.h5`, and computing them takes
+  a median 0.72 s instead of 1.08 s with pandas (5 interleaved runs).
 - The bootstrap of `analysis.photometric_offsets` draws each sample by a
   per-row binary search of the weight CDF, in a jitted helper, instead of
   comparing every CDF entry. The medians are bitwise identical. With 20,000
