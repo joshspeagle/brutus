@@ -446,6 +446,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Performance
 
+- `photometric_offsets_2d` groups the objects of each band into the bins
+  once, instead of scanning every object for each bin. The maps are bitwise
+  identical. With 3000 objects, 5 bands, 20 draws and 50 x 50 bins, a call
+  takes a median 0.54 s instead of 0.71 s (3 alternated runs, 4 CPUs).
 - The bootstrap of `analysis.photometric_offsets` draws each sample by a
   per-row binary search of the weight CDF, in a jitted helper, instead of
   comparing every CDF entry. The medians are bitwise identical. With 20,000

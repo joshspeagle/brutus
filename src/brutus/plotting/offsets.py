@@ -394,21 +394,27 @@ def photometric_offsets_2d(
         xloc[x == xbins[-1]] = nx - 1
         yloc[y == ybins[-1]] = ny - 1
         s, wt_s = _band_weights(i, mask, usable, fobs, feobs, mpred, weights)
-        wt = np.zeros(weights.shape)
-        wt[s] = wt_s
-        # Compute weighted median offsets.
-        offset2d = np.zeros((len(xbins) - 1, len(ybins) - 1))
-        for xidx in range(len(xbins) - 1):
-            for yidx in range(len(ybins) - 1):
-                bsel = np.where((xloc == xidx) & (yloc == yidx) & s)[0]
-                off, w = dm[bsel, :, i], wt[bsel]
-                if len(bsel) >= plot_thresh and w.sum() > 0:
-                    # If we have enough weighted objects, compute the median.
-                    off_med = quantile(off.flatten(), [0.5], w.flatten())[0]
-                    offset2d[xidx, yidx] = off_med
-                else:
-                    # Otherwise mask the bin.
-                    offset2d[xidx, yidx] = np.nan
+        # Group the selected objects in the bins once: a stable sort by flat
+        # bin index keeps each bin's objects in ascending order
+        objs = np.flatnonzero(s)
+        inside = (xloc[objs] >= 0) & (xloc[objs] < nx)
+        inside &= (yloc[objs] >= 0) & (yloc[objs] < ny)
+        rows = np.flatnonzero(inside)  # rows of wt_s
+        flat = np.ravel_multi_index((xloc[objs[rows]], yloc[objs[rows]]), (nx, ny))
+        order = np.argsort(flat, kind="stable")
+        rows, flat = rows[order], flat[order]
+        objs = objs[rows]
+        starts = np.searchsorted(flat, np.arange(nx * ny + 1))
+        # Weighted median offset of each bin with enough objects; NaN masks
+        # the others
+        offset2d = np.full(nx * ny, np.nan)
+        for b in np.flatnonzero(np.diff(starts) >= plot_thresh):
+            group = slice(starts[b], starts[b + 1])
+            w = wt_s[rows[group]]
+            if w.sum() > 0:
+                off = dm[objs[group], :, i]
+                offset2d[b] = quantile(off.flatten(), [0.5], w.flatten())[0]
+        offset2d = offset2d.reshape(nx, ny)
         # Plot offsets over 2-D histogram.
         img = ax[i].imshow(
             offset2d.T,

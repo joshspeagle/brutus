@@ -462,6 +462,37 @@ class TestPhotometricOffsets2D:
         arrays = _run_2d(d, x, y, bins=2)
         assert np.isfinite(arrays[0][-1, -1])
 
+    def test_maps_equal_the_weighted_median_of_each_bin(self):
+        """Reference: the weighted median offset of the objects in each bin,
+        found by a scan over all objects per bin (#261)."""
+        from brutus.plotting.offsets import _band_weights, _setup
+        from brutus.utils.sampling import quantile
+
+        d = _offsets_dataset(nobj=60)
+        x, y = self._xy(d)
+        nx, ny, thresh = 4, 3, 5  # half of the bins have too few objects
+        maps = _run_2d(d, x, y, bins=[(nx, ny)] * d["nfilt"], plot_thresh=thresh)
+
+        args = (d["flux"], d["fluxerr"], d["mask"], d["models"], d["idxs"])
+        args += (d["reds"], d["dreds"], d["dists"], True, None, None)
+        mask, usable, weights, mpred, fobs, feobs, magobs = _setup(*args)
+        dm = mpred - magobs[:, None]
+        xloc = np.minimum(np.digitize(x, np.histogram_bin_edges(x, nx)) - 1, nx - 1)
+        yloc = np.minimum(np.digitize(y, np.histogram_bin_edges(y, ny)) - 1, ny - 1)
+        for i in range(d["nfilt"]):
+            s, wt_s = _band_weights(i, mask, usable, fobs, feobs, mpred, weights)
+            wt = np.zeros(weights.shape)
+            wt[s] = wt_s
+            expected = np.full((nx, ny), np.nan)
+            for bx in range(nx):
+                for by in range(ny):
+                    sel = np.flatnonzero((xloc == bx) & (yloc == by) & s)
+                    if len(sel) >= thresh and wt[sel].sum() > 0:
+                        expected[bx, by] = quantile(
+                            dm[sel, :, i].flatten(), [0.5], wt[sel].flatten()
+                        )[0]
+            np.testing.assert_array_equal(maps[i], expected.T)
+
     def test_spans_set_the_bins_and_the_extent(self):
         """Regression (#172): `xspan` and `yspan` relabelled the axes of
         bins taken over the data range."""
