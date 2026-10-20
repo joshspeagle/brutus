@@ -294,6 +294,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `BruteForce.get_sed_grid` raises `ValueError` for an `av` or `rv` array
   whose length is not the number of models. With JIT on, it read past the
   end of the array and returned garbage SEDs.
+- `isochrone_population_loglike` checks its inputs before it builds the
+  model grid and raises `ValueError` that names the argument: `obs_phot`,
+  `obs_err` and `mask` must be 2-D with one shape, `parallax` and
+  `parallax_err` must come together with shape (N_objects,), and
+  `smf_grid` and `eep_grid` must be 1-D, finite and strictly increasing,
+  with `smf_grid` in [0, 1]. These inputs returned `LOG_ZERO` with a warning
+  for every `theta`. Only a `theta` with no valid model in the isochrone
+  grid still returns `LOG_ZERO`; any other error, such as a misspelled
+  outlier keyword or a `ValueError` from the model code, now raises.
+  `generate_isochrone_population_grid` checks the grids and no longer
+  turns a failed SED slice into a skipped slice. `compute_isochrone_cluster_loglike` raises `ValueError`
+  for a `parallax` without `parallax_err` or `distance`, which it dropped
+  without a warning.
 - `analysis.photometric_offsets` checks `sel`, `weights`, `prior_mean` and
   `prior_std` before it generates the model SEDs, and raises `ValueError`
   that names the argument. `sel` must be a bool or 0/1 array of shape `(Nobj,)`:
