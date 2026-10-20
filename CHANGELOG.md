@@ -209,6 +209,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unknown keyword now raises `TypeError`. `cornerplot` no longer sets a
   default `alpha` for the 2-D histograms, which `hist2d` never applied;
   the figures do not change.
+- `StarEvolTrack.get_seds` and `Isochrone.get_predictions` pass errors of
+  the tracks, the interpolator and the neural network through with their
+  own type. `get_seds` wrapped a track error in `RuntimeError`, and turned
+  an error in the primary or companion SED into a `RuntimeWarning` with a
+  NaN or single-star SED; the companion EEP search turned errors into a
+  NaN EEP. `Isochrone.get_predictions` wrapped interpolator errors in
+  `RuntimeError`. `EEPTracks` still rebuilds any cache that it cannot load,
+  and skips the cache write only on `OSError`.
 - **`GridGenerator.make_grid` has no `dist` argument.** Grids are always
   computed at 1 kpc, the distance that `load_models`, `StarGrid` and
   `BruteForce` assume; a grid made at another `dist` gave distances off by

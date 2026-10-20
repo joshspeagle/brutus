@@ -250,6 +250,20 @@ class TestStarEvolTrackMethods:
             )
         assert np.all(np.isfinite(np.asarray(sed_s[0])))
 
+    def test_companion_search_errors_propagate(self, mock_star_evol_track):
+        tracks = mock_star_evol_track.tracks
+        tracks.gridpoints = {"eep": np.arange(200.0, 500.0)}
+        primary = tracks.get_predictions.return_value
+
+        def get_predictions(labels, **kwargs):
+            if np.ndim(labels) == 2:  # the age curve of the companion
+                raise ValueError("bad curve")
+            return primary
+
+        tracks.get_predictions.side_effect = get_predictions
+        with pytest.raises(ValueError, match="bad curve"):
+            mock_star_evol_track.get_seds(mini=1.0, eep=350, feh=0.0, smf=0.7)
+
     def test_get_seds_multiple_stars(self, mock_star_evol_track):
         """Test get_seds with different stellar parameters."""
         # Test with single star but different parameters to exercise more code paths
@@ -273,11 +287,9 @@ class TestStarEvolTrackMethods:
         assert isinstance(params, np.ndarray)  # Should be array when return_dict=False
         assert isinstance(params2, np.ndarray)
 
-    def test_get_seds_error_handling(self):
-        """Test get_seds error handling paths."""
-        # Test with tracks that fail prediction
+    def test_get_seds_passes_track_errors_through(self):
         tracks = MagicMock()
-        tracks.get_predictions.side_effect = Exception("Prediction failed")
+        tracks.get_predictions.side_effect = ValueError("Prediction failed")
         tracks.labels = ["mini", "eep", "feh", "afe"]
         tracks.predictions = ["loga", "logl", "logt", "logg", "feh_surf", "afe_surf"]
 
@@ -288,10 +300,7 @@ class TestStarEvolTrackMethods:
             star_track = StarEvolTrack(tracks=tracks, verbose=False)
             star_track.predictor = mock_predictor
 
-            # Should raise RuntimeError when prediction fails (line 842)
-            with pytest.raises(
-                RuntimeError, match="Failed to generate stellar parameters"
-            ):
+            with pytest.raises(ValueError, match="Prediction failed"):
                 star_track.get_seds(mini=1.0, eep=350, feh=0.0, afe=0.0)
 
     def test_tracks_without_sed_labels_raise(self):
@@ -494,15 +503,29 @@ class TestBuildFromFile:
         assert tracks.predictions == PREDICTIONS + ["agewt"]
         np.testing.assert_allclose(preds, expected, rtol=1e-12)
 
-    def test_corrupt_cache_falls_back_to_the_hdf5_file(self, tmp_path):
+    @pytest.mark.parametrize(
+        "content", [b"not a pickle", b"", pickle.dumps({"labels": ["mini"]})]
+    )
+    def test_corrupt_cache_falls_back_to_the_hdf5_file(self, tmp_path, content):
         mistfile = _make_synthetic_mist_file(tmp_path / "tracks.h5")
         EEPTracks(mistfile=mistfile, predictions=PREDICTIONS, verbose=False)
         cache_file = next(iter(tmp_path.glob("*.pkl")))
-        cache_file.write_bytes(b"not a pickle")
+        cache_file.write_bytes(content)
 
         tracks = EEPTracks(mistfile=mistfile, predictions=PREDICTIONS, verbose=False)
         preds = tracks.get_predictions([1.0, 210.0, 0.0, 0.0], apply_corr=False)
         np.testing.assert_allclose(preds[0], np.log10(AGE_SLOPE * 210.0), rtol=1e-12)
+
+    def test_unwritable_cache_still_builds(self, tmp_path, monkeypatch):
+        import brutus.core.individual as individual
+
+        def fail(*args):
+            raise OSError("read-only file system")
+
+        monkeypatch.setattr(individual.pickle, "dump", fail)
+        mistfile = _make_synthetic_mist_file(tmp_path / "tracks.h5")
+        tracks = EEPTracks(mistfile=mistfile, predictions=PREDICTIONS, verbose=False)
+        assert np.isfinite(tracks.get_predictions([1.0, 210.0, 0.0, 0.0])).all()
 
     def test_missing_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError, match="fetch_tracks"):

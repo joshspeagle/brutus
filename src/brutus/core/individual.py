@@ -322,6 +322,7 @@ class EEPTracks:
 
         # Try to load from cache first
         if use_cache and cache_file.exists():
+            state = dict(vars(self))
             try:
                 # Check if cache is newer than original file
                 cache_mtime = cache_file.stat().st_mtime
@@ -350,6 +351,12 @@ class EEPTracks:
                             "Cache is older than data file, regenerating...\n"
                         )
             except Exception as e:
+                # A cache that cannot be loaded (unreadable, truncated,
+                # corrupt, or written by another numpy) is rebuilt from the
+                # data file, which gives the same result. A cache that loaded
+                # but held bad values must not leave them behind.
+                vars(self).clear()
+                vars(self).update(state)
                 if verbose:
                     sys.stderr.write(
                         f"Cache loading failed ({e}), loading from original file...\n"
@@ -395,7 +402,8 @@ class EEPTracks:
                 if verbose:
                     sys.stderr.write(f"EEPTracks cached to {cache_file}\n")
 
-            except Exception as e:
+            except OSError as e:
+                # A read-only data directory only costs a rebuild next time
                 if verbose:
                     sys.stderr.write(f"Warning: Failed to cache EEPTracks ({e})\n")
 
@@ -1032,12 +1040,9 @@ class StarEvolTrack:
         labels = np.array([labels[lbl] for lbl in self.tracks.labels])
 
         # Generate primary component predictions
-        try:
-            params_arr = self.tracks.get_predictions(
-                labels, apply_corr=apply_corr, corr_params=corr_params
-            )
-        except Exception as e:
-            raise RuntimeError(f"Failed to generate stellar parameters: {e}")
+        params_arr = self.tracks.get_predictions(
+            labels, apply_corr=apply_corr, corr_params=corr_params
+        )
 
         # Convert to dictionary format
         params = dict(zip(self.tracks.predictions, params_arr))
@@ -1052,23 +1057,16 @@ class StarEvolTrack:
         loga = params["loga"]
 
         if loga <= loga_max:
-            try:
-                sed = self.predictor.sed(
-                    logl=params["logl"],
-                    logt=params["logt"],
-                    logg=params["logg"],
-                    feh_surf=params["feh_surf"],
-                    afe=params["afe_surf"],
-                    av=av,
-                    rv=rv,
-                    dist=dist,
-                )
-            except Exception as e:
-                warnings.warn(
-                    f"Primary SED generation failed for (mini={mini}, eep={eep}): {e}",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
+            sed = self.predictor.sed(
+                logl=params["logl"],
+                logt=params["logt"],
+                logg=params["logg"],
+                feh_surf=params["feh_surf"],
+                afe=params["afe_surf"],
+                av=av,
+                rv=rv,
+                dist=dist,
+            )
 
             # Add binary companion if requested
             if self._tries_companion(mini, eep, smf, mini_bound, eep_binary_max):
@@ -1099,34 +1097,25 @@ class StarEvolTrack:
                     }
                     labels2 = np.array([labels2[lbl] for lbl in self.tracks.labels])
 
-                    try:
-                        params_arr2 = self.tracks.get_predictions(
-                            labels2, apply_corr=apply_corr, corr_params=corr_params
-                        )
-                        params2 = dict(zip(self.tracks.predictions, params_arr2))
+                    params_arr2 = self.tracks.get_predictions(
+                        labels2, apply_corr=apply_corr, corr_params=corr_params
+                    )
+                    params2 = dict(zip(self.tracks.predictions, params_arr2))
 
-                        # Generate secondary SED
-                        sed2 = self.predictor.sed(
-                            logl=params2["logl"],
-                            logt=params2["logt"],
-                            logg=params2["logg"],
-                            feh_surf=params2["feh_surf"],
-                            afe=params2["afe_surf"],
-                            av=av,
-                            rv=rv,
-                            dist=dist,
-                        )
-                        if combine_seds:
-                            # Combine SEDs (magnitude addition)
-                            sed = add_mag(sed, sed2)
-
-                    except Exception as e:
-                        warnings.warn(
-                            f"Secondary SED generation failed for binary "
-                            f"(mini={mini}, smf={smf}, eep2={eep2}): {e}",
-                            RuntimeWarning,
-                            stacklevel=2,
-                        )
+                    # Generate secondary SED
+                    sed2 = self.predictor.sed(
+                        logl=params2["logl"],
+                        logt=params2["logt"],
+                        logg=params2["logg"],
+                        feh_surf=params2["feh_surf"],
+                        afe=params2["afe_surf"],
+                        av=av,
+                        rv=rv,
+                        dist=dist,
+                    )
+                    if combine_seds:
+                        # Combine SEDs (magnitude addition)
+                        sed = add_mag(sed, sed2)
 
         # Format output
         if not return_dict:
@@ -1214,38 +1203,19 @@ class StarEvolTrack:
             if isinstance(x, np.ndarray) and x.size == 1:
                 x = x[0]
             # Get predicted age for secondary star with mass mini*smf at EEP x
-            try:
-                loga_pred = self.tracks.get_predictions(
-                    [mini2, x, feh, afe], apply_corr=False
-                )[aidx]
-                return (loga_pred - loga) ** 2
-            except Exception:
-                # Return large loss if prediction fails
-                return 1e6
+            loga_pred = self.tracks.get_predictions(
+                [mini2, x, feh, afe], apply_corr=False
+            )[aidx]
+            return (loga_pred - loga) ** 2
 
         # Find best-fit EEP that minimizes age difference
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")  # ignore bad values during optimization
-                res = minimize(loss, eep, method="Nelder-Mead")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # ignore bad values during optimization
+            res = minimize(loss, eep, method="Nelder-Mead")
 
-            # Check if solution meets tolerance. loss is the squared log-age
-            # difference, so this accepts matches with |dloga| < tol (in dex).
-            if res.fun < tol**2:
-                eep2 = res.x[0]
-            else:
-                eep2 = np.nan
-
-        except Exception as e:
-            warnings.warn(
-                f"EEP optimization failed for secondary star "
-                f"(mini={mini}, smf={smf}): {e}",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-            eep2 = np.nan
-
-        return eep2
+        # Check if solution meets tolerance. loss is the squared log-age
+        # difference, so this accepts matches with |dloga| < tol (in dex).
+        return res.x[0] if res.fun < tol**2 else np.nan
 
     def _invert_age_curve(self, loga, mini2, feh, afe, aidx, tol):
         """
@@ -1276,24 +1246,18 @@ class StarEvolTrack:
         -------
         eep2 : float or None
             The matching EEP; NaN if no EEP matches the target age within
-            `tol`; None if this method is unusable for these inputs (caller
-            should fall back to the scalar Nelder-Mead solve).
+            `tol`; None if the age curve is not monotone (the caller then
+            falls back to the scalar Nelder-Mead solve).
         """
-        try:
-            eep_axis = np.asarray(self.tracks.gridpoints["eep"], dtype=float)
-            values = {"mini": mini2, "eep": eep_axis, "feh": feh, "afe": afe}
-            labels = np.column_stack(
-                [
-                    np.broadcast_to(values[lbl], eep_axis.shape)
-                    for lbl in self.tracks.labels
-                ]
-            )
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                preds = self.tracks.get_predictions(labels, apply_corr=False)
-            loga_curve = np.asarray(preds, dtype=float)[:, aidx]
-        except Exception:
-            return None
+        eep_axis = np.asarray(self.tracks.gridpoints["eep"], dtype=float)
+        values = {"mini": mini2, "eep": eep_axis, "feh": feh, "afe": afe}
+        labels = np.column_stack(
+            [np.broadcast_to(values[lbl], eep_axis.shape) for lbl in self.tracks.labels]
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            preds = self.tracks.get_predictions(labels, apply_corr=False)
+        loga_curve = np.asarray(preds, dtype=float)[:, aidx]
 
         # Restrict to the EEP range where the track exists (NaN = off-track)
         finite = np.isfinite(loga_curve)
@@ -1310,18 +1274,12 @@ class StarEvolTrack:
 
         # Acceptance check against the actual interpolant (also rejects
         # targets outside the track's age range, which np.interp clamps)
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                check = self.tracks.get_predictions(
-                    [
-                        values[lbl] if lbl != "eep" else eep2
-                        for lbl in self.tracks.labels
-                    ],
-                    apply_corr=False,
-                )[aidx]
-        except Exception:
-            return None
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            check = self.tracks.get_predictions(
+                [values[lbl] if lbl != "eep" else eep2 for lbl in self.tracks.labels],
+                apply_corr=False,
+            )[aidx]
 
         if np.isfinite(check) and abs(check - loga) < tol:
             return eep2
