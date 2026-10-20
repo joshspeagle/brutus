@@ -207,7 +207,9 @@ class Isochrone:
                     s.decode() if isinstance(s, bytes) else s for s in raw_labels
                 ]
         except (OSError, KeyError) as e:
-            raise RuntimeError(f"Failed to load isochrone data from {mistfile}: {e}")
+            raise RuntimeError(
+                f"Failed to load isochrone data from {mistfile}: {e}"
+            ) from e
 
         # Validate the requested predictions against the file's labels and
         # build the column map used to subset/reorder interpolator output.
