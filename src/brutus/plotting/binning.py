@@ -97,11 +97,13 @@ def bin_pdfs_distred(
         per object. Each object's binned PDF is normalized by its total
         weight, so results are invariant to the absolute scale of `weights`.
 
-    parallaxes : `~numpy.ndarray` of shape `(Nobj,)`, optional
-        The parallax estimates for the sources.
+    parallaxes : float or `~numpy.ndarray` of shape `(Nobj,)`, optional
+        The parallax estimates for the sources in mas. A float applies to
+        every object.
 
-    parallax_errors : `~numpy.ndarray` of shape `(Nobj,)`, optional
-        The parallax errors for the sources.
+    parallax_errors : float or `~numpy.ndarray` of shape `(Nobj,)`, optional
+        The parallax errors for the sources in mas. A float applies to
+        every object.
 
     Nr : int, optional
         The number of Monte Carlo realizations used when sampling using the
@@ -111,11 +113,13 @@ def bin_pdfs_distred(
         The number of bins to be used in each dimension. Default is
         `(750, 300)` (distance, reddening).
 
-    span : iterable with shape `(ndim, 2)`, optional
-        `(av_bounds, dist_bounds)`: the A(V) range of the y-axis in mag and
-        the distance range of the x-axis in kpc, converted to `dist_type`.
-        If not provided, the y-axis spans `avlim` and the x-axis spans
-        distance modulus 4 to 19.
+    span : iterable with shape `(2, 2)`, optional
+        `((av_min, av_max), (d_min, d_max))`: the A(V) range of the y-axis
+        in mag and the distance range of the x-axis in kpc, converted to
+        `dist_type`. Note the order: `span` starts with A(V), `bins` and
+        `smooth` start with distance. If not provided, the y-axis spans
+        `avlim` and the x-axis spans distance modulus 4 to 19 (0.063 to
+        63.1 kpc).
 
     smooth : float or 2-tuple of floats, optional
         The standard deviation of the Gaussian kernel that smooths the 2-D
@@ -151,10 +155,8 @@ def bin_pdfs_distred(
         rstate = np.random
     if lndistprior is None:
         lndistprior = partial(gal_lnprior, R_solar=R_solar, Z_solar=Z_solar)
-    if parallaxes is None:
-        parallaxes = np.full(nobjs, np.nan)
-    if parallax_errors is None:
-        parallax_errors = np.full(nobjs, np.nan)
+    parallaxes = _per_object(parallaxes, "parallaxes", nobjs)
+    parallax_errors = _per_object(parallax_errors, "parallax_errors", nobjs)
     if weights is not None:
         weights = np.asarray(weights)
         if weights.shape != (nobjs, nsamps):
@@ -178,6 +180,12 @@ def bin_pdfs_distred(
         avlims = avlim
         dlims = 10 ** (np.array([4.0, 19.0]) / 5.0 - 2.0)
     else:
+        span = np.asarray(span, dtype=float)
+        if span.shape != (2, 2):
+            raise ValueError(
+                "`span` must be ((av_min, av_max), (d_min, d_max)); "
+                f"got shape {span.shape}."
+            )
         avlims, dlims = span
     try:
         xbin, ybin = bins
@@ -390,3 +398,15 @@ def bin_pdfs_distred(
             binned_vals[i] = H.cumsum(axis=1)
 
     return binned_vals, xedges, yedges
+
+
+def _per_object(value, name, nobjs):
+    """Return `value` as a float array of shape `(nobjs,)`, NaN for `None`."""
+    value = np.asarray(np.nan if value is None else value, dtype=float)
+    if value.ndim == 0:
+        return np.full(nobjs, value)
+    if value.shape != (nobjs,):
+        raise ValueError(
+            f"`{name}` must be a float or have shape ({nobjs},); got {value.shape}."
+        )
+    return value

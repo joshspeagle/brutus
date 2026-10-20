@@ -388,6 +388,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the band on the draws. With a 10% offset injected into a fitted band, the
   plotted offset differed from the analysis offset by 0.013 mag; it now
   agrees to 0.0001 mag.
+- `dist_vs_red` and `bin_pdfs_distred` accept a float parallax and
+  parallax error for several objects and apply them to every object, and
+  raise `ValueError` that names the argument for any shape other than
+  `(Nobj,)`. A float raised `TypeError`, and a short array left the last
+  objects without parallax smoothing. `bin_pdfs_distred` accepts a tuple
+  `span` for every `dist_type`, and raises `ValueError` unless `span` has
+  shape `(2, 2)`; `dist_type='scale'` and `'parallax'` raised `TypeError`.
 
 ### Performance
 

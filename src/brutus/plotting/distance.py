@@ -12,7 +12,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 
 from ..utils.math import AVLIM, RVLIM
-from .binning import bin_pdfs_distred
+from .binning import _per_object, bin_pdfs_distred
 
 __all__ = ["dist_vs_red"]
 
@@ -84,11 +84,13 @@ def dist_vs_red(
     weights : `~numpy.ndarray` of shape `(Nsamps)` or `(Nobj, Nsamps)`, optional
         An optional set of importance weights used to reweight the samples.
 
-    parallax : float, optional
-        The parallax estimate for the source.
+    parallax : float or `~numpy.ndarray` of shape `(Nobj,)`, optional
+        The parallax estimate for each source in mas. A float applies to
+        every object.
 
-    parallax_err : float, optional
-        The parallax error.
+    parallax_err : float or `~numpy.ndarray` of shape `(Nobj,)`, optional
+        The parallax error for each source in mas. A float applies to
+        every object.
 
     Nr : int, optional
         The number of Monte Carlo realizations used when sampling using the
@@ -101,7 +103,9 @@ def dist_vs_red(
         The number of bins to be used in each dimension. Default is `300`.
 
     span : iterable with shape `(2, 2)`, optional
-        `(av_bounds, dist_bounds)`, as in `bin_pdfs_distred`.
+        `((av_min, av_max), (d_min, d_max))`, A(V) in mag and distance in
+        kpc, as in `bin_pdfs_distred`. If not provided, A(V) spans `avlim`
+        and the distance spans distance modulus 4 to 19.
 
     smooth : float or 2-tuple of floats, optional
         The smoothing, as in `bin_pdfs_distred`. Default is `(0.015, 0.005)`.
@@ -168,12 +172,6 @@ def dist_vs_red(
         # Convert weights to (Nobj, Nsamps) format
         if weights is not None:
             weights = np.atleast_2d(np.asarray(weights))
-
-        # Convert parallax info to array format
-        if parallax is not None:
-            parallax = np.array([parallax])
-        if parallax_err is not None:
-            parallax_err = np.array([parallax_err])
     else:
         # Multi-object case
         single_object = False
@@ -191,6 +189,10 @@ def dist_vs_red(
                         f"(Nobj, Nsamps) = {(nobj, nsamps)}."
                     )
                 weights = np.broadcast_to(weights, (nobj, nsamps))
+
+    nobj = data[0].shape[0]
+    parallax = _per_object(parallax, "parallax", nobj)
+    parallax_err = _per_object(parallax_err, "parallax_err", nobj)
 
     # Use bin_pdfs_distred to do all the heavy lifting for data preparation
     binned_vals, xedges, yedges = bin_pdfs_distred(
