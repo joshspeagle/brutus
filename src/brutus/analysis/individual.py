@@ -24,8 +24,11 @@ BruteForce : Grid-based stellar parameter estimation
 
 Functions
 ---------
+_bounded_step : Damped Newton step in extinction within its bounds
+_mag_objective : Magnitude-space objective of one model
 _optimize_fit_mag : Optimize extinction in magnitude space
-_optimize_fit_flux : Optimize extinction in flux space
+_flux_objective : Flux-space objective and its gradient in extinction
+_newton_step_flux : Trial extinction step in flux space
 _get_sed_mle : Compute maximum likelihood SED parameters
 
 See Also
@@ -70,7 +73,6 @@ import sys
 import time
 import warnings
 from functools import partial
-from math import log
 
 import h5py
 import numpy as np
@@ -94,6 +96,11 @@ from ..utils.photometry import magnitude
 from ..utils.sampling import sample_multivariate_normal
 
 __all__ = ["BruteForce"]
+
+#: Most Gauss-Newton steps per model in each fitting stage.
+_MAX_STEPS = 100
+#: Largest Levenberg-Marquardt damping before a model counts as stalled.
+_MAX_DAMPING = 1e6
 
 
 # ============================================================================
@@ -146,508 +153,254 @@ def _check_threshold(name, value):
         raise ValueError(f"{name} must be a number in (0, 1), got {value!r}")
 
 
+def _check_positive(name, value):
+    """Raise ValueError naming `name` unless `value` is a positive finite
+    real number."""
+    if not (isinstance(value, numbers.Real) and 0.0 < value < np.inf):
+        raise ValueError(f"{name} must be a positive finite number, got {value!r}")
+
+
 # ============================================================================
 # Grid-based optimization functions
 # ============================================================================
 
 
-@jit(nopython=True, cache=True, parallel=True)
-def _chi2_from_resid(resid, tot_var):
-    """
-    Compute per-model chi-square ``sum_j resid[i,j]**2 / tot_var[j]``.
+@jit(nopython=True, cache=True)
+def _bounded_step(av, rv, g_av, g_rv, h_aa, h_ar, h_rr, damping, avlim, rvlim):
+    """Return the Levenberg-Marquardt step from `(av, rv)` within the bounds,
+    and the log-posterior gain the quadratic model predicts for the undamped
+    step.
 
-    Parallel numba replacement for ``np.sum(np.square(resid) / tot_var,
-    axis=1)``. The inner sum runs sequentially over filters (j = 0..Nfilt-1),
-    exactly matching the numpy reduction order, so results are
-    bitwise-identical while avoiding two full-size temporary allocations and
-    running across all cores.
+    A parameter at a bound whose gradient points out of the bounds stays
+    there, and the step solves for the other one alone. The diagonal of the
+    precision is scaled by ``1 + damping``.
     """
-    Nmodel, Nfilt = resid.shape
-    chi2 = np.empty(Nmodel)
-    for i in prange(Nmodel):
-        c = 0.0
-        for j in range(Nfilt):
-            c += resid[i, j] * resid[i, j] / tot_var[j]
-        chi2[i] = c
-    return chi2
+    avmin, avmax = avlim
+    rvmin, rvmax = rvlim
+    free_av = not ((av <= avmin and g_av < 0.0) or (av >= avmax and g_av > 0.0))
+    free_rv = not ((rv <= rvmin and g_rv < 0.0) or (rv >= rvmax and g_rv > 0.0))
+    scale = 1.0 + damping
+    if free_av and free_rv:
+        det = h_aa * h_rr - h_ar * h_ar
+        gain = (
+            0.5
+            * (h_rr * g_av * g_av - 2.0 * h_ar * g_av * g_rv + h_aa * g_rv * g_rv)
+            / det
+        )
+        det = h_aa * h_rr * scale * scale - h_ar * h_ar
+        d_av = (h_rr * scale * g_av - h_ar * g_rv) / det
+        d_rv = (h_aa * scale * g_rv - h_ar * g_av) / det
+    elif free_av:
+        gain, d_av, d_rv = 0.5 * g_av * g_av / h_aa, g_av / (h_aa * scale), 0.0
+    elif free_rv:
+        gain, d_av, d_rv = 0.5 * g_rv * g_rv / h_rr, 0.0, g_rv / (h_rr * scale)
+    else:
+        gain, d_av, d_rv = 0.0, 0.0, 0.0
+    av_new = min(max(av + d_av, avmin), avmax)
+    rv_new = min(max(rv + d_rv, rvmin), rvmax)
+    return av_new, rv_new, gain
 
 
-@jit(nopython=True, cache=True, parallel=True)
-def _init_mag_resid(mag_coeffs, av, rv, mags):
-    """
-    Compute initial mag-space SEDs/reddening vectors and the data residual.
-
-    Fused parallel replacement for
-    ``models, rvecs, drvecs = _get_seds(mag_coeffs, av, rv, return_flux=False)``
-    immediately followed by ``resid = mags - models``. Folding the residual
-    into the same pass avoids a second full-size broadcast subtraction and its
-    temporary allocation. Arithmetic is identical (``mags[j] - (base + av*rvec)``)
-    so results are bitwise-identical to the two-step form.
-    """
-    Nmodel, Nfilt, _ = mag_coeffs.shape
-    # Every (i, j) entry is written below, so skip zero-initialization.
-    models = np.empty((Nmodel, Nfilt))
-    rvecs = np.empty((Nmodel, Nfilt))
-    drvecs = np.empty((Nmodel, Nfilt))
-    resid = np.empty((Nmodel, Nfilt))
-    for i in prange(Nmodel):
-        for j in range(Nfilt):
-            m0 = mag_coeffs[i, j, 0]
-            r0 = mag_coeffs[i, j, 1]
-            dr = mag_coeffs[i, j, 2]
-            drvecs[i, j] = dr
-            rv_j = r0 + rv[i] * dr
-            rvecs[i, j] = rv_j
-            sed = m0 + av[i] * rv_j
-            models[i, j] = sed
-            resid[i, j] = mags[j] - sed
-    return models, rvecs, drvecs, resid
+@jit(nopython=True, cache=True)
+def _mag_objective(coeffs, av, rv, mags, inv_var, av_gauss, rv_gauss):
+    """Return chi2 plus the prior penalties of one model in magnitudes, with
+    the distance offset profiled out, and its gradient and Gauss-Newton
+    precision in `(Av, Rv)` (log-posterior units)."""
+    Av_mean, Av_std = av_gauss
+    Rv_mean, Rv_std = rv_gauss
+    Nfilt = len(mags)
+    # Weighted sums over bands. dm/dAv = rvec, dm/dRv = Av * dr.
+    s_w = s_res = s_rvec = s_dr = 0.0
+    for j in range(Nfilt):
+        s_w += inv_var[j]
+        rvec = coeffs[j, 1] + rv * coeffs[j, 2]
+        s_res += (mags[j] - coeffs[j, 0] - av * rvec) * inv_var[j]
+        s_rvec += rvec * inv_var[j]
+        s_dr += coeffs[j, 2] * inv_var[j]
+    offset = s_res / s_w
+    chi2 = g_av = g_rv = h_aa = h_ar = h_rr = 0.0
+    for j in range(Nfilt):
+        rvec = coeffs[j, 1] + rv * coeffs[j, 2]
+        resid = mags[j] - coeffs[j, 0] - av * rvec - offset
+        chi2 += resid * resid * inv_var[j]
+        g_av += rvec * resid * inv_var[j]
+        g_rv += coeffs[j, 2] * resid * inv_var[j]
+        h_aa += rvec * rvec * inv_var[j]
+        h_ar += rvec * coeffs[j, 2] * inv_var[j]
+        h_rr += coeffs[j, 2] * coeffs[j, 2] * inv_var[j]
+    # Profile the offset out: Schur complement of its block.
+    h_aa = h_aa - s_rvec * s_rvec / s_w + 1.0 / Av_std**2
+    h_ar = av * (h_ar - s_rvec * s_dr / s_w)
+    h_rr = av * av * (h_rr - s_dr * s_dr / s_w) + 1.0 / Rv_std**2
+    g_av += (Av_mean - av) / Av_std**2
+    g_rv = av * g_rv + (Rv_mean - rv) / Rv_std**2
+    obj = chi2 + (((av - Av_mean) / Av_std) ** 2 + ((rv - Rv_mean) / Rv_std) ** 2)
+    return obj, g_av, g_rv, h_aa, h_ar, h_rr
 
 
 @jit(nopython=True, cache=True, parallel=True)
 def _optimize_fit_mag(
     data,
     tot_var,
-    models,
-    rvecs,
-    drvecs,
-    av,
-    rv,
     mag_coeffs,
-    resid,
-    stepsize,
+    av_init,
+    rv_init,
     mags,
     mags_var,
     avlim=AVLIM,
     av_gauss=(0.0, 1e6),
     rvlim=RVLIM,
     rv_gauss=(3.32, 0.18),
-    tol=0.05,
-    init_thresh=5e-3,
+    tol=1e-3,
 ):
     """
-    Optimize the distance and reddening between the models and the data using
-    the gradient in **magnitudes**. This executes multiple `(Av, Rv)` updates.
+    Fit `(Av, Rv)` of every model in magnitudes, then evaluate it in fluxes.
+
+    In magnitudes a model is ``m0 + Av * (r0 + Rv * dr)`` plus a distance
+    offset, so the fit is nearly linear. Each model takes Gauss-Newton steps
+    in `(Av, Rv)` with the offset profiled out (`_bounded_step`). A step
+    that raises chi2 plus the prior penalties is retried with more
+    Levenberg-Marquardt damping: 1e-3 first, then ten times more each time. A
+    model stops when the predicted gain in log-posterior falls below `tol`,
+    when a step no longer moves it, when the damping exceeds `_MAX_DAMPING`,
+    or after `_MAX_STEPS` steps.
 
     Parameters
     ----------
-    data : `~numpy.ndarray` of shape `(Nfilt)`
-        Observed data values.
-
-    tot_var : `~numpy.ndarray` of shape `(Nfilt,)`
-        Associated (Normal) variance on the observed flux values.
-        1D since the variance is a property of the data, not the models.
-
-    models : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        Model predictions.
-
-    rvecs : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        Associated model reddening vectors.
-
-    drvecs : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        Associated differential model reddening vectors.
-
-    av : `~numpy.ndarray` of shape `(Nmodel,)`
-        Av values of the models.
-
-    rv : `~numpy.ndarray` of shape `(Nmodel,)`
-        Rv values of the models.
+    data, tot_var : `~numpy.ndarray` of shape `(Nfilt,)`
+        Observed fluxes and their variances.
 
     mag_coeffs : `~numpy.ndarray` of shape `(Nmodel, Nfilt, 3)`
-        Magnitude coefficients.
+        Magnitude coefficients `(m0, r0, dr)` of each model.
 
-    resid : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        Initial residuals.
+    av_init, rv_init : `~numpy.ndarray` of shape `(Nmodel,)`
+        Starting `(Av, Rv)`, clipped to the bounds. They are not modified.
 
-    stepsize : `~numpy.ndarray` of shape `(Nmodel)`
-        Gradient stepsize.
+    mags, mags_var : `~numpy.ndarray` of shape `(Nfilt,)`
+        Observed magnitudes and their variances. A band with a huge variance
+        has no weight.
 
-    mags : `~numpy.ndarray` of shape `(Nfilt)`
-        Data in magnitudes.
+    avlim, rvlim : 2-tuple, optional
+        Bounds on A(V) and R(V). Defaults are `AVLIM` and `RVLIM`.
 
-    mags_var : `~numpy.ndarray` of shape `(Nfilt,)`
-        Data variance in magnitudes.
-
-    avlim : 2-tuple, optional
-        Bounds on A(V). Default is `AVLIM`, (0, 20).
-
-    av_gauss : 2-tuple, optional
-        The mean and standard deviation of a Gaussian prior on A(V).
-        Default is `(0., 1e6)` (i.e. flat).
-
-    rvlim : 2-tuple, optional
-        Bounds on R(V). Default is `RVLIM`, (1, 8).
-
-    rv_gauss : 2-tuple, optional
-        The mean and standard deviation of a Gaussian prior on R(V).
-        Default is `(3.32, 0.18)`.
+    av_gauss, rv_gauss : 2-tuple, optional
+        Mean and standard deviation of the Gaussian priors on A(V) and R(V).
+        Defaults are `(0, 1e6)` (flat) and `(3.32, 0.18)`.
 
     tol : float, optional
-        The fractional tolerance to convergence. Default is `0.05`.
-
-    init_thresh : float, optional
-        The initial fractional tolerance to convergence. Default is `5e-3`.
+        Convergence tolerance on the predicted log-posterior gain. Default is
+        1e-3.
 
     Returns
     -------
-    models : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        Model flux densities for each model and filter.
+    models, rvecs, drvecs, scale, av, rv, icov_sar, resid
+        The outputs of `_get_sed_mle` at the fitted `(Av, Rv)`, in fluxes.
 
-    rvecs : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        Reddening vectors at a given Av and Rv for all models.
-
-    drvecs : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        Differential reddening vectors at a given Av and Rv for all models.
-
-    scale : `~numpy.ndarray` of shape `(Nmodel)`
-        Scale-factors (related to distance as s = 1/d^2).
-
-    av : `~numpy.ndarray` of shape `(Nmodel)`
-        Optimized A(V) values.
-
-    rv : `~numpy.ndarray` of shape `(Nmodel)`
-        Optimized R(V) values.
-
-    icov_sar : `~numpy.ndarray` of shape `(Nmodel, 3, 3)`
-        Inverse covariance matrices over `(scale, av, rv)`.
-
-    resid : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        Final residuals between data and optimized models.
-
-    See Also
-    --------
-    _optimize_fit_flux : Flux-space optimization (single iteration)
-    _get_sed_mle : MLE computation for SED parameters
-
-    Notes
-    -----
-    This function performs iterative optimization in magnitude space by
-    solving a linear system for (scale, Av, Rv) at each iteration. The
-    magnitude-space formulation is numerically stable but requires
-    multiple iterations to converge.
-
-    Convergence is determined by monitoring the fractional change in
-    Av and Rv for all well-fitting models (within init_thresh of the
-    best fit).
-
-    The optimization alternately solves for Av (at fixed Rv) and Rv
-    (at fixed Av) to incorporate priors and bounds on each parameter
-    independently.
+    converged : `~numpy.ndarray` of shape `(Nmodel,)`
+        False for a model that stopped on the damping or step limit.
     """
-    Nmodel, Nfilt = models.shape
-
+    Nmodel, Nfilt, _ = mag_coeffs.shape
     avmin, avmax = avlim
     rvmin, rvmax = rvlim
-
-    Av_mean, Av_std = av_gauss
-    Rv_mean, Rv_std = rv_gauss
-    Av_varinv, Rv_varinv = 1.0 / Av_std**2, 1.0 / Rv_std**2
-
-    log_init_thresh = log(init_thresh)
-
-    # Precompute reciprocal of magnitude variance (1D, same for all models).
-    inv_mags_var = 1.0 / mags_var
-
-    # In magnitude space, we can solve a linear system
-    # explicitly for `(s_ML, Av_ML, r_ML=Av_ML*Rv_ML)`. We opt to
-    # solve for Av and Rv in turn to so we can impose priors and bounds
-    # on both quantities as well as additional regularization.
-
-    # Compute constants.
-    s_den, rp_den = np.zeros(Nmodel), np.zeros(Nmodel)
-    srp_mix = np.zeros(Nmodel)
+    inv_var = 1.0 / mags_var
+    av, rv = np.empty(Nmodel), np.empty(Nmodel)
+    converged = np.empty(Nmodel, dtype=np.bool_)
     for i in prange(Nmodel):
-        for j in range(Nfilt):
-            s_den[i] += inv_mags_var[j]
-            rp_den[i] += drvecs[i][j] * drvecs[i][j] * inv_mags_var[j]
-            srp_mix[i] += drvecs[i][j] * inv_mags_var[j]
+        coeffs = mag_coeffs[i]
+        a = min(max(av_init[i], avmin), avmax)
+        r = min(max(rv_init[i], rvmin), rvmax)
+        obj, g_av, g_rv, h_aa, h_ar, h_rr = _mag_objective(
+            coeffs, a, r, mags, inv_var, av_gauss, rv_gauss
+        )
+        damping, done = 0.0, False
+        for _ in range(_MAX_STEPS):
+            a_new, r_new, gain = _bounded_step(
+                a, r, g_av, g_rv, h_aa, h_ar, h_rr, damping, avlim, rvlim
+            )
+            if gain < tol:
+                done = True
+                break
+            trial = _mag_objective(
+                coeffs, a_new, r_new, mags, inv_var, av_gauss, rv_gauss
+            )
+            if trial[0] <= obj:
+                if a_new == a and r_new == r:
+                    done = True
+                    break
+                a, r = a_new, r_new
+                obj, g_av, g_rv, h_aa, h_ar, h_rr = trial
+                damping *= 0.1
+            else:
+                damping = max(10.0 * damping, 1e-3)
+                if damping > _MAX_DAMPING:
+                    break
+        av[i], rv[i], converged[i] = a, r, done
 
-    # Main loop.
-    # Uses loop fusion to reduce from 5 to 3 inner loops per model,
-    # cutting memory traffic by ~40% (verified numerically identical).
-    logwt = np.zeros(Nmodel)
-    dav, drv = np.zeros(Nmodel), np.zeros(Nmodel)
-    while True:
-        for i in prange(Nmodel):
-            # --- Fused pass 1: Av solve ---
-            # Read resid[i][j] and rvecs[i][j] once to compute all Av terms.
-            a_den_i = Av_varinv
-            sa_mix_i = 0.0
-            resid_s_i = 0.0
-            resid_a_i = (Av_mean - av[i]) * Av_varinv
-            for j in range(Nfilt):
-                iv = inv_mags_var[j]
-                rv_j = rvecs[i][j]
-                res_j = resid[i][j]
-                riv = rv_j * iv
-                a_den_i += rv_j * riv
-                sa_mix_i += riv
-                resid_s_i += res_j * iv
-                resid_a_i += res_j * riv
-            # Compute ML solution for Delta_Av.
-            sa_idet = 1.0 / (s_den[i] * a_den_i - sa_mix_i * sa_mix_i)
-            dav[i] = sa_idet * (s_den[i] * resid_a_i - sa_mix_i * resid_s_i)
-            dav[i] = dav[i] * stepsize[i]
-
-            # Prevent Av from sliding off the provided bounds.
-            if dav[i] < avmin - av[i]:
-                dav[i] = avmin - av[i]
-            if dav[i] > avmax - av[i]:
-                dav[i] = avmax - av[i]
-
-            # Increment to new Av.
-            av[i] = av[i] + dav[i]
-
-            # --- Fused pass 2: Av residual update + Rv solve ---
-            # Update residuals from Av change and immediately compute Rv terms.
-            resid_s_i = 0.0
-            resid_r_i = 0.0
-            for j in range(Nfilt):
-                resid[i][j] = resid[i][j] - dav[i] * rvecs[i][j]
-                iv = inv_mags_var[j]
-                resid_s_i += resid[i][j] * iv
-                resid_r_i += resid[i][j] * drvecs[i][j] * iv
-            # Derive Rv partial derivatives.
-            r_den_i = rp_den[i] * av[i] * av[i] + Rv_varinv
-            sr_mix_i = srp_mix[i] * av[i]
-            resid_r_i = resid_r_i * av[i] + (Rv_mean - rv[i]) * Rv_varinv
-            # Compute ML solution for Delta_Rv.
-            sr_idet = 1.0 / (s_den[i] * r_den_i - sr_mix_i * sr_mix_i)
-            drv[i] = sr_idet * (s_den[i] * resid_r_i - sr_mix_i * resid_s_i)
-            drv[i] = drv[i] * stepsize[i]
-
-            # Prevent Rv from sliding off the provided bounds.
-            if drv[i] < rvmin - rv[i]:
-                drv[i] = rvmin - rv[i]
-            if drv[i] > rvmax - rv[i]:
-                drv[i] = rvmax - rv[i]
-
-            # Increment to new Rv.
-            rv[i] = rv[i] + drv[i]
-
-            # --- Fused pass 3: Rv residual/rvecs update + chi2 ---
-            av_drv = av[i] * drv[i]
-            chi2_i = 0.0
-            for j in range(Nfilt):
-                resid[i][j] = resid[i][j] - av_drv * drvecs[i][j]
-                rvecs[i][j] = rvecs[i][j] + drv[i] * drvecs[i][j]
-                chi2_i += resid[i][j] * resid[i][j] * inv_mags_var[j]
-            logwt[i] = -0.5 * chi2_i
-
-        # Find current best-fit model. Serial scan (cheap O(Nmodel) over the
-        # already-computed logwt): the per-model compute loop above is the
-        # parallel hot path; this reduction is kept serial for deterministic,
-        # version-robust behavior.
-        max_logwt = -1e300
-        for i in range(Nmodel):
-            if logwt[i] > max_logwt:
-                max_logwt = logwt[i]
-
-        # Find relative tolerance (error) to determine convergance, over the
-        # per-model step magnitudes restricted to "reasonably good" fits. Serial
-        # for the same reason.
-        err = -1e300
-        thresh = max_logwt + log_init_thresh
-        for i in range(Nmodel):
-            if logwt[i] > thresh:
-                dav_err, drv_err = abs(dav[i]), abs(drv[i])
-                if dav_err > err:
-                    err = dav_err
-                if drv_err > err:
-                    err = drv_err
-
-        # Check convergence.
-        if err < tol:
-            break
-
-    # Get MLE models and associated quantities.
     models, rvecs, drvecs, scale, icov_sar, resid = _get_sed_mle(
-        data, tot_var, resid, mag_coeffs, av, rv, av_gauss=av_gauss, rv_gauss=rv_gauss
+        data,
+        tot_var,
+        np.empty((Nmodel, Nfilt)),
+        mag_coeffs,
+        av,
+        rv,
+        av_gauss=av_gauss,
+        rv_gauss=rv_gauss,
     )
-
-    return models, rvecs, drvecs, scale, av, rv, icov_sar, resid
+    return models, rvecs, drvecs, scale, av, rv, icov_sar, resid, converged
 
 
 @jit(nopython=True, cache=True, parallel=True)
-def _optimize_fit_flux(
-    data,
-    tot_var,
-    models,
-    rvecs,
-    drvecs,
-    av,
-    rv,
-    mag_coeffs,
-    resid,
-    stepsize,
-    avlim=AVLIM,
-    av_gauss=(0.0, 1e6),
-    rvlim=RVLIM,
-    rv_gauss=(3.32, 0.18),
-):
+def _flux_objective(av, rv, rvecs, drvecs, resid, tot_var, av_gauss, rv_gauss):
     """
-    Optimize distance and reddening using flux densities gradient (single update).
+    Return chi2, chi2 plus the prior penalties on `(Av, Rv)`, and the gradient
+    of the log-posterior in `(Av, Rv)`, from the outputs of `_get_sed_mle`.
 
-    This executes **only one** `(Av, Rv)` update using the gradient
-    in **flux densities**.
-
-    Parameters
-    ----------
-    data : `~numpy.ndarray` of shape `(Nfilt)`
-        Observed data values.
-
-    tot_var : `~numpy.ndarray` of shape `(Nfilt,)`
-        Associated (Normal) variance on the observed flux values.
-        1D since the variance is a property of the data, not the models.
-
-    models : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        Model predictions.
-
-    rvecs : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        Associated model reddening vectors.
-
-    drvecs : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        Associated differential model reddening vectors.
-
-    av : `~numpy.ndarray` of shape `(Nmodel,)`
-        Av values of the models.
-
-    rv : `~numpy.ndarray` of shape `(Nmodel,)`
-        Rv values of the models.
-
-    mag_coeffs : `~numpy.ndarray` of shape `(Nmodel, Nfilt, 3)`
-        Magnitude coefficients used to compute reddened photometry for a given
-        model.
-
-    resid : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        Residuals between the data and models.
-
-    stepsize : `~numpy.ndarray`
-        The stepsize (in units of the computed gradient).
-
-    avlim : 2-tuple, optional
-        The lower and upper bound where the reddened photometry is reliable.
-        Default is `AVLIM`, (0, 20).
-
-    av_gauss : 2-tuple, optional
-        The mean and standard deviation of the Gaussian prior that is placed
-        on A(V). The default is `(0., 1e6)`, which is designed to be
-        essentially flat over `avlim`.
-
-    rvlim : 2-tuple, optional
-        The lower and upper bound where the reddening vector shape changes
-        are reliable. Default is `RVLIM`, (1, 8).
-
-    rv_gauss : 2-tuple, optional
-        The mean and standard deviation of the Gaussian prior that is placed
-        on R(V). The default is `(3.32, 0.18)` based on the results from
-        Schlafly et al. (2016).
-
-    Returns
-    -------
-    models_new : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        New model predictions. Always returned in flux densities.
-
-    rvecs_new : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        New reddening vectors. Always returned in flux densities.
-
-    drvecs_new : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        New differential reddening vectors. Always returned in flux densities.
-
-    scale : `~numpy.ndarray` of shape `(Nmodel)`, optional
-        The best-fit scale factor.
-
-    Av : `~numpy.ndarray` of shape `(Nmodel)`, optional
-        The best-fit reddening.
-
-    Rv : `~numpy.ndarray` of shape `(Nmodel)`, optional
-        The best-fit reddening shapes.
-
-    icov_sar : `~numpy.ndarray` of shape `(Nmodel, 3, 3)`, optional
-        The precision (inverse covariance) matrices expanded around
-        `(s_ML, Av_ML, Rv_ML)`.
-
-    resid : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        Residuals between the data and models.
-
-    See Also
-    --------
-    _optimize_fit_mag : Magnitude-space optimization (iterative)
-    _get_sed_mle : MLE computation for SED parameters
-
-    Notes
-    -----
-    This function performs a single update step in flux space using
-    gradient descent. It is called iteratively by the main fitting
-    routine until convergence.
-
-    Unlike magnitude-space fitting, flux-space optimization uses a
-    Taylor expansion which can be less numerically stable for large
-    extinctions but is faster per iteration.
+    `_get_sed_mle` returns `drvecs` as ``(1 / Av) * df/dRv``, so the R(V)
+    gradient multiplies it by `Av`.
     """
-    Nmodel, Nfilt = models.shape
-
-    avmin, avmax = avlim
-    rvmin, rvmax = rvlim
-
+    Nmodel, Nfilt = resid.shape
     Av_mean, Av_std = av_gauss
     Rv_mean, Rv_std = rv_gauss
-    Av_varinv, Rv_varinv = 1.0 / Av_std**2, 1.0 / Rv_std**2
-
-    # Precompute reciprocal of flux variance (1D, same for all models).
-    inv_tot_var = 1.0 / tot_var
-
-    # In flux density space, we can solve the linear system
-    # implicitly for `(s_ML, Av_ML, Rv_ML)`. However, the solution
-    # is not necessarily as numerically stable as one might hope
-    # due to the nature of our Taylor expansion in flux.
-    # Instead, it is easier to iterate in `(dAv, dRv)` from
-    # a good guess for `(s_ML, Av_ML, Rv_ML)`. We opt to solve both
-    # independently at fixed `(Av, Rv)` to avoid recomputing models.
-
-    # Fused: compute Av and Rv sums in a single pass over filters,
-    # since both read the same resid[i][j], rvecs[i][j], drvecs[i][j].
+    chi2, obj = np.empty(Nmodel), np.empty(Nmodel)
+    grad = np.empty((Nmodel, 2))
     for i in prange(Nmodel):
-        a_num_i = (Av_mean - av[i]) * Av_varinv
-        a_den_i = Av_varinv
-        r_num_i = (Rv_mean - rv[i]) * Rv_varinv
-        r_den_i = Rv_varinv
+        chi2_i = 0.0
+        g_av = (Av_mean - av[i]) / Av_std**2
+        g_rv = (Rv_mean - rv[i]) / Rv_std**2
         for j in range(Nfilt):
-            iv = inv_tot_var[j]
-            rv_j = rvecs[i][j]
-            drv_j = drvecs[i][j]
-            res_j = resid[i][j]
-            a_num_i += rv_j * res_j * iv
-            a_den_i += rv_j * rv_j * iv
-            r_num_i += drv_j * res_j * iv
-            r_den_i += drv_j * drv_j * iv
-        dav_i = a_num_i / a_den_i * stepsize[i]
-        drv_i = r_num_i / r_den_i * stepsize[i]
+            chi2_i += resid[i, j] * resid[i, j] / tot_var[j]
+            weighted = resid[i, j] / tot_var[j]
+            g_av += rvecs[i, j] * weighted
+            g_rv += av[i] * drvecs[i, j] * weighted
+        chi2[i] = chi2_i
+        obj[i] = chi2_i + (
+            ((av[i] - Av_mean) / Av_std) ** 2 + ((rv[i] - Rv_mean) / Rv_std) ** 2
+        )
+        grad[i, 0], grad[i, 1] = g_av, g_rv
+    return chi2, obj, grad
 
-        # Prevent Av from sliding off the provided bounds.
-        if dav_i < avmin - av[i]:
-            dav_i = avmin - av[i]
-        if dav_i > avmax - av[i]:
-            dav_i = avmax - av[i]
 
-        # Increment to new Av.
-        av[i] += dav_i
+@jit(nopython=True, cache=True, parallel=True)
+def _newton_step_flux(av, rv, grad, icov_sar, damping, avlim, rvlim):
+    """
+    Return trial `(Av, Rv)` from one damped Gauss-Newton step with the scale
+    profiled out, and the predicted log-posterior gain of the undamped step.
 
-        # Prevent Rv from sliding off the provided bounds.
-        if drv_i < rvmin - rv[i]:
-            drv_i = rvmin - rv[i]
-        if drv_i > rvmax - rv[i]:
-            drv_i = rvmax - rv[i]
-
-        # Increment to new Rv.
-        rv[i] += drv_i
-
-    # Get MLE models and associated quantities.
-    models, rvecs, drvecs, scale, icov_sar, resid = _get_sed_mle(
-        data, tot_var, resid, mag_coeffs, av, rv, av_gauss=av_gauss, rv_gauss=rv_gauss
-    )
-
-    return models, rvecs, drvecs, scale, av, rv, icov_sar, resid
+    The step is `_bounded_step` on the 2x2 Schur complement of `icov_sar`
+    onto `(Av, Rv)` and `grad` (from `_flux_objective`).
+    """
+    Nmodel = len(av)
+    av_new, rv_new, gain = np.empty(Nmodel), np.empty(Nmodel), np.empty(Nmodel)
+    for i in prange(Nmodel):
+        g_av, g_rv = grad[i, 0], grad[i, 1]
+        prec = icov_sar[i]
+        h_aa = prec[1, 1] - prec[0, 1] * prec[0, 1] / prec[0, 0]
+        h_ar = prec[1, 2] - prec[0, 1] * prec[0, 2] / prec[0, 0]
+        h_rr = prec[2, 2] - prec[0, 2] * prec[0, 2] / prec[0, 0]
+        av_new[i], rv_new[i], gain[i] = _bounded_step(
+            av[i], rv[i], g_av, g_rv, h_aa, h_ar, h_rr, damping[i], avlim, rvlim
+        )
+    return av_new, rv_new, gain
 
 
 @jit(nopython=True, cache=True, parallel=True)
@@ -1152,9 +905,8 @@ class BruteForce:
         av_init=None,
         rv_init=None,
         dim_prior=True,
-        ltol=3e-2,
-        ltol_subthresh=1e-2,
-        init_thresh=5e-3,
+        ltol=1e-3,
+        init_thresh=1e-6,
         parallax=None,
         parallax_err=None,
         return_vals=False,
@@ -1192,6 +944,17 @@ class BruteForce:
         rv_gauss : tuple, optional
             (mean, std) for Gaussian prior on R(V). Default is (3.32, 0.18).
 
+        ltol : float, optional
+            Convergence tolerance of both fits: a model stops when the next
+            Gauss-Newton step is predicted to raise its log-posterior in
+            (A(V), R(V)) by less than `ltol`. Must be positive. Default is
+            1e-3.
+
+        init_thresh : float, optional
+            Models whose magnitude-space fit, with the parallax term, is below
+            ``init_thresh`` times the best are not refined in flux space and
+            keep their magnitude-space fit. Default is 1e-6.
+
         parallax : float, optional
             Parallax measurement in mas.
 
@@ -1214,19 +977,39 @@ class BruteForce:
         If return_vals=True:
             Also includes scale, av, rv, icov_sar arrays
 
+        Raises
+        ------
+        ValueError
+            If the shapes of ``data``, ``data_err`` and ``data_mask`` disagree,
+            if only one of ``parallax`` and ``parallax_err`` is given, if
+            ``init_thresh`` is not in (0, 1), if ``ltol`` is not positive, or
+            if no band is valid.
+
+        Warns
+        -----
+        RuntimeWarning
+            If fewer than 4 bands are valid, or if a model's fit stopped on
+            the step or damping limit before it converged.
+
         See Also
         --------
         logpost_grid : Compute log-posteriors from likelihoods
         _optimize_fit_mag : Magnitude-space optimization
-        _optimize_fit_flux : Flux-space optimization
 
         Notes
         -----
         This method optimizes (distance, Av, Rv) for each grid point by:
 
-        1. Initial magnitude-space fit for numerical stability
-        2. Iterative flux-space refinement until convergence
-        3. Optional parallax constraint during optimization
+        1. A magnitude-space fit of every model.
+        2. A cut on that fit (``init_thresh``), with the parallax term if a
+           parallax is given.
+        3. A flux-space refinement of the kept models.
+
+        Both fits take Gauss-Newton steps in (A(V), R(V)) with the distance
+        profiled out. A step that raises chi2 plus the prior penalties is
+        retried with ten times more Levenberg-Marquardt damping. A model
+        stops when the predicted gain is below `ltol`, when a step no longer
+        moves it, when the damping passes 1e6, or after 100 steps.
 
         The optimization uses priors on Av and Rv but not on distance/scale
         (distance priors are applied in logpost_grid).
@@ -1243,6 +1026,7 @@ class BruteForce:
         if (parallax is None) != (parallax_err is None):
             raise ValueError("parallax and parallax_err must be given together")
         _check_threshold("init_thresh", init_thresh)
+        _check_positive("ltol", ltol)
 
         # Clean data. A new mask, so the caller's array is left unchanged.
         data_mask = np.asarray(data_mask, dtype=bool)
@@ -1301,40 +1085,27 @@ class BruteForce:
             # in logpost_grid."  A huge sigma effectively removes the prior.
             rv_gauss = (3.32, 1e6)
 
-        # Initialize values. The optimizers update these arrays in place, so
-        # they are copies, never the caller's arrays.
-        av_init = _model_array(av_init, av_gauss[0], Nmodels, "av_init").copy()
-        rv_init = _model_array(rv_init, rv_gauss[0], Nmodels, "rv_init").copy()
-
-        # Compute unreddened photometry and the initial data residual in a
-        # single fused parallel pass (replaces _get_seds + `mags - models`).
-        mtol = 2.5 * ltol
-        models, rvecs, drvecs, resid = _init_mag_resid(mcoeffs, av_init, rv_init, mags)
-        stepsize = np.ones(Nmodels)
-        results = _optimize_fit_mag(
+        av_init = _model_array(av_init, av_gauss[0], Nmodels, "av_init")
+        rv_init = _model_array(rv_init, rv_gauss[0], Nmodels, "rv_init")
+        _, rvecs, drvecs, scale, av, rv, icov_sar, resid, converged = _optimize_fit_mag(
             flux,
             tot_var,
-            models,
-            rvecs,
-            drvecs,
+            mcoeffs,
             av_init,
             rv_init,
-            mcoeffs,
-            resid,
-            stepsize,
             mags,
             mags_var,
-            tol=mtol,
-            init_thresh=init_thresh,
             avlim=avlim,
             av_gauss=av_gauss,
             rvlim=rvlim,
             rv_gauss=rv_gauss,
+            tol=ltol,
         )
-        models, rvecs, drvecs, scale, av, rv, icov_sar, resid = results
 
         # Cull initial bad fits before moving on
-        chi2 = _chi2_from_resid(resid, tot_var)
+        chi2, obj, grad = _flux_objective(
+            av, rv, rvecs, drvecs, resid, tot_var, av_gauss, rv_gauss
+        )
         lnl = -0.5 * chi2
 
         # Add parallax to log-likelihood
@@ -1350,59 +1121,74 @@ class BruteForce:
         lnl_sel = lnl_p > np.max(lnl_p) + np.log(init_thresh)
         init_sel = np.where(lnl_sel)[0]
 
-        # Subselect models (tot_var is 1D and data-only, no subselection needed)
-        models = models[init_sel]
-        rvecs = rvecs[init_sel]
-        drvecs = drvecs[init_sel]
-        av_new = av[init_sel]
-        rv_new = rv[init_sel]
+        # Refine the kept models in flux space, with the same stopping rules
+        # as the magnitude-space fit.
         mcoeffs = mcoeffs[init_sel]
-        resid = resid[init_sel]
-
-        # Iterate until convergence
-        lnl_old, lerr = LOG_ZERO, -LOG_ZERO  # -inf, +inf proxies
-        stepsize, rescaling = np.ones(Nmodels)[init_sel], 1.2
-        ln_ltol_subthresh = np.log(ltol_subthresh)
-        while lerr > ltol:
-            # Re-compute models
-            results = _optimize_fit_flux(
+        scale_new, icov_sar_new = scale[init_sel], icov_sar[init_sel]
+        av_new, rv_new = av[init_sel], rv[init_sel]
+        chi2_new, obj, grad = chi2[init_sel], obj[init_sel], grad[init_sel]
+        converged = converged[init_sel]
+        damping = np.zeros(len(init_sel))
+        active = np.arange(len(init_sel))
+        for _ in range(_MAX_STEPS):
+            av_t, rv_t, gain = _newton_step_flux(
+                av_new[active],
+                rv_new[active],
+                grad[active],
+                icov_sar_new[active],
+                damping[active],
+                avlim,
+                rvlim,
+            )
+            unconverged = gain >= ltol
+            active, av_t, rv_t = (
+                active[unconverged],
+                av_t[unconverged],
+                rv_t[unconverged],
+            )
+            if active.size == 0:
+                break
+            _, rvecs_t, drvecs_t, scale_t, icov_t, resid_t = _get_sed_mle(
                 flux,
                 tot_var,
-                models,
-                rvecs,
-                drvecs,
-                av_new,
-                rv_new,
-                mcoeffs,
-                resid,
-                stepsize,
-                avlim=avlim,
+                np.empty((active.size, Ndim)),
+                mcoeffs[active],
+                av_t,
+                rv_t,
                 av_gauss=av_gauss,
-                rvlim=rvlim,
                 rv_gauss=rv_gauss,
             )
-            models, rvecs, drvecs, scale_new, av_new, rv_new, icov_sar_new, resid = (
-                results
+            chi2_t, obj_t, grad_t = _flux_objective(
+                av_t, rv_t, rvecs_t, drvecs_t, resid_t, tot_var, av_gauss, rv_gauss
             )
-
-            # Compute chi2
-            chi2_new = _chi2_from_resid(resid, tot_var)
-
-            # Compute multivariate normal logpdf
-            lnl_new = -0.5 * chi2_new
-
-            # Compute stopping criterion
-            lnl_sel = np.where(lnl_new > np.max(lnl_new) + ln_ltol_subthresh)[0]
-            lerr = np.max(np.abs(lnl_new - lnl_old)[lnl_sel])
-
-            # Adjust stepsize
-            stepsize[lnl_new < lnl_old] /= rescaling
-            lnl_old = lnl_new
+            improved = obj_t <= obj[active]
+            moved = (av_t != av_new[active]) | (rv_t != rv_new[active])
+            accepted = active[improved]
+            av_new[accepted], rv_new[accepted] = av_t[improved], rv_t[improved]
+            chi2_new[accepted], obj[accepted] = chi2_t[improved], obj_t[improved]
+            grad[accepted], icov_sar_new[accepted] = grad_t[improved], icov_t[improved]
+            scale_new[accepted] = scale_t[improved]
+            damping[accepted] *= 0.1
+            rejected = active[~improved]
+            damping[rejected] = np.maximum(10.0 * damping[rejected], 1e-3)
+            # A model stops when a step no longer moves it, or gives up when
+            # the damping grows past _MAX_DAMPING.
+            gave_up = ~improved & (damping[active] > _MAX_DAMPING)
+            converged[active[gave_up]] = False
+            active = active[~((improved & ~moved) | gave_up)]
+        converged[active] = False
+        if not np.all(converged):
+            warnings.warn(
+                "Some models stopped before their A(V), R(V) fit converged "
+                "(step or damping limit).",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
         # Insert optimized models into initial array of results. Culled models
         # keep their magnitude-space fit; the Gaussian normalization applies to
         # every model, so that all of lnl shares one constant.
-        lnl[init_sel], chi2[init_sel] = lnl_new, chi2_new
+        lnl[init_sel], chi2[init_sel] = -0.5 * chi2_new, chi2_new
         scale[init_sel], av[init_sel], rv[init_sel] = scale_new, av_new, rv_new
         icov_sar[init_sel] = icov_sar_new
         lnl += -0.5 * (Ndim * np.log(2.0 * np.pi) + np.sum(np.log(tot_var)))
@@ -1885,9 +1671,8 @@ class BruteForce:
         apply_dlabels=True,
         data_coords=None,
         logl_dim_prior=True,
-        ltol=3e-2,
-        ltol_subthresh=1e-2,
-        logl_initthresh=5e-3,
+        ltol=1e-3,
+        logl_initthresh=1e-6,
         mag_max=50.0,
         merr_max=0.25,
         rstate=None,
@@ -2008,13 +1793,13 @@ class BruteForce:
             Default is True.
 
         ltol : float, optional
-            Convergence tolerance for likelihood optimization. Default is 3e-2.
-
-        ltol_subthresh : float, optional
-            Sub-threshold for convergence. Default is 1e-2.
+            Convergence tolerance of the fits, as in `loglike_grid`. Default
+            is 1e-3.
 
         logl_initthresh : float, optional
-            Initial likelihood threshold for model culling. Default is 5e-3.
+            Models whose magnitude-space fit is below this fraction of the
+            best are not refined (``init_thresh`` of `loglike_grid`). Default
+            is 1e-6.
 
         mag_max : float, optional
             Maximum allowed magnitude for valid data. Default is 50.0.
@@ -2075,9 +1860,9 @@ class BruteForce:
             If the shapes of ``data``, ``data_err``, ``data_mask``,
             ``data_labels``, ``parallax``, ``parallax_err``, ``data_coords``
             or ``lnprior`` disagree, if
-            only one of ``parallax`` and ``parallax_err`` is given, or if
-            ``logl_initthresh`` is not in (0, 1). These checks run before the
-            output file is created.
+            only one of ``parallax`` and ``parallax_err`` is given, if
+            ``logl_initthresh`` is not in (0, 1), or if ``ltol`` is not
+            positive. These checks run before the output file is created.
 
         Notes
         -----
@@ -2156,6 +1941,7 @@ class BruteForce:
                 f"got {len(data_labels)}"
             )
         _check_threshold("logl_initthresh", logl_initthresh)
+        _check_positive("ltol", ltol)
 
         # Load dust map from file path (str or os.PathLike) if needed
         # (once for all objects)
@@ -2274,7 +2060,6 @@ class BruteForce:
                         dlabels=dlabels,
                         logl_dim_prior=logl_dim_prior,
                         ltol=ltol,
-                        ltol_subthresh=ltol_subthresh,
                         logl_initthresh=logl_initthresh,
                         mem_lim=mem_lim,
                         precision_shrinkage=precision_shrinkage,
@@ -2358,9 +2143,8 @@ class BruteForce:
         dustfile=None,
         dlabels=_GRID_LABELS,
         logl_dim_prior=True,
-        ltol=3e-2,
-        ltol_subthresh=1e-2,
-        logl_initthresh=5e-3,
+        ltol=1e-3,
+        logl_initthresh=1e-6,
         mem_lim=8000.0,
         max_models=50000,
         precision_shrinkage=0.0,
@@ -2418,11 +2202,9 @@ class BruteForce:
         logl_dim_prior : bool, optional
             Whether to apply dimensional prior correction.
         ltol : float, optional
-            Convergence tolerance.
-        ltol_subthresh : float, optional
-            Sub-threshold for convergence.
+            Convergence tolerance, as in `loglike_grid`.
         logl_initthresh : float, optional
-            Initial likelihood threshold.
+            ``init_thresh`` of `loglike_grid`.
         mem_lim : float, optional
             Memory limit in MB.
         rstate : numpy.random.RandomState, optional
@@ -2471,7 +2253,6 @@ class BruteForce:
             rv_gauss=rv_gauss,
             dim_prior=logl_dim_prior,
             ltol=ltol,
-            ltol_subthresh=ltol_subthresh,
             init_thresh=logl_initthresh,
             parallax=parallax,
             parallax_err=parallax_err,

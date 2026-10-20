@@ -8,20 +8,22 @@ diagonal preconditioning, and the Monte Carlo draws of ``logpost_grid``.
 These tests validate the numerical correctness of the precision matrix
 (inverse covariance) computed in ``_get_sed_mle``, the (ln d, Av, Rv) draws,
 weights and effective sample size of ``BruteForce.logpost_grid``, the
-``inverse3`` utility with regularization, and the jitted helpers of
-``loglike_grid``.
+``inverse3`` utility with regularization, the flux-space refinement and the
+jitted helpers of ``loglike_grid``.
 """
 
 import numpy as np
 import numpy.testing as npt
 import pytest
+import scipy.optimize
 import scipy.stats
 
 from brutus.analysis.individual import (
     BruteForce,
-    _chi2_from_resid,
+    _flux_objective,
     _get_sed_mle,
-    _init_mag_resid,
+    _newton_step_flux,
+    _optimize_fit_mag,
 )
 from brutus.core.individual import StarGrid
 from brutus.core.sed_utils import _get_seds
@@ -752,92 +754,229 @@ class TestGetSedMleMultiModel:
 
 
 class TestOptimizeFitMagConvergence:
-    """Test that _optimize_fit_mag recovers known synthetic star parameters."""
+    """Test that _optimize_fit_mag reaches the magnitude-space minimum."""
 
-    def test_recovers_known_synthetic_star(self, simple_mag_coeffs):
-        """
-        Create a known synthetic star (model + noise), run the full
-        loglike_grid pipeline, and verify the optimized (scale, Av, Rv)
-        are close to the true values.
-        """
-        av_true, rv_true, scale_true = 0.8, 3.3, 1.0
-        snr = 200.0
-
-        data, tot_var, resid = _make_synthetic_data(
-            simple_mag_coeffs,
-            av_true,
-            rv_true,
-            scale_true,
-            snr=snr,
+    def test_reaches_the_direct_minimum_with_correlated_av_and_rv(self):
+        """Regression: coordinate steps in A(V), then R(V), stopped far from
+        the minimum when the two are correlated (a star outside the grid)."""
+        rng = np.random.default_rng(0)
+        nbands = 8
+        mag_coeffs = np.zeros((3, nbands, 3))
+        mag_coeffs[:, :, 0] = 15.0 + rng.normal(0.0, 0.1, (3, nbands))
+        mag_coeffs[:, :, 1] = np.linspace(1.6, 0.3, nbands)
+        mag_coeffs[:, :, 2] = np.linspace(0.4, -0.2, nbands)
+        # Red excess of up to 0.5 mag: no model fits exactly.
+        mags = (
+            mag_coeffs[0, :, 0]
+            + 5.0 * (mag_coeffs[0, :, 1] + 3.5 * mag_coeffs[0, :, 2])
+            - np.linspace(0.0, 0.5, nbands)
         )
-
-        av_arr = np.array([av_true * 0.5])  # Start away from truth
-        rv_arr = np.array([3.0])  # Start away from truth
-
-        from brutus.analysis.individual import _optimize_fit_mag
-        from brutus.core.sed_utils import _get_seds
-        from brutus.utils.photometry import magnitude
-
-        Nmodels, Nbands = simple_mag_coeffs.shape[0], simple_mag_coeffs.shape[1]
-
-        # Compute initial model predictions in magnitudes
-        models_init, rvecs_init, drvecs_init = _get_seds(
-            simple_mag_coeffs,
-            av_arr,
-            rv_arr,
-            return_flux=False,
-        )
-
-        # Convert data to magnitudes
-        with np.errstate(divide="ignore", invalid="ignore"):
-            mags = -2.5 * np.log10(data)
-            mags_var = (2.5 / np.log(10.0)) ** 2 * tot_var / data**2
-
-        resid_init = mags - models_init
-        stepsize = np.ones(Nmodels)
-
-        results = _optimize_fit_mag(
-            data,
-            tot_var,
-            models_init,
-            rvecs_init,
-            drvecs_init,
-            av_arr.copy(),
-            rv_arr.copy(),
-            simple_mag_coeffs,
-            resid_init,
-            stepsize,
+        mags_var = np.full(nbands, (1.0857 / 50.0) ** 2)
+        flux = 10 ** (-0.4 * mags)
+        av_fit, rv_fit = _optimize_fit_mag(
+            flux,
+            (flux / 50.0) ** 2,
+            mag_coeffs,
+            np.zeros(3),
+            np.full(3, 3.32),
             mags,
             mags_var,
-            avlim=(0.0, 20.0),
-            av_gauss=(0.0, 1e6),
-            rvlim=(1.0, 8.0),
-            rv_gauss=(3.32, 0.18),
-        )
-        (
-            models_out,
-            rvecs_out,
-            drvecs_out,
-            scale_opt,
-            av_opt,
-            rv_opt,
-            icov_sar,
-            resid_out,
-        ) = results
+            tol=1e-8,
+        )[4:6]
 
-        # The optimized values should be close to the true values.
-        npt.assert_allclose(
-            scale_opt[0],
-            scale_true,
-            rtol=0.1,
-            err_msg="Scale should converge near true value",
+        def objective(x, i):
+            model = mag_coeffs[i, :, 0] + x[0] * (
+                mag_coeffs[i, :, 1] + x[1] * mag_coeffs[i, :, 2]
+            )
+            resid = mags - model
+            resid -= np.sum(resid / mags_var) / np.sum(1 / mags_var)
+            return np.sum(resid**2 / mags_var) + ((x[1] - 3.32) / 0.18) ** 2
+
+        for i in range(3):
+            best = scipy.optimize.minimize(
+                objective,
+                [av_fit[i], rv_fit[i]],
+                args=(i,),
+                method="Nelder-Mead",
+                options=dict(xatol=1e-10, fatol=1e-12),
+            )
+            assert objective([av_fit[i], rv_fit[i]], i) <= best.fun + 1e-6
+
+
+def _direct_fit(mag_coeffs, data, tot_var, av0, rv0):
+    """Minimize chi2 plus the R(V) penalty of each model, scale profiled out.
+
+    Returns the minimizing (A(V), R(V)) and chi2 of each model.
+    """
+
+    def objective(x, i):
+        flux, _, _ = _get_seds(mag_coeffs[i : i + 1], x[:1], x[1:], return_flux=True)
+        flux = flux[0]
+        scale = np.sum(flux * data / tot_var) / np.sum(flux**2 / tot_var)
+        chi2 = np.sum((data - scale * flux) ** 2 / tot_var)
+        return chi2 + ((x[1] - 3.32) / 0.18) ** 2, chi2
+
+    out = []
+    for i in range(len(mag_coeffs)):
+        best = scipy.optimize.minimize(
+            lambda x: objective(x, i)[0],
+            [av0, rv0],
+            method="Nelder-Mead",
+            options=dict(xatol=1e-9, fatol=1e-12, maxiter=20000),
         )
-        npt.assert_allclose(
-            av_opt[0], av_true, atol=0.3, err_msg="Av should converge near true value"
+        out.append([*best.x, objective(best.x, i)[1]])
+    return np.array(out).T
+
+
+def _fitter(mag_coeffs):
+    """BruteForce on a grid of `mag_coeffs` with 5 bands."""
+    labels = np.zeros(
+        len(mag_coeffs), dtype=[("mini", "f8"), ("eep", "f8"), ("feh", "f8")]
+    )
+    grid = StarGrid(mag_coeffs, labels, filters=list("grizy"), verbose=False)
+    return BruteForce(grid, verbose=False)
+
+
+# R(V) changes the slope of this reddening vector, so the bands constrain it.
+RVEC = [1.5, 1.2, 1.0, 0.8, 0.7]
+DRVEC = [0.30, 0.10, -0.05, -0.12, -0.15]
+
+
+class TestFluxRefinement:
+    """Test the flux-space refinement against a direct minimization."""
+
+    @pytest.fixture
+    def reddened_star(self):
+        # A(V) = 2.5 makes a missing A(V) factor in the R(V) step visible.
+        mag_coeffs = np.zeros((4, 5, 3))
+        mag_coeffs[:, :, 0] = 15.0 + np.outer(
+            [0.0, 0.1, -0.1, 0.2], [1, 0.6, 0.3, 0, -0.2]
         )
-        npt.assert_allclose(
-            rv_opt[0], rv_true, atol=0.5, err_msg="Rv should converge near true value"
+        mag_coeffs[:, :, 1], mag_coeffs[:, :, 2] = RVEC, DRVEC
+        data, tot_var, _ = _make_synthetic_data(mag_coeffs, 2.5, 2.8, 1.0, snr=50.0)
+        return mag_coeffs, data, tot_var
+
+    def test_newton_steps_converge_to_the_direct_minimum(self, reddened_star):
+        mag_coeffs, data, tot_var = reddened_star
+        nmodels, nbands = mag_coeffs.shape[:2]
+        av, rv = np.full(nmodels, 2.0), np.full(nmodels, 3.3)
+        for _ in range(8):
+            _, rvecs, drvecs, _, icov, resid = _get_sed_mle(
+                data, tot_var, np.empty((nmodels, nbands)), mag_coeffs, av, rv
+            )
+            _, _, grad = _flux_objective(
+                av, rv, rvecs, drvecs, resid, tot_var, (0.0, 1e6), (3.32, 0.18)
+            )
+            av, rv, _ = _newton_step_flux(
+                av, rv, grad, icov, np.zeros(nmodels), (0.0, 20.0), (1.0, 8.0)
+            )
+        av_ref, rv_ref, _ = _direct_fit(mag_coeffs, data, tot_var, 2.0, 3.3)
+        # Newton steps converge quadratically: 8 steps leave only the
+        # tolerance of the Nelder-Mead reference.
+        npt.assert_allclose(av, av_ref, atol=1e-5)
+        npt.assert_allclose(rv, rv_ref, atol=1e-5)
+
+    def test_loglike_grid_reaches_the_direct_minimum(self, reddened_star):
+        mag_coeffs, data, tot_var = reddened_star
+        _, _, chi2, _, av, rv, _ = _fitter(mag_coeffs).loglike_grid(
+            data,
+            np.sqrt(tot_var),
+            np.ones(len(data), dtype=bool),
+            init_thresh=1e-300,
+            ltol=1e-6,
+            return_vals=True,
         )
+        av_ref, rv_ref, chi2_ref = _direct_fit(mag_coeffs, data, tot_var, 2.0, 3.3)
+        # Near the minimum, chi2 changes quadratically with (A(V), R(V)), so a
+        # 1e-3 error in the parameters gives a far smaller chi2 error.
+        npt.assert_allclose(av, av_ref, atol=1e-3)
+        npt.assert_allclose(rv, rv_ref, atol=1e-3)
+        npt.assert_allclose(chi2, chi2_ref, atol=1e-4)
+
+    def test_default_fit_keeps_the_best_model_of_a_star_outside_the_grid(self):
+        """Regression: an unconverged magnitude-space fit put the best model
+        below the first cut, so it kept a poor fit and lost its weight."""
+        rng = np.random.default_rng(0)
+        nmodels, nbands = 300, 8
+        mag_coeffs = np.zeros((nmodels, nbands, 3))
+        mag_coeffs[:, :, 0] = 15.0 + rng.normal(0.0, 0.1, (nmodels, nbands))
+        mag_coeffs[:, :, 1] = np.linspace(1.6, 0.3, nbands) + rng.normal(
+            0.0, 0.05, (nmodels, nbands)
+        )
+        mag_coeffs[:, :, 2] = np.linspace(0.4, -0.2, nbands)
+        mags = (
+            15.0
+            + rng.normal(0.0, 0.1, nbands)
+            + 5.0
+            * (np.linspace(1.6, 0.3, nbands) + 3.5 * np.linspace(0.4, -0.2, nbands))
+            - np.linspace(0.0, 0.5, nbands)
+        )
+        flux = 10 ** (-0.4 * mags)
+        labels = np.zeros(nmodels, dtype=[("mini", "f8"), ("eep", "f8"), ("feh", "f8")])
+        fitter = BruteForce(
+            StarGrid(mag_coeffs, labels, filters=list("abcdefgh"), verbose=False),
+            verbose=False,
+        )
+        args = (flux, flux / 50.0, np.ones(nbands, dtype=bool))
+        lnl = fitter.loglike_grid(*args)[0]
+        lnl_ref = fitter.loglike_grid(*args, init_thresh=1e-300, ltol=1e-9)[0]
+        best = np.argmax(lnl_ref)
+        assert lnl[best] > lnl_ref[best] - 0.1
+
+    def test_fit_at_an_rv_bound_minimizes_over_av_alone(self):
+        """Regression: at a bound, the clipped joint step stopped where the
+        2x2 solve no longer moved A(V), not at the minimum over A(V)."""
+        mag_coeffs = np.zeros((1, 5, 3))
+        mag_coeffs[0, :, 0] = 15.0
+        mag_coeffs[0, :, 1], mag_coeffs[0, :, 2] = RVEC, DRVEC
+        # R(V) = 0.4 lies below rvlim, so the fit stops at R(V) = 1.
+        data, tot_var, _ = _make_synthetic_data(mag_coeffs, 2.5, 0.4, 1.0, snr=50.0)
+        _, _, chi2, _, av, rv, _ = _fitter(mag_coeffs).loglike_grid(
+            data,
+            np.sqrt(tot_var),
+            np.ones(5, dtype=bool),
+            rv_gauss=None,
+            ltol=1e-9,
+            return_vals=True,
+        )
+
+        def chi2_at(a):
+            flux = _get_seds(
+                mag_coeffs, np.array([a]), np.array([1.0]), return_flux=True
+            )[0][0]
+            scale = np.sum(flux * data / tot_var) / np.sum(flux**2 / tot_var)
+            return np.sum((data - scale * flux) ** 2 / tot_var)
+
+        best = scipy.optimize.minimize_scalar(
+            chi2_at, bounds=(0.0, 20.0), method="bounded", options=dict(xatol=1e-10)
+        )
+        assert rv[0] == 1.0
+        npt.assert_allclose(av[0], best.x, atol=1e-5)
+        assert chi2[0] <= best.fun + 1e-8
+
+    def test_nonpositive_ltol_raises(self, reddened_star):
+        mag_coeffs, data, tot_var = reddened_star
+        with pytest.raises(ValueError, match="ltol"):
+            _fitter(mag_coeffs).loglike_grid(
+                data, np.sqrt(tot_var), np.ones(len(data), dtype=bool), ltol=0.0
+            )
+
+    def test_default_cut_refines_the_models_the_old_cut_left_unrefined(self):
+        # Models differ in colour, so their fits spread over tens of nats.
+        rng = np.random.default_rng(3)
+        mag_coeffs = np.zeros((60, 5, 3))
+        mag_coeffs[:, :, 0] = 15.0 + rng.normal(0.0, 0.05, (60, 5))
+        mag_coeffs[:, :, 1], mag_coeffs[:, :, 2] = RVEC, DRVEC
+        data, tot_var, _ = _make_synthetic_data(mag_coeffs, 2.5, 2.8, 1.0, snr=50.0)
+        fitter = _fitter(mag_coeffs)
+        args = (data, np.sqrt(tot_var), np.ones(5, dtype=bool))
+        lnl_default = fitter.loglike_grid(*args)[0]
+        lnl_all = fitter.loglike_grid(*args, init_thresh=1e-300)[0]
+        # Every model within a factor 1e-6 of the best is refined, and each
+        # model is fit on its own, so both runs give it the same fit.
+        near = lnl_all > lnl_all.max() + np.log(1e-6)
+        assert near.sum() > (lnl_all > lnl_all.max() + np.log(5e-3)).sum()
+        npt.assert_array_equal(lnl_default[near], lnl_all[near])
 
 
 # ============================================================================
@@ -848,33 +987,22 @@ class TestOptimizeFitMagConvergence:
 class TestJittedLikelihoodHelpers:
     """Compare the jitted loglike_grid helpers with direct numpy."""
 
-    def test_init_mag_resid_matches_numpy(self):
-        """_init_mag_resid returns the reddened SEDs, R(V)-dependent
-        reddening vectors, their R(V) derivatives and mags - SED."""
-        rng = np.random.RandomState(166)
-        mag_coeffs = rng.normal(size=(7, 5, 3))
-        av = rng.uniform(0.0, 3.0, 7)
-        rv = rng.uniform(2.0, 5.0, 7)
-        mags = rng.normal(15.0, 1.0, 5)
-
-        models, rvecs, drvecs, resid = _init_mag_resid(mag_coeffs, av, rv, mags)
-
-        expected_rvecs = mag_coeffs[:, :, 1] + rv[:, None] * mag_coeffs[:, :, 2]
-        expected_models = mag_coeffs[:, :, 0] + av[:, None] * expected_rvecs
-        npt.assert_array_equal(drvecs, mag_coeffs[:, :, 2])
-        npt.assert_array_equal(rvecs, expected_rvecs)
-        npt.assert_array_equal(models, expected_models)
-        npt.assert_array_equal(resid, mags - expected_models)
-
-    def test_chi2_from_resid_matches_numpy(self):
-        """_chi2_from_resid returns sum_j resid[i, j]**2 / tot_var[j]."""
+    def test_flux_objective_matches_numpy(self):
+        """_flux_objective returns chi2, chi2 plus the prior penalties and the
+        log-posterior gradient, with df/dR(V) = A(V) * drvecs."""
         rng = np.random.RandomState(145)
-        resid = rng.normal(size=(7, 5))
+        resid, rvecs, drvecs = rng.normal(size=(3, 7, 5))
         tot_var = rng.uniform(0.01, 1.0, 5)
-
-        npt.assert_array_equal(
-            _chi2_from_resid(resid, tot_var), np.sum(resid**2 / tot_var, axis=1)
+        av, rv = rng.uniform(0.0, 3.0, 7), rng.uniform(2.0, 5.0, 7)
+        chi2, obj, grad = _flux_objective(
+            av, rv, rvecs, drvecs, resid, tot_var, (0.5, 2.0), (3.32, 0.18)
         )
+        npt.assert_allclose(chi2, np.sum(resid**2 / tot_var, axis=1), rtol=1e-12)
+        penalty = ((av - 0.5) / 2.0) ** 2 + ((rv - 3.32) / 0.18) ** 2
+        npt.assert_allclose(obj, chi2 + penalty, rtol=1e-12)
+        g_av = np.sum(rvecs * resid / tot_var, axis=1) + (0.5 - av) / 4.0
+        g_rv = av * np.sum(drvecs * resid / tot_var, axis=1) + (3.32 - rv) / 0.18**2
+        npt.assert_allclose(grad, np.column_stack([g_av, g_rv]), rtol=1e-12)
 
 
 # ============================================================================
