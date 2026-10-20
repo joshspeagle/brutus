@@ -118,7 +118,7 @@ One star of the Orion example in {doc}`scientific_background`. Left: the draws o
 
 ### Monte Carlo weights
 
-`mc_ess` is $1 / \sum_j w_j^2$ over the normalized Monte Carlo weights of a model. It is at most the number of Monte Carlo draws per model: `Nmc_prior` (50), or fewer when `mem_lim` reduces it. A value of 0 means every weight underflowed. A value near 1 means one point carries the whole weight: the Gaussian around the best fit and the priors overlap poorly, and the weight of that model is noisy. The draws come in antithetic pairs, so `mc_ess` measures how concentrated the weights are, not a count of independent draws.
+`mc_ess` is $1 / \sum_j w_j^2$ over the normalized Monte Carlo weights of a model. It is at most the number of Monte Carlo draws per model: `Nmc_prior` (50), or fewer when `mem_lim` reduces it. A value of 0 means no Monte Carlo draw of the model has nonzero weight, for example when every draw falls outside `avlim`, `rvlim` or the distance range. A value near 1 means one point carries the whole weight: the Gaussian around the best fit and the priors overlap poorly, and the weight of that model is noisy. The draws come in antithetic pairs, so `mc_ess` measures how concentrated the weights are, not a count of independent draws.
 
 ### Parallax and prior
 
