@@ -424,6 +424,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keyword dicts the caller passes (`data_kwargs`, `contourf_kwargs`,
   `contour_kwargs`, `truth_kwargs`). A `contour_kwargs` reused across
   panels kept the colour of the first call.
+- `cornerplot` and `bin_pdfs_distred` choose the input format by the
+  length of `data`, and raise `ValueError` that names `data` unless it has
+  3 or 4 arrays. `cornerplot` accepts saved draws as lists; it sent them to
+  the `(scales, avs, rvs, covs_sar)` path, which failed with an unpacking
+  error. With `(scales, avs, rvs, covs_sar)` input, `bin_pdfs_distred`
+  gives zero weight to a sample when the priors give zero weight to every
+  draw of it; the binned PDF of its object was NaN.
 
 ### Performance
 
@@ -437,6 +444,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exists. Results are bitwise identical. With 21000 models and 1000 stars,
   the marginalization takes a median 0.59 to 0.67 s against 0.70 s on one
   core (25 interleaved runs, two repeats).
+- `cornerplot` resamples the regenerated draws with one batch of uniform
+  deviates and a search of each sample's weight CDF, instead of one
+  `rstate.choice` call per sample. The draws are bitwise identical for a
+  seeded `RandomState` or `Generator`. For 2000 samples and 500 draws, the
+  resampling takes 12 ms instead of 35 ms (medians of 7 interleaved runs,
+  4 CPUs).
 
 ### Documentation
 

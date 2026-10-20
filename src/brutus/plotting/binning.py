@@ -8,19 +8,16 @@ This module provides functions to bin posterior samples of distance and
 reddening for visualization purposes.
 """
 
-import copy
 import sys
 import warnings
 from functools import partial
 
 import numpy as np
 from scipy.ndimage import gaussian_filter as norm_kde
-from scipy.special import logsumexp
 
 from ..priors import logp_galactic_structure as gal_lnprior
-from ..priors import logp_parallax
 from ..utils.math import AVLIM, RVLIM
-from ..utils.sampling import draw_sar
+from .utils import _require_coord, _sar_draws
 
 __all__ = ["bin_pdfs_distred"]
 
@@ -223,30 +220,12 @@ def bin_pdfs_distred(
 
     # Compute binned PDFs.
     binned_vals = np.zeros((nobjs, xbin, ybin), dtype="float32")
-    try:
-        # Grab (distance, reddening (Av), differential reddening (Rv)) samples.
-        # Check if data is in direct format (3 values) vs SAR format (4 values)
-        if len(data) == 3:
-            ddraws, adraws, rdraws = copy.deepcopy(data)
-        else:
-            # Data is in SAR format - raise to trigger except block
-            raise AttributeError("Data is in SAR format")
+    if len(data) == 3:
+        # Saved (distance, A(V), R(V)) samples.
+        ddraws, adraws, rdraws = data
         pdraws = 1.0 / ddraws
-        sdraws = pdraws**2
-        dmdraws = 5.0 * np.log10(ddraws) + 10.0
-
-        # Grab relevant draws.
-        ydraws = adraws
-        if ebv:
-            ydraws /= rdraws
-        if dist_type == "scale":
-            xdraws = sdraws
-        elif dist_type == "parallax":
-            xdraws = pdraws
-        elif dist_type == "distance":
-            xdraws = ddraws
-        elif dist_type == "distance_modulus":
-            xdraws = dmdraws
+        xdraws = _distance_draws(dist_type, pdraws**2, pdraws, ddraws)
+        ydraws = adraws / rdraws if ebv else adraws
 
         # Bin draws.
         for i, (xs, ys) in enumerate(zip(xdraws, ydraws)):
@@ -254,23 +233,16 @@ def bin_pdfs_distred(
             if verbose:
                 sys.stderr.write(f"\rBinning object {i + 1}/{nobjs}")
             wt = None if weights is None else weights[i]
-            H, xedges, yedges = np.histogram2d(xs, ys, bins=(xbins, ybins), weights=wt)
+            H = np.histogram2d(xs, ys, bins=(xbins, ybins), weights=wt)[0]
             # Normalize by the total weight (nsamps when unweighted) so the
             # binned mass equals the weighted fraction of samples inside the
             # span, independent of the absolute scale of `weights`.
             wtot = nsamps if weights is None else weights[i].sum()
             binned_vals[i] = H / wtot
-    except (AttributeError, KeyError):
+    elif len(data) == 4:
         # Regenerate distance and reddening samples from inputs.
-        scales, avs, rvs, covs_sar = copy.deepcopy(data)
-
-        _is_default_prior = lndistprior is gal_lnprior or (
-            hasattr(lndistprior, "func") and lndistprior.func is gal_lnprior
-        )
-        if _is_default_prior and coord is None:
-            raise ValueError(
-                "`coord` must be passed if the default distance " "prior was used."
-            )
+        scales, avs, rvs, covs_sar = data
+        _require_coord(lndistprior, coord)
         if coord is None:
             # Custom `lndistprior` without coordinates: pass `None` per object.
             coord = [None] * nobjs
@@ -289,78 +261,45 @@ def bin_pdfs_distred(
                 )
 
         # Generate parallax and Av realizations.
-        for i, stuff in enumerate(
-            zip(scales, avs, rvs, covs_sar, parallaxes, parallax_errors, coord)
-        ):
-            (
-                scales_obj,
-                avs_obj,
-                rvs_obj,
-                covs_sar_obj,
-                parallax,
-                parallax_err,
-                crd,
-            ) = stuff
-
+        for i in range(nobjs):
             # Print progress.
             if verbose:
                 sys.stderr.write(f"\rBinning object {i + 1}/{nobjs}")
 
-            # Draw random samples.
-            sdraws, adraws, rdraws = draw_sar(
-                scales_obj,
-                avs_obj,
-                rvs_obj,
-                covs_sar_obj,
-                ndraws=Nr,
-                avlim=avlim,
-                rvlim=rvlim,
-                rstate=rstate,
+            sdraws, pdraws, ddraws, adraws, rdraws, pwt = _sar_draws(
+                scales[i],
+                avs[i],
+                rvs[i],
+                covs_sar[i],
+                lndistprior,
+                coord[i],
+                parallaxes[i],
+                parallax_errors[i],
+                Nr,
+                avlim,
+                rvlim,
+                rstate,
             )
-            pdraws = np.sqrt(sdraws)
-            ddraws = 1.0 / pdraws
-            dmdraws = 5.0 * np.log10(ddraws) + 10.0
-
-            # Re-apply distance and parallax priors to realizations.
-            # Draws come from a Gaussian proposal in *scale* space (s = d^-2),
-            # while `lndistprior` is a density over distance, so the
-            # importance weight needs the change-of-variables Jacobian
-            # |dd/ds| = d^3 / 2 (constant factor irrelevant after
-            # normalization). Matches the ln-distance Jacobian handling in
-            # `analysis.individual.logpost_grid`.
-            lnp_draws = lndistprior(ddraws, crd) + 3.0 * np.log(ddraws)
-            if parallax is not None and parallax_err is not None:
-                lnp_draws += logp_parallax(pdraws, parallax, parallax_err)
-            lnp = logsumexp(lnp_draws, axis=1)
-            pwt = np.exp(lnp_draws - lnp[:, None])
-            pwt /= pwt.sum(axis=1)[:, None]
             if weights is not None:
                 # Fold per-sample importance weights into the per-draw ones.
                 pwt *= weights[i][:, None]
-            pwt = pwt.flatten()
-
-            # Grab draws.
-            ydraws = adraws.flatten()
-            if ebv:
-                ydraws /= rdraws.flatten()
-            if dist_type == "scale":
-                xdraws = sdraws.flatten()
-            elif dist_type == "parallax":
-                xdraws = pdraws.flatten()
-            elif dist_type == "distance":
-                xdraws = ddraws.flatten()
-            elif dist_type == "distance_modulus":
-                xdraws = dmdraws.flatten()
+            xdraws = _distance_draws(dist_type, sdraws, pdraws, ddraws)
+            ydraws = adraws / rdraws if ebv else adraws
 
             # Generate 2-D histogram.
-            H, xedges, yedges = np.histogram2d(
-                xdraws, ydraws, bins=(xbins, ybins), weights=pwt
-            )
+            H = np.histogram2d(
+                xdraws.ravel(), ydraws.ravel(), bins=(xbins, ybins), weights=pwt.ravel()
+            )[0]
             # Each sample's Nr draw weights sum to 1, so the total weight is
             # nsamps unweighted and sum(weights[i]) otherwise; dividing by it
             # keeps the result invariant to the absolute scale of `weights`.
             wtot = nsamps if weights is None else weights[i].sum()
             binned_vals[i] = H / wtot
+    else:
+        raise ValueError(
+            "`data` must be (dists, reds, dreds) or (scales, avs, rvs, covs_sar); "
+            f"got {len(data)} arrays."
+        )
 
     # Apply smoothing.
     for i, (H, parallax, parallax_err) in enumerate(
@@ -397,7 +336,18 @@ def bin_pdfs_distred(
             # the *reddening* axis within each distance column.
             binned_vals[i] = H.cumsum(axis=1)
 
-    return binned_vals, xedges, yedges
+    return binned_vals, xbins, ybins
+
+
+def _distance_draws(dist_type, sdraws, pdraws, ddraws):
+    """Return the draws of the distance axis in `dist_type` units."""
+    if dist_type == "scale":
+        return sdraws
+    if dist_type == "parallax":
+        return pdraws
+    if dist_type == "distance":
+        return ddraws
+    return 5.0 * np.log10(ddraws) + 10.0
 
 
 def _per_object(value, name, nobjs):

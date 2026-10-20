@@ -407,3 +407,31 @@ def test_parallax_with_too_few_objects_raises():
         bin_pdfs_distred(
             _three_objects(), parallaxes=[1.0, 1.0], parallax_errors=[0.1, 0.1]
         )
+
+
+def test_data_of_wrong_length_raises():
+    with pytest.raises(ValueError, match="`data` must be"):
+        bin_pdfs_distred(_three_objects()[:2])
+
+
+def test_sample_with_zero_prior_weight_gets_zero_weight():
+    """Regression (#186): a sample whose draws all have zero prior weight
+    made the binned PDF of its object NaN."""
+    rng = np.random.RandomState(2)
+    sar = (
+        rng.lognormal(np.log(0.25), 0.2, (2, 10)),
+        rng.uniform(0.2, 1.0, (2, 10)),
+        rng.normal(3.3, 0.1, (2, 10)),
+        np.tile(np.diag([0.002, 0.02, 0.05]), (2, 10, 1, 1)),
+    )
+    # Zero prior weight beyond 3 kpc; sample 0 of object 0 lies far beyond.
+    sar[0][0, 0] = 1e-4
+    sar[3][0, 0] = np.diag([1e-12, 0.02, 0.05])
+
+    def lndistprior(d, coord):
+        return np.where(d < 3.0, 0.0, -np.inf)
+
+    kwargs = dict(lndistprior=lndistprior, Nr=50, bins=(20, 10), smooth=0)
+    binned = bin_pdfs_distred(sar, rstate=np.random.RandomState(0), **kwargs)[0]
+    assert np.all(np.isfinite(binned))
+    np.testing.assert_allclose(binned[0].sum(), 9 / 10)

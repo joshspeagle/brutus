@@ -14,8 +14,11 @@ import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap, colorConverter
 from scipy.ndimage import gaussian_filter as norm_kde
+from scipy.special import logsumexp
 
-from ..utils.sampling import quantile
+from ..priors import logp_galactic_structure as gal_lnprior
+from ..priors import logp_parallax
+from ..utils.sampling import draw_sar, quantile
 
 __all__ = ["hist2d"]
 
@@ -111,19 +114,7 @@ def hist2d(
     contourf_kwargs = dict(contourf_kwargs or {})
     contour_kwargs = dict(contour_kwargs or {})
 
-    # Determine plotting bounds.
-    data = [x, y]
-    if span is None:
-        span = [0.99 for i in range(2)]
-    span = list(span)
-    if len(span) != 2:
-        raise ValueError("Dimension mismatch between samples and span.")
-    for i, _ in enumerate(span):
-        try:
-            xmin, xmax = span[i]
-        except (TypeError, ValueError):
-            q = [0.5 - 0.5 * span[i], 0.5 + 0.5 * span[i]]
-            span[i] = quantile(data[i], q, weights=weights)
+    span = _resolve_span(span, [x, y], weights)
 
     # The default "sigma" contour levels.
     if levels is None:
@@ -305,3 +296,77 @@ def hist2d(
 
     ax.set_xlim(span[0])
     ax.set_ylim(span[1])
+
+
+def _resolve_span(span, samples, weights):
+    """Return `(low, high)` bounds for each row of `samples`.
+
+    An entry of `span` that is a float is the weighted credible fraction of
+    an equal-tailed interval. `None` means 0.99 for every row.
+    """
+    if span is None:
+        span = [0.99] * len(samples)
+    span = list(span)
+    if len(span) != len(samples):
+        raise ValueError("Dimension mismatch between samples and span.")
+    for i, s in enumerate(span):
+        if np.ndim(s) == 0:
+            span[i] = quantile(samples[i], [0.5 - 0.5 * s, 0.5 + 0.5 * s], weights)
+    return span
+
+
+def _require_coord(lndistprior, coord):
+    """Raise unless `coord` is given for the default Galactic prior."""
+    if coord is None and getattr(lndistprior, "func", lndistprior) is gal_lnprior:
+        raise ValueError(
+            "`coord` must be passed if the default distance prior was used."
+        )
+
+
+def _sar_draws(
+    scales,
+    avs,
+    rvs,
+    covs_sar,
+    lndistprior,
+    coord,
+    parallax,
+    parallax_err,
+    ndraws,
+    avlim,
+    rvlim,
+    rstate,
+):
+    """Draw `ndraws` (scale, A(V), R(V)) per sample and weight them by the
+    distance prior and, unless `parallax` is None, the parallax prior.
+
+    Returns the scale, parallax, distance, A(V) and R(V) draws and the
+    weights, each of shape `(Nsamps, ndraws)`. Each row of the weights sums
+    to 1, or is 0 when the priors give zero weight to every draw of the
+    sample.
+    """
+    sdraws, adraws, rdraws = draw_sar(
+        scales,
+        avs,
+        rvs,
+        covs_sar,
+        ndraws=ndraws,
+        avlim=avlim,
+        rvlim=rvlim,
+        rstate=rstate,
+    )
+    pdraws = np.sqrt(sdraws)
+    ddraws = 1.0 / pdraws
+    # The draws come from a Gaussian in scale (s = d^-2), but `lndistprior`
+    # is a density in distance, so the weight takes the Jacobian
+    # |dd/ds| = d^3 / 2 (the constant cancels in the normalization), as
+    # `analysis.individual.logpost_grid` does for ln-distance.
+    lnp = lndistprior(ddraws, coord) + 3.0 * np.log(ddraws)
+    if parallax is not None:
+        lnp += logp_parallax(pdraws, parallax, parallax_err)
+    lnz = logsumexp(lnp, axis=1)
+    with np.errstate(invalid="ignore"):
+        pwt = np.exp(lnp - lnz[:, None])
+        pwt /= pwt.sum(axis=1)[:, None]
+    pwt[~np.isfinite(lnz)] = 0.0
+    return sdraws, pdraws, ddraws, adraws, rdraws, pwt

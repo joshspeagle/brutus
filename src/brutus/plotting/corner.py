@@ -8,7 +8,6 @@ This module provides functions for creating corner plots of multi-dimensional
 posterior distributions.
 """
 
-import copy
 import warnings
 from functools import partial
 
@@ -16,13 +15,12 @@ import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib.ticker import MaxNLocator, NullLocator, ScalarFormatter
 from scipy.ndimage import gaussian_filter as norm_kde
-from scipy.special import logsumexp
 
 from ..priors import logp_galactic_structure as gal_lnprior
 from ..priors import logp_parallax
 from ..utils.math import AVLIM, RVLIM
-from ..utils.sampling import draw_sar, quantile
-from .utils import hist2d
+from ..utils.sampling import quantile
+from .utils import _require_coord, _resolve_span, _sar_draws, hist2d
 
 __all__ = ["cornerplot"]
 
@@ -304,60 +302,45 @@ def cornerplot(
         "There are more " "dimensions than samples!"
     )
 
-    try:
-        # Grab distance and reddening samples.
-        ddraws, adraws, rdraws = copy.deepcopy(data)
+    if len(data) == 3:
+        # Saved distance and reddening samples.
+        ddraws, adraws, rdraws = (np.asarray(d) for d in data)
         pdraws = 1.0 / ddraws
-    except (ValueError, TypeError):
+    elif len(data) == 4:
         # Regenerate distance and reddening samples from inputs.
-        scales, avs, rvs, covs_sar = copy.deepcopy(data)
-
         if applied_parallax and (parallax is None or parallax_err is None):
             raise ValueError(
                 "`applied_parallax=True` needs both `parallax` and `parallax_err`."
             )
-        _is_default_prior = lndistprior is gal_lnprior or (
-            hasattr(lndistprior, "func") and lndistprior.func is gal_lnprior
+        _require_coord(lndistprior, coord)
+        _, pdraws, ddraws, adraws, rdraws, pwt = _sar_draws(
+            *data,
+            lndistprior,
+            coord,
+            parallax if applied_parallax else None,
+            parallax_err,
+            Nr,
+            avlim,
+            rvlim,
+            rstate,
         )
-        if _is_default_prior and coord is None:
-            raise ValueError(
-                "`coord` must be passed if the default distance " "prior was used."
-            )
-
-        # Add in scale/parallax/distance, Av, and Rv realizations.
-        nsamps = len(idxs)
-        sdraws, adraws, rdraws = draw_sar(
-            scales,
-            avs,
-            rvs,
-            covs_sar,
-            ndraws=Nr,
-            avlim=avlim,
-            rvlim=rvlim,
-            rstate=rstate,
+        # Resample one draw per sample: the first draw whose CDF exceeds a
+        # uniform deviate. This takes the same deviates and gives the same
+        # indices as `rstate.choice(Nr, p=pwt[i])` for each sample in turn.
+        if np.any(pwt.sum(axis=1) == 0):
+            raise ValueError("The priors give zero weight to every draw of a sample.")
+        cdf = pwt.cumsum(axis=1)
+        cdf /= cdf[:, -1:]
+        rows = np.arange(len(cdf))
+        ridx = (cdf > rstate.random(len(cdf))[:, None]).argmax(axis=1)
+        pdraws, ddraws, adraws, rdraws = (
+            draws[rows, ridx] for draws in (pdraws, ddraws, adraws, rdraws)
         )
-        pdraws = np.sqrt(sdraws)
-        ddraws = 1.0 / pdraws
-
-        # Re-apply distance and parallax priors to realizations.
-        # Draws come from a Gaussian proposal in *scale* space (s = d^-2),
-        # while `lndistprior` is a density over distance, so the importance
-        # weight needs the change-of-variables Jacobian |dd/ds| = d^3 / 2
-        # (constant factor irrelevant after normalization). Matches the
-        # ln-distance Jacobian handling in `analysis.individual.logpost_grid`.
-        lnp_draws = lndistprior(ddraws, coord) + 3.0 * np.log(ddraws)
-        if applied_parallax:
-            lnp_draws += logp_parallax(pdraws, parallax, parallax_err)
-
-        # Resample draws.
-        lnp = logsumexp(lnp_draws, axis=1)
-        pwt = np.exp(lnp_draws - lnp[:, None])
-        pwt /= pwt.sum(axis=1)[:, None]
-        ridx = [rstate.choice(Nr, p=pwt[i]) for i in range(nsamps)]
-        pdraws = pdraws[np.arange(nsamps), ridx]
-        ddraws = ddraws[np.arange(nsamps), ridx]
-        adraws = adraws[np.arange(nsamps), ridx]
-        rdraws = rdraws[np.arange(nsamps), ridx]
+    else:
+        raise ValueError(
+            "`data` must be (dists, reds, dreds) or (scales, avs, rvs, covs_sar); "
+            f"got {len(data)} arrays."
+        )
 
     # Append to samples.
     samples = np.c_[samples.T, adraws, rdraws, pdraws, ddraws].T
@@ -369,18 +352,7 @@ def cornerplot(
     if nsamps != weights.shape[0]:
         raise ValueError("The number of weights and samples disagree!")
 
-    # Determine plotting bounds.
-    if span is None:
-        span = [0.99 for i in range(ndim)]
-    span = list(span)
-    if len(span) != ndim:
-        raise ValueError("Dimension mismatch between samples and span.")
-    for i, _ in enumerate(span):
-        try:
-            xmin, xmax = span[i]
-        except (TypeError, ValueError):
-            q = [0.5 - 0.5 * span[i], 0.5 + 0.5 * span[i]]
-            span[i] = quantile(samples[i], q, weights=weights)
+    span = _resolve_span(span, samples, weights)
 
     # Append additional labels for extra dimensions
     labels.append("Av")

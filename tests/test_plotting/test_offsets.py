@@ -263,10 +263,12 @@ class TestPhotometricOffsets1D:
         for arr, nbin in zip(_run_1d(d, bins=bins), bins):
             assert arr.size == nbin * nbin
 
-    def test_two_bins_for_many_bands_raise(self):
-        """Regression (#170): a length-2 `bins` raised TypeError."""
+    @pytest.mark.parametrize("bins", [(10, 12), [5, (3, 2), 5, 5, 5, 5]])
+    def test_malformed_bins_raise(self, bins):
+        """Regression (#170): a length-2 `bins` raised TypeError, and a
+        ragged `bins` raised numpy's error, which does not name `bins`."""
         with pytest.raises(ValueError, match="`bins`"):
-            _run_1d(_offsets_dataset(), bins=(10, 12))
+            _run_1d(_offsets_dataset(), bins=bins)
 
     def test_band_that_no_object_observes_is_left_blank(self):
         """Regression (#170): an empty band raised IndexError."""
