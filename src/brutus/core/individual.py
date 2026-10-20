@@ -1552,18 +1552,23 @@ class StarGrid:
         Every multi-valued axis must be given. Each given value must be
         finite and inside its axis range, with a relative tolerance of 1e-6
         at the edges: stored edges are not round (the MIST mini maximum is
-        2.0000000000000013).
+        2.0000000000000013). A label not in the grid warns and is ignored.
         """
         if not self._axis_names:
             raise ValueError(
                 "StarGrid needs at least one grid label (mini, eep, feh, afe or "
                 f"smf) to answer a query; models_labels has {self.label_names}."
             )
-        values = {
-            name: value
-            for name, value in query.items()
-            if name in self.grid_axes and value is not None
-        }
+        given = {name: value for name, value in query.items() if value is not None}
+        values = {name: v for name, v in given.items() if name in self.grid_axes}
+        ignored = sorted(given.keys() - self.grid_axes.keys())
+        if ignored:
+            warnings.warn(
+                f"{ignored} are not labels of this grid and are ignored. "
+                "load_models drops a label that is constant across the grid.",
+                UserWarning,
+                stacklevel=4,
+            )
         missing = [
             name
             for name in self._axis_names
@@ -1852,6 +1857,12 @@ class StarGrid:
             (with a relative tolerance of 1e-6 at the edges). Single-valued
             dimensions may be omitted and take their only value.
 
+        Warns
+        -----
+        UserWarning
+            If a label is given that the grid does not have. It is ignored:
+            `load_models` drops a label that is constant across the grid.
+
         See Also
         --------
         get_seds : Generate photometry along with parameter predictions
@@ -1953,6 +1964,11 @@ class StarGrid:
             As in `get_predictions`, or if `dist` is not a finite distance
             greater than 0.
 
+        Warns
+        -----
+        UserWarning
+            As in `get_predictions`.
+
         See Also
         --------
         get_predictions : Get stellar parameters without photometry
@@ -1981,8 +1997,8 @@ class StarGrid:
         """
         if dist is None or not np.isfinite(dist) or dist <= 0:
             raise ValueError(f"dist must be a finite distance > 0 in pc; got {dist}.")
-        # Warning for binary support limitations
-        if smf is not None and smf > 0:
+        # Warning for binary support limitations (a grid without smf ignores it)
+        if smf is not None and smf > 0 and "smf" in self.grid_axes:
             warnings.warn(
                 "Binary star support in StarGrid is limited. Secondary parameters "
                 "(params2) will be empty. For full binary modeling, use StarEvolTrack "

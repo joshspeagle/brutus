@@ -262,6 +262,26 @@ class TestQueryValidation:
         np.testing.assert_allclose(near, edge, rtol=0, atol=1e-6)
 
 
+class TestLabelNotInGrid:
+    """A label that the grid lacks is ignored with a warning, not silently."""
+
+    @pytest.mark.parametrize("use_multilinear", [True, False])
+    def test_label_not_in_the_grid_warns(self, complete_grid, use_multilinear):
+        with pytest.warns(UserWarning, match="afe"):
+            with_afe, _, _ = complete_grid.get_seds(
+                mini=1.0, eep=300.0, feh=0.0, afe=0.4, use_multilinear=use_multilinear
+            )
+        without, _, _ = complete_grid.get_seds(
+            mini=1.0, eep=300.0, feh=0.0, use_multilinear=use_multilinear
+        )
+        np.testing.assert_array_equal(with_afe, without)
+
+    def test_smf_on_a_grid_without_smf_warns_once(self, complete_grid):
+        with pytest.warns(UserWarning) as record:
+            complete_grid.get_seds(mini=1.0, eep=300.0, feh=0.0, smf=0.5)
+        assert len(record) == 1 and "smf" in str(record[0].message)
+
+
 class TestUnspecifiedParameterError:
     """Finding: unspecified multi-valued axes were silently pinned to the
     axis minimum; omission now raises instead (there is no sensible

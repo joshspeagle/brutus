@@ -344,6 +344,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `StarGrid.get_seds` and `get_predictions` warn when a query gives a label
+  that the grid does not have, such as `afe=0.4` on `grid_mist_v9.h5`, where
+  `load_models` drops the constant `afe`. The label was ignored silently,
+  so the result was for [α/Fe] = 0.
 - `StarGrid` builds its grid axes and its KD-tree from finite label values
   only. A NaN label made a one-value axis count as multi-valued, so omitting
   it raised, and it made the KD-tree ignore that axis entirely. A grid
