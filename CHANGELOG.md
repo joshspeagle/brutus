@@ -286,6 +286,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `True` raised for saved `(dists, reds, dreds)` draws given without a
   parallax, where the flag has no effect. `applied_parallax=True` without
   both values now raises only for `(scales, avs, rvs, covs_sar)` input.
+- `dist_vs_red` takes `fig=(fig, ax)` and draws on `ax`, as the other
+  plotting functions do. Without it, it draws on the current axes, as
+  before.
 
 ### Fixed
 
@@ -410,6 +413,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `photometric_offsets`; they relabelled the axes of bins taken over the
   data range. The last bin includes its right edge, as in `np.histogram`;
   the object with the largest x or y was left out of every bin.
+- `posterior_predictive`, `photometric_offsets` and
+  `photometric_offsets_2d` lay out only a figure that they create. With
+  `fig=(fig, ax)`, they called `plt.tight_layout()`, which re-laid out the
+  current figure, not the one passed.
 
 ### Performance
 

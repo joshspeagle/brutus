@@ -131,9 +131,9 @@ def photometric_offsets(
         Keyword arguments to be passed to `~matplotlib.axes.Axes.hist2d`.
 
     fig : (`~matplotlib.figure.Figure`, `~matplotlib.axes.Axes`), optional
-        If provided, overplot the traces and marginalized 1-D posteriors
-        onto the provided figure. Otherwise, by default an
-        internal figure is generated.
+        If provided, draw on the provided axes, one per band, and leave the
+        figure layout unchanged. Otherwise, a new figure is generated and
+        laid out with `~matplotlib.figure.Figure.tight_layout`.
 
     Returns
     -------
@@ -188,7 +188,8 @@ def photometric_offsets(
             magobs = phot - 2.5 * np.log10(offset)
 
     # Generate figure.
-    if fig is None:
+    own_fig = fig is None
+    if own_fig:
         ncols = 5
         nrows = (nfilt - 1) // ncols + 1
         fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 6, nrows * 5))
@@ -253,7 +254,8 @@ def photometric_offsets(
         ax[i].set_frame_on(False)
         ax[i].set_xticks([])
         ax[i].set_yticks([])
-    plt.tight_layout()
+    if own_fig:
+        fig.tight_layout()
 
     return fig, axes
 
@@ -385,9 +387,9 @@ def photometric_offsets_2d(
         Keyword arguments to be passed to `~matplotlib.axes.Axes.imshow`.
 
     fig : (`~matplotlib.figure.Figure`, `~matplotlib.axes.Axes`), optional
-        If provided, overplot the traces and marginalized 1-D posteriors
-        onto the provided figure. Otherwise, by default an
-        internal figure is generated.
+        If provided, draw on the provided axes, one per band, and leave the
+        figure layout unchanged. Otherwise, a new figure is generated and
+        laid out with `~matplotlib.figure.Figure.tight_layout`.
 
     Returns
     -------
@@ -446,7 +448,8 @@ def photometric_offsets_2d(
             dm[~mask[:, i], :, i] = np.nan
 
     # Generate figure.
-    if fig is None:
+    own_fig = fig is None
+    if own_fig:
         ncols = 5
         nrows = (nfilt - 1) // ncols + 1
         fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 15, nrows * 12))
@@ -514,7 +517,8 @@ def photometric_offsets_2d(
         ax[i].set_frame_on(False)
         ax[i].set_xticks([])
         ax[i].set_yticks([])
-    plt.tight_layout()
+    if own_fig:
+        fig.tight_layout()
 
     return fig, axes
 

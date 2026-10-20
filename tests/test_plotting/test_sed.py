@@ -331,6 +331,22 @@ class TestPosteriorPredictive:
 
         plt.close(fig)
 
+    def test_given_figure_leaves_other_figures_unchanged(
+        self, mock_models, sample_indices, sample_parameters
+    ):
+        """Regression (#184): `plt.tight_layout()` re-laid out the current
+        figure, not the figure the caller passed."""
+        reds, dreds, dists = sample_parameters
+        other, _ = plt.subplots(2, 2)
+        before = vars(other.subplotpars).copy()
+        given = plt.subplots(1, 1)
+        plt.figure(other.number)  # make the other figure current
+        posterior_predictive(mock_models, sample_indices, reds, dreds, dists, fig=given)
+        after = vars(other.subplotpars).copy()
+        plt.close(other)
+        plt.close(given[0])
+        assert after == before
+
     def test_posterior_predictive_random_state(
         self, mock_models, sample_indices, sample_parameters
     ):

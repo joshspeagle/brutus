@@ -38,6 +38,7 @@ def dist_vs_red(
     truth_color="red",
     truth_kwargs=None,
     rstate=None,
+    fig=None,
 ):
     """
     Generate a 2-D plot of distance vs reddening.
@@ -131,6 +132,10 @@ def dist_vs_red(
 
     rstate : `~numpy.random.RandomState`, optional
         `~numpy.random.RandomState` instance.
+
+    fig : (`~matplotlib.figure.Figure`, `~matplotlib.axes.Axes`), optional
+        The figure and axes to draw on. Default is the current axes,
+        `~matplotlib.pyplot.gca`.
 
     Returns
     -------
@@ -243,7 +248,8 @@ def dist_vs_red(
     ylims = [yedges[0], yedges[-1]]
 
     # Generate the plot
-    img = plt.imshow(
+    ax = plt.gca() if fig is None else fig[1]
+    img = ax.imshow(
         H.T,
         cmap=cmap,
         aspect="auto",
@@ -252,20 +258,16 @@ def dist_vs_red(
         extent=[xlims[0], xlims[1], ylims[0], ylims[1]],
         **plot_kwargs,
     )
-    plt.xlabel(xlabel)
-    plt.ylabel(ylabel)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
 
     # Add truth values if provided
     if truths is not None:
         if truths[0] is not None:  # x-axis truth
-            try:
-                [plt.axvline(t, color=truth_color, **truth_kwargs) for t in truths[0]]
-            except TypeError:
-                plt.axvline(truths[0], color=truth_color, **truth_kwargs)
+            for t in np.atleast_1d(truths[0]):
+                ax.axvline(t, color=truth_color, **truth_kwargs)
         if truths[1] is not None:  # y-axis truth
-            try:
-                [plt.axhline(t, color=truth_color, **truth_kwargs) for t in truths[1]]
-            except TypeError:
-                plt.axhline(truths[1], color=truth_color, **truth_kwargs)
+            for t in np.atleast_1d(truths[1]):
+                ax.axhline(t, color=truth_color, **truth_kwargs)
 
     return H, xedges, yedges, img

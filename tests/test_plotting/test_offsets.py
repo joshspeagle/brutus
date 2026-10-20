@@ -16,12 +16,6 @@ from brutus.plotting.offsets import photometric_offsets, photometric_offsets_2d
 from brutus.utils.photometry import inv_magnitude
 
 
-@pytest.fixture
-def no_tight_layout(monkeypatch):
-    """Skip text layout, which dominates the run time of the data checks."""
-    monkeypatch.setattr(plt, "tight_layout", lambda *args, **kwargs: None)
-
-
 def _offsets_dataset(nobj=30, nfilt=6, nsamps=8, seed=3):
     """Deterministic synthetic dataset exercised with the real (unmocked)
     get_seds and magnitude."""
@@ -98,7 +92,6 @@ def _panel_hist_arrays(axes, nfilt):
     return out
 
 
-@pytest.mark.usefixtures("no_tight_layout")
 class TestPhotometricOffsetsFixes:
     """Magnitude-space offset arithmetic, integer masks, and finiteness
     selection in photometric_offsets / photometric_offsets_2d."""
@@ -241,7 +234,6 @@ def _run_2d(d, x, y, **kwargs):
     return arrays
 
 
-@pytest.mark.usefixtures("no_tight_layout")
 class TestPhotometricOffsets1D:
     """Histogram weights and binning of `photometric_offsets`."""
 
@@ -331,7 +323,6 @@ class TestPhotometricOffsets1D:
         plt.close(fig)
 
 
-@pytest.mark.usefixtures("no_tight_layout")
 class TestPhotometricOffsets2D:
     """Offset maps of `photometric_offsets_2d`."""
 

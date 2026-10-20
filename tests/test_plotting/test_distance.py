@@ -348,3 +348,14 @@ def test_parallax_of_wrong_shape_raises():
     data = tuple(np.ones((3, 10)) for _ in range(3))
     with pytest.raises(ValueError, match="`parallax`"):
         dist_vs_red(data, parallax=[1.0, 1.0], parallax_err=0.1)
+
+
+def test_draws_on_the_given_axes():
+    data = tuple(np.random.RandomState(1).uniform(1, 2, (3, 50)))
+    other, _ = plt.subplots()
+    fig, ax = plt.subplots()
+    plt.figure(other.number)
+    img = dist_vs_red(data, bins=(5, 4), fig=(fig, ax))[3]
+    plt.close(other)
+    plt.close(fig)
+    assert img.axes is ax and ax.get_xlabel() == r"$\mu$"
