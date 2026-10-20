@@ -336,5 +336,30 @@ class TestMultilinearEquivalence:
         assert 1 not in wmap
 
 
+class TestNonFiniteLabels:
+    """A model with a NaN label is not a grid value on either path."""
+
+    def test_nan_label_does_not_make_an_axis_multivalued(self):
+        grid = _make_grid([(0.5, 200.0, 0.0), (1.0, 200.0, 0.0), (1.0, 300.0, np.nan)])
+        assert list(grid.grid_axes["feh"]) == [0.0]
+        grid.get_seds(mini=1.0, eep=200.0)  # feh is single-valued: may be omitted
+
+    def test_kdtree_ignores_models_with_nan_labels(self):
+        tuples = [(m, e, 0.0) for m in (0.5, 1.0) for e in (200.0, 300.0, 400.0)]
+        grid = _make_grid(tuples + [(1.0, np.nan, 0.0)])
+        low, _ = grid._find_neighbors_kdtree(mini=1.0, eep=200.0, feh=0.0)
+        high, _ = grid._find_neighbors_kdtree(mini=1.0, eep=400.0, feh=0.0)
+        assert low[0] == 3 and high[0] == 5
+        assert 6 not in low and 6 not in high
+
+    def test_grid_without_a_fully_finite_model_raises(self):
+        with pytest.raises(ValueError, match="No model"):
+            _make_grid([(0.5, np.nan, 0.0), (1.0, 200.0, np.nan)])
+
+    def test_axis_without_finite_values_raises(self):
+        with pytest.raises(ValueError, match="feh"):
+            _make_grid([(0.5, 200.0, np.nan), (1.0, 200.0, np.nan)])
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

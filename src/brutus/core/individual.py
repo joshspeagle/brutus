@@ -1336,8 +1336,10 @@ class StarGrid:
     Raises
     ------
     ValueError
-        If no requested filter is in a structured `models` array, or if
-        `filters` does not give one name per filter of `models`.
+        If no requested filter is in a structured `models` array, if
+        `filters` does not give one name per filter of `models`, or if a grid
+        label has no finite value or no model has finite values for all of
+        them.
 
     Notes
     -----
@@ -1492,27 +1494,28 @@ class StarGrid:
         self.grid_axes = {}
         self.grid_shape = []
 
+        # A non-finite label is not a grid value, so the axes and both
+        # neighbour searches use only the models with finite labels
+        valid = np.ones(self.nmodels, dtype=bool)
         for label in self.label_names:
             if label in ["mini", "eep", "feh", "afe", "smf"]:
-                unique_vals = np.unique(self.labels[label])
+                vals = self.labels[label]
+                finite = np.isfinite(vals)
+                unique_vals = np.unique(vals[finite])
+                if unique_vals.size == 0:
+                    raise ValueError(f"Grid label {label} has no finite value.")
                 self.grid_axes[label] = unique_vals
                 self.grid_shape.append(len(unique_vals))
-        # Finite (low, high) of each axis, for checking queries
-        self._axis_range = {
-            name: (np.nanmin(vals), np.nanmax(vals))
-            for name, vals in self.grid_axes.items()
-        }
+                valid &= finite
+        self._finite_rows = np.where(valid)[0]
 
         # Corner-index lookup: axis indices -> model row (first match wins)
         self._axis_names = list(self.grid_axes.keys())
         self._grid_idx_map = None
         if self._axis_names:
-            # Models with non-finite label values are unreachable by an
-            # equality match, so keep them out of the lookup
-            valid = np.ones(self.nmodels, dtype=bool)
-            for name in self._axis_names:
-                valid &= np.isfinite(np.asarray(self.labels[name], dtype=float))
-            rows = np.where(valid)[0]
+            if self._finite_rows.size == 0:
+                raise ValueError("No model has finite values for every grid label.")
+            rows = self._finite_rows
 
             # Per-model axis indices (exact: axes come from np.unique of
             # these same label values)
@@ -1567,7 +1570,10 @@ class StarGrid:
             if name not in values and len(self.grid_axes[name]) > 1
         ]
         if missing:
-            ranges = {name: self._axis_range[name] for name in missing}
+            ranges = {
+                name: (self.grid_axes[name][0], self.grid_axes[name][-1])
+                for name in missing
+            }
             raise ValueError(
                 f"Grid parameter(s) {missing} not specified. These axes span "
                 f"{ranges}. Specify them explicitly."
@@ -1575,7 +1581,7 @@ class StarGrid:
         for name, value in values.items():
             if not np.isfinite(value):
                 raise ValueError(f"{name} must be finite, got {value}.")
-            low, high = self._axis_range[name]
+            low, high = self.grid_axes[name][0], self.grid_axes[name][-1]
             tol = 1e-6 * max(abs(low), abs(high), 1.0)
             if not low - tol <= value <= high + tol:
                 raise ValueError(
@@ -1595,8 +1601,8 @@ class StarGrid:
         for label in ["mini", "eep", "feh", "afe", "smf"]:
             if label not in self.grid_axes:
                 continue
-            vals = self.labels[label]
-            val_min, val_max = vals.min(), vals.max()
+            vals = self.labels[label][self._finite_rows]
+            val_min, val_max = self.grid_axes[label][0], self.grid_axes[label][-1]
             span = val_max - val_min
             self._kdtree_scale[label] = (val_min, span)
             if span > 0:
@@ -1760,10 +1766,11 @@ class StarGrid:
             for label, (val_min, span) in self._kdtree_scale.items()
         ]
 
-        k = min(8, self.nmodels)  # Use up to 8 neighbors
+        k = min(8, len(self._finite_rows))  # Use up to 8 neighbors
         distances, indices = self.kdtree.query(query_point, k=k)
         # A 1-model grid returns scalars
         distances, indices = np.atleast_1d(distances, indices)
+        indices = self._finite_rows[indices]
 
         # Convert distances to weights (inverse distance weighting)
         epsilon = 1e-10

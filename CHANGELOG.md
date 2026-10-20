@@ -344,6 +344,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `StarGrid` builds its grid axes and its KD-tree from finite label values
+  only. A NaN label made a one-value axis count as multi-valued, so omitting
+  it raised, and it made the KD-tree ignore that axis entirely. A grid
+  label with no finite value now raises `ValueError`.
 - `logpost_grid` raises `ValueError` when only one of `parallax` and
   `parallax_err` is given, as `loglike_grid` and `fit` do. It ignored the
   parallax.
