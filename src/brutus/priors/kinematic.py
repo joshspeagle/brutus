@@ -67,20 +67,26 @@ PM_SGRA = (-6.411, -0.219)
 U_SUN = 11.1
 V_PEC_SUN = 12.24
 # Shape of the circular velocity curve, v_c(R) / v_c(R_sun) against
-# R / R_sun, from the measurements in rotation_curve.dat: Sofue & Kohno
+# ln(R / R_sun), from the measurements in rotation_curve.dat: Sofue & Kohno
 # (2025) inside VC_JOIN and Eilers et al. (2019) outside, each scaled by its
-# own (R_sun, v_c,sun). Points with errors above VC_MAX_ERR (km/s) are
-# left out: the Eilers et al. bins beyond 21 kpc have 6-29 km/s. Both
-# sources are smoothed with a Gaussian of VC_SMOOTH (weighted by the
-# errors) and blended across VC_JOIN with a cosine weight, so the slope
-# stays continuous, all in units of R / R_sun.
-# The curve falls linearly to 0 inside the first point and flattens
-# beyond the last.
+# own (R_sun, v_c,sun). Eilers et al. bins with errors above VC_MAX_ERR
+# (km/s) are left out: those beyond 21 kpc have 6-29 km/s. All Sofue &
+# Kohno points are kept; inside 0.4 kpc their errors reach 48 km/s. Both
+# sources are smoothed with a Gaussian, weighted by the errors, of width
+# VC_SMOOTH in ln R (0.24 kpc at 2 kpc) up to VC_SMOOTH_MAX in R / R_sun
+# (1 kpc), reached at 8.3 kpc. Sofue & Kohno are
+# scaled to Eilers et al. at the middle of VC_JOIN (up by 2.2%), and the two
+# are blended across VC_JOIN with a cosine weight, so the slope stays
+# continuous. Inside the first point v_c is proportional to R. The table
+# runs to VC_EXTEND smoothing widths beyond the last point (37 kpc), where
+# the slope is below 1e-8, and v_c is flat beyond it.
 VC_SOURCES = ((8.178, 235.1), (8.122, 229.0))
 VC_MAX_ERR = 5.0
-VC_SMOOTH = 1.0 / 8.2
-VC_JOIN = (4.5 / 8.2, 5.5 / 8.2)
-_VC_DX = 0.002
+VC_SMOOTH = 0.12
+VC_SMOOTH_MAX = 1.0 / 8.2
+VC_JOIN = (log(4.5 / 8.2), log(5.5 / 8.2))
+VC_EXTEND = 12.0
+_VC_DU = 0.002
 
 # Thin-disk dispersion relations, (sigma_R, sigma_z) pairs (Sharma et al.
 # 2021, eqs. 3-7 and Table 2): sigma at 10 Gyr, solar L_z, [Fe/H] = 0 and
@@ -185,46 +191,59 @@ def solar_velocity(R_solar=8.2, pm_sgra=PM_SGRA, U_sun=U_SUN):
 
 
 def _rotation_curve_table():
-    """Return the shape of v_c and its slope on a grid of R / R_sun."""
+    """Return ln(R / R_sun) of the first grid point, the shape of v_c and
+    its slope per grid step on a grid uniform in ln(R / R_sun)."""
     data = np.loadtxt(os.path.join(os.path.dirname(__file__), "rotation_curve.dat"))
     R, v, err, src = data[(data[:, 2] <= VC_MAX_ERR) | (data[:, 3] == 0)].T
     src = src.astype(int)
     R_sun, vc_sun = (np.array(c)[src] for c in zip(*VC_SOURCES))
-    x, shape = R / R_sun, v / vc_sun
-    grid = np.arange(0.0, x.max() + 3.0 * VC_SMOOTH, _VC_DX)
+    u, shape = np.log(R / R_sun), v / vc_sun
+
+    def width(u):
+        return np.minimum(VC_SMOOTH, VC_SMOOTH_MAX * np.exp(-u))
+
+    grid = np.arange(u.min(), u.max() + VC_EXTEND * width(u.max()), _VC_DU)
+    sigma = width(grid)[:, None]
 
     def smooth(sel):
-        w = np.exp(-0.5 * ((x[sel] - grid[:, None]) / VC_SMOOTH) ** 2) / err[sel] ** 2
+        q = -0.5 * ((u[sel] - grid[:, None]) / sigma) ** 2
+        # Far from the points the weights underflow; only their ratios count.
+        w = np.exp(q - q.max(1, keepdims=True)) / err[sel] ** 2
         return (w * shape[sel]).sum(1) / w.sum(1)
 
+    inner, outer = smooth(src == 0), smooth(src == 1)
+    mid = 0.5 * (VC_JOIN[0] + VC_JOIN[1])
+    inner *= np.interp(mid, grid, outer) / np.interp(mid, grid, inner)
     t = np.clip((grid - VC_JOIN[0]) / (VC_JOIN[1] - VC_JOIN[0]), 0.0, 1.0)
     blend = 0.5 - 0.5 * np.cos(np.pi * t)
-    curve = (1.0 - blend) * smooth(src == 0) + blend * smooth(src == 1)
-    x0 = x[src == 0].min()
-    inner = grid < x0
-    curve[inner] = np.interp(x0, grid, curve) * grid[inner] / x0
-    curve /= np.interp(1.0, grid, curve)
-    return curve, np.gradient(curve, _VC_DX)
+    curve = (1.0 - blend) * inner + blend * outer
+    curve /= np.interp(0.0, grid, curve)
+    return grid[0], curve, np.gradient(curve)
 
 
-_VC_SHAPE, _VC_SLOPE = _rotation_curve_table()
+_VC_U0, _VC_SHAPE, _VC_SLOPE = _rotation_curve_table()
 
 
 @jit(nopython=True, cache=True)
 def _circular_velocity(R, R_solar, vc_solar):
     """Return v_c(R) and d ln v_c / d ln R.
 
-    The shape is interpolated in _VC_SHAPE with cubic Hermite polynomials,
-    whose slopes are _VC_SLOPE, so v_c and its derivative are continuous.
+    The shape is interpolated in _VC_SHAPE, against ln(R / R_solar), with
+    cubic Hermite polynomials whose slopes are _VC_SLOPE (per grid step),
+    so v_c and its derivative are continuous.
     """
-    y = R / R_solar / _VC_DX
+    if R <= 0.0:
+        return 0.0, 1.0
+    y = (log(R / R_solar) - _VC_U0) / _VC_DU
+    if y <= 0.0:
+        return vc_solar * _VC_SHAPE[0] * exp(_VC_DU * y), 1.0
     n = len(_VC_SHAPE) - 1
     if y >= n:
         return vc_solar * _VC_SHAPE[n], 0.0
     i = int(y)
     w = y - i
     p0, p1 = _VC_SHAPE[i], _VC_SHAPE[i + 1]
-    m0, m1 = _VC_SLOPE[i] * _VC_DX, _VC_SLOPE[i + 1] * _VC_DX
+    m0, m1 = _VC_SLOPE[i], _VC_SLOPE[i + 1]
     w2, w3 = w * w, w * w * w
     s = (
         (2.0 * w3 - 3.0 * w2 + 1.0) * p0
@@ -238,8 +257,7 @@ def _circular_velocity(R, R_solar, vc_solar):
         + (6.0 * w - 6.0 * w2) * p1
         + (3.0 * w2 - 2.0 * w) * m1
     )
-    # Inside the first point the curve is linear, so d ln v_c / d ln R = 1.
-    return vc_solar * s, (y * ds_dy / s if s > 0.0 else 1.0)
+    return vc_solar * s, ds_dy / (_VC_DU * s)
 
 
 @jit(nopython=True, cache=True)
@@ -306,9 +324,8 @@ def _thin_disk_L_refs(R_solar, vc_solar):
 @jit(nopython=True, cache=True)
 def _thin_disk_fL(L, L_solar, L_range):
     """Return the Sharma et al. (2021) f_L of sigma_R and of sigma_z, and
-    d ln f_L(sigma_R) / d ln L_z, which is 0 where L_z is clamped to
-    ``L_range`` (L_z at the ends of THIN_DISK_R_RANGE)."""
-    inside = L_range[0] < L < L_range[1]
+    d ln f_L(sigma_R) / d ln L_z, with L_z clamped to ``L_range`` (L_z of
+    circular orbits at the ends of THIN_DISK_R_RANGE)."""
     L = min(max(L, L_range[0]), L_range[1])
     u2 = (L / L_solar) ** 2
     a_R, a_z = THIN_DISK_ALPHA_L
@@ -316,39 +333,48 @@ def _thin_disk_fL(L, L_solar, L_range):
     e_R = exp(-(L - L_solar) / lam_R)
     f_R = (a_R * u2 + e_R) / (1.0 + a_R)
     f_z = (a_z * u2 + exp(-(L - L_solar) / lam_z)) / (1.0 + a_z)
-    if not inside:
-        return f_R, f_z, 0.0
     return f_R, f_z, (2.0 * a_R * u2 - (L / lam_R) * e_R) / ((1.0 + a_R) * f_R)
 
 
 @jit(nopython=True, cache=True)
 def _thin_disk_radial(R, abs_z, sig_R0, vc, dlnvc, L, L_solar, L_range, dlnnu_dlnR):
-    """Return (v_phi, var_R, var_phi) of the thin disk for f_L at ``L``.
+    """Return (v_phi, var_R, var_phi, f_L of sigma_z) of the thin disk for
+    f_L at ``L``.
 
     sigma_phi follows the epicyclic ratio
     sigma_phi^2 / sigma_R^2 = (1 + d ln v_c / d ln R) / 2, and
     d ln L_z / d ln R is taken as that of a circular orbit, 1 + d ln v_c /
-    d ln R; against the exact Jeans solution for the mean L_z this moves
-    v_phi by up to 2.2 km/s at 3 < R < 20 kpc.
+    d ln R. For R_solar = 8.2 kpc, |z| <= 1 kpc and -1 <= [Fe/H] <= 0.5,
+    the derivative of the mean L_z itself would move v_phi by up to
+    3.5 km/s at 3.2 < R < 19.8 kpc, most for old metal-poor stars near
+    5 kpc, where v_c changes fastest. Outside THIN_DISK_R_RANGE the
+    Jeans equation takes the dispersions as constant in R. These edges are
+    in R, not L_z, so v_phi is continuous in L_z and the fixed point in
+    ``_thin_disk_mean_L`` converges.
     """
-    f_R, _, dlnf_R = _thin_disk_fL(L, L_solar, L_range)
+    f_R, f_z, dlnf_R = _thin_disk_fL(L, L_solar, L_range)
     sig_R = sig_R0 * f_R * (1.0 + THIN_DISK_GAMMA_Z[0] * abs_z)
     var_R = sig_R * sig_R
     var_phi = 0.5 * var_R * (1.0 + dlnvc)
-    dlnvar_dlnR = 2.0 * dlnf_R * (1.0 + dlnvc)
-    return _jeans_vphi(var_R, var_phi, dlnvar_dlnR, dlnnu_dlnR, vc), var_R, var_phi
+    lo, hi = THIN_DISK_R_RANGE
+    dlnvar_dlnR = 2.0 * dlnf_R * (1.0 + dlnvc) if lo < R < hi else 0.0
+    vphi = _jeans_vphi(var_R, var_phi, dlnvar_dlnR, dlnnu_dlnR, vc)
+    return vphi, var_R, var_phi, f_z
 
 
 @jit(nopython=True, cache=True)
 def _thin_disk_mean_L(R, abs_z, sig_R0, vc, dlnvc, L_solar, L_range, dlnnu_dlnR):
     """Return the mean L_z = R v_phi of a thin-disk population.
 
-    Two steps of the fixed point L_z = R v_phi(L_z) from the circular
-    L_z = R v_c. Against the converged L_z, f_L is within 0.5% at
-    0.5 < R < 25 kpc and |z| < 3 kpc for all ages; one step gives 2.6%.
+    Three steps of the fixed point L_z = R v_phi(L_z) from the circular
+    L_z = R v_c. For R_solar = 8.2 kpc, 0.5 < R < 25 kpc, all ages and
+    -1 < [Fe/H] < 0.5, f_L of sigma_R is then within 0.06% of the
+    converged value at |z| < 1 kpc and 1% at |z| < 3 kpc. Where several
+    L_z solve it (old, metal-poor stars beyond 11 kpc), the steps approach
+    the largest, the solution connected to circular orbits.
     """
     L = R * vc
-    for _ in range(2):
+    for _ in range(3):
         L = (
             R
             * _thin_disk_radial(
@@ -371,10 +397,9 @@ def _thin_disk_moments(
     THIN_DISK_R_RANGE; beyond them L_z keeps its edge value.
     """
     L = _thin_disk_mean_L(R, abs_z, sig_R0, vc, dlnvc, L_solar, L_range, dlnnu_dlnR)
-    vphi, var_R, var_phi = _thin_disk_radial(
+    vphi, var_R, var_phi, f_z = _thin_disk_radial(
         R, abs_z, sig_R0, vc, dlnvc, L, L_solar, L_range, dlnnu_dlnR
     )
-    f_z = _thin_disk_fL(L, L_solar, L_range)[1]
     sig_z = sig_z0 * f_z * (1.0 + THIN_DISK_GAMMA_Z[1] * abs_z)
     return vphi, var_R, var_phi, sig_z * sig_z
 
@@ -601,12 +626,14 @@ def thin_disk_velocity_moments(
     + e^{-(L_z - L_{z,\odot})/\lambda_{L,v}}] / (1 + \alpha_{L,v})`. The
     :math:`L_{z,\odot} = R_\odot v_c(R_\odot)`. :math:`L_z` is the mean
     angular momentum of the population, :math:`R\,\bar{v}_\phi`, with
-    :math:`\bar{v}_\phi` from the Jeans equation below (two steps of the
-    fixed point from the circular :math:`L_z = R\,v_c`). The relations were
-    fitted at 3 < R < 20 kpc and -1 < [Fe/H] < 0.5: :math:`L_z` is clamped
-    to the circular :math:`L_z` at those radii and [Fe/H] to that range, so
-    the dispersions do not extrapolate. The azimuthal dispersion follows the
-    epicyclic ratio
+    :math:`\bar{v}_\phi` from the Jeans equation below (three steps of
+    the fixed point from the circular :math:`L_z = R\,v_c`). The relations
+    were fitted at 3 < R < 20 kpc and -1 < [Fe/H] < 0.5: :math:`L_z` is
+    clamped to the circular :math:`L_z` at those radii and [Fe/H] to that
+    range, so the dispersions do not extrapolate, and the Jeans equation
+    takes them as constant in R outside those radii. :math:`\bar{v}_\phi`
+    therefore steps at the edges, by up to 10 km/s at 3 kpc for old stars.
+    The azimuthal dispersion follows the epicyclic ratio
     :math:`\sigma_\phi^2 / \sigma_R^2 = (1 + d\ln v_c / d\ln R) / 2`.
 
     The mean rotation is the radial Jeans solution (Binney & Tremaine 2008,
@@ -620,8 +647,9 @@ def thin_disk_velocity_moments(
 
     with the measured circular velocity :math:`v_c(R)`: Sofue & Kohno
     (2025) inside 5 kpc and Eilers et al. (2019) outside, each scaled to
-    :math:`v_{c,\odot}` at :math:`R_\odot`, smoothed over 1 kpc and
-    flat beyond 21 kpc (``rotation_curve.dat``). The mean rotation is
+    :math:`v_{c,\odot}` at :math:`R_\odot`, smoothed with a Gaussian of
+    width 12% of R up to 1 kpc, and flattening beyond the last measurement
+    at 21 kpc (``rotation_curve.dat``). The mean rotation is
     clipped to :math:`[0, v_c]`: the Jeans equation has no
     solution where the right-hand side is negative, and near the centre,
     where the density gradient vanishes, it gives rotation faster than
@@ -715,7 +743,8 @@ def thick_disk_velocity_moments(
     The defaults are the high-[alpha/Fe] dispersions of Anguiano et al.
     (2020, Table 1) and the e-folding length of Mackereth et al. (2019).
     Beyond 4 < R < 13 kpc, the radii of the Mackereth et al. sample, the
-    dispersions keep their values at the edges. The mean rotation is the radial Jeans solution of
+    dispersions keep their values at the edges, so the mean rotation
+    steps there by 10 km/s. The mean rotation is the radial Jeans solution of
     `thin_disk_velocity_moments`, with
     :math:`\partial \ln \sigma_R^2 / \partial \ln R = -2R / R_\sigma`.
     With the defaults, :math:`\bar{v}_\phi = 191` km/s at the Sun;
