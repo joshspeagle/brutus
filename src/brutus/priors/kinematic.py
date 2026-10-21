@@ -101,6 +101,8 @@ THICK_DISK_R_RANGE = (4.0, 13.0)
 # centres of the radial bins in kpc; weight of the isotropic component;
 # its radial and tangential dispersions; the dispersions of the two equal
 # radial lobes, their separation from v_r = 0 and their mean v_phi; km/s.
+# Lancaster et al. take v_phi < 0 for disc rotation, so the lobe v_phi here
+# is their value with the sign changed.
 HALO_R = (9.0, 16.15, 24.6, 48.965)
 HALO_F_ISO = (0.52, 0.55, 0.55, 0.96)
 HALO_SIGMA_R_ISO = (129.24, 122.03, 113.62, 95.21)
@@ -108,7 +110,7 @@ HALO_SIGMA_T_ISO = (114.27, 105.41, 96.72, 79.33)
 HALO_SIGMA_R_LOBE = (109.93, 78.21, 62.91, 176.36)
 HALO_SIGMA_T_LOBE = (58.18, 34.02, 29.14, 145.69)
 HALO_DELTA_LOBE = (104.16, 98.60, 67.75, 82.87)
-HALO_V_PHI_LOBE = (-4.49, 11.54, 14.13, -27.39)
+HALO_V_PHI_LOBE = (4.49, -11.54, -14.13, 27.39)
 
 # Vertical potential, in the form of Kuijken & Gilmore (1989):
 # K_z = 2 pi G [Sigma_0 z / sqrt(z^2 + D^2) + 2 rho_DM z]. Sigma_0 and D
