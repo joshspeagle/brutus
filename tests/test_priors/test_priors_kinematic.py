@@ -16,7 +16,6 @@ from brutus.priors.kinematic import (
     HALO_SIGMA_R_LOBE,
     HALO_SIGMA_T_ISO,
     HALO_SIGMA_T_LOBE,
-    HALO_V_PHI_LOBE,
     PM_SGRA,
     THICK_DISK_R_RANGE,
     THIN_DISK_R_RANGE,
@@ -259,7 +258,9 @@ def test_halo_components_reproduce_the_lancaster_table_at_the_bin_centres():
     np.testing.assert_allclose(mean[:, 0], 0.0)
     for k, sign in ((1, 1.0), (2, -1.0)):
         np.testing.assert_allclose(mean[:, k, 0], sign * np.array(HALO_DELTA_LOBE))
-        np.testing.assert_allclose(mean[:, k, 1], HALO_V_PHI_LOBE)
+        # Lancaster et al. print mu_vphi = (-4.49, 11.54, 14.13, -27.39)
+        # with v_phi < 0 for disc rotation; here v_phi > 0 is rotation.
+        np.testing.assert_allclose(mean[:, k, 1], [4.49, -11.54, -14.13, 27.39])
         np.testing.assert_allclose(mean[:, k, 2], 0.0, atol=1e-12)
     np.testing.assert_allclose(cov[:, 0, 0, 0], np.square(HALO_SIGMA_R_ISO))
     np.testing.assert_allclose(cov[:, 0, 2, 2], np.square(HALO_SIGMA_T_ISO))
