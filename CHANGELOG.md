@@ -312,6 +312,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `BruteForce.loglike_grid` and `logpost_grid` no longer accept unused
   `**kwargs`, so a misspelled keyword such as `av_gaus` raises `TypeError`.
   Before, it was dropped and the default applied.
+- astropy 6.1 or later is a declared dependency (`brutus.dust` imports
+  it).
 - Python 3.10 or later and numpy 2.0 or later are required (the floors were 3.9
   and 1.19). Python 3.9 is past its end of life, and no astropy release for
   Python 3.9 supports numpy 2.
