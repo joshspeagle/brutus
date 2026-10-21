@@ -138,6 +138,10 @@ q16, q50, q84 = quantile(data, [0.16, 0.5, 0.84], weights=weights)
 ```
 
 ```{eval-rst}
+.. autofunction:: pm_equatorial_to_galactic
+```
+
+```{eval-rst}
 .. autofunction:: inverse3
 ```
 

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`brutus.priors.kinematic`** gives the velocity ellipsoids of the thin
+  disk, thick disk and halo, the solar velocity from the Sgr A* proper
+  motion, and the projection of an ellipsoid to Galactic proper motions
+  and radial velocity. The disk rotation follows the radial Jeans equation
+  with the `logn_disk` density. `brutus.utils.pm_equatorial_to_galactic`
+  converts Gaia proper motions and their covariance to Galactic
+  coordinates. The fit does not use them yet (#275).
+
 ### Fixed — statistical correctness *(output-changing)*
 
 - **The `max_models` cap no longer biases the posterior.** Above the
