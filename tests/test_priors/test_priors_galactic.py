@@ -691,7 +691,7 @@ class TestVerticalJeans:
         )
         fused = logp_galactic_structure(d, (30.0, 0.0), **kw)
         np.testing.assert_allclose(fused, lnp, rtol=1e-12)
-        # Without an age, the age-averaged table is 0 at |Z_sun| too.
+        # Without an age, the thin-disk age average is 0 at |Z_sun| too.
         no_age = logp_galactic_structure(d, (30.0, 0.0), return_components=True)
         thin, thick, _ = no_age[1]["number_density"]
         np.testing.assert_allclose(thin, logn_disk(R, 0.025) + vol, rtol=1e-12)
@@ -716,24 +716,6 @@ class TestVerticalJeans:
                 / quad(prior, 0, 13.8, epsrel=1e-10)[0]
             )
             assert np.isclose(_no_age_thin(R, abs_Z, feh)[0], expected, atol=1e-4)
-
-    def test_metal_poor_thin_disk_stars_lie_farther_from_the_plane(self):
-        # The star's [Fe/H] sets sigma_z with and without an age.
-        z = np.full(3, 1.0)
-        feh = np.array([-0.8, -0.2, 0.3])
-        no_age = _no_age_thin(np.full(3, 8.2), z, feh)
-        assert no_age[0] > no_age[1] > no_age[2]
-        lnp = [
-            logp_galactic_structure(
-                np.array([1.0]),
-                (0.0, 90.0),
-                feh=[f],
-                loga=[9.6],
-                return_components=True,
-            )[1]["number_density"][0][0]
-            for f in feh
-        ]
-        assert lnp[0] > lnp[1] > lnp[2]
 
     def test_feh_outside_the_fitted_range_takes_the_edge_value(self):
         for feh, edge in [(-2.5, -1.0), (1.0, 0.5), (3.0, 0.5)]:

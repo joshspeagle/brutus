@@ -59,6 +59,7 @@ Combined Galactic structure prior:
 >>> log_prior = logp_galactic_structure(distances, coord)
 """
 
+from functools import lru_cache
 from math import exp, log, pi, sqrt
 
 import numpy as np
@@ -103,16 +104,23 @@ def _logsumexp3(a, b, c):
 _AGE_NODES = 16
 
 
+@lru_cache(maxsize=16)
 def _thin_age_nodes(feh_thin, age_args):
     """Return the thin-disk sigma_z model at [Fe/H] = 0 for each node of
     the age average, and the log weights of the nodes, which sum to 1 under
-    the age prior ``logp_age_from_feh(age, feh_thin, *age_args)``."""
+    the age prior ``logp_age_from_feh(age, feh_thin, *age_args)``. The
+    arrays are read-only, because the cache returns them to every caller."""
     max_age, min_age = age_args[:2]
     x, w = np.polynomial.legendre.leggauss(_AGE_NODES)
     ages = 0.5 * (max_age - min_age) * (x + 1.0) + min_age
     ln_w = np.log(w) + logp_age_from_feh(ages, feh_thin, *age_args)
-    sig_age = np.array([_thin_disk_sigma0(a, 0.0)[1] for a in ages])
-    return sig_age, ln_w - np.logaddexp.reduce(ln_w)
+    nodes = (
+        np.array([_thin_disk_sigma0(a, 0.0)[1] for a in ages]),
+        ln_w - np.logaddexp.reduce(ln_w),
+    )
+    for a in nodes:
+        a.flags.writeable = False
+    return nodes
 
 
 @jit(nopython=True, cache=True)
@@ -146,35 +154,37 @@ def _disk_vertical_terms(
 ):
     """Return ln nu(|Z|) - ln nu(|Z_sun|) of the thin and thick disks.
 
-    With an age, the thin disk uses that age's vertical dispersion. Without
-    one, it averages the profile over the age nodes ``age_sig`` and ``age_ln_w``
-    from ``_thin_age_nodes``; [Fe/H] enters both. ``solar`` comes from
+    The thin disk is ln sum_k w_k nu_k over age nodes: without an age, the
+    nodes ``age_sig`` and ``age_ln_w`` from ``_thin_age_nodes``; with one,
+    that age alone. [Fe/H] scales sigma_z in both. ``solar`` comes from
     ``_vertical_solar``.
     """
     L_solar, L_lo, L_hi, t0, t1, t2, p0, p1 = solar
     L_range, thin_solar, phi_solar = (L_lo, L_hi), (t0, t1, t2), (p0, p1)
     S = _potential_scale(R, rot[0])
     vc = _circular_velocity(R, *rot)[0]
-    f_L = _thin_disk_fL(R * vc, L_solar, L_range)[1]
+    scale = _thin_disk_feh_factor(feh)[1] * _thin_disk_fL(R * vc, L_solar, L_range)[1]
     terms = _thin_disk_integrals(abs_Z)
-    if has_age:
-        sig_z0 = _thin_disk_sigma0(age, feh)[1] * f_L
-        thin = _thin_disk_vertical(terms, thin_solar, sig_z0, S)
-    else:
-        # ln sum_k w_k nu_k, accumulated with a running maximum.
-        scale = _thin_disk_feh_factor(feh)[1] * f_L
-        mx = LOG_ZERO
-        acc = 0.0
-        for k in range(len(age_sig)):
+    # Running-maximum logsumexp over the nodes, started at the first node.
+    thin = 0.0
+    acc = 1.0
+    for k in range(1 if has_age else len(age_sig)):
+        if has_age:
+            v = _thin_disk_vertical(
+                terms, thin_solar, _thin_disk_sigma0(age, 0.0)[1] * scale, S
+            )
+        else:
             v = age_ln_w[k] + _thin_disk_vertical(
                 terms, thin_solar, age_sig[k] * scale, S
             )
-            if v > mx:
-                acc = acc * exp(mx - v) + 1.0
-                mx = v
-            else:
-                acc += exp(v - mx)
-        thin = mx + log(acc)
+        if k == 0:
+            thin = v
+        elif v > thin:
+            acc = acc * exp(thin - v) + 1.0
+            thin = v
+        else:
+            acc += exp(v - thin)
+    thin += log(acc)
     var_z = thick_var_z * _thick_disk_scale(R, thick_R_sigma, rot[0])
     thick = _thick_disk_vertical(_vertical_potential(abs_Z), phi_solar, var_z, S)
     return thin, thick
@@ -1062,9 +1072,16 @@ def logp_galactic_structure(
     )
     thick = (float(thick_sigma_z) ** 2, float(thick_R_sigma))
     if loga is None:
-        age_args = (max_age, min_age, feh_age_ctr, feh_age_scale)
-        age_args += (nsigma_from_max_age, max_sigma, min_sigma)
-        age_nodes = _thin_age_nodes(feh_thin, age_args)
+        age_args = (
+            max_age,
+            min_age,
+            feh_age_ctr,
+            feh_age_scale,
+            nsigma_from_max_age,
+            max_sigma,
+            min_sigma,
+        )
+        age_nodes = _thin_age_nodes(float(feh_thin), tuple(map(float, age_args)))
     else:
         age_nodes = (np.empty(0), np.empty(0))
 
