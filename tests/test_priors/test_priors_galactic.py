@@ -54,11 +54,14 @@ def _phi(abs_z, S):
     return quad(lambda t: _Kz(t, S), 0, abs_z * 1000.0, **_QUAD)[0]
 
 
-def _no_age_thin(R, abs_Z, feh):
+_AGE_ARGS = (13.8, 0.0, -0.5, 0.5, 2.0, 4.0, 1.0)
+
+
+def _no_age_thin(R, abs_Z, feh, age_args=_AGE_ARGS):
     """Thin-disk ln nu(|Z|) - ln nu(|Z_sun|) without an age, from the
-    production kernel at the default parameters."""
+    production kernel, with the thin-disk age prior at feh_thin = -0.2."""
     rot = (8.2, _VC_SUN, kin.DVCIRC_DR, kin.VC_TAPER)
-    nodes = gal._thin_age_nodes(-0.2, (13.8, 0.0, -0.5, 0.5, 2.0, 4.0, 1.0))
+    nodes = gal._thin_age_nodes(-0.2, age_args)
     R, abs_Z, feh = (np.atleast_1d(np.asarray(x, dtype=float)) for x in (R, abs_Z, feh))
     args = (R, abs_Z, 0.025, np.empty(0), feh, False, rot, 1.0, 1.0)
     return gal._disk_vertical_array(*args, *nodes)[0]
@@ -662,7 +665,8 @@ class TestVerticalJeans:
     def test_vertical_kernels_match_quadrature(self, abs_z, S):
         # Beyond 10 kpc the thin-disk kernel leaves its table.
         zero = kin._thin_disk_integrals(0.0)
-        thin = kin._thin_disk_vertical(kin._thin_disk_integrals(abs_z), zero, 20.0, S)
+        a, b = kin._thin_disk_vertical(kin._thin_disk_integrals(abs_z), zero, S)
+        thin = a - b / 20.0**2
         assert np.isclose(thin, _thin_lnnu(abs_z, S, 20.0), rtol=1e-8)
         zero = kin._vertical_potential(0.0)
         thick = kin._thick_disk_vertical(
@@ -697,13 +701,18 @@ class TestVerticalJeans:
         np.testing.assert_allclose(thin, logn_disk(R, 0.025) + vol, rtol=1e-12)
 
     @pytest.mark.parametrize("feh", [-0.8, -0.2, 0.3])
-    def test_age_average_matches_quadrature_over_ages(self, feh):
+    @pytest.mark.parametrize(
+        "age_args", [_AGE_ARGS, (13.8, 0.0, -0.5, 0.5, 2.0, 0.5, 0.3)]
+    )
+    def test_age_average_matches_quadrature_over_ages(self, feh, age_args):
         # Without an age, the thin disk averages over the age prior of the
         # thin disk (at feh_thin), with the star's own [Fe/H] in sigma_z.
+        # The second prior is narrow (sigma of 0.5 Gyr), where the nodes
+        # must sit on its support.
         def prior(age):
-            return np.exp(logp_age_from_feh(np.array([age]), -0.2)[0])
+            return np.exp(logp_age_from_feh(np.array([age]), -0.2, *age_args)[0])
 
-        for R, abs_Z in [(4.0, 0.5), (8.25, 0.3), (8.25, 2.0), (15.0, 1.0)]:
+        for R, abs_Z in [(4.0, 0.5), (8.25, 0.3), (8.25, 2.0), (15.0, 1.0), (8.2, 6.0)]:
 
             def weighted(age):
                 args = np.array([R]), np.array([abs_Z]), np.array([age])
@@ -711,11 +720,12 @@ class TestVerticalJeans:
                     _vertical_reference(*args, np.array([feh]))[0][0]
                 )
 
+            kw = dict(epsrel=1e-10, limit=200, points=[1.0, 4.0, 8.0, 12.0])
             expected = np.log(
-                quad(weighted, 0, 13.8, epsrel=1e-10)[0]
-                / quad(prior, 0, 13.8, epsrel=1e-10)[0]
+                quad(weighted, 0, 13.8, **kw)[0] / quad(prior, 0, 13.8, **kw)[0]
             )
-            assert np.isclose(_no_age_thin(R, abs_Z, feh)[0], expected, atol=1e-4)
+            no_age = _no_age_thin(R, abs_Z, feh, age_args)[0]
+            assert np.isclose(no_age, expected, rtol=0, atol=1e-6)
 
     def test_feh_outside_the_fitted_range_takes_the_edge_value(self):
         for feh, edge in [(-2.5, -1.0), (1.0, 0.5), (3.0, 0.5)]:
@@ -767,6 +777,14 @@ class TestVerticalInputs:
             logp_galactic_structure(np.array([1.0]), (x, 30.0), **kw)[0] for x in ell
         ]
         np.testing.assert_allclose(lnp, each, rtol=1e-12)
+
+    @pytest.mark.parametrize("name", ["feh", "loga"])
+    @pytest.mark.parametrize("value", [np.nan, np.inf])
+    def test_non_finite_labels_raise(self, name, value):
+        kw = dict(feh=np.array([0.0]), loga=np.array([9.0]))
+        kw[name] = np.array([value])
+        with pytest.raises(ValueError, match=name):
+            logp_galactic_structure(np.array([1.0]), (0.0, 30.0), **kw)
 
     @pytest.mark.parametrize("name", ["R_taper", "thick_sigma_z", "thick_R_sigma"])
     @pytest.mark.parametrize("value", [0.0, -2.0])

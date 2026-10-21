@@ -225,16 +225,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (2015). The thin disk takes the vertical dispersion of the star's age
   and [Fe/H] (Sharma et al. 2021), so a 1 Gyr star lies closer to the
   midplane than a 10 Gyr star. Without an age, it averages over the
-  thin-disk age prior; the star's [Fe/H] enters with or without an age. The thick disk is isothermal. In the plane of the
-  Sun the prior does not change; above it, the age-averaged thin disk
-  falls by e in 0.32 kpc and the thick disk in 0.99 kpc. `Z_thin` and
-  `Z_thick` are removed. The new keywords `thick_sigma_z` and
-  `thick_R_sigma` set the thick disk, and `v_circ_solar`, `dvcirc_dR`
-  and `R_taper` the rotation curve. To change the thick disk height,
-  pass a smaller `thick_sigma_z` instead of `Z_thick`. The thin-disk
-  dispersions, here and in `thin_disk_velocity_moments`, hold [Fe/H] at
-  -1 or 0.5 outside that range, where Sharma et al. (2021) fitted them
-  (#283).
+  thin-disk age prior; the star's [Fe/H] enters with or without an age.
+  The thick disk is isothermal. In the plane of the Sun the prior does
+  not change; above it, the age-averaged thin disk falls by e in
+  0.32 kpc and the thick disk in 0.99 kpc. `Z_thin` and `Z_thick` are
+  removed. The new keywords `thick_sigma_z` and `thick_R_sigma` set the
+  thick disk, and `v_circ_solar`, `dvcirc_dR` and `R_taper` the rotation
+  curve. To change the thick disk height, pass a smaller `thick_sigma_z`
+  instead of `Z_thick`. The thin-disk dispersions, here and in
+  `thin_disk_velocity_moments`, hold [Fe/H] at -1 or 0.5 outside that
+  range, where Sharma et al. (2021) fitted them. A non-finite `feh` or
+  `loga` now raises `ValueError` (#283).
 - **`load_models` keeps constant grid labels.** It returned no `afe` column
   for a single-afe grid under the default labels, and no `smf` column
   without `include_binaries`. Both are now one-value columns, so

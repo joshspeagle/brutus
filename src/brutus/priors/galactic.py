@@ -100,22 +100,28 @@ def _logsumexp3(a, b, c):
 
 
 # Gauss-Legendre nodes for the average over the thin-disk age prior, used
-# when no age is given. 16 nodes give ln nu to 1e-5 at 0.1 to 8 kpc.
-_AGE_NODES = 16
+# when no age is given. They span the ages where the prior is within e^-40
+# of its peak, so a narrow prior is resolved as well as a wide one.
+_AGE_NODES = 32
 
 
 @lru_cache(maxsize=16)
 def _thin_age_nodes(feh_thin, age_args):
-    """Return the thin-disk sigma_z model at [Fe/H] = 0 for each node of
-    the age average, and the log weights of the nodes, which sum to 1 under
-    the age prior ``logp_age_from_feh(age, feh_thin, *age_args)``. The
-    arrays are read-only, because the cache returns them to every caller."""
+    """Return 1 / sigma_z^2 of the thin-disk model at [Fe/H] = 0 for each
+    node of the age average, and the log weights of the nodes, whose
+    exponentials sum to 1 under the age prior
+    ``logp_age_from_feh(age, feh_thin, *age_args)``. The arrays are
+    read-only, because the cache returns them to every caller."""
     max_age, min_age = age_args[:2]
+    grid = np.linspace(min_age, max_age, 2001)
+    lnp = logp_age_from_feh(grid, feh_thin, *age_args)
+    keep = np.flatnonzero(lnp > lnp.max() - 40.0)
+    lo, hi = grid[max(keep[0] - 1, 0)], grid[min(keep[-1] + 1, grid.size - 1)]
     x, w = np.polynomial.legendre.leggauss(_AGE_NODES)
-    ages = 0.5 * (max_age - min_age) * (x + 1.0) + min_age
+    ages = 0.5 * (hi - lo) * (x + 1.0) + lo
     ln_w = np.log(w) + logp_age_from_feh(ages, feh_thin, *age_args)
     nodes = (
-        np.array([_thin_disk_sigma0(a, 0.0)[1] for a in ages]),
+        np.array([_thin_disk_sigma0(a, 0.0)[1] ** -2 for a in ages]),
         ln_w - np.logaddexp.reduce(ln_w),
     )
     for a in nodes:
@@ -149,42 +155,39 @@ def _disk_vertical_terms(
     solar,
     thick_var_z,
     thick_R_sigma,
-    age_sig,
+    age_ivar,
     age_ln_w,
 ):
     """Return ln nu(|Z|) - ln nu(|Z_sun|) of the thin and thick disks.
 
-    The thin disk is ln sum_k w_k nu_k over age nodes: without an age, the
-    nodes ``age_sig`` and ``age_ln_w`` from ``_thin_age_nodes``; with one,
-    that age alone. [Fe/H] scales sigma_z in both. ``solar`` comes from
-    ``_vertical_solar``.
+    With an age, the thin disk uses that age's vertical dispersion. Without
+    one, it averages the profile over the age nodes ``age_ivar`` and
+    ``age_ln_w`` from ``_thin_age_nodes``. [Fe/H] scales sigma_z in both.
+    ``solar`` comes from ``_vertical_solar``.
     """
     L_solar, L_lo, L_hi, t0, t1, t2, p0, p1 = solar
     L_range, thin_solar, phi_solar = (L_lo, L_hi), (t0, t1, t2), (p0, p1)
     S = _potential_scale(R, rot[0])
     vc = _circular_velocity(R, *rot)[0]
-    scale = _thin_disk_feh_factor(feh)[1] * _thin_disk_fL(R * vc, L_solar, L_range)[1]
-    terms = _thin_disk_integrals(abs_Z)
-    # Running-maximum logsumexp over the nodes, started at the first node.
-    thin = 0.0
-    acc = 1.0
-    for k in range(1 if has_age else len(age_sig)):
-        if has_age:
-            v = _thin_disk_vertical(
-                terms, thin_solar, _thin_disk_sigma0(age, 0.0)[1] * scale, S
-            )
-        else:
-            v = age_ln_w[k] + _thin_disk_vertical(
-                terms, thin_solar, age_sig[k] * scale, S
-            )
-        if k == 0:
-            thin = v
-        elif v > thin:
-            acc = acc * exp(thin - v) + 1.0
-            thin = v
-        else:
-            acc += exp(v - thin)
-    thin += log(acc)
+    f_L = _thin_disk_fL(R * vc, L_solar, L_range)[1]
+    a, b = _thin_disk_vertical(_thin_disk_integrals(abs_Z), thin_solar, S)
+    if has_age:
+        sig_z0 = _thin_disk_sigma0(age, feh)[1] * f_L
+        thin = a - b / (sig_z0 * sig_z0)
+    else:
+        # a + ln sum_k w_k exp(-b / sig_k^2), with a running maximum.
+        scale = _thin_disk_feh_factor(feh)[1] * f_L
+        c = b / (scale * scale)
+        mx = age_ln_w[0] - c * age_ivar[0]
+        acc = 1.0
+        for k in range(1, len(age_ivar)):
+            v = age_ln_w[k] - c * age_ivar[k]
+            if v > mx:
+                acc = acc * exp(mx - v) + 1.0
+                mx = v
+            else:
+                acc += exp(v - mx)
+        thin = a + mx + log(acc)
     var_z = thick_var_z * _thick_disk_scale(R, thick_R_sigma, rot[0])
     thick = _thick_disk_vertical(_vertical_potential(abs_Z), phi_solar, var_z, S)
     return thin, thick
@@ -201,7 +204,7 @@ def _disk_vertical_array(
     rot,
     thick_var_z,
     thick_R_sigma,
-    age_sig,
+    age_ivar,
     age_ln_w,
 ):
     solar = _vertical_solar(abs_Z_solar, rot)
@@ -218,7 +221,7 @@ def _disk_vertical_array(
             solar,
             thick_var_z,
             thick_R_sigma,
-            age_sig,
+            age_ivar,
             age_ln_w,
         )
     return thin, thick
@@ -250,7 +253,7 @@ def _galactic_prior_fused(
     R_taper,
     thick_var_z,
     thick_R_sigma,
-    age_sig,
+    age_ivar,
     age_ln_w,
     # Halo
     Rs_halo,
@@ -278,7 +281,7 @@ def _galactic_prior_fused(
     """Fused galactic prior: coords + density + vol + met + age in one pass.
 
     The disk vertical profiles come from ``_disk_vertical_terms``; without
-    ``loga``, the thin disk averages over the age nodes ``age_sig`` and
+    ``loga``, the thin disk averages over the age nodes ``age_ivar`` and
     ``age_ln_w``.
 
     ``sin_l``/``cos_l``/``sin_b``/``cos_b`` are the precomputed sine/cosine
@@ -365,7 +368,7 @@ def _galactic_prior_fused(
             solar,
             thick_var_z,
             thick_R_sigma,
-            age_sig,
+            age_ivar,
             age_ln_w,
         )
 
@@ -949,8 +952,8 @@ def logp_galactic_structure(
     Raises
     ------
     ValueError
-        If ``labels``, ``feh`` or ``loga`` does not have one entry per
-        distance; if ``R_taper``,
+        If ``labels``, ``feh`` or ``loga`` does not have one finite entry
+        per distance; if ``R_taper``,
         ``thick_sigma_z`` or ``thick_R_sigma`` is not positive; or if the
         rotation curve is not positive at 0 < R < 25 kpc.
 
@@ -975,11 +978,12 @@ def logp_galactic_structure(
     [Fe/H] (Sharma et al. 2021), which grows with height as
     :math:`1 + \gamma_z |z|`; younger stars therefore lie closer to the
     midplane. Without an age, the thin-disk profile is the average over
-    the thin-disk age prior, by 16-point Gauss-Legendre quadrature. Without
-    [Fe/H], the dispersion uses ``feh_thin``; [Fe/H] outside -1 to 0.5,
-    the range of Sharma et al. (2021), takes the edge value. The disk
-    term of the potential scales with radius on 4 to 9 kpc, the radii of
-    Bovy & Rix (2013), and keeps its edge values outside. The thick disk
+    the thin-disk age prior, by 32-point Gauss-Legendre quadrature on the
+    ages where the prior has weight. Without [Fe/H], the dispersion uses
+    ``feh_thin``; [Fe/H] outside -1 to 0.5, the range of Sharma et al.
+    (2021), takes the edge value. The disk term of the potential scales
+    with radius on 4 to 9 kpc, the radii of Bovy & Rix (2013), and keeps
+    its edge values outside. The thick disk
     is isothermal (:math:`\gamma_z = 0`) with ``thick_sigma_z``.
     Each profile is normalized to 1 at the Sun's height, at every radius,
     so the prior at the Sun's position does not depend on the vertical
@@ -1051,6 +1055,8 @@ def logp_galactic_structure(
                 f"`feh` must be a 1D array with one entry per distance "
                 f"({n}); got shape {np.shape(feh)}."
             )
+        if not np.all(np.isfinite(feh)):
+            raise ValueError("`feh` must be finite.")
     if loga is not None:
         loga = np.asarray(loga, dtype=np.float64)
         if loga.ndim != 1 or loga.shape[0] != n:
@@ -1058,6 +1064,8 @@ def logp_galactic_structure(
                 f"`loga` must be a 1D array with one entry per distance "
                 f"({n}); got shape {np.shape(loga)}."
             )
+        if not np.all(np.isfinite(loga)):
+            raise ValueError("`loga` must be finite.")
 
     # Vertical profiles: the rotation curve, the thick disk dispersion and,
     # without an age, the nodes of the thin-disk age average.

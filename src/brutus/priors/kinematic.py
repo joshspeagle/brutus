@@ -591,10 +591,9 @@ def thin_disk_velocity_moments(
     ------
     ValueError
         If the positions are not finite 1-D arrays of one length, ``R`` or
-        ``age`` is negative, ``feh`` is not below 1.92 (where a dispersion
-        would vanish), ``age`` or ``feh`` does not broadcast to ``R``, a
-        length scale is not positive, or the circular velocity is not
-        positive at 0 < R < 25 kpc.
+        ``age`` is negative, ``feh`` is not finite, ``age`` or ``feh`` does
+        not broadcast to ``R``, a length scale is not positive, or the
+        circular velocity is not positive at 0 < R < 25 kpc.
     """
     R = _check_radii(R)
     Z = _check_heights(Z, R)
@@ -858,18 +857,20 @@ def _thin_disk_integrals(abs_z):
 
 
 @jit(nopython=True, cache=True)
-def _thin_disk_vertical(terms, terms_solar, sig_z0, S):
-    """Return ln nu(|z|) - ln nu(|z_sun|) of a thin-disk population.
+def _thin_disk_vertical(terms, terms_solar, S):
+    """Return (a, b) with ln nu(|z|) - ln nu(|z_sun|) = a - b / sig_z0^2
+    for a thin-disk population of vertical dispersion sig_z0 (km/s).
 
     The vertical Jeans equation d(nu sigma_z^2)/dz = -nu K_z with
     sigma_z(z) = sig_z0 (1 + gamma_z |z|) gives
     ln nu(z) = -2 ln(1 + gamma_z |z|) - [S I_D(|z|) + I_DM(|z|)] / sig_z0^2.
-    ``terms`` and ``terms_solar`` come from ``_thin_disk_integrals``;
-    ``sig_z0`` is in km/s and ``S`` scales the disk term with radius.
+    ``terms`` and ``terms_solar`` come from ``_thin_disk_integrals``, and
+    ``S`` scales the disk term with radius. Neither a nor b depends on
+    sig_z0, so many populations at one point share them.
     """
-    return -(terms[0] - terms_solar[0]) - (
-        S * (terms[1] - terms_solar[1]) + (terms[2] - terms_solar[2])
-    ) / (sig_z0 * sig_z0)
+    return -(terms[0] - terms_solar[0]), S * (terms[1] - terms_solar[1]) + (
+        terms[2] - terms_solar[2]
+    )
 
 
 @jit(nopython=True, cache=True)
