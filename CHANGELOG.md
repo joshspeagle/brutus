@@ -567,6 +567,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- New page "Migrating from 1.x to 2.0" with the old and new usage of each
+  changed argument.
 - The docstring examples of `core.individual`, `core.neural_nets` and
   `core.grid_generation` run on the shipped data: binary examples use
   [α/Fe] = 0 (the MIST tracks have no other value) and filter names are
