@@ -44,7 +44,7 @@ Examples
 """
 
 import os
-from math import exp, radians, sqrt
+from math import exp, log, radians, sqrt
 
 import numpy as np
 from numba import jit, prange
@@ -67,21 +67,26 @@ PM_SGRA = (-6.411, -0.219)
 U_SUN = 11.1
 V_PEC_SUN = 12.24
 # Shape of the circular velocity curve, v_c(R) / v_c(R_sun) against
-# R / R_sun, from the measurements in rotation_curve.dat: Sofue & Kohno
+# ln(R / R_sun), from the measurements in rotation_curve.dat: Sofue & Kohno
 # (2025) inside VC_JOIN and Eilers et al. (2019) outside, each scaled by its
 # own (R_sun, v_c,sun). Eilers et al. bins with errors above VC_MAX_ERR
 # (km/s) are left out: those beyond 21 kpc have 6-29 km/s. All Sofue &
 # Kohno points are kept; inside 0.4 kpc their errors reach 48 km/s. Both
-# sources are smoothed with a Gaussian of VC_SMOOTH (weighted by the
-# errors) and blended across VC_JOIN with a cosine weight, so the slope
-# stays continuous, all in units of R / R_sun.
-# The curve falls linearly to 0 inside the first point, flattens beyond
-# the last and is flat beyond three smoothing lengths more (about 24 kpc).
+# sources are smoothed with a Gaussian, weighted by the errors, of width
+# VC_SMOOTH in ln R (0.24 kpc at 2 kpc) up to VC_SMOOTH_MAX in R / R_sun
+# (1 kpc), reached at 8.3 kpc. Sofue & Kohno are
+# scaled to Eilers et al. at the middle of VC_JOIN (up by 2.2%), and the two
+# are blended across VC_JOIN with a cosine weight, so the slope stays
+# continuous. Inside the first point v_c is proportional to R. The table
+# runs to VC_EXTEND smoothing widths beyond the last point (37 kpc), where
+# the slope is below 1e-8, and v_c is flat beyond it.
 VC_SOURCES = ((8.178, 235.1), (8.122, 229.0))
 VC_MAX_ERR = 5.0
-VC_SMOOTH = 1.0 / 8.2
-VC_JOIN = (4.5 / 8.2, 5.5 / 8.2)
-_VC_DX = 0.002
+VC_SMOOTH = 0.12
+VC_SMOOTH_MAX = 1.0 / 8.2
+VC_JOIN = (log(4.5 / 8.2), log(5.5 / 8.2))
+VC_EXTEND = 12.0
+_VC_DU = 0.002
 
 # Thin-disk dispersion relations, (sigma_R, sigma_z) pairs (Sharma et al.
 # 2021, eqs. 3-7 and Table 2): sigma at 10 Gyr, solar L_z, [Fe/H] = 0 and
@@ -168,41 +173,52 @@ def solar_velocity(R_solar=8.2, pm_sgra=PM_SGRA, U_sun=U_SUN):
 
 
 def _rotation_curve_table():
-    """Return the shape of v_c and its slope on a grid of R / R_sun."""
+    """Return ln(R / R_sun) of the first grid point, the shape of v_c and
+    its slope per grid step on a grid uniform in ln(R / R_sun)."""
     data = np.loadtxt(os.path.join(os.path.dirname(__file__), "rotation_curve.dat"))
     R, v, err, src = data[(data[:, 2] <= VC_MAX_ERR) | (data[:, 3] == 0)].T
     src = src.astype(int)
     R_sun, vc_sun = (np.array(c)[src] for c in zip(*VC_SOURCES))
-    x, shape = R / R_sun, v / vc_sun
-    grid = np.arange(0.0, x.max() + 3.0 * VC_SMOOTH, _VC_DX)
+    u, shape = np.log(R / R_sun), v / vc_sun
+
+    def width(u):
+        return np.minimum(VC_SMOOTH, VC_SMOOTH_MAX * np.exp(-u))
+
+    grid = np.arange(u.min(), u.max() + VC_EXTEND * width(u.max()), _VC_DU)
+    sigma = width(grid)[:, None]
 
     def smooth(sel):
-        w = np.exp(-0.5 * ((x[sel] - grid[:, None]) / VC_SMOOTH) ** 2) / err[sel] ** 2
+        q = -0.5 * ((u[sel] - grid[:, None]) / sigma) ** 2
+        # Far from the points the weights underflow; only their ratios count.
+        w = np.exp(q - q.max(1, keepdims=True)) / err[sel] ** 2
         return (w * shape[sel]).sum(1) / w.sum(1)
 
+    inner, outer = smooth(src == 0), smooth(src == 1)
+    mid = 0.5 * (VC_JOIN[0] + VC_JOIN[1])
+    inner *= np.interp(mid, grid, outer) / np.interp(mid, grid, inner)
     t = np.clip((grid - VC_JOIN[0]) / (VC_JOIN[1] - VC_JOIN[0]), 0.0, 1.0)
     blend = 0.5 - 0.5 * np.cos(np.pi * t)
-    curve = (1.0 - blend) * smooth(src == 0) + blend * smooth(src == 1)
-    x0 = x[src == 0].min()
-    inner = grid < x0
-    curve[inner] = np.interp(x0, grid, curve) * grid[inner] / x0
-    curve /= np.interp(1.0, grid, curve)
-    # The slope is per grid step, the unit the Hermite interpolation uses.
-    return curve, np.gradient(curve)
+    curve = (1.0 - blend) * inner + blend * outer
+    curve /= np.interp(0.0, grid, curve)
+    return grid[0], curve, np.gradient(curve)
 
 
-_VC_SHAPE, _VC_SLOPE = _rotation_curve_table()
+_VC_U0, _VC_SHAPE, _VC_SLOPE = _rotation_curve_table()
 
 
 @jit(nopython=True, cache=True)
 def _circular_velocity(R, R_solar, vc_solar):
     """Return v_c(R) and d ln v_c / d ln R.
 
-    The shape is interpolated in _VC_SHAPE with cubic Hermite polynomials,
-    whose slopes are _VC_SLOPE (per grid step), so v_c and its derivative
-    are continuous.
+    The shape is interpolated in _VC_SHAPE, against ln(R / R_solar), with
+    cubic Hermite polynomials whose slopes are _VC_SLOPE (per grid step),
+    so v_c and its derivative are continuous.
     """
-    y = R / R_solar / _VC_DX
+    if R <= 0.0:
+        return 0.0, 1.0
+    y = (log(R / R_solar) - _VC_U0) / _VC_DU
+    if y <= 0.0:
+        return vc_solar * _VC_SHAPE[0] * exp(_VC_DU * y), 1.0
     n = len(_VC_SHAPE) - 1
     if y >= n:
         return vc_solar * _VC_SHAPE[n], 0.0
@@ -223,8 +239,7 @@ def _circular_velocity(R, R_solar, vc_solar):
         + (6.0 * w - 6.0 * w2) * p1
         + (3.0 * w2 - 2.0 * w) * m1
     )
-    # Inside the first point the curve is linear, so d ln v_c / d ln R = 1.
-    return vc_solar * s, (y * ds_dy / s if s > 0.0 else 1.0)
+    return vc_solar * s, ds_dy / (_VC_DU * s)
 
 
 @jit(nopython=True, cache=True)
@@ -582,9 +597,9 @@ def thin_disk_velocity_moments(
 
     with the measured circular velocity :math:`v_c(R)`: Sofue & Kohno
     (2025) inside 5 kpc and Eilers et al. (2019) outside, each scaled to
-    :math:`v_{c,\odot}` at :math:`R_\odot`, smoothed over 1 kpc, and
-    flattening beyond the last measurement at 21 kpc
-    (``rotation_curve.dat``). The mean rotation is
+    :math:`v_{c,\odot}` at :math:`R_\odot`, smoothed with a Gaussian of
+    width 12% of R up to 1 kpc, and flattening beyond the last measurement
+    at 21 kpc (``rotation_curve.dat``). The mean rotation is
     clipped to :math:`[0, v_c]`: the Jeans equation has no
     solution where the right-hand side is negative, and near the centre,
     where the density gradient vanishes, it gives rotation faster than

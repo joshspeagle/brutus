@@ -149,8 +149,8 @@ def test_rotation_curve_follows_the_measured_circular_velocities():
     R, shape = _measured_curve(1, (5.3, 21.3), max_err=5.0)
     rel = _vc(R) / _vc_solar() / shape - 1
     assert np.abs(rel).max() < 0.03 and np.sqrt(np.mean(rel**2)) < 0.015
-    # Sofue & Kohno (2025) at 2-4.5 kpc, smoothed over the bar's wiggles.
-    R, shape = _measured_curve(0, (2.0, 4.5))
+    # Sofue & Kohno (2025) at 0.1-4.5 kpc, smoothed over the bar's wiggles.
+    R, shape = _measured_curve(0, (0.1, 4.5))
     rel = _vc(R) / _vc_solar() / shape - 1
     assert np.sqrt(np.mean(rel**2)) < 0.05
 
@@ -294,10 +294,12 @@ def test_velocity_ellipsoids_stay_positive_definite_at_all_radii():
 
 
 def test_rotation_curve_is_flat_beyond_the_measured_radii():
-    R = np.array([30.0, 60.0])
+    # The table ends at 37 kpc, where its slope is below 1e-8.
+    R = np.array([40.0, 300.0])
+    np.testing.assert_allclose(_vc(R), _vc(R[0])[0])
     _, cov = _thin(R)
     # sigma_phi^2 / sigma_R^2 = (1 + d ln v_c / d ln R) / 2 = 1/2 where flat.
-    np.testing.assert_allclose(cov[1, 1, 1] / cov[1, 0, 0], 0.5, rtol=1e-6)
+    np.testing.assert_allclose(cov[:, 1, 1] / cov[:, 0, 0], 0.5, rtol=1e-6)
 
 
 def test_disk_does_not_rotate_where_the_jeans_equation_has_no_solution():
