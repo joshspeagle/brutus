@@ -183,18 +183,19 @@ def _dln_dlnR(f, R, h=1e-5):
 
 def test_thin_disk_dispersions_use_the_mean_angular_momentum():
     # Sharma et al. (2021): sigma = sigma_0 f_L(L_z) at 10 Gyr, [Fe/H] = 0
-    # and z = 0, with L_z the population's mean R v_phi (to 0.5%).
-    R = np.array([4.0, R_SOLAR, 14.0])
+    # and z = 0, with L_z the population's mean R v_phi (to 0.06%).
+    # Near the edges of THIN_DISK_R_RANGE the fixed point once oscillated.
+    R = np.array([3.05, 4.0, R_SOLAR, 14.0, 19.95])
     mean, cov = _thin(R, age=10.0)
     vc = _vc(R)
     L_solar = R_SOLAR * _vc_solar()
     L_range = tuple(r * _vc(r)[0] for r in THIN_DISK_R_RANGE)
-    for i in range(3):
+    for i in range(len(R)):
         f_R, f_z, _ = kin._thin_disk_fL(R[i] * mean[i, 1], L_solar, L_range)
         np.testing.assert_allclose(
             np.sqrt(cov[i, [0, 2], [0, 2]]),
             np.multiply(THIN_DISK_SIGMA0, (f_R, f_z)),
-            rtol=5e-3,
+            rtol=1e-3,
         )
         # The circular L_z = R v_c gives other dispersions.
         f_c = kin._thin_disk_fL(R[i] * vc[i], L_solar, L_range)[0]
@@ -273,7 +274,7 @@ def test_disk_rotation_stays_below_circular_and_vanishes_at_the_centre(disk):
 def test_disk_dispersions_keep_their_edge_values_outside_the_fitted_radii():
     # The thin disk is clamped in L_z, at the L_z of circular orbits at the
     # edges of THIN_DISK_R_RANGE; its mean L_z lies below them, so the
-    # clamp holds a little inside 3 kpc and beyond 20 kpc.
+    # clamp holds inside 3 kpc and from a little beyond 20 kpc.
     lo, hi = THIN_DISK_R_RANGE
     _, cov = _thin(np.array([0.5 * lo, 0.25 * lo, 1.5 * hi, 3 * hi]))
     np.testing.assert_allclose(cov[1, [0, 2], [0, 2]], cov[0, [0, 2], [0, 2]])
