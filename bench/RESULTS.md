@@ -189,6 +189,31 @@ grid pre-filtering does not yield a clean low-risk large win; deferred-`icov`
 API coupling. Left unimplemented pending a decision on whether the ~1.6×
 aggressive variant is worth a dedicated, heavily-validated effort.
 
+## Release 2.0.0 (2026-10-21)
+
+`python bench/harness.py bench` on the source of the 2.0.0 release.
+
+| Setting | Value |
+|---|---|
+| Commit | `60dddee` (`src/` of the release) |
+| Machine | Linux x86_64, 4 CPUs (`cpu_count=4`), cloud container |
+| Threads | `numba_threads=4`, `NUMBA_NUM_THREADS` and `OMP_NUM_THREADS` unset |
+| Libraries | Python 3.13, numpy 2.5.3, scipy 1.18.1, numba 0.68.0 |
+| Data | `grid_mist_v9.h5` (613,530 models), 8 bands, Orion field, offsets applied |
+| Sample | First 30 objects with every band and a parallax; `Nmc_prior=50`, `Ndraws=250`, `wt_thresh=1e-3` |
+
+Each figure is the mean, over the 30 objects, of the median of 5 repeats.
+
+| Stage | Time per object |
+|---|---:|
+| `loglike_grid` | 268 ms |
+| `logpost_grid` | 292 ms |
+| `_fit` | 550 ms |
+
+The figures above this section come from an earlier setup with no record of
+its commit, threads or library versions, and use minima, not medians. They
+are not comparable with these.
+
 ## Reproduce
 
 Requires the real grid + data locally (`fetch_grids()`, `fetch_offsets('mist_v9')`;
