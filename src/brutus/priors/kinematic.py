@@ -67,6 +67,8 @@ U_SUN = 11.1
 V_PEC_SUN = 12.24
 # Slope of the circular velocity curve in km/s/kpc (Eilers et al. 2019).
 DVCIRC_DR = -1.7
+# Radius in kpc of the taper that takes v_c to 0 at the Galactic centre.
+VC_TAPER = 2.0
 
 # Thin-disk dispersion relations, (sigma_R, sigma_z) pairs (Sharma et al.
 # 2021, eqs. 3-7 and Table 2): sigma at 10 Gyr, solar L_z, [Fe/H] = 0 and
@@ -145,17 +147,16 @@ def solar_velocity(R_solar=8.2, pm_sgra=PM_SGRA, U_sun=U_SUN):
 
 
 @jit(nopython=True, cache=True)
-def _circular_velocity(R, R_solar, vc_solar, dvc_dR, R_smooth):
+def _circular_velocity(R, R_solar, vc_solar, dvc_dR, R_taper):
     """Return v_c(R) and d ln v_c / d ln R.
 
     The linear curve holds at 5-25 kpc (Eilers et al. 2019); the taper
-    tanh(R / R_smooth) takes it to 0 at the centre within the smoothing
-    radius of the disk density.
+    tanh(R / R_taper) takes it to 0 at the centre.
     """
     v_lin = vc_solar + dvc_dR * (R - R_solar)
     if v_lin <= 0.0:
         return 0.0, 0.0
-    x = R / R_smooth
+    x = R / R_taper
     t = tanh(x)
     # d ln tanh(x) / d ln x = x (1 - t^2) / t, which tends to 1 as x -> 0.
     dln_taper = x * (1.0 - t * t) / t if x > 0.0 else 1.0
@@ -163,14 +164,20 @@ def _circular_velocity(R, R_solar, vc_solar, dvc_dR, R_smooth):
 
 
 @jit(nopython=True, cache=True)
-def _jeans_vphi(R, R_eff, var_R, var_phi, dlnvar_dlnR, R_scale, vc):
+def _logn_disk_dlnR(R, R_scale, R_smooth):
+    """Return d ln(nu) / d ln(R) of `~brutus.priors.galactic.logn_disk`."""
+    return -R * R / (R_scale * sqrt(R * R + R_smooth * R_smooth))
+
+
+@jit(nopython=True, cache=True)
+def _jeans_vphi(var_R, var_phi, dlnvar_dlnR, dlnnu_dlnR, vc):
     """Mean rotation from the radial Jeans equation, clipped to [0, vc].
 
-    Binney & Tremaine (2008), eq. 4.228, with a cylindrically aligned
-    ellipsoid and the density gradient of logn_disk,
-    d ln(nu) / d ln(R) = -R^2 / (R_scale * R_eff).
+    Binney & Tremaine (2008), eq. 4.228, for a cylindrically aligned
+    ellipsoid. The density gradient comes from the caller, so the rotation
+    follows whatever density the caller uses.
     """
-    vphi2 = vc * vc - var_phi + var_R * (1.0 - R * R / (R_scale * R_eff) + dlnvar_dlnR)
+    vphi2 = vc * vc - var_phi + var_R * (1.0 + dlnnu_dlnR + dlnvar_dlnR)
     # Where the dispersions exceed what rotation can support, the equation
     # has no solution; near the centre, where the density gradient
     # vanishes, it gives rotation faster than circular.
@@ -178,64 +185,154 @@ def _jeans_vphi(R, R_eff, var_R, var_phi, dlnvar_dlnR, R_scale, vc):
 
 
 @jit(nopython=True, cache=True)
-def _sharma_sigma(L, L_solar, age, feh, abs_z, v):
-    """Return sigma and d ln sigma / d ln L_z (Sharma et al. 2021, eqs. 3-7)
-    for v = 0 (sigma_R) or v = 1 (sigma_z)."""
-    s0, beta = THIN_DISK_SIGMA0[v], THIN_DISK_BETA[v]
-    lam, alpha = THIN_DISK_LAMBDA_L[v], THIN_DISK_ALPHA_L[v]
-    g_feh, g_z = THIN_DISK_GAMMA_FEH[v], THIN_DISK_GAMMA_Z[v]
-    u = L / L_solar
-    e = exp(-(L - L_solar) / lam)
-    f_L = (alpha * u * u + e) / (1.0 + alpha)
-    dlnf_dlnL = (2.0 * alpha * u * u - (L / lam) * e) / (1.0 + alpha) / f_L
-    sigma = (
-        s0
-        * ((age + 0.1) / 10.1) ** beta
-        * f_L
-        * (1.0 + g_feh * feh)
-        * (1.0 + g_z * abs_z)
+def _thin_disk_sigma0(age, feh):
+    """Return the Sharma et al. (2021) (sigma_R, sigma_z) of one stellar
+    model at solar L_z and z = 0: sigma_0 f_tau f_[Fe/H].
+
+    These factors depend only on the model, so a caller that evaluates many
+    positions per model computes them once.
+    """
+    a = (age + 0.1) / 10.1
+    return (
+        THIN_DISK_SIGMA0[0]
+        * a ** THIN_DISK_BETA[0]
+        * (1.0 + THIN_DISK_GAMMA_FEH[0] * feh),
+        THIN_DISK_SIGMA0[1]
+        * a ** THIN_DISK_BETA[1]
+        * (1.0 + THIN_DISK_GAMMA_FEH[1] * feh),
     )
-    return sigma, dlnf_dlnL
 
 
 @jit(nopython=True, cache=True)
-def _thin_disk_moments(
-    R,
-    R_eff,
-    abs_z,
-    age,
-    feh,
-    R_scale,
-    R_smooth,
-    R_solar,
-    vc_solar,
-    dvc_dR,
-):
-    """Return (v_phi, var_R, var_phi, var_z, cov_Rz) of the thin disk.
+def _thin_disk_moments(R, abs_z, sig_R0, sig_z0, vc, dlnvc, L_solar, dlnnu_dlnR):
+    """Return (v_phi, var_R, var_phi, var_z) of the thin disk.
 
-    The angular momentum is that of a circular orbit, L_z = R v_c(R), so
-    that L_z = L_z,sun at R_solar. sigma_phi follows the epicyclic ratio
-    sigma_phi^2 / sigma_R^2 = (1 + d ln v_c / d ln R) / 2.
-    ``R_eff = sqrt(R^2 + R_smooth^2)`` is the smoothed radius of the
-    ``logn_disk`` density, which the Galactic prior kernel already holds.
+    ``sig_R0`` and ``sig_z0`` come from ``_thin_disk_sigma0``. The angular
+    momentum is that of a circular orbit, L_z = R v_c(R), and ``L_solar``
+    is R_solar v_c(R_solar), so f_L = 1 at the Sun. sigma_phi follows the
+    epicyclic ratio sigma_phi^2 / sigma_R^2 = (1 + d ln v_c / d ln R) / 2.
     """
-    vc, dlnvc = _circular_velocity(R, R_solar, vc_solar, dvc_dR, R_smooth)
-    vc_sun = _circular_velocity(R_solar, R_solar, vc_solar, dvc_dR, R_smooth)[0]
     L = max(R * vc, 1e-10)
-    L_solar = R_solar * vc_sun
-    sig_R, dlnf_R = _sharma_sigma(L, L_solar, age, feh, abs_z, 0)
-    sig_z = _sharma_sigma(L, L_solar, age, feh, abs_z, 1)[0]
+    u2 = (L / L_solar) ** 2
+    a_R, a_z = THIN_DISK_ALPHA_L
+    lam_R, lam_z = THIN_DISK_LAMBDA_L
+    e_R = exp(-(L - L_solar) / lam_R)
+    e_z = exp(-(L - L_solar) / lam_z)
+    f_R = (a_R * u2 + e_R) / (1.0 + a_R)
+    f_z = (a_z * u2 + e_z) / (1.0 + a_z)
+    dlnf_R = (2.0 * a_R * u2 - (L / lam_R) * e_R) / ((1.0 + a_R) * f_R)
+    sig_R = sig_R0 * f_R * (1.0 + THIN_DISK_GAMMA_Z[0] * abs_z)
+    sig_z = sig_z0 * f_z * (1.0 + THIN_DISK_GAMMA_Z[1] * abs_z)
     var_R = sig_R * sig_R
     var_phi = 0.5 * var_R * (1.0 + dlnvc)
     dlnvar_dlnR = 2.0 * dlnf_R * (1.0 + dlnvc)
-    vphi = _jeans_vphi(R, R_eff, var_R, var_phi, dlnvar_dlnR, R_scale, vc)
-    return vphi, var_R, var_phi, sig_z * sig_z, 0.0
+    vphi = _jeans_vphi(var_R, var_phi, dlnvar_dlnR, dlnnu_dlnR, vc)
+    return vphi, var_R, var_phi, sig_z * sig_z
 
 
 @jit(nopython=True, cache=True)
-def _thick_disk_moments(
+def _thick_disk_moments(R, vc, var_R0, var_phi0, var_z0, R_sigma, R_solar, dlnnu_dlnR):
+    """Return (v_phi, var_R, var_phi, var_z) of the thick disk."""
+    f = exp(-2.0 * (R - R_solar) / R_sigma)
+    var_R = var_R0 * f
+    var_phi = var_phi0 * f
+    vphi = _jeans_vphi(var_R, var_phi, -2.0 * R / R_sigma, dlnnu_dlnR, vc)
+    return vphi, var_R, var_phi, var_z0 * f
+
+
+@jit(nopython=True, cache=True)
+def _halo_moments(R, Z):
+    """Return the halo mixture at (R, Z): the weight of the isotropic
+    component, its (var_R, var_phi, var_z, cov_Rz), and the lobe at
+    v_r = +delta as (m_R, m_phi, m_z, var_R, var_phi, var_z, cov_Rz). The
+    lobe at -delta has the same moments with m_R and m_z negated, and each
+    lobe has weight (1 - f_iso) / 2.
+    """
+    r = sqrt(R * R + Z * Z)
+    if r > 0.0:
+        s, c = R / r, Z / r
+    else:
+        s, c = 1.0, 0.0
+    # Linear interpolation between the bin centres, constant beyond them.
+    n = len(HALO_R)
+    i, w = 0, 0.0
+    if r >= HALO_R[n - 1]:
+        i, w = n - 2, 1.0
+    elif r > HALO_R[0]:
+        while r > HALO_R[i + 1]:
+            i += 1
+        w = (r - HALO_R[i]) / (HALO_R[i + 1] - HALO_R[i])
+
+    def row(ys):
+        return (1.0 - w) * ys[i] + w * ys[i + 1]
+
+    f_iso = row(HALO_F_ISO)
+    ss, cc, sc = s * s, c * c, s * c
+    # v_R = v_r sin(theta) + v_theta cos(theta),
+    # v_z = v_r cos(theta) - v_theta sin(theta), theta from the +z axis.
+    var_r, var_t = row(HALO_SIGMA_R_ISO) ** 2, row(HALO_SIGMA_T_ISO) ** 2
+    iso = (
+        var_r * ss + var_t * cc,
+        var_t,
+        var_r * cc + var_t * ss,
+        (var_r - var_t) * sc,
+    )
+    delta = row(HALO_DELTA_LOBE)
+    var_r, var_t = row(HALO_SIGMA_R_LOBE) ** 2, row(HALO_SIGMA_T_LOBE) ** 2
+    lobe = (
+        delta * s,
+        row(HALO_V_PHI_LOBE),
+        delta * c,
+        var_r * ss + var_t * cc,
+        var_t,
+        var_r * cc + var_t * ss,
+        (var_r - var_t) * sc,
+    )
+    return f_iso, iso, lobe
+
+
+@jit(nopython=True, cache=True)
+def _store(mean, cov, m_R, m_phi, m_z, var_R, var_phi, var_z, cov_Rz):
+    mean[0] = m_R
+    mean[1] = m_phi
+    mean[2] = m_z
+    cov[0, 0] = var_R
+    cov[1, 1] = var_phi
+    cov[2, 2] = var_z
+    cov[0, 2] = cov_Rz
+    cov[2, 0] = cov_Rz
+
+
+@jit(nopython=True, parallel=True, cache=True)
+def _thin_disk_array(
+    R, Z, age, feh, R_scale, R_smooth, R_solar, vc_solar, dvc_dR, R_taper
+):
+    N = len(R)
+    mean = np.zeros((N, 3))
+    cov = np.zeros((N, 3, 3))
+    L_solar = (
+        R_solar * _circular_velocity(R_solar, R_solar, vc_solar, dvc_dR, R_taper)[0]
+    )
+    for i in prange(N):
+        vc, dlnvc = _circular_velocity(R[i], R_solar, vc_solar, dvc_dR, R_taper)
+        sig_R0, sig_z0 = _thin_disk_sigma0(age[i], feh[i])
+        vphi, var_R, var_phi, var_z = _thin_disk_moments(
+            R[i],
+            abs(Z[i]),
+            sig_R0,
+            sig_z0,
+            vc,
+            dlnvc,
+            L_solar,
+            _logn_disk_dlnR(R[i], R_scale, R_smooth),
+        )
+        _store(mean[i], cov[i], 0.0, vphi, 0.0, var_R, var_phi, var_z, 0.0)
+    return mean, cov
+
+
+@jit(nopython=True, parallel=True, cache=True)
+def _thick_disk_array(
     R,
-    R_eff,
     var_R0,
     var_phi0,
     var_z0,
@@ -245,164 +342,66 @@ def _thick_disk_moments(
     R_solar,
     vc_solar,
     dvc_dR,
-):
-    """Return (v_phi, var_R, var_phi, var_z, cov_Rz) of the thick disk."""
-    vc = _circular_velocity(R, R_solar, vc_solar, dvc_dR, R_smooth)[0]
-    f = exp(-2.0 * (R - R_solar) / R_sigma)
-    var_R = var_R0 * f
-    vphi = _jeans_vphi(R, R_eff, var_R, var_phi0 * f, -2.0 * R / R_sigma, R_scale, vc)
-    return vphi, var_R, var_phi0 * f, var_z0 * f, 0.0
-
-
-@jit(nopython=True, cache=True)
-def _interp(x, xs, ys):
-    """Linear interpolation in x, constant beyond the ends of xs."""
-    if x <= xs[0]:
-        return ys[0]
-    for i in range(1, len(xs)):
-        if x <= xs[i]:
-            w = (x - xs[i - 1]) / (xs[i] - xs[i - 1])
-            return ys[i - 1] + w * (ys[i] - ys[i - 1])
-    return ys[-1]
-
-
-@jit(nopython=True, cache=True)
-def _halo_component(R, Z, k, table):
-    """Return (weight, m_R, m_phi, m_z, var_R, var_phi, var_z, cov_Rz) of
-    halo component k: 0 is isotropic, 1 and 2 are the lobes at v_r = +delta
-    and -delta. ``table`` holds the HALO_* rows, in the order of HALO_R.
-    """
-    r = sqrt(R * R + Z * Z)
-    if r > 0.0:
-        s, c = R / r, Z / r
-    else:
-        s, c = 1.0, 0.0
-    f_iso = _interp(r, table[0], table[1])
-    if k == 0:
-        weight, m_r, m_phi = f_iso, 0.0, 0.0
-        sig_r = _interp(r, table[0], table[2])
-        sig_t = _interp(r, table[0], table[3])
-    else:
-        weight = 0.5 * (1.0 - f_iso)
-        delta = _interp(r, table[0], table[6])
-        m_r = delta if k == 1 else -delta
-        m_phi = _interp(r, table[0], table[7])
-        sig_r = _interp(r, table[0], table[4])
-        sig_t = _interp(r, table[0], table[5])
-    var_r, var_t = sig_r * sig_r, sig_t * sig_t
-    # v_R = v_r sin(theta) + v_theta cos(theta),
-    # v_z = v_r cos(theta) - v_theta sin(theta), theta from the +z axis.
-    return (
-        weight,
-        m_r * s,
-        m_phi,
-        m_r * c,
-        var_r * s * s + var_t * c * c,
-        var_t,
-        var_r * c * c + var_t * s * s,
-        (var_r - var_t) * s * c,
-    )
-
-
-@jit(nopython=True, cache=True)
-def _store(mean, cov, i, m_R, m_phi, m_z, var_R, var_phi, var_z, cov_Rz):
-    mean[i, 0] = m_R
-    mean[i, 1] = m_phi
-    mean[i, 2] = m_z
-    cov[i, 0, 0] = var_R
-    cov[i, 1, 1] = var_phi
-    cov[i, 2, 2] = var_z
-    cov[i, 0, 2] = cov_Rz
-    cov[i, 2, 0] = cov_Rz
-
-
-@jit(nopython=True, parallel=True, cache=True)
-def _thin_disk_array(R, Z, age, feh, R_scale, R_smooth, R_solar, vc_solar, dvc_dR):
-    N = len(R)
-    mean = np.zeros((N, 3))
-    cov = np.zeros((N, 3, 3))
-    for i in prange(N):
-        R_eff = sqrt(R[i] * R[i] + R_smooth * R_smooth)
-        vphi, var_R, var_phi, var_z, cov_Rz = _thin_disk_moments(
-            R[i],
-            R_eff,
-            abs(Z[i]),
-            age[i],
-            feh[i],
-            R_scale,
-            R_smooth,
-            R_solar,
-            vc_solar,
-            dvc_dR,
-        )
-        _store(mean, cov, i, 0.0, vphi, 0.0, var_R, var_phi, var_z, cov_Rz)
-    return mean, cov
-
-
-@jit(nopython=True, parallel=True, cache=True)
-def _thick_disk_array(
-    R, var_R0, var_phi0, var_z0, R_sigma, R_scale, R_smooth, R_solar, vc_solar, dvc_dR
+    R_taper,
 ):
     N = len(R)
     mean = np.zeros((N, 3))
     cov = np.zeros((N, 3, 3))
     for i in prange(N):
-        R_eff = sqrt(R[i] * R[i] + R_smooth * R_smooth)
-        vphi, var_R, var_phi, var_z, cov_Rz = _thick_disk_moments(
+        vc = _circular_velocity(R[i], R_solar, vc_solar, dvc_dR, R_taper)[0]
+        vphi, var_R, var_phi, var_z = _thick_disk_moments(
             R[i],
-            R_eff,
+            vc,
             var_R0,
             var_phi0,
             var_z0,
             R_sigma,
-            R_scale,
-            R_smooth,
             R_solar,
-            vc_solar,
-            dvc_dR,
+            _logn_disk_dlnR(R[i], R_scale, R_smooth),
         )
-        _store(mean, cov, i, 0.0, vphi, 0.0, var_R, var_phi, var_z, cov_Rz)
+        _store(mean[i], cov[i], 0.0, vphi, 0.0, var_R, var_phi, var_z, 0.0)
     return mean, cov
 
 
 @jit(nopython=True, parallel=True, cache=True)
-def _halo_array(R, Z, table):
+def _halo_array(R, Z):
     N = len(R)
     weight = np.empty((N, 3))
     mean = np.zeros((N, 3, 3))
     cov = np.zeros((N, 3, 3, 3))
     for i in prange(N):
-        for k in range(3):
-            w, m_R, m_phi, m_z, var_R, var_phi, var_z, cov_Rz = _halo_component(
-                R[i], Z[i], k, table
-            )
-            weight[i, k] = w
-            _store(
-                mean[:, k], cov[:, k], i, m_R, m_phi, m_z, var_R, var_phi, var_z, cov_Rz
-            )
+        f_iso, iso, lobe = _halo_moments(R[i], Z[i])
+        weight[i, 0] = f_iso
+        weight[i, 1] = weight[i, 2] = 0.5 * (1.0 - f_iso)
+        _store(mean[i, 0], cov[i, 0], 0.0, 0.0, 0.0, *iso)
+        _store(mean[i, 1], cov[i, 1], *lobe)
+        m_R, m_phi, m_z = lobe[0], lobe[1], lobe[2]
+        _store(
+            mean[i, 2], cov[i, 2], -m_R, m_phi, -m_z, lobe[3], lobe[4], lobe[5], lobe[6]
+        )
     return weight, mean, cov
 
 
-def _check_positions(R, Z):
+def _check_radii(R):
     R = np.asarray(R, dtype=np.float64)
-    Z = np.asarray(Z, dtype=np.float64)
-    if R.ndim != 1 or R.shape != Z.shape:
-        raise ValueError(
-            f"R and Z must be 1-D with the same shape, got {R.shape} and {Z.shape}"
-        )
+    if R.ndim != 1:
+        raise ValueError(f"R must be 1-D, got shape {R.shape}")
     if not np.all(np.isfinite(R) & (R >= 0)):
         raise ValueError("R must be finite and non-negative")
+    return R
+
+
+def _check_heights(Z, R):
+    Z = np.asarray(Z, dtype=np.float64)
+    if Z.shape != R.shape:
+        raise ValueError(f"Z must have the shape of R {R.shape}, got {Z.shape}")
     if not np.all(np.isfinite(Z)):
         raise ValueError("Z must be finite")
-    return R, Z
+    return Z
 
 
-def _check_rotation(R_scale, R_smooth, R_solar):
-    for name, value in (
-        ("R_scale", R_scale),
-        ("R_smooth", R_smooth),
-        ("R_solar", R_solar),
-    ):
+def _check_positive(**values):
+    for name, value in values.items():
         if not value > 0:
             raise ValueError(f"{name} must be positive, got {value}")
 
@@ -411,6 +410,9 @@ def _vc_solar(v_circ_solar, R_solar):
     if v_circ_solar is None:
         return solar_velocity(R_solar)[1] - V_PEC_SUN
     return float(v_circ_solar)
+
+
+_FEH_MAX = -1.0 / min(THIN_DISK_GAMMA_FEH)
 
 
 def thin_disk_velocity_moments(
@@ -423,6 +425,7 @@ def thin_disk_velocity_moments(
     R_solar=8.2,
     v_circ_solar=None,
     dvcirc_dR=DVCIRC_DR,
+    R_taper=VC_TAPER,
 ):
     r"""
     Return the velocity ellipsoid of the thin disk.
@@ -453,7 +456,7 @@ def thin_disk_velocity_moments(
         + \frac{\partial \ln \sigma_R^2}{\partial \ln R}\right)
 
     with :math:`v_c(R) = [v_{c,\odot} + (dv_c/dR)(R - R_\odot)]
-    \tanh(R / R_\mathrm{smooth})`. The taper takes :math:`v_c` to 0 at the
+    \tanh(R / R_\mathrm{taper})`. The taper takes :math:`v_c` to 0 at the
     Galactic centre and changes it by less than 0.1% at the Sun. The mean
     rotation is clipped to :math:`[0, v_c]`: the Jeans equation has no
     solution where the right-hand side is negative, and near the centre,
@@ -466,16 +469,14 @@ def thin_disk_velocity_moments(
     R, Z : array_like of shape `(N,)`
         Galactocentric cylindrical radius and height above the midplane in
         kpc.
-    age : array_like of shape `(N,)`
+    age : float or array_like of shape `(N,)`
         Stellar age in Gyr.
-    feh : array_like of shape `(N,)`
+    feh : float or array_like of shape `(N,)`
         Metallicity [Fe/H].
-    R_scale : float, optional
-        Radial scale length of the number density in kpc, as in
-        `~brutus.priors.galactic.logn_disk`. Default is 2.6.
-    R_smooth : float, optional
-        Smoothing radius of the number density and of the taper of the
-        circular velocity, in kpc. Default is 2.0.
+    R_scale, R_smooth : float, optional
+        Radial scale length and smoothing radius of the number density in
+        kpc, as in `~brutus.priors.galactic.logn_disk`. Defaults are 2.6
+        and 2.0.
     R_solar : float, optional
         Distance of the Sun from the Galactic centre in kpc. Default is 8.2.
     v_circ_solar : float, optional
@@ -486,6 +487,9 @@ def thin_disk_velocity_moments(
     dvcirc_dR : float, optional
         Slope of the circular velocity curve in km/s/kpc. Default is -1.7
         (Eilers et al. 2019).
+    R_taper : float, optional
+        Radius of the taper of the circular velocity at the centre, in kpc.
+        Default is ``VC_TAPER``, 2.0.
 
     Returns
     -------
@@ -497,21 +501,29 @@ def thin_disk_velocity_moments(
     Raises
     ------
     ValueError
-        If the inputs are not finite 1-D arrays of one length, ``R`` or
-        ``age`` is negative, ``feh`` makes a dispersion non-positive, or a
-        length scale is not positive.
+        If the positions are not finite 1-D arrays of one length, ``R`` or
+        ``age`` is negative, ``feh`` is not below 1.92 (where a dispersion
+        would vanish), ``age`` or ``feh`` does not broadcast to ``R``, or
+        a length scale is not positive.
     """
-    R, Z = _check_positions(R, Z)
-    age = np.asarray(age, dtype=np.float64)
-    feh = np.asarray(feh, dtype=np.float64)
-    if age.shape != R.shape or feh.shape != R.shape:
-        raise ValueError("age and feh must have the shape of R")
+    R = _check_radii(R)
+    Z = _check_heights(Z, R)
+    try:
+        age, feh = (
+            np.ascontiguousarray(
+                np.broadcast_to(np.asarray(x, dtype=np.float64), R.shape)
+            )
+            for x in (age, feh)
+        )
+    except ValueError:
+        raise ValueError(f"age and feh must broadcast to the shape of R {R.shape}")
     if not np.all(np.isfinite(age) & (age >= 0)):
         raise ValueError("age must be finite and non-negative")
-    # 1 + gamma_[Fe/H] [Fe/H] > 0 for both dispersions.
-    if not np.all(np.isfinite(feh) & (feh < 1.0 / 0.52)):
-        raise ValueError("feh must be finite and below 1.92")
-    _check_rotation(R_scale, R_smooth, R_solar)
+    if not np.all(np.isfinite(feh) & (feh < _FEH_MAX)):
+        raise ValueError(f"feh must be finite and below {_FEH_MAX:.2f}")
+    _check_positive(
+        R_scale=R_scale, R_smooth=R_smooth, R_solar=R_solar, R_taper=R_taper
+    )
     return _thin_disk_array(
         R,
         Z,
@@ -522,6 +534,7 @@ def thin_disk_velocity_moments(
         float(R_solar),
         _vc_solar(v_circ_solar, R_solar),
         float(dvcirc_dR),
+        float(R_taper),
     )
 
 
@@ -534,6 +547,7 @@ def thick_disk_velocity_moments(
     R_solar=8.2,
     v_circ_solar=None,
     dvcirc_dR=DVCIRC_DR,
+    R_taper=VC_TAPER,
 ):
     r"""
     Return the velocity ellipsoid of the thick disk.
@@ -563,22 +577,11 @@ def thick_disk_velocity_moments(
     R_sigma : float, optional
         E-folding length of the dispersions in kpc. Default is
         ``THICK_DISK_R_SIGMA``, 15.0.
-    R_scale : float, optional
-        Radial scale length of the number density in kpc, as in
-        `~brutus.priors.galactic.logn_disk`. Default is 2.0.
-    R_smooth : float, optional
-        Smoothing radius of the number density and of the taper of the
-        circular velocity, in kpc. Default is 2.0.
-    R_solar : float, optional
-        Distance of the Sun from the Galactic centre in kpc. Default is 8.2.
-    v_circ_solar : float, optional
-        Circular velocity at ``R_solar`` before the taper, in km/s. Default
-        is the solar V from ``solar_velocity(R_solar)`` minus the peculiar
-        12.24 km/s of Schönrich et al. (2010): 236.97 km/s for
-        ``R_solar=8.2``.
-    dvcirc_dR : float, optional
-        Slope of the circular velocity curve in km/s/kpc. Default is -1.7
-        (Eilers et al. 2019).
+    R_scale, R_smooth : float, optional
+        Radial scale length and smoothing radius of the number density in
+        kpc. Defaults are 2.0 and 2.0.
+    R_solar, v_circ_solar, dvcirc_dR, R_taper : optional
+        The rotation curve, as in `thin_disk_velocity_moments`.
 
     Returns
     -------
@@ -593,14 +596,18 @@ def thick_disk_velocity_moments(
         If ``R`` is not a finite, non-negative 1-D array, a dispersion is
         negative, or a length scale is not positive.
     """
-    R, _ = _check_positions(R, np.zeros(np.shape(R)))
+    R = _check_radii(R)
     if len(sigma_solar) != 3 or min(sigma_solar) < 0:
         raise ValueError(
             f"sigma_solar must be 3 non-negative dispersions, got {sigma_solar}"
         )
-    if not R_sigma > 0:
-        raise ValueError(f"R_sigma must be positive, got {R_sigma}")
-    _check_rotation(R_scale, R_smooth, R_solar)
+    _check_positive(
+        R_sigma=R_sigma,
+        R_scale=R_scale,
+        R_smooth=R_smooth,
+        R_solar=R_solar,
+        R_taper=R_taper,
+    )
     var_R, var_phi, var_z = (float(s) ** 2 for s in sigma_solar)
     return _thick_disk_array(
         R,
@@ -613,21 +620,8 @@ def thick_disk_velocity_moments(
         float(R_solar),
         _vc_solar(v_circ_solar, R_solar),
         float(dvcirc_dR),
+        float(R_taper),
     )
-
-
-_HALO_TABLE = np.array(
-    [
-        HALO_R,
-        HALO_F_ISO,
-        HALO_SIGMA_R_ISO,
-        HALO_SIGMA_T_ISO,
-        HALO_SIGMA_R_LOBE,
-        HALO_SIGMA_T_LOBE,
-        HALO_DELTA_LOBE,
-        HALO_V_PHI_LOBE,
-    ]
-)
 
 
 def halo_velocity_moments(R, Z):
@@ -665,10 +659,12 @@ def halo_velocity_moments(R, Z):
     Returns
     -------
     weight : `~numpy.ndarray` of shape `(N, 3)`
-        Weights of the isotropic component and the two lobes; each row
-        sums to 1.
+        Weights of the isotropic component and the lobes at
+        :math:`v_r = +\delta` and :math:`-\delta`; each row sums to 1.
     mean : `~numpy.ndarray` of shape `(N, 3, 3)`
         Mean velocity ``(v_R, v_phi, v_z)`` of each component in km/s.
+        ``velocity_to_observables(d, coord, mean[:, k], cov[:, k])``
+        projects component ``k``.
     cov : `~numpy.ndarray` of shape `(N, 3, 3, 3)`
         Velocity covariance of each component in (km/s)^2.
 
@@ -678,8 +674,8 @@ def halo_velocity_moments(R, Z):
         If ``R`` and ``Z`` are not finite 1-D arrays of the same length,
         or ``R`` is negative.
     """
-    R, Z = _check_positions(R, Z)
-    return _halo_array(R, Z, _HALO_TABLE)
+    R = _check_radii(R)
+    return _halo_array(R, _check_heights(Z, R))
 
 
 def _sightline(coord, v_sun):
@@ -801,7 +797,8 @@ def velocity_to_observables(dists, coord, mean, cov, R_solar=8.2, v_sun=None):
     cov : array_like of shape `(N, 3, 3)`
         Velocity covariance at each distance, in (km/s)^2, with no
         ``(v_R, v_phi)`` or ``(v_phi, v_z)`` covariance, as returned by
-        `disk_velocity_moments` and `halo_velocity_moments`.
+        `thin_disk_velocity_moments`, `thick_disk_velocity_moments` and each
+        component of `halo_velocity_moments`.
     R_solar : float, optional
         Distance of the Sun from the Galactic centre in kpc. Default is 8.2.
     v_sun : array_like of shape `(3,)`, optional

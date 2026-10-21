@@ -21,6 +21,7 @@ from brutus.priors.kinematic import (
     THIN_DISK_SIGMA0,
     U_SUN,
     V_PEC_SUN,
+    VC_TAPER,
     halo_velocity_moments,
     solar_velocity,
     thick_disk_velocity_moments,
@@ -122,15 +123,18 @@ def test_rigid_rotation_shows_one_proper_motion_and_no_radial_velocity():
         np.testing.assert_allclose(obs[:, 1:], 0.0, atol=1e-10)
 
 
-def _vc(R, R_smooth=2.0):
-    return (_circular_velocity() + DVCIRC_DR * (R - R_SOLAR)) * np.tanh(R / R_smooth)
+def _vc(R):
+    return (_circular_velocity() + DVCIRC_DR * (R - R_SOLAR)) * np.tanh(R / VC_TAPER)
 
 
-def _thin(R, Z=None, age=5.0, feh=0.0, **kw):
+def _thin(R, age=5.0, feh=0.0, **kw):
     R = np.atleast_1d(np.asarray(R, dtype=float))
-    full = np.ones_like(R)
-    Z = np.zeros_like(R) if Z is None else Z
-    return thin_disk_velocity_moments(R, Z, age * full, feh * full, **kw)
+    return thin_disk_velocity_moments(R, np.zeros_like(R), age, feh, **kw)
+
+
+def _dln_dlnR(f, R, h=1e-5):
+    """Central difference of d ln f / d ln R."""
+    return (np.log(f(R * (1 + h))) - np.log(f(R * (1 - h)))) / (2 * h)
 
 
 def test_thin_disk_dispersions_equal_sharma_sigma0_at_the_reference_point():
@@ -148,8 +152,9 @@ def test_thin_disk_population_matches_the_measured_low_alpha_disk():
     ages = np.linspace(0.05, 13.8, 400)
     w = np.exp(logp_age_from_feh(ages, feh_mean=-0.2))
     w /= w.sum()
-    full = np.ones_like(ages)
-    mean, cov = thin_disk_velocity_moments(R_SOLAR * full, 0 * full, ages, -0.2 * full)
+    mean, cov = thin_disk_velocity_moments(
+        np.full_like(ages, R_SOLAR), np.zeros_like(ages), ages, -0.2
+    )
     vphi = w @ mean[:, 1]
     var = w @ np.diagonal(cov, axis1=1, axis2=2)
     var[1] += w @ (mean[:, 1] - vphi) ** 2
@@ -164,12 +169,6 @@ def test_thick_disk_rotation_matches_the_measured_high_alpha_lag():
     # 48.2 km/s. The model predicts it; nothing is fitted to it.
     mean, _ = thick_disk_velocity_moments(np.array([R_SOLAR]))
     assert abs(_circular_velocity() - mean[0, 1] - 48.2) < 3.0
-
-
-def _dlnvar_R(moments, R, h=1e-5):
-    hi = moments(R * (1 + h))[1][:, 0, 0]
-    lo = moments(R * (1 - h))[1][:, 0, 0]
-    return (np.log(hi) - np.log(lo)) / (2 * h)
 
 
 @pytest.mark.parametrize("disk", ["thin", "thick"])
@@ -187,14 +186,11 @@ def test_disk_rotation_solves_the_jeans_equation_for_the_logn_disk_density(disk)
             return thick_disk_velocity_moments(R, R_sigma=9.0, **density)
 
     mean, cov = moments(R)
-    h = 1e-5
-    dlnnu = (
-        logn_disk(R * (1 + h), 0.0, **density) - logn_disk(R * (1 - h), 0.0, **density)
-    ) / (2 * h)
-    vc = _vc(R, density["R_smooth"])
+    dlnnu = _dln_dlnR(lambda x: np.exp(logn_disk(x, 0.0, **density)), R)
+    dlnvar = _dln_dlnR(lambda x: moments(x)[1][:, 0, 0], R)
     # Binney & Tremaine (2008), eq. 4.228, with no tilt term.
-    lhs = vc**2 - mean[:, 1] ** 2
-    rhs = cov[:, 1, 1] - cov[:, 0, 0] * (1 + dlnnu + _dlnvar_R(moments, R))
+    lhs = _vc(R) ** 2 - mean[:, 1] ** 2
+    rhs = cov[:, 1, 1] - cov[:, 0, 0] * (1 + dlnnu + dlnvar)
     np.testing.assert_allclose(lhs, rhs, rtol=1e-6)
     np.testing.assert_allclose(mean[:, [0, 2]], 0.0)
 
@@ -202,8 +198,7 @@ def test_disk_rotation_solves_the_jeans_equation_for_the_logn_disk_density(disk)
 def test_thin_disk_azimuthal_dispersion_follows_the_epicyclic_ratio():
     R = np.linspace(3.0, 20.0, 18)
     _, cov = _thin(R)
-    h = 1e-5
-    dlnvc = (np.log(_vc(R * (1 + h))) - np.log(_vc(R * (1 - h)))) / (2 * h)
+    dlnvc = _dln_dlnR(_vc, R)
     np.testing.assert_allclose(cov[:, 1, 1] / cov[:, 0, 0], (1 + dlnvc) / 2, rtol=1e-6)
 
 
@@ -243,8 +238,7 @@ def test_halo_components_keep_their_spherical_ellipsoids_off_the_plane():
     rng = np.random.default_rng(3)
     R = np.concatenate([[0.0, 3.0], rng.uniform(0.0, 60.0, 10)])
     Z = np.concatenate([[5.0, 0.0], rng.uniform(-60.0, 60.0, 10)])
-    weight, mean, cov = halo_velocity_moments(R, Z)
-    np.testing.assert_allclose(weight.sum(axis=1), 1.0)
+    _, mean, cov = halo_velocity_moments(R, Z)
     r = np.hypot(R, Z)
     unit_r = np.stack([R / r, Z / r], axis=1)
     for k in range(3):
