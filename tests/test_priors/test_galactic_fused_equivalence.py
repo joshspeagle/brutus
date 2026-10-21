@@ -23,8 +23,8 @@ import numpy as np
 from numba import jit, prange
 
 from brutus.priors.galactic import (
-    _age_averaged_table,
     _disk_vertical_array,
+    _thin_age_nodes,
     logp_galactic_structure,
 )
 from brutus.priors.kinematic import (
@@ -265,12 +265,10 @@ def _run_reference(dists, ell, b, feh, loga):
     has_loga = loga is not None
     R, Z = galactic_to_galactocentric_cyl(dists, ell, b, R_solar=8.2, Z_solar=0.025)
     rot = (8.2, _vc_solar(None, 8.2, DVCIRC_DR), DVCIRC_DR, VC_TAPER)
-    table = (
-        np.empty((0, 0))
+    age_nodes = (
+        (np.empty(0), np.empty(0))
         if has_loga
-        else _age_averaged_table(
-            -0.2, 0.025, rot, (13.8, 0.0, -0.5, 0.5, 2.0, 4.0, 1.0)
-        )
+        else _thin_age_nodes(-0.2, (13.8, 0.0, -0.5, 0.5, 2.0, 4.0, 1.0))
     )
     thin_z, thick_z = _disk_vertical_array(
         R,
@@ -282,7 +280,7 @@ def _run_reference(dists, ell, b, feh, loga):
         rot,
         THICK_DISK_SIGMA[2] ** 2,
         THICK_DISK_R_SIGMA,
-        table,
+        *age_nodes,
     )
     return reference_kernel(
         dists,

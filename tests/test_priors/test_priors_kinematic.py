@@ -312,7 +312,7 @@ def test_halo_components_keep_their_spherical_ellipsoids_off_the_plane():
         lambda: thick_disk_velocity_moments(np.array([8.0]), R_sigma=0.0),
         lambda: thick_disk_velocity_moments(np.array([-1.0])),
         lambda: _thin(8.0, age=-1.0),
-        lambda: _thin(8.0, feh=2.0),
+        lambda: _thin(8.0, feh=np.nan),
         lambda: _thin(8.0, v_circ_solar=-5.0),
         lambda: _thin(8.0, v_circ_solar=0.0),
         lambda: thick_disk_velocity_moments(np.array([8.0]), dvcirc_dR=np.nan),

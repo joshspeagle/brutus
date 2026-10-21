@@ -82,9 +82,11 @@ THIN_DISK_LAMBDA_L = (2300.0, 1130.0)
 THIN_DISK_ALPHA_L = (0.09, 0.58)
 THIN_DISK_GAMMA_FEH = (-0.19, -0.52)
 THIN_DISK_GAMMA_Z = (0.12, 0.20)
-# Radii in kpc where the thin-disk relations were fitted (Sharma et al. 2021).
-# Beyond them the dispersions keep their values at the edges.
+# Radii in kpc and [Fe/H] in dex where the thin-disk relations were fitted
+# (Sharma et al. 2021, Fig. 1). Beyond them the dispersions keep their
+# values at the edges.
 THIN_DISK_R_RANGE = (3.0, 20.0)
+THIN_DISK_FEH_RANGE = (-1.0, 0.5)
 
 # Thick-disk (high-[alpha/Fe]) dispersions (sigma_R, sigma_phi, sigma_z)
 # in km/s (Anguiano et al. 2020, Table 1) and the e-folding length of the
@@ -214,6 +216,15 @@ def _jeans_vphi(var_R, var_phi, dlnvar_dlnR, dlnnu_dlnR, vc):
 
 
 @jit(nopython=True, cache=True)
+def _thin_disk_feh_factor(feh):
+    """Return f_[Fe/H] of sigma_R and of sigma_z, with [Fe/H] clamped to
+    THIN_DISK_FEH_RANGE."""
+    lo, hi = THIN_DISK_FEH_RANGE
+    feh = min(max(feh, lo), hi)
+    return 1.0 + THIN_DISK_GAMMA_FEH[0] * feh, 1.0 + THIN_DISK_GAMMA_FEH[1] * feh
+
+
+@jit(nopython=True, cache=True)
 def _thin_disk_sigma0(age, feh):
     """Return the Sharma et al. (2021) (sigma_R, sigma_z) of one stellar
     model at solar L_z and z = 0: sigma_0 f_tau f_[Fe/H].
@@ -222,13 +233,10 @@ def _thin_disk_sigma0(age, feh):
     positions per model computes them once.
     """
     a = (age + 0.1) / 10.1
+    f_R, f_z = _thin_disk_feh_factor(feh)
     return (
-        THIN_DISK_SIGMA0[0]
-        * a ** THIN_DISK_BETA[0]
-        * (1.0 + THIN_DISK_GAMMA_FEH[0] * feh),
-        THIN_DISK_SIGMA0[1]
-        * a ** THIN_DISK_BETA[1]
-        * (1.0 + THIN_DISK_GAMMA_FEH[1] * feh),
+        THIN_DISK_SIGMA0[0] * a ** THIN_DISK_BETA[0] * f_R,
+        THIN_DISK_SIGMA0[1] * a ** THIN_DISK_BETA[1] * f_z,
     )
 
 
@@ -493,9 +501,6 @@ def _vc_solar(v_circ_solar, R_solar, dvcirc_dR):
     return v_circ_solar
 
 
-_FEH_MAX = -1.0 / min(THIN_DISK_GAMMA_FEH)
-
-
 def thin_disk_velocity_moments(
     R,
     Z,
@@ -524,8 +529,9 @@ def thin_disk_velocity_moments(
     + e^{-(L_z - L_{z,\odot})/\lambda_{L,v}}] / (1 + \alpha_{L,v})`. The
     angular momentum is that of a circular orbit, :math:`L_z = R\,v_c(R)`,
     so :math:`f_{L_z} = 1` at the Sun. The relations were fitted at
-    3 < R < 20 kpc; beyond that range :math:`L_z` keeps its value at the
-    edge, so the dispersions do not extrapolate. The azimuthal dispersion follows the epicyclic ratio
+    3 < R < 20 kpc and -1 < [Fe/H] < 0.5; beyond these ranges
+    :math:`L_z` and [Fe/H] keep their values at the edges, so the
+    dispersions do not extrapolate. The azimuthal dispersion follows the epicyclic ratio
     :math:`\sigma_\phi^2 / \sigma_R^2 = (1 + d\ln v_c / d\ln R) / 2`.
 
     The mean rotation is the radial Jeans solution (Binney & Tremaine 2008,
@@ -603,8 +609,8 @@ def thin_disk_velocity_moments(
         raise ValueError(f"age and feh must broadcast to the shape of R {R.shape}")
     if not np.all(np.isfinite(age) & (age >= 0)):
         raise ValueError("age must be finite and non-negative")
-    if not np.all(np.isfinite(feh) & (feh < _FEH_MAX)):
-        raise ValueError(f"feh must be finite and below {_FEH_MAX:.2f}")
+    if not np.all(np.isfinite(feh)):
+        raise ValueError("feh must be finite")
     _check_positive(
         R_scale=R_scale, R_smooth=R_smooth, R_solar=R_solar, R_taper=R_taper
     )

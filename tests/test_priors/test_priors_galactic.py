@@ -54,11 +54,14 @@ def _phi(abs_z, S):
     return quad(lambda t: _Kz(t, S), 0, abs_z * 1000.0, **_QUAD)[0]
 
 
-def _default_table():
+def _no_age_thin(R, abs_Z, feh):
+    """Thin-disk ln nu(|Z|) - ln nu(|Z_sun|) without an age, from the
+    production kernel at the default parameters."""
     rot = (8.2, _VC_SUN, kin.DVCIRC_DR, kin.VC_TAPER)
-    return gal._age_averaged_table(
-        -0.2, 0.025, rot, (13.8, 0.0, -0.5, 0.5, 2.0, 4.0, 1.0)
-    )
+    nodes = gal._thin_age_nodes(-0.2, (13.8, 0.0, -0.5, 0.5, 2.0, 4.0, 1.0))
+    R, abs_Z, feh = (np.atleast_1d(np.asarray(x, dtype=float)) for x in (R, abs_Z, feh))
+    args = (R, abs_Z, 0.025, np.empty(0), feh, False, rot, 1.0, 1.0)
+    return gal._disk_vertical_array(*args, *nodes)[0]
 
 
 def _vertical_reference(R, Z, age, feh):
@@ -76,7 +79,7 @@ def _vertical_reference(R, Z, age, feh):
         sig = (
             kin.THIN_DISK_SIGMA0[1]
             * ((age[i] + 0.1) / 10.1) ** kin.THIN_DISK_BETA[1]
-            * (1 + kin.THIN_DISK_GAMMA_FEH[1] * feh[i])
+            * (1 + kin.THIN_DISK_GAMMA_FEH[1] * np.clip(feh[i], -1.0, 0.5))
             * f_L
         )
         thin[i] = _thin_lnnu(abs(Z[i]), S, sig) - _thin_lnnu(0.025, S, sig)
@@ -693,33 +696,48 @@ class TestVerticalJeans:
         thin, thick, _ = no_age[1]["number_density"]
         np.testing.assert_allclose(thin, logn_disk(R, 0.025) + vol, rtol=1e-12)
 
-    def test_age_averaged_table_matches_direct_average(self):
-        table = _default_table()
-
+    @pytest.mark.parametrize("feh", [-0.8, -0.2, 0.3])
+    def test_age_average_matches_quadrature_over_ages(self, feh):
+        # Without an age, the thin disk averages over the age prior of the
+        # thin disk (at feh_thin), with the star's own [Fe/H] in sigma_z.
         def prior(age):
             return np.exp(logp_age_from_feh(np.array([age]), -0.2)[0])
 
-        def expected(R, abs_Z):
+        for R, abs_Z in [(4.0, 0.5), (8.25, 0.3), (8.25, 2.0), (15.0, 1.0)]:
+
             def weighted(age):
                 args = np.array([R]), np.array([abs_Z]), np.array([age])
                 return prior(age) * np.exp(
-                    _vertical_reference(*args, np.array([-0.2]))[0][0]
+                    _vertical_reference(*args, np.array([feh]))[0][0]
                 )
 
-            return np.log(
+            expected = np.log(
                 quad(weighted, 0, 13.8, epsrel=1e-10)[0]
                 / quad(prior, 0, 13.8, epsrel=1e-10)[0]
             )
+            assert np.isclose(_no_age_thin(R, abs_Z, feh)[0], expected, atol=1e-4)
 
-        # Each row is shifted to be 0 at |Z_sun| between the nodes, so
-        # compare differences from the |Z| = 0 node within a row.
-        for R, abs_Z in [(4.0, 0.5), (8.25, 0.3), (8.25, 2.0), (15.0, 1.0)]:
-            i, j = round(R / gal._TABLE_DR), round(abs_Z / gal._TABLE_DZ)
-            assert np.isclose(
-                table[i, j] - table[i, 0],
-                expected(R, abs_Z) - expected(R, 0.0),
-                rtol=1e-9,
-            )
+    def test_metal_poor_thin_disk_stars_lie_farther_from_the_plane(self):
+        # The star's [Fe/H] sets sigma_z with and without an age.
+        z = np.full(3, 1.0)
+        feh = np.array([-0.8, -0.2, 0.3])
+        no_age = _no_age_thin(np.full(3, 8.2), z, feh)
+        assert no_age[0] > no_age[1] > no_age[2]
+        lnp = [
+            logp_galactic_structure(
+                np.array([1.0]),
+                (0.0, 90.0),
+                feh=[f],
+                loga=[9.6],
+                return_components=True,
+            )[1]["number_density"][0][0]
+            for f in feh
+        ]
+        assert lnp[0] > lnp[1] > lnp[2]
+
+    def test_feh_outside_the_fitted_range_takes_the_edge_value(self):
+        for feh, edge in [(-2.5, -1.0), (1.0, 0.5), (3.0, 0.5)]:
+            assert kin._thin_disk_sigma0(4.0, feh) == kin._thin_disk_sigma0(4.0, edge)
 
     @staticmethod
     def _scale_height(lnnu, z):
@@ -729,8 +747,7 @@ class TestVerticalJeans:
         # New result: scale heights near 0.3 and 0.9 kpc (Juric et al. 2008)
         # follow from the dispersions and the potential.
         z = np.linspace(0.3, 1.5, 25)
-        table = _default_table()
-        thin = [gal._table_lookup(table, 8.2, x) for x in z]
+        thin = _no_age_thin(np.full(z.size, 8.2), z, np.full(z.size, -0.2))
         assert 0.25 < self._scale_height(thin, z) < 0.4
         z = np.linspace(0.5, 2.0, 25)
         zero = kin._vertical_potential(0.0)
@@ -768,12 +785,6 @@ class TestVerticalInputs:
             logp_galactic_structure(np.array([1.0]), (x, 30.0), **kw)[0] for x in ell
         ]
         np.testing.assert_allclose(lnp, each, rtol=1e-12)
-
-    def test_feh_where_the_thin_disk_dispersion_vanishes_raises(self):
-        with pytest.raises(ValueError, match="feh"):
-            logp_galactic_structure(
-                np.array([1.0]), (0.0, 30.0), feh=np.array([2.0]), loga=np.array([9.0])
-            )
 
     @pytest.mark.parametrize("name", ["R_taper", "thick_sigma_z", "thick_R_sigma"])
     @pytest.mark.parametrize("value", [0.0, -2.0])
