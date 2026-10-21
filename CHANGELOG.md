@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-21
+
+This release collects the pull requests merged since 1.2.0, #71 to #281,
+most of them from the fix plan of #99. It fixes the statistics of the
+individual-star fit, the priors, the population and line-of-sight fits,
+and the photometric offsets, and it validates the inputs of the public
+functions. Results differ from 1.2.0 and from the paper (Speagle et al.
+2025): see the entries marked *(output-changing)*. Some arguments and
+attributes are removed, and some inputs that 1.2.0 ignored now raise
+errors. The [migration
+guide](https://brutus.readthedocs.io/en/latest/migration.html) lists
+each change a user must make.
+
 ### Fixed — statistical correctness *(output-changing)*
 
 - **The `max_models` cap no longer biases the posterior.** Above the
