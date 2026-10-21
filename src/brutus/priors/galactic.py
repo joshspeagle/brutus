@@ -66,12 +66,11 @@ import numpy as np
 from numba import jit, prange
 
 from brutus.priors.kinematic import (
-    DVCIRC_DR,
     THICK_DISK_R_SIGMA,
     THICK_DISK_SIGMA,
-    VC_TAPER,
     _check_positive,
     _circular_velocity,
+    _logn_disk_dlnR,
     _potential_scale,
     _thick_disk_scale,
     _thick_disk_vertical,
@@ -79,6 +78,7 @@ from brutus.priors.kinematic import (
     _thin_disk_fL,
     _thin_disk_integrals,
     _thin_disk_L_refs,
+    _thin_disk_mean_L,
     _thin_disk_sigma0,
     _thin_disk_vertical,
     _vc_solar,
@@ -107,7 +107,7 @@ _AGE_NODES = 32
 
 @lru_cache(maxsize=16)
 def _thin_age_nodes(feh_thin, age_args):
-    """Return 1 / sigma_z^2 of the thin-disk model at [Fe/H] = 0 for each
+    """Return the thin-disk (sigma_R, sigma_z) model at [Fe/H] = 0 for each
     node of the age average, and the log weights of the nodes, whose
     exponentials sum to 1 under the age prior
     ``logp_age_from_feh(age, feh_thin, *age_args)``. The arrays are
@@ -120,10 +120,8 @@ def _thin_age_nodes(feh_thin, age_args):
     x, w = np.polynomial.legendre.leggauss(_AGE_NODES)
     ages = 0.5 * (hi - lo) * (x + 1.0) + lo
     ln_w = np.log(w) + logp_age_from_feh(ages, feh_thin, *age_args)
-    nodes = (
-        np.array([_thin_disk_sigma0(a, 0.0)[1] ** -2 for a in ages]),
-        ln_w - np.logaddexp.reduce(ln_w),
-    )
+    sig = np.array([_thin_disk_sigma0(a, 0.0) for a in ages])
+    nodes = (sig[:, 0].copy(), sig[:, 1].copy(), ln_w - np.logaddexp.reduce(ln_w))
     for a in nodes:
         a.flags.writeable = False
     return nodes
@@ -134,7 +132,7 @@ def _vertical_solar(abs_Z_solar, rot):
     """Return what ``_disk_vertical_terms`` needs that is fixed per call, as
     one flat tuple (numba's parallel loops take no nested tuples): the L_z
     references of the thin disk and both profiles' terms at the Sun's
-    height. ``rot`` is (R_solar, vc_solar, dvc_dR, R_taper)."""
+    height. ``rot`` is (R_solar, vc_solar)."""
     L_solar, L_range = _thin_disk_L_refs(*rot)
     return (
         (L_solar,)
@@ -152,36 +150,46 @@ def _disk_vertical_terms(
     feh,
     has_age,
     rot,
+    thin_R,
     solar,
     thick_var_z,
     thick_R_sigma,
-    age_ivar,
+    age_sig_R,
+    age_sig_z,
     age_ln_w,
 ):
     """Return ln nu(|Z|) - ln nu(|Z_sun|) of the thin and thick disks.
 
     With an age, the thin disk uses that age's vertical dispersion. Without
-    one, it averages the profile over the age nodes ``age_ivar`` and
-    ``age_ln_w`` from ``_thin_age_nodes``. [Fe/H] scales sigma_z in both.
-    ``solar`` comes from ``_vertical_solar``.
+    one, it averages the profile over the age nodes ``age_sig_R``,
+    ``age_sig_z`` and ``age_ln_w`` from ``_thin_age_nodes``. [Fe/H] scales
+    the dispersions in both, and f_L is taken at the population's mean L_z,
+    which uses the radial density gradient of the thin disk with
+    ``thin_R`` = (scale length, smoothing radius). ``solar`` comes from
+    ``_vertical_solar``.
     """
     L_solar, L_lo, L_hi, t0, t1, t2, p0, p1 = solar
     L_range, thin_solar, phi_solar = (L_lo, L_hi), (t0, t1, t2), (p0, p1)
     S = _potential_scale(R, rot[0])
-    vc = _circular_velocity(R, *rot)[0]
-    f_L = _thin_disk_fL(R * vc, L_solar, L_range)[1]
+    vc, dlnvc = _circular_velocity(R, *rot)
+    dlnnu = _logn_disk_dlnR(R, sqrt(R * R + thin_R[1] * thin_R[1]), thin_R[0])
     a, b = _thin_disk_vertical(_thin_disk_integrals(abs_Z), thin_solar, S)
     if has_age:
-        sig_z0 = _thin_disk_sigma0(age, feh)[1] * f_L
-        thin = a - b / (sig_z0 * sig_z0)
+        sig_R0, sig_z0 = _thin_disk_sigma0(age, feh)
+        L = _thin_disk_mean_L(R, 0.0, sig_R0, vc, dlnvc, L_solar, L_range, dlnnu)
+        sig_z = sig_z0 * _thin_disk_fL(L, L_solar, L_range)[1]
+        thin = a - b / (sig_z * sig_z)
     else:
         # a + ln sum_k w_k exp(-b / sig_k^2), with a running maximum.
-        scale = _thin_disk_feh_factor(feh)[1] * f_L
-        c = b / (scale * scale)
-        mx = age_ln_w[0] - c * age_ivar[0]
-        acc = 1.0
-        for k in range(1, len(age_ivar)):
-            v = age_ln_w[k] - c * age_ivar[k]
+        f_R, f_z = _thin_disk_feh_factor(feh)
+        mx = LOG_ZERO
+        acc = 0.0
+        for k in range(len(age_ln_w)):
+            L = _thin_disk_mean_L(
+                R, 0.0, age_sig_R[k] * f_R, vc, dlnvc, L_solar, L_range, dlnnu
+            )
+            sig_z = age_sig_z[k] * f_z * _thin_disk_fL(L, L_solar, L_range)[1]
+            v = age_ln_w[k] - b / (sig_z * sig_z)
             if v > mx:
                 acc = acc * exp(mx - v) + 1.0
                 mx = v
@@ -202,9 +210,11 @@ def _disk_vertical_array(
     feh,
     has_age,
     rot,
+    thin_R,
     thick_var_z,
     thick_R_sigma,
-    age_ivar,
+    age_sig_R,
+    age_sig_z,
     age_ln_w,
 ):
     solar = _vertical_solar(abs_Z_solar, rot)
@@ -218,10 +228,12 @@ def _disk_vertical_array(
             feh[i],
             has_age,
             rot,
+            thin_R,
             solar,
             thick_var_z,
             thick_R_sigma,
-            age_ivar,
+            age_sig_R,
+            age_sig_z,
             age_ln_w,
         )
     return thin, thick
@@ -249,11 +261,10 @@ def _galactic_prior_fused(
     f_thick,
     # Vertical profiles
     vc_solar,
-    dvc_dR,
-    R_taper,
     thick_var_z,
     thick_R_sigma,
-    age_ivar,
+    age_sig_R,
+    age_sig_z,
     age_ln_w,
     # Halo
     Rs_halo,
@@ -281,8 +292,8 @@ def _galactic_prior_fused(
     """Fused galactic prior: coords + density + vol + met + age in one pass.
 
     The disk vertical profiles come from ``_disk_vertical_terms``; without
-    ``loga``, the thin disk averages over the age nodes ``age_ivar`` and
-    ``age_ln_w``.
+    ``loga``, the thin disk averages over the age nodes ``age_sig_R``,
+    ``age_sig_z`` and ``age_ln_w``.
 
     ``sin_l``/``cos_l``/``sin_b``/``cos_b`` are the precomputed sine/cosine
     of the (scalar) Galactic longitude/latitude; the Galactocentric (R, Z)
@@ -310,7 +321,8 @@ def _galactic_prior_fused(
     R_solar_eff_thin = sqrt(R_solar**2 + Rs_thin**2)
     R_solar_eff_thick = sqrt(R_solar**2 + Rs_thick**2)
     abs_Z_solar = abs(Z_solar)
-    rot = (R_solar, vc_solar, dvc_dR, R_taper)
+    rot = (R_solar, vc_solar)
+    thin_R = (R_thin, Rs_thin)
     solar = _vertical_solar(abs_Z_solar, rot)
     ln_f_thick = log(f_thick)
     ln_f_halo = log(f_halo)
@@ -365,10 +377,12 @@ def _galactic_prior_fused(
             feh_arr[i] if has_feh else feh_thin_mean,
             has_loga,
             rot,
+            thin_R,
             solar,
             thick_var_z,
             thick_R_sigma,
-            age_ivar,
+            age_sig_R,
+            age_sig_z,
             age_ln_w,
         )
 
@@ -836,8 +850,6 @@ def logp_galactic_structure(
     max_sigma=4.0,
     min_sigma=1.0,
     v_circ_solar=None,
-    dvcirc_dR=DVCIRC_DR,
-    R_taper=VC_TAPER,
     thick_sigma_z=THICK_DISK_SIGMA[2],
     thick_R_sigma=THICK_DISK_R_SIGMA,
     return_components=False,
@@ -921,18 +933,12 @@ def logp_galactic_structure(
     min_sigma : float, optional
         Minimum age dispersion in Gyr. Default is 1.0.
     v_circ_solar : float or None, optional
-        Circular velocity at the Sun in km/s, before the taper. Default
-        (None) is the Sgr A* proper motion less the solar peculiar velocity,
-        as in `~brutus.priors.solar_velocity`.
-    dvcirc_dR : float, optional
-        Slope of the rotation curve in km/s/kpc. Default is
-        ``brutus.priors.kinematic.DVCIRC_DR``.
-    R_taper : float, optional
-        Radius in kpc of the taper ``tanh(R / R_taper)`` that takes the
-        rotation curve to 0 at the centre. Default is
-        ``brutus.priors.kinematic.VC_TAPER``. The rotation curve sets the
-        angular momentum on which the thin-disk vertical dispersion
-        depends.
+        Circular velocity at the Sun in km/s, which scales the measured
+        rotation curve of `~brutus.priors.thin_disk_velocity_moments`.
+        Default (None) is the Sgr A* proper motion less the solar peculiar
+        velocity, as in `~brutus.priors.solar_velocity`. The rotation curve
+        sets the angular momentum on which the thin-disk vertical
+        dispersion depends.
     thick_sigma_z : float, optional
         Vertical dispersion of the thick disk at the Sun in km/s. Default
         is ``brutus.priors.kinematic.THICK_DISK_SIGMA[2]``.
@@ -953,9 +959,8 @@ def logp_galactic_structure(
     ------
     ValueError
         If ``labels``, ``feh`` or ``loga`` does not have one finite entry
-        per distance; if ``R_taper``,
-        ``thick_sigma_z`` or ``thick_R_sigma`` is not positive; or if the
-        rotation curve is not positive at 0 < R < 25 kpc.
+        per distance; if ``thick_sigma_z`` or ``thick_R_sigma`` is not
+        positive; or if ``v_circ_solar`` is not positive.
 
     Notes
     -----
@@ -1069,15 +1074,8 @@ def logp_galactic_structure(
 
     # Vertical profiles: the rotation curve, the thick disk dispersion and,
     # without an age, the nodes of the thin-disk age average.
-    _check_positive(
-        R_taper=R_taper, thick_sigma_z=thick_sigma_z, thick_R_sigma=thick_R_sigma
-    )
-    rot = (
-        float(R_solar),
-        _vc_solar(v_circ_solar, R_solar, dvcirc_dR),
-        float(dvcirc_dR),
-        float(R_taper),
-    )
+    _check_positive(thick_sigma_z=thick_sigma_z, thick_R_sigma=thick_R_sigma)
+    rot = (float(R_solar), _vc_solar(v_circ_solar, R_solar))
     thick = (float(thick_sigma_z) ** 2, float(thick_R_sigma))
     if loga is None:
         age_args = (
@@ -1091,7 +1089,7 @@ def logp_galactic_structure(
         )
         age_nodes = _thin_age_nodes(float(feh_thin), tuple(map(float, age_args)))
     else:
-        age_nodes = (np.empty(0), np.empty(0))
+        age_nodes = (np.empty(0),) * 3
 
     # Fast path: use fused numba kernel when labels are provided and
     # return_components is not needed. Eliminates ~15 temporary arrays
@@ -1177,6 +1175,7 @@ def logp_galactic_structure(
         np.full(R.size, feh_thin) if feh is None else per_point(feh),
         loga is not None,
         rot,
+        (float(R_thin), float(Rs_thin)),
         *thick,
         *age_nodes,
     )

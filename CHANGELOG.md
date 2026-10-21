@@ -13,10 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Galactic components: the thin disk with the age, angular-momentum,
   [Fe/H] and height relations of Sharma et al. (2021), the thick disk with
   the high-[alpha/Fe] dispersions of Anguiano et al. (2020), and the halo
-  mixture of Lancaster et al. (2019). The disk rotation is the radial Jeans
-  solution for the `logn_disk` density. The module also gives the solar
-  velocity from the Sgr A* proper motion and the projection of an
-  ellipsoid to Galactic proper motions and radial velocity.
+  mixture of Lancaster et al. (2019). The thin-disk dispersions use the
+  population's mean angular momentum. The disk rotation is the radial
+  Jeans solution for the `logn_disk` density in the measured rotation
+  curve of Sofue & Kohno (2025) inside 5 kpc and Eilers et al. (2019)
+  outside, shipped as `priors/rotation_curve.dat`. The module also gives
+  the solar velocity from the Sgr A* proper motion and the projection of
+  an ellipsoid to Galactic proper motions and radial velocity.
   `brutus.utils.pm_equatorial_to_galactic` converts Gaia proper motions
   and their covariance to Galactic coordinates. The fit does not use them
   yet (#275).
@@ -228,10 +231,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   thin-disk age prior; the star's [Fe/H] enters with or without an age.
   The thick disk is isothermal. In the plane of the Sun the prior does
   not change; above it, the age-averaged thin disk falls by e in
-  0.32 kpc and the thick disk in 0.99 kpc. `Z_thin` and `Z_thick` are
+  0.33 kpc and the thick disk in 0.99 kpc. `Z_thin` and `Z_thick` are
   removed. The new keywords `thick_sigma_z` and `thick_R_sigma` set the
-  thick disk, and `v_circ_solar`, `dvcirc_dR` and `R_taper` the rotation
-  curve. To change the thick disk height, pass a smaller `thick_sigma_z`
+  thick disk, and `v_circ_solar` scales the rotation curve. To change the thick disk height, pass a smaller `thick_sigma_z`
   instead of `Z_thick`. The thin-disk dispersions, here and in
   `thin_disk_velocity_moments`, hold [Fe/H] at -1 or 0.5 outside that
   range, where Sharma et al. (2021) fitted them. A non-finite `feh` or

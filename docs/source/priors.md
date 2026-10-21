@@ -71,7 +71,7 @@ $$
 
 with $\gamma_z = 0.20\ {\rm kpc}^{-1}$. Younger stars have smaller $\sigma_{z,0}$ and lie closer to the midplane. Without `loga`, the thin-disk profile is the average over the thin-disk age distribution (the table below), by 32-point Gauss-Legendre quadrature over the ages where it has weight. The star's `feh` sets $\sigma_{z,0}$ with or without `loga`; without `feh`, the thin-disk mean [Fe/H] does. [Fe/H] outside $-1$ to $0.5$, the range of the fit, takes the edge value. The thick disk is isothermal, with $\sigma_z = 43.6$ km/s from {func}`~brutus.priors.thick_disk_velocity_moments`, so $\ln \nu = -\Phi_z / \sigma_z^2$. Both profiles are normalized at the Sun's height at every radius, so the local fractions $f_c$ keep their meaning.
 
-The scale heights follow from these dispersions instead of being set. At the Sun, the age-averaged thin disk falls by $e$ in 0.32 kpc between 0.3 and 1.5 kpc, and the thick disk in 0.99 kpc between 0.5 and 2 kpc. Star counts give 0.3 and 0.9 kpc {cite:p}`juric2008`. A single thin-disk age is close to Gaussian near the plane, so its height depends on how it is measured; its column height $\Sigma / 2\nu_0$ at [Fe/H] $= -0.2$ is 0.16 kpc at 1 Gyr and 0.58 kpc at 12 Gyr.
+The scale heights follow from these dispersions instead of being set. At the Sun, the age-averaged thin disk falls by $e$ in 0.33 kpc between 0.3 and 1.5 kpc, and the thick disk in 0.99 kpc between 0.5 and 2 kpc. Star counts give 0.3 and 0.9 kpc {cite:p}`juric2008`. A single thin-disk age is close to Gaussian near the plane, so its height depends on how it is measured; its column height $\Sigma / 2\nu_0$ at [Fe/H] $= -0.2$ is 0.16 kpc at 1 Gyr and 0.60 kpc at 12 Gyr.
 
 The halo is a power law, flattened near the centre and rounder far from it:
 
@@ -99,7 +99,7 @@ All components use $R_s = 2$ kpc.
 ```
 
 :::{div} figure-caption
-The density and volume terms of the default Galactic prior, per unit $\ln d$, the variable that brutus samples. The metallicity and age terms are left out, so a given grid model's prior can differ. Left: each sightline scaled to a peak of 1. Right: the b = 30° total and its components, scaled by the total's peak. The growing volume pushes the peak out to 10 to 20 kpc. Off the plane, the disks add a second peak at 3 to 4 kpc: at b = 30° it is the higher one, and at b = 90° it is 0.38 times the halo peak. The likelihood usually confines the distance far more than this.
+The density and volume terms of the default Galactic prior, per unit $\ln d$, the variable that brutus samples. The metallicity and age terms are left out, so a given grid model's prior can differ. Left: each sightline scaled to a peak of 1. Right: the b = 30° total and its components, scaled by the total's peak. The growing volume pushes the peak out to 10 to 20 kpc. Off the plane, the disks add a second peak at 3 to 4 kpc: at b = 30° it is the higher one, and at b = 90° it is 0.39 times the halo peak. The likelihood usually confines the distance far more than this.
 :::
 
 **Metallicity.** When the labels include `feh`, each component has a Gaussian [Fe/H] distribution (the table). The components are weighted by their density at the star's position. A metal-poor star near the Sun is therefore more likely to belong to the halo.

@@ -25,14 +25,26 @@ _2PI_G = 2.0 * np.pi * 4.30091e-3
 _QUAD = dict(epsabs=1e-12, epsrel=1e-12, limit=500)
 
 
-# v_circ_solar: the linear rotation curve at the Sun, before the taper.
+# v_c at the Sun: the default scale of the measured rotation curve.
 _VC_SUN = kin.solar_velocity(8.2)[1] - kin.V_PEC_SUN
+_ROT = (8.2, _VC_SUN)
 
 
 def _vc(R):
-    """Default rotation curve, written out from its definition."""
-    R_lin = np.minimum(R, kin.VC_LINEAR_R_MAX)
-    return (_VC_SUN + kin.DVCIRC_DR * (R_lin - 8.2)) * np.tanh(R / kin.VC_TAPER)
+    """The rotation curve and d ln v_c / d ln R (tested in the kinematic
+    tests)."""
+    return kin._circular_velocity(float(R), *_ROT)
+
+
+def _mean_L(R, age, feh):
+    """Mean L_z of a thin-disk population at R in the midplane, from the
+    kinematic kernels (tested in the kinematic tests), with the default
+    thin-disk density (R_scale = 2.6, R_smooth = 2)."""
+    vc, dlnvc = _vc(R)
+    L_refs = (8.2 * _vc(8.2)[0], tuple(r * _vc(r)[0] for r in kin.THIN_DISK_R_RANGE))
+    dlnnu = -R * R / (2.6 * np.hypot(R, 2.0))
+    sig_R0 = kin._thin_disk_sigma0(age, feh)[0]
+    return kin._thin_disk_mean_L(R, 0.0, sig_R0, vc, dlnvc, *L_refs, dlnnu), L_refs
 
 
 def _Kz(t, S):
@@ -60,10 +72,9 @@ _AGE_ARGS = (13.8, 0.0, -0.5, 0.5, 2.0, 4.0, 1.0)
 def _no_age_thin(R, abs_Z, feh, age_args=_AGE_ARGS):
     """Thin-disk ln nu(|Z|) - ln nu(|Z_sun|) without an age, from the
     production kernel, with the thin-disk age prior at feh_thin = -0.2."""
-    rot = (8.2, _VC_SUN, kin.DVCIRC_DR, kin.VC_TAPER)
     nodes = gal._thin_age_nodes(-0.2, age_args)
     R, abs_Z, feh = (np.atleast_1d(np.asarray(x, dtype=float)) for x in (R, abs_Z, feh))
-    args = (R, abs_Z, 0.025, np.empty(0), feh, False, rot, 1.0, 1.0)
+    args = (R, abs_Z, 0.025, np.empty(0), feh, False, _ROT, (2.6, 2.0), 1.0, 1.0)
     return gal._disk_vertical_array(*args, *nodes)[0]
 
 
@@ -72,11 +83,10 @@ def _vertical_reference(R, Z, age, feh):
     vertical Jeans integral done by quadrature (an independent reference)."""
     thin = np.empty(len(R))
     thick = np.empty(len(R))
-    lo, hi = kin.THIN_DISK_R_RANGE
-    L_sun = 8.2 * _vc(8.2)
     for i in range(len(R)):
         S = np.exp(-(np.clip(R[i], 4.0, 9.0) - 8.2) / kin.VERTICAL_R_SCALE)
-        L = np.clip(R[i] * _vc(R[i]), lo * _vc(lo), hi * _vc(hi))
+        L, (L_sun, L_range) = _mean_L(R[i], age[i], feh[i])
+        L = np.clip(L, *L_range)
         a, lam = kin.THIN_DISK_ALPHA_L[1], kin.THIN_DISK_LAMBDA_L[1]
         f_L = (a * (L / L_sun) ** 2 + np.exp(-(L - L_sun) / lam)) / (1 + a)
         sig = (
@@ -786,7 +796,7 @@ class TestVerticalInputs:
         with pytest.raises(ValueError, match=name):
             logp_galactic_structure(np.array([1.0]), (0.0, 30.0), **kw)
 
-    @pytest.mark.parametrize("name", ["R_taper", "thick_sigma_z", "thick_R_sigma"])
+    @pytest.mark.parametrize("name", ["v_circ_solar", "thick_sigma_z", "thick_R_sigma"])
     @pytest.mark.parametrize("value", [0.0, -2.0])
     def test_non_positive_vertical_parameters_raise(self, name, value):
         with pytest.raises(ValueError, match=name):

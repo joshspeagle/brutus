@@ -27,13 +27,7 @@ from brutus.priors.galactic import (
     _thin_age_nodes,
     logp_galactic_structure,
 )
-from brutus.priors.kinematic import (
-    DVCIRC_DR,
-    THICK_DISK_R_SIGMA,
-    THICK_DISK_SIGMA,
-    VC_TAPER,
-    _vc_solar,
-)
+from brutus.priors.kinematic import THICK_DISK_R_SIGMA, THICK_DISK_SIGMA, _vc_solar
 from brutus.utils.math import _truncnorm_lognorm_scalar, galactic_to_galactocentric_cyl
 
 _LOG_2PI = log(2.0 * pi)
@@ -264,9 +258,9 @@ def _run_reference(dists, ell, b, feh, loga):
     has_feh = feh is not None
     has_loga = loga is not None
     R, Z = galactic_to_galactocentric_cyl(dists, ell, b, R_solar=8.2, Z_solar=0.025)
-    rot = (8.2, _vc_solar(None, 8.2, DVCIRC_DR), DVCIRC_DR, VC_TAPER)
+    rot = (8.2, _vc_solar(None, 8.2))
     age_nodes = (
-        (np.empty(0), np.empty(0))
+        (np.empty(0),) * 3
         if has_loga
         else _thin_age_nodes(-0.2, (13.8, 0.0, -0.5, 0.5, 2.0, 4.0, 1.0))
     )
@@ -278,6 +272,7 @@ def _run_reference(dists, ell, b, feh, loga):
         feh if has_feh else np.full(len(R), -0.2),
         has_loga,
         rot,
+        (2.6, 2.0),
         THICK_DISK_SIGMA[2] ** 2,
         THICK_DISK_R_SIGMA,
         *age_nodes,
