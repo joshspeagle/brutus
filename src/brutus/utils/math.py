@@ -745,8 +745,9 @@ def pm_equatorial_to_galactic(
     Raises
     ------
     ValueError
-        If the inputs do not share one 1-D shape, an error is negative, or
-        a correlation is outside [-1, 1].
+        If the inputs do not share one 1-D shape, an error is negative, a
+        correlation is outside [-1, 1], ``ra`` is not finite or ``dec`` is
+        outside [-90, 90].
     """
     ra, dec, pmra, pmdec, err_a, err_d, corr = (
         np.asarray(x, dtype=np.float64)
@@ -760,13 +761,16 @@ def pm_equatorial_to_galactic(
         raise ValueError("pmra_error and pmdec_error must be non-negative")
     if np.any(np.abs(corr) > 1):
         raise ValueError("pmra_pmdec_corr must be in [-1, 1]")
+    if not (np.all(np.isfinite(ra)) and np.all(np.abs(dec) <= 90)):
+        raise ValueError("ra must be finite and dec in [-90, 90]")
 
     ra_g, dec_g = np.radians(_RA_NGP), np.radians(_DEC_NGP)
     ra, dec = np.radians(ra), np.radians(dec)
     c1 = np.sin(dec_g) * np.cos(dec) - np.cos(dec_g) * np.sin(dec) * np.cos(ra - ra_g)
     c2 = np.cos(dec_g) * np.sin(ra - ra_g)
     cos_b = np.hypot(c1, c2)
-    c, s = c1 / cos_b, c2 / cos_b
+    with np.errstate(invalid="ignore", divide="ignore"):  # NaN at the poles
+        c, s = c1 / cos_b, c2 / cos_b
 
     pm = np.stack([c * pmra + s * pmdec, -s * pmra + c * pmdec], axis=1)
     var_a, var_d = err_a**2, err_d**2

@@ -18,9 +18,12 @@ from brutus.priors.kinematic import (
     HALO_SIGMA_T_LOBE,
     HALO_V_PHI_LOBE,
     PM_SGRA,
+    THICK_DISK_R_RANGE,
+    THIN_DISK_R_RANGE,
     THIN_DISK_SIGMA0,
     U_SUN,
     V_PEC_SUN,
+    VC_LINEAR_R_MAX,
     VC_TAPER,
     halo_velocity_moments,
     solar_velocity,
@@ -124,7 +127,10 @@ def test_rigid_rotation_shows_one_proper_motion_and_no_radial_velocity():
 
 
 def _vc(R):
-    return (_circular_velocity() + DVCIRC_DR * (R - R_SOLAR)) * np.tanh(R / VC_TAPER)
+    R_lin = np.minimum(R, VC_LINEAR_R_MAX)
+    return (_circular_velocity() + DVCIRC_DR * (R_lin - R_SOLAR)) * np.tanh(
+        R / VC_TAPER
+    )
 
 
 def _thin(R, age=5.0, feh=0.0, **kw):
@@ -173,7 +179,7 @@ def test_thick_disk_rotation_matches_the_measured_high_alpha_lag():
 
 @pytest.mark.parametrize("disk", ["thin", "thick"])
 def test_disk_rotation_solves_the_jeans_equation_for_the_logn_disk_density(disk):
-    R = np.linspace(3.0, 20.0, 18)
+    R = np.linspace(4.5, 12.5, 17)
     density = dict(R_scale=2.3, R_smooth=1.5)
     if disk == "thin":
 
@@ -208,6 +214,33 @@ def test_disk_rotation_stays_below_circular_and_vanishes_at_the_centre(disk):
     mean = (_thin(R) if disk == "thin" else thick_disk_velocity_moments(R))[0]
     assert mean[0, 1] == 0.0
     assert np.all(mean[:, 1] <= _vc(R) * (1 + 1e-12))
+
+
+def test_disk_dispersions_keep_their_edge_values_outside_the_fitted_radii():
+    lo, hi = THIN_DISK_R_RANGE
+    _, cov = _thin(np.array([lo, 0.5 * lo, hi, 2 * hi]))
+    np.testing.assert_allclose(cov[1, [0, 2], [0, 2]], cov[0, [0, 2], [0, 2]])
+    np.testing.assert_allclose(cov[3, [0, 2], [0, 2]], cov[2, [0, 2], [0, 2]])
+    lo, hi = THICK_DISK_R_RANGE
+    _, cov = thick_disk_velocity_moments(np.array([lo, 0.5 * lo, hi, 10 * hi]))
+    np.testing.assert_allclose(cov[1], cov[0])
+    np.testing.assert_allclose(cov[3], cov[2])
+
+
+def test_velocity_ellipsoids_stay_positive_definite_at_all_radii():
+    R = np.linspace(0.0, 300.0, 3001)
+    Z = 0.3 * R
+    for _, cov in (_thin(R), thick_disk_velocity_moments(R)):
+        assert np.all(np.linalg.eigvalsh(cov) > 0)
+    _, _, cov = halo_velocity_moments(R, Z)
+    assert np.all(np.linalg.eigvalsh(cov) > 0)
+
+
+def test_rotation_curve_is_flat_beyond_the_fitted_radii():
+    R = np.array([VC_LINEAR_R_MAX, 2 * VC_LINEAR_R_MAX])
+    _, cov = _thin(R)
+    # sigma_phi^2 / sigma_R^2 = (1 + d ln v_c / d ln R) / 2 = 1/2 where flat.
+    np.testing.assert_allclose(cov[1, 1, 1] / cov[1, 0, 0], 0.5, rtol=1e-6)
 
 
 def test_disk_does_not_rotate_where_the_jeans_equation_has_no_solution():
@@ -280,6 +313,25 @@ def test_halo_components_keep_their_spherical_ellipsoids_off_the_plane():
         lambda: thick_disk_velocity_moments(np.array([-1.0])),
         lambda: _thin(8.0, age=-1.0),
         lambda: _thin(8.0, feh=2.0),
+        lambda: _thin(8.0, v_circ_solar=-5.0),
+        lambda: _thin(8.0, v_circ_solar=0.0),
+        lambda: thick_disk_velocity_moments(np.array([8.0]), dvcirc_dR=np.nan),
+        lambda: thick_disk_velocity_moments(np.array([8.0]), dvcirc_dR=-20.0),
+        lambda: velocity_to_observables(
+            np.array([1.0]), (0, 0), np.zeros((1, 3)), -np.eye(3)[None]
+        ),
+        lambda: velocity_to_observables(
+            np.array([1.0]),
+            (0, 0),
+            np.zeros((1, 3)),
+            np.array([[[1.0, 0, 5], [0, 1, 0], [5, 0, 1]]]),
+        ),
+        lambda: velocity_to_observables(
+            np.array([1.0]), (np.nan, 0), np.zeros((1, 3)), np.zeros((1, 3, 3))
+        ),
+        lambda: velocity_to_observables(
+            np.array([1.0]), (0, 95.0), np.zeros((1, 3)), np.zeros((1, 3, 3))
+        ),
         lambda: halo_velocity_moments(np.array([1.0]), np.array([np.nan])),
     ],
 )

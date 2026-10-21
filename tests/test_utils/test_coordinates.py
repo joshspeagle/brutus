@@ -9,6 +9,8 @@ for a grid of (l, b, d) values, tests edge cases, and checks
 that R_solar/Z_solar parameters propagate correctly.
 """
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -190,6 +192,19 @@ def test_pm_covariance_is_the_jacobian_sandwich_of_the_error_covariance():
     np.testing.assert_allclose(cov, expected, rtol=1e-12, atol=1e-15)
 
 
-def test_pm_conversion_rejects_a_correlation_outside_minus_one_to_one():
-    with pytest.raises(ValueError, match="pmra_pmdec_corr"):
-        pm_equatorial_to_galactic([0.0], [0.0], [0.0], [0.0], [1.0], [1.0], [1.5])
+@pytest.mark.parametrize(
+    "dec, corr, match",
+    [(0.0, 1.5, "pmra_pmdec_corr"), (100.0, 0.0, "dec")],
+)
+def test_pm_conversion_rejects_invalid_inputs(dec, corr, match):
+    with pytest.raises(ValueError, match=match):
+        pm_equatorial_to_galactic([0.0], [dec], [0.0], [0.0], [1.0], [1.0], [corr])
+
+
+def test_pm_conversion_returns_nan_at_the_galactic_pole_without_warning():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        pm, cov = pm_equatorial_to_galactic(
+            [192.85948], [27.12825], [1.0], [1.0], [1.0], [1.0], [0.0]
+        )
+    assert np.all(np.isnan(pm)) and np.all(np.isnan(cov))
