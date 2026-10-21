@@ -132,7 +132,11 @@ Velocity moments of the Galactic components and their projection to proper motio
 ```
 
 ```{eval-rst}
-.. autofunction:: disk_velocity_moments
+.. autofunction:: thin_disk_velocity_moments
+```
+
+```{eval-rst}
+.. autofunction:: thick_disk_velocity_moments
 ```
 
 ```{eval-rst}

@@ -27,9 +27,10 @@ from .galactic import (
 
 # Kinematics
 from .kinematic import (
-    disk_velocity_moments,
     halo_velocity_moments,
     solar_velocity,
+    thick_disk_velocity_moments,
+    thin_disk_velocity_moments,
     velocity_to_observables,
 )
 
@@ -52,7 +53,8 @@ __all__ = [
     "logp_age_from_feh",
     # Kinematics
     "solar_velocity",
-    "disk_velocity_moments",
+    "thin_disk_velocity_moments",
+    "thick_disk_velocity_moments",
     "halo_velocity_moments",
     "velocity_to_observables",
     # Extinction priors

@@ -6,17 +6,25 @@
 import numpy as np
 import pytest
 
-from brutus.priors.galactic import logn_disk
+from brutus.priors.galactic import logn_disk, logp_age_from_feh
 from brutus.priors.kinematic import (
     DVCIRC_DR,
+    HALO_DELTA_LOBE,
+    HALO_F_ISO,
+    HALO_R,
+    HALO_SIGMA_R_ISO,
+    HALO_SIGMA_R_LOBE,
+    HALO_SIGMA_T_ISO,
+    HALO_SIGMA_T_LOBE,
+    HALO_V_PHI_LOBE,
     PM_SGRA,
-    THICK_DISK_R_SIGMA,
-    THICK_DISK_SIGMA,
+    THIN_DISK_SIGMA0,
     U_SUN,
     V_PEC_SUN,
-    disk_velocity_moments,
     halo_velocity_moments,
     solar_velocity,
+    thick_disk_velocity_moments,
+    thin_disk_velocity_moments,
     velocity_to_observables,
 )
 from brutus.utils.math import galactic_to_galactocentric_cyl
@@ -114,77 +122,143 @@ def test_rigid_rotation_shows_one_proper_motion_and_no_radial_velocity():
         np.testing.assert_allclose(obs[:, 1:], 0.0, atol=1e-10)
 
 
-@pytest.mark.parametrize(
-    "kwargs, lag",
-    [
-        ({}, 15.0),
-        (
-            dict(sigma_solar=THICK_DISK_SIGMA, R_scale=2.0, R_sigma=THICK_DISK_R_SIGMA),
-            46.0,
-        ),
-    ],
-    ids=["thin", "thick"],
-)
-def test_disk_parameters_give_the_measured_solar_lag(kwargs, lag):
-    # Lags from Bensby et al. (2014).
-    mean, _ = disk_velocity_moments(np.array([R_SOLAR]), **kwargs)
-    assert abs(_circular_velocity() - mean[0, 1] - lag) < 0.5
+def _vc(R, R_smooth=2.0):
+    return (_circular_velocity() + DVCIRC_DR * (R - R_SOLAR)) * np.tanh(R / R_smooth)
 
 
-def test_disk_rotation_solves_the_jeans_equation_for_the_logn_disk_density():
+def _thin(R, Z=None, age=5.0, feh=0.0, **kw):
+    R = np.atleast_1d(np.asarray(R, dtype=float))
+    full = np.ones_like(R)
+    Z = np.zeros_like(R) if Z is None else Z
+    return thin_disk_velocity_moments(R, Z, age * full, feh * full, **kw)
+
+
+def test_thin_disk_dispersions_equal_sharma_sigma0_at_the_reference_point():
+    # Sharma et al. (2021): sigma_0 is the dispersion at 10 Gyr, solar L_z,
+    # [Fe/H] = 0 and z = 0.
+    _, cov = _thin(R_SOLAR, age=10.0)
+    np.testing.assert_allclose(cov[0, 0, 0], THIN_DISK_SIGMA0[0] ** 2, rtol=1e-12)
+    np.testing.assert_allclose(cov[0, 2, 2], THIN_DISK_SIGMA0[1] ** 2, rtol=1e-12)
+
+
+def test_thin_disk_population_matches_the_measured_low_alpha_disk():
+    # Average over the local thin-disk age prior of brutus at [Fe/H] = -0.2.
+    # Anguiano et al. (2020, Table 1), low-alpha disk: lag 240 - 229.43 =
+    # 10.6 km/s, sigma_phi / sigma_R = 0.66, sigma_z / sigma_R = 0.49.
+    ages = np.linspace(0.05, 13.8, 400)
+    w = np.exp(logp_age_from_feh(ages, feh_mean=-0.2))
+    w /= w.sum()
+    full = np.ones_like(ages)
+    mean, cov = thin_disk_velocity_moments(R_SOLAR * full, 0 * full, ages, -0.2 * full)
+    vphi = w @ mean[:, 1]
+    var = w @ np.diagonal(cov, axis1=1, axis2=2)
+    var[1] += w @ (mean[:, 1] - vphi) ** 2
+    sig = np.sqrt(var)
+    assert abs(_circular_velocity() - vphi - 10.6) < 3.0
+    assert abs(sig[1] / sig[0] - 0.66) < 0.05
+    assert abs(sig[2] / sig[0] - 0.49) < 0.05
+
+
+def test_thick_disk_rotation_matches_the_measured_high_alpha_lag():
+    # Anguiano et al. (2020, Table 1), high-alpha disk: lag 240 - 191.82 =
+    # 48.2 km/s. The model predicts it; nothing is fitted to it.
+    mean, _ = thick_disk_velocity_moments(np.array([R_SOLAR]))
+    assert abs(_circular_velocity() - mean[0, 1] - 48.2) < 3.0
+
+
+def _dlnvar_R(moments, R, h=1e-5):
+    hi = moments(R * (1 + h))[1][:, 0, 0]
+    lo = moments(R * (1 - h))[1][:, 0, 0]
+    return (np.log(hi) - np.log(lo)) / (2 * h)
+
+
+@pytest.mark.parametrize("disk", ["thin", "thick"])
+def test_disk_rotation_solves_the_jeans_equation_for_the_logn_disk_density(disk):
     R = np.linspace(3.0, 20.0, 18)
-    sigma = (40.0, 25.0, 20.0)
     density = dict(R_scale=2.3, R_smooth=1.5)
-    kw = dict(R_sigma=4.0, **density)
-    mean, cov = disk_velocity_moments(R, sigma_solar=sigma, **kw)
+    if disk == "thin":
 
+        def moments(R):
+            return _thin(R, age=7.0, feh=-0.3, **density)
+
+    else:
+
+        def moments(R):
+            return thick_disk_velocity_moments(R, R_sigma=9.0, **density)
+
+    mean, cov = moments(R)
     h = 1e-5
     dlnnu = (
         logn_disk(R * (1 + h), 0.0, **density) - logn_disk(R * (1 - h), 0.0, **density)
     ) / (2 * h)
-    var_R = cov[:, 0, 0]
-    _, cov_hi = disk_velocity_moments(R * (1 + h), sigma_solar=sigma, **kw)
-    _, cov_lo = disk_velocity_moments(R * (1 - h), sigma_solar=sigma, **kw)
-    dlnvar = (np.log(cov_hi[:, 0, 0]) - np.log(cov_lo[:, 0, 0])) / (2 * h)
-    vc = (_circular_velocity() + DVCIRC_DR * (R - R_SOLAR)) * np.tanh(
-        R / density["R_smooth"]
-    )
+    vc = _vc(R, density["R_smooth"])
     # Binney & Tremaine (2008), eq. 4.228, with no tilt term.
     lhs = vc**2 - mean[:, 1] ** 2
-    rhs = cov[:, 1, 1] - var_R * (1 + dlnnu + dlnvar)
+    rhs = cov[:, 1, 1] - cov[:, 0, 0] * (1 + dlnnu + _dlnvar_R(moments, R))
     np.testing.assert_allclose(lhs, rhs, rtol=1e-6)
     np.testing.assert_allclose(mean[:, [0, 2]], 0.0)
 
 
-def test_disk_rotation_stays_below_circular_and_vanishes_at_the_centre():
+def test_thin_disk_azimuthal_dispersion_follows_the_epicyclic_ratio():
+    R = np.linspace(3.0, 20.0, 18)
+    _, cov = _thin(R)
+    h = 1e-5
+    dlnvc = (np.log(_vc(R * (1 + h))) - np.log(_vc(R * (1 - h)))) / (2 * h)
+    np.testing.assert_allclose(cov[:, 1, 1] / cov[:, 0, 0], (1 + dlnvc) / 2, rtol=1e-6)
+
+
+@pytest.mark.parametrize("disk", ["thin", "thick"])
+def test_disk_rotation_stays_below_circular_and_vanishes_at_the_centre(disk):
     R = np.linspace(0.0, 4.0, 41)
-    mean, _ = disk_velocity_moments(R)
-    vc = (_circular_velocity() + DVCIRC_DR * (R - R_SOLAR)) * np.tanh(R / 2.0)
+    mean = (_thin(R) if disk == "thin" else thick_disk_velocity_moments(R))[0]
     assert mean[0, 1] == 0.0
-    assert np.all(mean[:, 1] <= vc * (1 + 1e-12))
+    assert np.all(mean[:, 1] <= _vc(R) * (1 + 1e-12))
 
 
 def test_disk_does_not_rotate_where_the_jeans_equation_has_no_solution():
-    mean, _ = disk_velocity_moments(
+    mean, _ = thick_disk_velocity_moments(
         np.array([R_SOLAR]), sigma_solar=(300.0, 10.0, 10.0)
     )
     assert mean[0, 1] == 0.0
 
 
-def test_halo_ellipsoid_keeps_its_spherical_dispersions():
+def test_halo_components_reproduce_the_lancaster_table_at_the_bin_centres():
+    # In the plane (Z = 0), v_R is v_r and v_z is v_theta.
+    R = np.array(HALO_R)
+    weight, mean, cov = halo_velocity_moments(R, np.zeros_like(R))
+    f = np.array(HALO_F_ISO)
+    np.testing.assert_allclose(weight, np.stack([f, (1 - f) / 2, (1 - f) / 2], 1))
+    np.testing.assert_allclose(mean[:, 0], 0.0)
+    for k, sign in ((1, 1.0), (2, -1.0)):
+        np.testing.assert_allclose(mean[:, k, 0], sign * np.array(HALO_DELTA_LOBE))
+        np.testing.assert_allclose(mean[:, k, 1], HALO_V_PHI_LOBE)
+        np.testing.assert_allclose(mean[:, k, 2], 0.0, atol=1e-12)
+    np.testing.assert_allclose(cov[:, 0, 0, 0], np.square(HALO_SIGMA_R_ISO))
+    np.testing.assert_allclose(cov[:, 0, 2, 2], np.square(HALO_SIGMA_T_ISO))
+    np.testing.assert_allclose(cov[:, 1, 0, 0], np.square(HALO_SIGMA_R_LOBE))
+    np.testing.assert_allclose(cov[:, 2, 1, 1], np.square(HALO_SIGMA_T_LOBE))
+
+
+def test_halo_components_keep_their_spherical_ellipsoids_off_the_plane():
     rng = np.random.default_rng(3)
-    R = np.concatenate([[5.0, 0.0], rng.uniform(0.0, 30.0, 10)])
-    Z = np.concatenate([[0.0, 5.0], rng.uniform(-30.0, 30.0, 10)])
-    sig = (141.0, 75.0, 85.0)
-    mean, cov = halo_velocity_moments(R, Z, sigma_sph=sig, v_phi=20.0)
-    # In the plane, v_R is v_r; on the axis, v_z is v_r.
-    np.testing.assert_allclose(np.diag(cov[0]), [sig[0] ** 2, sig[2] ** 2, sig[1] ** 2])
-    np.testing.assert_allclose(np.diag(cov[1]), [sig[1] ** 2, sig[2] ** 2, sig[0] ** 2])
-    for c in cov:
+    R = np.concatenate([[0.0, 3.0], rng.uniform(0.0, 60.0, 10)])
+    Z = np.concatenate([[5.0, 0.0], rng.uniform(-60.0, 60.0, 10)])
+    weight, mean, cov = halo_velocity_moments(R, Z)
+    np.testing.assert_allclose(weight.sum(axis=1), 1.0)
+    r = np.hypot(R, Z)
+    unit_r = np.stack([R / r, Z / r], axis=1)
+    for k in range(3):
+        rz = cov[:, k][:, [0, 2]][:, :, [0, 2]]
+        # The (R, z) block has eigenvalues (sigma_t^2, sigma_r^2), with the
+        # larger one along the radial direction; sigma_phi = sigma_t.
+        eig = np.linalg.eigvalsh(rz)
+        np.testing.assert_allclose(eig[:, 0], cov[:, k, 1, 1], rtol=1e-10)
+        radial = np.einsum("ni,nij,nj->n", unit_r, rz, unit_r)
+        np.testing.assert_allclose(radial, eig[:, 1], rtol=1e-10)
+        # The lobe means point along the radial direction.
         np.testing.assert_allclose(
-            np.linalg.eigvalsh(c), np.sort(np.square(sig)), rtol=1e-10
+            mean[:, k, 0] * unit_r[:, 1], mean[:, k, 2] * unit_r[:, 0], atol=1e-9
         )
-    np.testing.assert_allclose(mean, np.tile([0.0, 20.0, 0.0], (len(R), 1)))
 
 
 @pytest.mark.parametrize(
@@ -196,7 +270,6 @@ def test_halo_ellipsoid_keeps_its_spherical_dispersions():
         lambda: velocity_to_observables(
             np.array([1.0]), (0, 0), np.zeros((2, 3)), np.zeros((1, 3, 3))
         ),
-        lambda: disk_velocity_moments(np.array([8.0]), R_sigma=0.0),
         lambda: velocity_to_observables(
             np.array([1.0]), (0, 0), np.zeros((1, 3)), np.ones((1, 3, 3))
         ),
@@ -209,7 +282,10 @@ def test_halo_ellipsoid_keeps_its_spherical_dispersions():
         lambda: velocity_to_observables(
             np.array([1.0]), (0, 0), np.zeros((1, 3)), np.zeros((1, 3, 3)), R_solar=-8.2
         ),
-        lambda: disk_velocity_moments(np.array([-1.0])),
+        lambda: thick_disk_velocity_moments(np.array([8.0]), R_sigma=0.0),
+        lambda: thick_disk_velocity_moments(np.array([-1.0])),
+        lambda: _thin(8.0, age=-1.0),
+        lambda: _thin(8.0, feh=2.0),
         lambda: halo_velocity_moments(np.array([1.0]), np.array([np.nan])),
     ],
 )
