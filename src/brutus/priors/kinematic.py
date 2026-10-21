@@ -43,7 +43,7 @@ Examples
 >>> obs_mean, obs_cov = velocity_to_observables(dists, coord, mean, cov)
 """
 
-from math import exp, radians, sqrt, tanh
+from math import exp, log, radians, sqrt, tanh
 
 import numpy as np
 from numba import jit, prange
@@ -107,6 +107,22 @@ HALO_SIGMA_R_LOBE = (109.93, 78.21, 62.91, 176.36)
 HALO_SIGMA_T_LOBE = (58.18, 34.02, 29.14, 145.69)
 HALO_DELTA_LOBE = (104.16, 98.60, 67.75, 82.87)
 HALO_V_PHI_LOBE = (-4.49, 11.54, 14.13, -27.39)
+
+# Vertical potential, in the form of Kuijken & Gilmore (1989):
+# K_z = 2 pi G [Sigma_0 z / sqrt(z^2 + D^2) + 2 rho_DM z]. Sigma_0 and D
+# follow from K_z(1.1 kpc) / 2 pi G in Msun/pc^2 (Bovy & Rix 2013) and the
+# total midplane density in Msun/pc^3 (McKee et al. 2015), with the dark
+# matter density of McKee et al. (2015). The disk term falls with radius
+# with the scale length of K_z(1.1 kpc) in kpc, and keeps its edge values
+# outside the radii of that measurement (Bovy & Rix 2013).
+VERTICAL_KZ_1KPC = 67.0
+VERTICAL_RHO_MIDPLANE = 0.097
+VERTICAL_RHO_DM = 0.013
+VERTICAL_R_SCALE = 2.7
+VERTICAL_R_RANGE = (4.0, 9.0)
+
+# 2 pi G in (km/s)^2 pc / Msun.
+_2PI_G = 2.0 * np.pi * 4.30091e-3
 
 
 def solar_velocity(R_solar=8.2, pm_sgra=PM_SGRA, U_sun=U_SUN):
@@ -217,6 +233,37 @@ def _thin_disk_sigma0(age, feh):
 
 
 @jit(nopython=True, cache=True)
+def _thin_disk_L_refs(R_solar, vc_solar, dvc_dR, R_taper):
+    """Return L_z at the Sun and at the ends of THIN_DISK_R_RANGE."""
+    lo, hi = THIN_DISK_R_RANGE
+    return (
+        R_solar * _circular_velocity(R_solar, R_solar, vc_solar, dvc_dR, R_taper)[0],
+        (
+            lo * _circular_velocity(lo, R_solar, vc_solar, dvc_dR, R_taper)[0],
+            hi * _circular_velocity(hi, R_solar, vc_solar, dvc_dR, R_taper)[0],
+        ),
+    )
+
+
+@jit(nopython=True, cache=True)
+def _thin_disk_fL(L, L_solar, L_range):
+    """Return the Sharma et al. (2021) f_L of sigma_R and of sigma_z, and
+    d ln f_L(sigma_R) / d ln L_z, which is 0 where L_z is clamped to
+    ``L_range`` (L_z at the ends of THIN_DISK_R_RANGE)."""
+    inside = L_range[0] < L < L_range[1]
+    L = min(max(L, L_range[0]), L_range[1])
+    u2 = (L / L_solar) ** 2
+    a_R, a_z = THIN_DISK_ALPHA_L
+    lam_R, lam_z = THIN_DISK_LAMBDA_L
+    e_R = exp(-(L - L_solar) / lam_R)
+    f_R = (a_R * u2 + e_R) / (1.0 + a_R)
+    f_z = (a_z * u2 + exp(-(L - L_solar) / lam_z)) / (1.0 + a_z)
+    if not inside:
+        return f_R, f_z, 0.0
+    return f_R, f_z, (2.0 * a_R * u2 - (L / lam_R) * e_R) / ((1.0 + a_R) * f_R)
+
+
+@jit(nopython=True, cache=True)
 def _thin_disk_moments(
     R, abs_z, sig_R0, sig_z0, vc, dlnvc, L_solar, L_range, dlnnu_dlnR
 ):
@@ -229,24 +276,22 @@ def _thin_disk_moments(
     sigma_phi follows the epicyclic ratio
     sigma_phi^2 / sigma_R^2 = (1 + d ln v_c / d ln R) / 2.
     """
-    L = R * vc
-    inside = L_range[0] < L < L_range[1]
-    L = min(max(L, L_range[0]), L_range[1])
-    u2 = (L / L_solar) ** 2
-    a_R, a_z = THIN_DISK_ALPHA_L
-    lam_R, lam_z = THIN_DISK_LAMBDA_L
-    e_R = exp(-(L - L_solar) / lam_R)
-    e_z = exp(-(L - L_solar) / lam_z)
-    f_R = (a_R * u2 + e_R) / (1.0 + a_R)
-    f_z = (a_z * u2 + e_z) / (1.0 + a_z)
-    dlnf_R = (2.0 * a_R * u2 - (L / lam_R) * e_R) / ((1.0 + a_R) * f_R)
+    f_R, f_z, dlnf_R = _thin_disk_fL(R * vc, L_solar, L_range)
     sig_R = sig_R0 * f_R * (1.0 + THIN_DISK_GAMMA_Z[0] * abs_z)
     sig_z = sig_z0 * f_z * (1.0 + THIN_DISK_GAMMA_Z[1] * abs_z)
     var_R = sig_R * sig_R
     var_phi = 0.5 * var_R * (1.0 + dlnvc)
-    dlnvar_dlnR = 2.0 * dlnf_R * (1.0 + dlnvc) if inside else 0.0
+    dlnvar_dlnR = 2.0 * dlnf_R * (1.0 + dlnvc)
     vphi = _jeans_vphi(var_R, var_phi, dlnvar_dlnR, dlnnu_dlnR, vc)
     return vphi, var_R, var_phi, sig_z * sig_z
+
+
+@jit(nopython=True, cache=True)
+def _thick_disk_scale(R, R_sigma, R_solar):
+    """Return exp(-2 (R - R_solar) / R_sigma), the radial factor of the
+    thick-disk variances, with R clamped to THICK_DISK_R_RANGE."""
+    lo, hi = THICK_DISK_R_RANGE
+    return exp(-2.0 * (min(max(R, lo), hi) - R_solar) / R_sigma)
 
 
 @jit(nopython=True, cache=True)
@@ -256,7 +301,7 @@ def _thick_disk_moments(R, vc, var_R0, var_phi0, var_z0, R_sigma, R_solar, dlnnu
     Beyond THICK_DISK_R_RANGE the dispersions keep their edge values.
     """
     lo, hi = THICK_DISK_R_RANGE
-    f = exp(-2.0 * (min(max(R, lo), hi) - R_solar) / R_sigma)
+    f = _thick_disk_scale(R, R_sigma, R_solar)
     var_R = var_R0 * f
     var_phi = var_phi0 * f
     dlnvar_dlnR = -2.0 * R / R_sigma if lo < R < hi else 0.0
@@ -334,12 +379,7 @@ def _thin_disk_array(
     N = len(R)
     mean = np.zeros((N, 3))
     cov = np.zeros((N, 3, 3))
-    lo, hi = THIN_DISK_R_RANGE
-    L_solar = (
-        R_solar * _circular_velocity(R_solar, R_solar, vc_solar, dvc_dR, R_taper)[0]
-    )
-    L_lo = lo * _circular_velocity(lo, R_solar, vc_solar, dvc_dR, R_taper)[0]
-    L_hi = hi * _circular_velocity(hi, R_solar, vc_solar, dvc_dR, R_taper)[0]
+    L_solar, L_range = _thin_disk_L_refs(R_solar, vc_solar, dvc_dR, R_taper)
     for i in prange(N):
         vc, dlnvc = _circular_velocity(R[i], R_solar, vc_solar, dvc_dR, R_taper)
         sig_R0, sig_z0 = _thin_disk_sigma0(age[i], feh[i])
@@ -351,7 +391,7 @@ def _thin_disk_array(
             vc,
             dlnvc,
             L_solar,
-            (L_lo, L_hi),
+            L_range,
             _logn_disk_dlnR(R[i], sqrt(R[i] * R[i] + R_smooth * R_smooth), R_scale),
         )
         _store(mean[i], cov[i], 0.0, vphi, 0.0, var_R, var_phi, var_z, 0.0)
@@ -722,6 +762,135 @@ def halo_velocity_moments(R, Z):
     """
     R = _check_radii(R)
     return _halo_array(R, _check_heights(Z, R))
+
+
+# Sigma_0 (Msun/pc^2) and D (pc) of the vertical potential, from
+# K_z(z_1) / 2 pi G = Sigma_0 z_1 / sqrt(z_1^2 + D^2) + 2 rho_DM z_1 at
+# z_1 = 1.1 kpc and Sigma_0 = 2 (rho_midplane - rho_DM) D (Poisson's
+# equation at the midplane): y = D / sqrt(z_1^2 + D^2) is then linear.
+_y = (VERTICAL_KZ_1KPC - 2.0 * VERTICAL_RHO_DM * 1100.0) / (
+    2.0 * (VERTICAL_RHO_MIDPLANE - VERTICAL_RHO_DM) * 1100.0
+)
+VERTICAL_D = 1100.0 * _y / sqrt(1.0 - _y * _y)
+VERTICAL_SIGMA0 = 2.0 * (VERTICAL_RHO_MIDPLANE - VERTICAL_RHO_DM) * VERTICAL_D
+
+# gamma_z of the thin-disk sigma_z in 1/pc.
+_GAMMA_Z = THIN_DISK_GAMMA_Z[1] / 1000.0
+
+
+def _thin_disk_force(z):
+    """Disk part of K_z / (1 + gamma_z z)^2 in (km/s)^2 / pc at z pc."""
+    return (
+        _2PI_G
+        * VERTICAL_SIGMA0
+        * z
+        / (np.sqrt(z * z + VERTICAL_D * VERTICAL_D) * (1.0 + _GAMMA_Z * z) ** 2)
+    )
+
+
+# I_D(z) = int_0^z _thin_disk_force(t) dt in (km/s)^2 at every pc to 10 kpc,
+# by Simpson's rule on each pc, and the integrand at the same nodes.
+_Z_NODES = np.arange(10001.0)
+_THIN_FORCE = _thin_disk_force(_Z_NODES)
+_THIN_VERTICAL_TABLE = np.concatenate(
+    (
+        [0.0],
+        np.cumsum(
+            (
+                _THIN_FORCE[:-1]
+                + 4.0 * _thin_disk_force(_Z_NODES[:-1] + 0.5)
+                + _THIN_FORCE[1:]
+            )
+            / 6.0
+        ),
+    )
+)
+
+
+@jit(nopython=True, cache=True)
+def _far_disk_term(t, g):
+    """Antiderivative of 1 / (t^2 (1 + g t)^2)."""
+    return -1.0 / t + 2.0 * g * log((1.0 + g * t) / t) - g / (1.0 + g * t)
+
+
+@jit(nopython=True, cache=True)
+def _thin_disk_integrals(abs_z):
+    """Return the height terms of the thin-disk vertical profile at |z| =
+    ``abs_z`` kpc: 2 ln(1 + gamma_z z), I_D(z) and I_DM(z) in (km/s)^2,
+    with I(z) = int_0^z K_z / (1 + gamma_z t)^2 dt split into its disk and
+    dark matter parts.
+
+    I_D is interpolated in _THIN_VERTICAL_TABLE with cubic Hermite
+    polynomials, whose slopes are the integrand itself.
+    """
+    g = _GAMMA_Z
+    z = abs_z * 1000.0
+    n = len(_THIN_VERTICAL_TABLE) - 1
+    if z < n:
+        i = int(z)
+        w = z - i
+        w2, w3 = w * w, w * w * w
+        I_D = (
+            (2.0 * w3 - 3.0 * w2 + 1.0) * _THIN_VERTICAL_TABLE[i]
+            + (w3 - 2.0 * w2 + w) * _THIN_FORCE[i]
+            + (3.0 * w2 - 2.0 * w3) * _THIN_VERTICAL_TABLE[i + 1]
+            + (w3 - w2) * _THIN_FORCE[i + 1]
+        )
+    else:
+        # Beyond the table, z >> D: t / sqrt(t^2 + D^2) = 1 - D^2 / (2 t^2),
+        # integrated against 1 / (1 + g t)^2 in closed form.
+        I_D = _THIN_VERTICAL_TABLE[n] + _2PI_G * VERTICAL_SIGMA0 * (
+            (1.0 / (1.0 + g * n) - 1.0 / (1.0 + g * z)) / g
+            - 0.5
+            * VERTICAL_D
+            * VERTICAL_D
+            * (_far_disk_term(z, g) - _far_disk_term(float(n), g))
+        )
+    gz = 1.0 + g * z
+    I_DM = 2.0 * _2PI_G * VERTICAL_RHO_DM * (log(gz) + 1.0 / gz - 1.0) / (g * g)
+    return 2.0 * log(gz), I_D, I_DM
+
+
+@jit(nopython=True, cache=True)
+def _thin_disk_vertical(terms, terms_solar, sig_z0, S):
+    """Return ln nu(|z|) - ln nu(|z_sun|) of a thin-disk population.
+
+    The vertical Jeans equation d(nu sigma_z^2)/dz = -nu K_z with
+    sigma_z(z) = sig_z0 (1 + gamma_z |z|) gives
+    ln nu(z) = -2 ln(1 + gamma_z |z|) - [S I_D(|z|) + I_DM(|z|)] / sig_z0^2.
+    ``terms`` and ``terms_solar`` come from ``_thin_disk_integrals``;
+    ``sig_z0`` is in km/s and ``S`` scales the disk term with radius.
+    """
+    return -(terms[0] - terms_solar[0]) - (
+        S * (terms[1] - terms_solar[1]) + (terms[2] - terms_solar[2])
+    ) / (sig_z0 * sig_z0)
+
+
+@jit(nopython=True, cache=True)
+def _vertical_potential(abs_z):
+    """Return the disk part (per unit S) and the dark matter part of
+    Phi_z(|z|) / 2 pi G in Msun/pc, at |z| = ``abs_z`` kpc."""
+    z = abs_z * 1000.0
+    return (
+        VERTICAL_SIGMA0 * (sqrt(z * z + VERTICAL_D * VERTICAL_D) - VERTICAL_D),
+        VERTICAL_RHO_DM * z * z,
+    )
+
+
+@jit(nopython=True, cache=True)
+def _thick_disk_vertical(phi, phi_solar, var_z, S):
+    """Return ln nu(|z|) - ln nu(|z_sun|) = -[Phi(z) - Phi(z_sun)] / sigma_z^2
+    of the isothermal thick disk, from ``_vertical_potential`` at the two
+    heights; ``var_z`` is in (km/s)^2."""
+    return -_2PI_G * (S * (phi[0] - phi_solar[0]) + (phi[1] - phi_solar[1])) / var_z
+
+
+@jit(nopython=True, cache=True)
+def _potential_scale(R, R_solar):
+    """Radial scaling of the disk term of the vertical potential, with R
+    clamped to VERTICAL_R_RANGE."""
+    lo, hi = VERTICAL_R_RANGE
+    return exp(-(min(max(R, lo), hi) - R_solar) / VERTICAL_R_SCALE)
 
 
 def _sightline(coord, v_sun):

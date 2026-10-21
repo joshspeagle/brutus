@@ -12,7 +12,9 @@ the unhoisted formulation. `reference_kernel` below is a copy of the fused
 kernel with the pre-optimization structure (per-point age constants,
 precomputed R/Z arrays from `galactic_to_galactocentric_cyl`) but the same
 semantics (smoothed solar disk normalization, metallicity-updated age
-weights).
+weights). The disk vertical profiles come from the production
+``_disk_vertical_array`` on the precomputed R/Z arrays; the vertical model
+itself is tested in ``test_priors_galactic.py``.
 """
 
 from math import exp, log, pi, sqrt
@@ -20,7 +22,18 @@ from math import exp, log, pi, sqrt
 import numpy as np
 from numba import jit, prange
 
-from brutus.priors.galactic import logp_galactic_structure
+from brutus.priors.galactic import (
+    _age_averaged_table,
+    _disk_vertical_array,
+    logp_galactic_structure,
+)
+from brutus.priors.kinematic import (
+    DVCIRC_DR,
+    THICK_DISK_R_SIGMA,
+    THICK_DISK_SIGMA,
+    VC_TAPER,
+    _vc_solar,
+)
 from brutus.utils.math import _truncnorm_lognorm_scalar, galactic_to_galactocentric_cyl
 
 _LOG_2PI = log(2.0 * pi)
@@ -31,6 +44,8 @@ def reference_kernel(
     dists,
     R_arr,
     Z_arr,
+    thin_z,
+    thick_z,
     feh_arr,
     loga_arr,
     has_feh,
@@ -38,10 +53,8 @@ def reference_kernel(
     R_solar,
     Z_solar,
     R_thin,
-    Z_thin,
     Rs_thin,
     R_thick,
-    Z_thick,
     Rs_thick,
     f_thick,
     Rs_halo,
@@ -86,16 +99,12 @@ def reference_kernel(
         vol = 2.0 * log(d + 1e-300)
 
         R_eff_thin = sqrt(R**2 + Rs_thin**2)
-        lnp_thin = (
-            -(R_eff_thin - R_solar_eff_thin) / R_thin
-            - (abs(Z) - abs(Z_solar)) / Z_thin
-            + vol
-        )
+        lnp_thin = -(R_eff_thin - R_solar_eff_thin) / R_thin + thin_z[i] + vol
 
         R_eff_thick = sqrt(R**2 + Rs_thick**2)
         lnp_thick = (
             -(R_eff_thick - R_solar_eff_thick) / R_thick
-            - (abs(Z) - abs(Z_solar)) / Z_thick
+            + thick_z[i]
             + vol
             + log(f_thick)
         )
@@ -225,10 +234,8 @@ DEFAULT_ARGS = dict(
     R_solar=8.2,
     Z_solar=0.025,
     R_thin=2.6,
-    Z_thin=0.3,
     Rs_thin=2.0,
     R_thick=2.0,
-    Z_thick=0.9,
     Rs_thick=2.0,
     f_thick=0.04,
     Rs_halo=2.0,
@@ -257,10 +264,32 @@ def _run_reference(dists, ell, b, feh, loga):
     has_feh = feh is not None
     has_loga = loga is not None
     R, Z = galactic_to_galactocentric_cyl(dists, ell, b, R_solar=8.2, Z_solar=0.025)
+    rot = (8.2, _vc_solar(None, 8.2, DVCIRC_DR), DVCIRC_DR, VC_TAPER)
+    table = (
+        np.empty((0, 0))
+        if has_loga
+        else _age_averaged_table(
+            -0.2, 0.025, rot, (13.8, 0.0, -0.5, 0.5, 2.0, 4.0, 1.0)
+        )
+    )
+    thin_z, thick_z = _disk_vertical_array(
+        R,
+        np.abs(Z),
+        0.025,
+        loga if has_loga else np.empty(0),
+        feh if has_feh else np.full(len(R), -0.2),
+        has_loga,
+        rot,
+        THICK_DISK_SIGMA[2] ** 2,
+        THICK_DISK_R_SIGMA,
+        table,
+    )
     return reference_kernel(
         dists,
         R,
         Z,
+        thin_z,
+        thick_z,
         feh if has_feh else np.empty(0),
         loga if has_loga else np.empty(0),
         has_feh,
@@ -278,7 +307,7 @@ class TestFusedKernelBitwiseEquivalence:
     def _data(self, N=20000, seed=42):
         rng = np.random.default_rng(seed)
         dists = rng.uniform(0.01, 20.0, N)
-        feh = rng.normal(-0.5, 0.6, N)
+        feh = np.clip(rng.normal(-0.5, 0.6, N), -4.0, 0.5)
         loga = rng.uniform(7.5, 10.2, N)
         return dists, feh, loga
 
@@ -331,7 +360,7 @@ class TestFusedVsNumpyPath:
         rng = np.random.default_rng(5)
         d = rng.uniform(0.05, 10.0, N)
         labels = np.empty(N, dtype=[("feh", float), ("loga", float)])
-        labels["feh"] = rng.normal(-0.5, 0.6, N)
+        labels["feh"] = np.clip(rng.normal(-0.5, 0.6, N), -4.0, 0.5)
         labels["loga"] = rng.uniform(8.0, 10.1, N)
 
         fused = logp_galactic_structure(d, self.COORD, labels=labels)

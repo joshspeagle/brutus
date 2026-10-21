@@ -59,12 +59,31 @@ Combined Galactic structure prior:
 >>> log_prior = logp_galactic_structure(distances, coord)
 """
 
+from functools import lru_cache
 from math import exp, log, pi, sqrt
 
 import numpy as np
 from numba import jit, prange
 
-# Import utility functions from brutus.utils
+from brutus.priors.kinematic import (
+    _FEH_MAX,
+    DVCIRC_DR,
+    THICK_DISK_R_SIGMA,
+    THICK_DISK_SIGMA,
+    VC_TAPER,
+    _check_positive,
+    _circular_velocity,
+    _potential_scale,
+    _thick_disk_scale,
+    _thick_disk_vertical,
+    _thin_disk_fL,
+    _thin_disk_integrals,
+    _thin_disk_L_refs,
+    _thin_disk_sigma0,
+    _thin_disk_vertical,
+    _vc_solar,
+    _vertical_potential,
+)
 from brutus.utils import truncnorm_logpdf
 from brutus.utils.math import (
     LOG_ZERO,
@@ -78,6 +97,142 @@ _LOG_2PI = log(2.0 * pi)
 def _logsumexp3(a, b, c):
     """Fast logsumexp of 3 arrays using numpy's logaddexp ufunc."""
     return np.logaddexp(np.logaddexp(a, b), c)
+
+
+# Grid of the age-averaged thin-disk vertical profile, used when no age is
+# given: R from 0 to 40 kpc and |Z| from 0 to 10 kpc.
+_TABLE_DR = 0.25
+_TABLE_DZ = 0.01
+_TABLE_SHAPE = (161, 1001)
+# Gauss-Legendre nodes for the average over the thin-disk age prior.
+_AGE_NODES = 64
+
+
+@jit(nopython=True, cache=True)
+def _table_lookup(table, R, abs_Z):
+    """Bilinear interpolation in the age-averaged table; constant beyond
+    the last R, linear in |Z| beyond the last row."""
+    nR, nz = table.shape
+    x = min(R / _TABLE_DR, nR - 1.0)
+    i = min(int(x), nR - 2)
+    u = x - i
+    y = abs_Z / _TABLE_DZ
+    j = min(int(y), nz - 2)
+    v = y - j
+    return (1.0 - u) * ((1.0 - v) * table[i, j] + v * table[i, j + 1]) + u * (
+        (1.0 - v) * table[i + 1, j] + v * table[i + 1, j + 1]
+    )
+
+
+@jit(nopython=True, cache=True)
+def _vertical_solar(abs_Z_solar, rot):
+    """Return what ``_disk_vertical_terms`` needs that is fixed per call, as
+    one flat tuple (numba's parallel loops take no nested tuples): the L_z
+    references of the thin disk and both profiles' terms at the Sun's
+    height. ``rot`` is (R_solar, vc_solar, dvc_dR, R_taper)."""
+    L_solar, L_range = _thin_disk_L_refs(*rot)
+    return (
+        (L_solar,)
+        + L_range
+        + _thin_disk_integrals(abs_Z_solar)
+        + _vertical_potential(abs_Z_solar)
+    )
+
+
+@jit(nopython=True, cache=True)
+def _disk_vertical_terms(
+    R, abs_Z, age, feh, has_age, rot, solar, thick_var_z, thick_R_sigma, table
+):
+    """Return ln nu(|Z|) - ln nu(|Z_sun|) of the thin and thick disks.
+
+    With an age, the thin disk uses that age's vertical dispersion; without
+    one, it uses ``table``, the average over the thin-disk age prior.
+    ``solar`` comes from ``_vertical_solar``.
+    """
+    L_solar, L_lo, L_hi, t0, t1, t2, p0, p1 = solar
+    L_range, thin_solar, phi_solar = (L_lo, L_hi), (t0, t1, t2), (p0, p1)
+    S = _potential_scale(R, rot[0])
+    if has_age:
+        vc = _circular_velocity(R, *rot)[0]
+        sig_z0 = (
+            _thin_disk_sigma0(age, feh)[1] * _thin_disk_fL(R * vc, L_solar, L_range)[1]
+        )
+        thin = _thin_disk_vertical(_thin_disk_integrals(abs_Z), thin_solar, sig_z0, S)
+    else:
+        thin = _table_lookup(table, R, abs_Z)
+    var_z = thick_var_z * _thick_disk_scale(R, thick_R_sigma, rot[0])
+    thick = _thick_disk_vertical(_vertical_potential(abs_Z), phi_solar, var_z, S)
+    return thin, thick
+
+
+@jit(nopython=True, parallel=True, cache=True)
+def _disk_vertical_array(
+    R, abs_Z, abs_Z_solar, loga, feh, has_age, rot, thick_var_z, thick_R_sigma, table
+):
+    solar = _vertical_solar(abs_Z_solar, rot)
+    thin = np.empty(len(R))
+    thick = np.empty(len(R))
+    for i in prange(len(R)):
+        thin[i], thick[i] = _disk_vertical_terms(
+            R[i],
+            abs_Z[i],
+            10.0 ** loga[i] / 1e9 if has_age else 0.0,
+            feh[i],
+            has_age,
+            rot,
+            solar,
+            thick_var_z,
+            thick_R_sigma,
+            table,
+        )
+    return thin, thick
+
+
+@jit(nopython=True, parallel=True, cache=True)
+def _vertical_table(ages, ln_w, feh, abs_Z_solar, rot):
+    L_solar, L_range = _thin_disk_L_refs(*rot)
+    thin_solar = _thin_disk_integrals(abs_Z_solar)
+    nR, nz = _TABLE_SHAPE
+    terms = [_thin_disk_integrals(j * _TABLE_DZ) for j in range(nz)]
+    sig_model = np.empty(len(ages))
+    for k in range(len(ages)):
+        sig_model[k] = _thin_disk_sigma0(ages[k], feh)[1]
+    table = np.empty((nR, nz))
+    for i in prange(nR):
+        R = i * _TABLE_DR
+        vc = _circular_velocity(R, *rot)[0]
+        S = _potential_scale(R, rot[0])
+        sig = sig_model * _thin_disk_fL(R * vc, L_solar, L_range)[1]
+        lnp = np.empty(len(ages))
+        for j in range(nz):
+            for k in range(len(ages)):
+                lnp[k] = ln_w[k] + _thin_disk_vertical(terms[j], thin_solar, sig[k], S)
+            mx = lnp.max()
+            table[i, j] = mx + log(np.exp(lnp - mx).sum())
+    return table
+
+
+@lru_cache(maxsize=4)
+def _age_averaged_table(feh_thin, abs_Z_solar, rot, age_args):
+    """ln of the thin-disk vertical profile averaged over the age prior
+    ``logp_age_from_feh(age, feh_thin, *age_args)``, on the _TABLE grid.
+
+    Each row is shifted so that ``_table_lookup`` gives 0 at |Z_sun|, which
+    lies between the grid nodes. The table is read-only, because the cache
+    returns it to every caller.
+    """
+    max_age, min_age = age_args[:2]
+    x, w = np.polynomial.legendre.leggauss(_AGE_NODES)
+    ages = 0.5 * (max_age - min_age) * (x + 1.0) + min_age
+    ln_w = np.log(w) + logp_age_from_feh(ages, feh_thin, *age_args)
+    ln_w -= np.logaddexp.reduce(ln_w)
+    table = _vertical_table(ages, ln_w, feh_thin, abs_Z_solar, rot)
+    y = abs_Z_solar / _TABLE_DZ
+    j = int(y)
+    v = y - j
+    table -= ((1.0 - v) * table[:, j] + v * table[:, j + 1])[:, None]
+    table.flags.writeable = False
+    return table
 
 
 @jit(nopython=True, parallel=True, cache=True)
@@ -95,13 +250,18 @@ def _galactic_prior_fused(
     Z_solar,
     # Thin disk
     R_thin,
-    Z_thin,
     Rs_thin,
     # Thick disk
     R_thick,
-    Z_thick,
     Rs_thick,
     f_thick,
+    # Vertical profiles
+    vc_solar,
+    dvc_dR,
+    R_taper,
+    thick_var_z,
+    thick_R_sigma,
+    table,
     # Halo
     Rs_halo,
     eta_halo,
@@ -126,6 +286,9 @@ def _galactic_prior_fused(
     min_sigma_age,
 ):
     """Fused galactic prior: coords + density + vol + met + age in one pass.
+
+    The disk vertical profiles come from ``_disk_vertical_terms``; ``table``
+    is the age-averaged thin-disk profile, used when ``has_loga`` is False.
 
     ``sin_l``/``cos_l``/``sin_b``/``cos_b`` are the precomputed sine/cosine
     of the (scalar) Galactic longitude/latitude; the Galactocentric (R, Z)
@@ -153,6 +316,8 @@ def _galactic_prior_fused(
     R_solar_eff_thin = sqrt(R_solar**2 + Rs_thin**2)
     R_solar_eff_thick = sqrt(R_solar**2 + Rs_thick**2)
     abs_Z_solar = abs(Z_solar)
+    rot = (R_solar, vc_solar, dvc_dR, R_taper)
+    solar = _vertical_solar(abs_Z_solar, rot)
     ln_f_thick = log(f_thick)
     ln_f_halo = log(f_halo)
 
@@ -197,21 +362,29 @@ def _galactic_prior_fused(
         # Volume factor
         vol = 2.0 * log(d + 1e-300)
 
+        # Disk vertical profiles from the vertical Jeans equation
+        age_val = 10.0 ** loga_arr[i] / 1e9 if has_loga else 0.0  # Gyr
+        thin_z, thick_z = _disk_vertical_terms(
+            R,
+            abs(Z),
+            age_val,
+            feh_arr[i] if has_feh else feh_thin_mean,
+            has_loga,
+            rot,
+            solar,
+            thick_var_z,
+            thick_R_sigma,
+            table,
+        )
+
         # Thin disk
         R_eff_thin = sqrt(R**2 + Rs_thin**2)
-        lnp_thin = (
-            -(R_eff_thin - R_solar_eff_thin) / R_thin
-            - (abs(Z) - abs_Z_solar) / Z_thin
-            + vol
-        )
+        lnp_thin = -(R_eff_thin - R_solar_eff_thin) / R_thin + thin_z + vol
 
         # Thick disk
         R_eff_thick = sqrt(R**2 + Rs_thick**2)
         lnp_thick = (
-            -(R_eff_thick - R_solar_eff_thick) / R_thick
-            - (abs(Z) - abs_Z_solar) / Z_thick
-            + vol
-            + ln_f_thick
+            -(R_eff_thick - R_solar_eff_thick) / R_thick + thick_z + vol + ln_f_thick
         )
 
         # Halo
@@ -278,7 +451,6 @@ def _galactic_prior_fused(
 
         # Age prior
         if has_loga:
-            age_val = 10.0 ** loga_arr[i] / 1e9  # Gyr
             if has_feh:
                 # Metallicity-updated membership weights: the joint mixture
                 # prior is sum_c w_c(pos) p(feh|c) p(age|c), so the age term
@@ -645,10 +817,8 @@ def logp_galactic_structure(
     R_solar=8.2,
     Z_solar=0.025,
     R_thin=2.6,
-    Z_thin=0.3,
     Rs_thin=2.0,
     R_thick=2.0,
-    Z_thick=0.9,
     f_thick=0.04,
     Rs_thick=2.0,
     Rs_halo=2.0,
@@ -670,9 +840,14 @@ def logp_galactic_structure(
     nsigma_from_max_age=2.0,
     max_sigma=4.0,
     min_sigma=1.0,
+    v_circ_solar=None,
+    dvcirc_dR=DVCIRC_DR,
+    R_taper=VC_TAPER,
+    thick_sigma_z=THICK_DISK_SIGMA[2],
+    thick_R_sigma=THICK_DISK_R_SIGMA,
     return_components=False,
 ):
-    """
+    r"""
     Complete Galactic structure log-prior with thin disk, thick disk, and halo.
 
     Implements a sophisticated three-component Galactic model based on
@@ -704,14 +879,10 @@ def logp_galactic_structure(
         Solar height above midplane in kpc. Default is 0.025.
     R_thin : float, optional
         Thin disk radial scale length in kpc. Default is 2.6.
-    Z_thin : float, optional
-        Thin disk vertical scale height in kpc. Default is 0.3.
     Rs_thin : float, optional
         Thin disk smoothing radius in kpc. Default is 2.0.
     R_thick : float, optional
         Thick disk radial scale length in kpc. Default is 2.0.
-    Z_thick : float, optional
-        Thick disk vertical scale height in kpc. Default is 0.9.
     f_thick : float, optional
         Thick disk relative normalization. Default is 0.04.
     Rs_thick : float, optional
@@ -754,6 +925,25 @@ def logp_galactic_structure(
         Maximum age dispersion in Gyr. Default is 4.0.
     min_sigma : float, optional
         Minimum age dispersion in Gyr. Default is 1.0.
+    v_circ_solar : float or None, optional
+        Circular velocity at the Sun in km/s, before the taper. Default
+        (None) is the Sgr A* proper motion less the solar peculiar velocity,
+        as in `~brutus.priors.solar_velocity`.
+    dvcirc_dR : float, optional
+        Slope of the rotation curve in km/s/kpc. Default is
+        ``brutus.priors.kinematic.DVCIRC_DR``.
+    R_taper : float, optional
+        Radius in kpc of the taper ``tanh(R / R_taper)`` that takes the
+        rotation curve to 0 at the centre. Default is
+        ``brutus.priors.kinematic.VC_TAPER``. The rotation curve sets the
+        angular momentum on which the thin-disk vertical dispersion
+        depends.
+    thick_sigma_z : float, optional
+        Vertical dispersion of the thick disk at the Sun in km/s. Default
+        is ``brutus.priors.kinematic.THICK_DISK_SIGMA[2]``.
+    thick_R_sigma : float, optional
+        E-folding length of the thick disk dispersions in kpc. Default is
+        ``brutus.priors.kinematic.THICK_DISK_R_SIGMA``.
     return_components : bool, optional
         Whether to return individual component contributions. Default is False.
 
@@ -768,7 +958,10 @@ def logp_galactic_structure(
     ------
     ValueError
         If ``labels``, ``feh`` or ``loga`` does not have one entry per
-        distance.
+        distance; if ``feh`` is 1.92 or more, where the thin-disk dispersion
+        model of Sharma et al. (2021) reaches 0; if ``R_taper``,
+        ``thick_sigma_z`` or ``thick_R_sigma`` is not positive; or if the
+        rotation curve is not positive at 0 < R < 25 kpc.
 
     Notes
     -----
@@ -777,6 +970,28 @@ def logp_galactic_structure(
     1. **Thin Disk**: Young, metal-rich stars with small scale height
     2. **Thick Disk**: Intermediate-age, metal-poor stars with larger scale height
     3. **Halo**: Old, very metal-poor stars with flattened power-law profile
+
+    The disks are exponential in radius, as in `logn_disk`. Their vertical
+    profiles solve the vertical Jeans equation in one vertical potential,
+    of the Kuijken & Gilmore (1989) form with the parameters of
+    ``brutus.priors.kinematic`` (Bovy & Rix 2013; McKee et al. 2015):
+
+    .. math::
+        \ln \nu(z) = -2 \ln(1 + \gamma_z |z|) - \frac{1}{\sigma_{z,0}^2}
+        \int_0^{|z|} \frac{K_z(t)}{(1 + \gamma_z t)^2}\,dt
+
+    The thin disk takes the vertical dispersion of the star's age and
+    [Fe/H] (Sharma et al. 2021), which grows with height as
+    :math:`1 + \gamma_z |z|`; younger stars therefore lie closer to the
+    midplane. Without an age, the thin-disk profile is the average over
+    the thin-disk age prior at ``feh_thin``, and the star's [Fe/H] does not
+    enter it; with an age but no [Fe/H], it uses ``feh_thin``. The disk
+    term of the potential scales with radius on 4 to 9 kpc, the radii of
+    Bovy & Rix (2013), and keeps its edge values outside. The thick disk
+    is isothermal (:math:`\gamma_z = 0`) with ``thick_sigma_z``.
+    Each profile is normalized to 1 at the Sun's height, at every radius,
+    so the prior at the Sun's position does not depend on the vertical
+    model, and ``f_thick`` and the age prior stay local quantities.
 
     Each component has distinct spatial, metallicity, and age distributions
     calibrated from observations. The model accounts for:
@@ -844,6 +1059,11 @@ def logp_galactic_structure(
                 f"`feh` must be a 1D array with one entry per distance "
                 f"({n}); got shape {np.shape(feh)}."
             )
+        if np.any(feh >= _FEH_MAX):
+            raise ValueError(
+                f"`feh` must be below {_FEH_MAX:.2f}, where the thin-disk "
+                f"vertical dispersion reaches 0; got {feh.max()}."
+            )
     if loga is not None:
         loga = np.asarray(loga, dtype=np.float64)
         if loga.ndim != 1 or loga.shape[0] != n:
@@ -851,6 +1071,38 @@ def logp_galactic_structure(
                 f"`loga` must be a 1D array with one entry per distance "
                 f"({n}); got shape {np.shape(loga)}."
             )
+
+    # Vertical profiles: the rotation curve, the thick disk dispersion and,
+    # without an age, the age-averaged thin-disk table.
+    _check_positive(
+        R_taper=R_taper, thick_sigma_z=thick_sigma_z, thick_R_sigma=thick_R_sigma
+    )
+    rot = (
+        float(R_solar),
+        _vc_solar(v_circ_solar, R_solar, dvcirc_dR),
+        float(dvcirc_dR),
+        float(R_taper),
+    )
+    thick = (float(thick_sigma_z) ** 2, float(thick_R_sigma))
+    age_args = (
+        max_age,
+        min_age,
+        feh_age_ctr,
+        feh_age_scale,
+        nsigma_from_max_age,
+        max_sigma,
+        min_sigma,
+    )
+    table = (
+        np.empty((0, 0))
+        if loga is not None
+        else _age_averaged_table(
+            float(feh_thin),
+            abs(float(Z_solar)),
+            rot,
+            tuple(float(a) for a in age_args),
+        )
+    )
 
     # Fast path: use fused numba kernel when labels are provided and
     # return_components is not needed. Eliminates ~15 temporary arrays
@@ -883,12 +1135,13 @@ def logp_galactic_structure(
             R_solar,
             Z_solar,
             R_thin,
-            Z_thin,
             Rs_thin,
             R_thick,
-            Z_thick,
             Rs_thick,
             f_thick,
+            *rot[1:],
+            *thick,
+            table,
             Rs_halo,
             eta_halo,
             q_halo_ctr,
@@ -921,29 +1174,29 @@ def logp_galactic_structure(
         dists, ell, b, R_solar=R_solar, Z_solar=Z_solar
     )
 
-    # Thin disk component
-    logp_thin = logn_disk(
-        R,
-        Z,
-        R_solar=R_solar,
-        Z_solar=Z_solar,
-        R_scale=R_thin,
-        Z_scale=Z_thin,
-        R_smooth=Rs_thin,
-    )
-    logp_thin += vol_factor
+    # Disk components: the radial part of logn_disk and the vertical
+    # Jeans profiles. Array coordinates broadcast R past the shape of
+    # `dists`, so the labels broadcast with it.
+    def per_point(x):
+        return np.broadcast_to(x.reshape(dists.shape), R.shape).ravel()
 
-    # Thick disk component
-    logp_thick = logn_disk(
-        R,
-        Z,
-        R_solar=R_solar,
-        Z_solar=Z_solar,
-        R_scale=R_thick,
-        Z_scale=Z_thick,
-        R_smooth=Rs_thick,
+    thin_z, thick_z = _disk_vertical_array(
+        R.ravel(),
+        np.abs(Z).ravel(),
+        abs(Z_solar),
+        np.empty(0) if loga is None else per_point(loga),
+        np.full(R.size, feh_thin) if feh is None else per_point(feh),
+        loga is not None,
+        rot,
+        *thick,
+        table,
     )
-    logp_thick += vol_factor + np.log(f_thick)
+    # logn_disk at Z = Z_solar is its radial part alone.
+    radial = dict(Z=Z_solar, R_solar=R_solar, Z_solar=Z_solar)
+    logp_thin = logn_disk(R, R_scale=R_thin, R_smooth=Rs_thin, **radial)
+    logp_thin += thin_z.reshape(R.shape) + vol_factor
+    logp_thick = logn_disk(R, R_scale=R_thick, R_smooth=Rs_thick, **radial)
+    logp_thick += thick_z.reshape(R.shape) + vol_factor + np.log(f_thick)
 
     # Halo component
     logp_halo = logn_halo(
