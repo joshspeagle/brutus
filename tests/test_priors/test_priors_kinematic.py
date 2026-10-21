@@ -41,7 +41,7 @@ YR_S = 365.25 * 86400.0
 MAS_PER_RAD = 180.0 / np.pi * 3600e3
 
 
-def _circular_velocity(R_solar=R_SOLAR):
+def _vc_solar(R_solar=R_SOLAR):
     return solar_velocity(R_solar)[1] - V_PEC_SUN
 
 
@@ -128,7 +128,7 @@ def test_rigid_rotation_shows_one_proper_motion_and_no_radial_velocity():
 
 def _vc(R, R_solar=R_SOLAR, v_circ_solar=None):
     """The rotation curve kernel at radii R."""
-    vc = _circular_velocity(R_solar) if v_circ_solar is None else v_circ_solar
+    vc = _vc_solar(R_solar) if v_circ_solar is None else v_circ_solar
     return np.array(
         [kin._circular_velocity(r, R_solar, vc)[0] for r in np.atleast_1d(R)]
     )
@@ -147,11 +147,11 @@ def _measured_curve(source, R_range, max_err=np.inf):
 def test_rotation_curve_follows_the_measured_circular_velocities():
     # Eilers et al. (2019) bins with errors under 5 km/s, 5.3-21 kpc.
     R, shape = _measured_curve(1, (5.3, 21.3), max_err=5.0)
-    rel = _vc(R) / _circular_velocity() / shape - 1
+    rel = _vc(R) / _vc_solar() / shape - 1
     assert np.abs(rel).max() < 0.03 and np.sqrt(np.mean(rel**2)) < 0.015
     # Sofue & Kohno (2025) at 2-4.5 kpc, smoothed over the bar's wiggles.
     R, shape = _measured_curve(0, (2.0, 4.5))
-    rel = _vc(R) / _circular_velocity() / shape - 1
+    rel = _vc(R) / _vc_solar() / shape - 1
     assert np.sqrt(np.mean(rel**2)) < 0.05
 
 
@@ -160,16 +160,14 @@ def test_rotation_curve_scales_with_the_solar_radius_and_velocity(
     R_solar, v_circ_solar
 ):
     R = np.array([1.0, 4.0, 8.0, 15.0, 30.0])
-    expected = v_circ_solar / _circular_velocity() * _vc(R * R_SOLAR / R_solar)
+    expected = v_circ_solar / _vc_solar() * _vc(R * R_SOLAR / R_solar)
     np.testing.assert_allclose(_vc(R, R_solar, v_circ_solar), expected, rtol=1e-12)
     np.testing.assert_allclose(_vc(R_solar, R_solar, v_circ_solar), v_circ_solar)
 
 
 def test_rotation_curve_slope_is_the_derivative_of_its_values():
     R = np.linspace(0.2, 30.0, 300)
-    dlnvc = np.array(
-        [kin._circular_velocity(r, R_SOLAR, _circular_velocity())[1] for r in R]
-    )
+    dlnvc = np.array([kin._circular_velocity(r, R_SOLAR, _vc_solar())[1] for r in R])
     np.testing.assert_allclose(dlnvc, _dln_dlnR(_vc, R), atol=1e-6)
 
 
@@ -189,7 +187,7 @@ def test_thin_disk_dispersions_use_the_mean_angular_momentum():
     R = np.array([4.0, R_SOLAR, 14.0])
     mean, cov = _thin(R, age=10.0)
     vc = _vc(R)
-    L_solar = R_SOLAR * _circular_velocity()
+    L_solar = R_SOLAR * _vc_solar()
     L_range = tuple(r * _vc(r)[0] for r in THIN_DISK_R_RANGE)
     for i in range(3):
         f_R, f_z, _ = kin._thin_disk_fL(R[i] * mean[i, 1], L_solar, L_range)
@@ -217,7 +215,7 @@ def test_thin_disk_population_matches_the_measured_low_alpha_disk():
     var = w @ np.diagonal(cov, axis1=1, axis2=2)
     var[1] += w @ (mean[:, 1] - vphi) ** 2
     sig = np.sqrt(var)
-    assert abs(_circular_velocity() - vphi - 10.6) < 3.0
+    assert abs(_vc_solar() - vphi - 10.6) < 3.0
     assert abs(sig[1] / sig[0] - 0.66) < 0.05
     assert abs(sig[2] / sig[0] - 0.49) < 0.05
 
@@ -226,7 +224,7 @@ def test_thick_disk_rotation_matches_the_measured_high_alpha_lag():
     # Anguiano et al. (2020, Table 1), high-alpha disk: lag 240 - 191.82 =
     # 48.2 km/s. The model predicts it; nothing is fitted to it.
     mean, _ = thick_disk_velocity_moments(np.array([R_SOLAR]))
-    assert abs(_circular_velocity() - mean[0, 1] - 48.2) < 3.0
+    assert abs(_vc_solar() - mean[0, 1] - 48.2) < 3.0
 
 
 @pytest.mark.parametrize("disk", ["thin", "thick"])

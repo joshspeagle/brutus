@@ -69,13 +69,14 @@ V_PEC_SUN = 12.24
 # Shape of the circular velocity curve, v_c(R) / v_c(R_sun) against
 # R / R_sun, from the measurements in rotation_curve.dat: Sofue & Kohno
 # (2025) inside VC_JOIN and Eilers et al. (2019) outside, each scaled by its
-# own (R_sun, v_c,sun). Points with errors above VC_MAX_ERR (km/s) are
-# left out: the Eilers et al. bins beyond 21 kpc have 6-29 km/s. Both
+# own (R_sun, v_c,sun). Eilers et al. bins with errors above VC_MAX_ERR
+# (km/s) are left out: those beyond 21 kpc have 6-29 km/s. All Sofue &
+# Kohno points are kept; inside 0.4 kpc their errors reach 48 km/s. Both
 # sources are smoothed with a Gaussian of VC_SMOOTH (weighted by the
 # errors) and blended across VC_JOIN with a cosine weight, so the slope
 # stays continuous, all in units of R / R_sun.
-# The curve falls linearly to 0 inside the first point and flattens
-# beyond the last.
+# The curve falls linearly to 0 inside the first point, flattens beyond
+# the last and is flat beyond three smoothing lengths more (about 24 kpc).
 VC_SOURCES = ((8.178, 235.1), (8.122, 229.0))
 VC_MAX_ERR = 5.0
 VC_SMOOTH = 1.0 / 8.2
@@ -186,7 +187,8 @@ def _rotation_curve_table():
     inner = grid < x0
     curve[inner] = np.interp(x0, grid, curve) * grid[inner] / x0
     curve /= np.interp(1.0, grid, curve)
-    return curve, np.gradient(curve, _VC_DX)
+    # The slope is per grid step, the unit the Hermite interpolation uses.
+    return curve, np.gradient(curve)
 
 
 _VC_SHAPE, _VC_SLOPE = _rotation_curve_table()
@@ -197,7 +199,8 @@ def _circular_velocity(R, R_solar, vc_solar):
     """Return v_c(R) and d ln v_c / d ln R.
 
     The shape is interpolated in _VC_SHAPE with cubic Hermite polynomials,
-    whose slopes are _VC_SLOPE, so v_c and its derivative are continuous.
+    whose slopes are _VC_SLOPE (per grid step), so v_c and its derivative
+    are continuous.
     """
     y = R / R_solar / _VC_DX
     n = len(_VC_SHAPE) - 1
@@ -206,7 +209,7 @@ def _circular_velocity(R, R_solar, vc_solar):
     i = int(y)
     w = y - i
     p0, p1 = _VC_SHAPE[i], _VC_SHAPE[i + 1]
-    m0, m1 = _VC_SLOPE[i] * _VC_DX, _VC_SLOPE[i + 1] * _VC_DX
+    m0, m1 = _VC_SLOPE[i], _VC_SLOPE[i + 1]
     w2, w3 = w * w, w * w * w
     s = (
         (2.0 * w3 - 3.0 * w2 + 1.0) * p0
@@ -579,8 +582,9 @@ def thin_disk_velocity_moments(
 
     with the measured circular velocity :math:`v_c(R)`: Sofue & Kohno
     (2025) inside 5 kpc and Eilers et al. (2019) outside, each scaled to
-    :math:`v_{c,\odot}` at :math:`R_\odot`, smoothed over 1 kpc and
-    flat beyond 21 kpc (``rotation_curve.dat``). The mean rotation is
+    :math:`v_{c,\odot}` at :math:`R_\odot`, smoothed over 1 kpc, and
+    flattening beyond the last measurement at 21 kpc
+    (``rotation_curve.dat``). The mean rotation is
     clipped to :math:`[0, v_c]`: the Jeans equation has no
     solution where the right-hand side is negative, and near the centre,
     where the density gradient vanishes, it gives rotation faster than
