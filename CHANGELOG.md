@@ -352,6 +352,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- brutus's numba caches are recompiled when any file of the package
+  changes. Numba checked a cached kernel only against its own source file,
+  so a kernel that calls jitted code in another brutus module kept returning
+  results of the old code after that module changed.
 - `StarGrid.get_seds(afe=0.4)` on `grid_mist_v9.h5` raises `ValueError`.
   `load_models` dropped the constant `afe` label, so the query ignored it
   silently and returned the [α/Fe] = 0 result. `load_models` now keeps the
