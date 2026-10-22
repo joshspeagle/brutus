@@ -44,7 +44,7 @@ Examples
 """
 
 import os
-from math import asinh, exp, radians, sqrt
+from math import asinh, exp, log1p, radians, sqrt
 
 import numpy as np
 from numba import jit, prange
@@ -98,8 +98,10 @@ THIN_DISK_ALPHA_L = (0.09, 0.58)
 THIN_DISK_GAMMA_FEH = (-0.19, -0.52)
 THIN_DISK_GAMMA_Z = (0.12, 0.20)
 # Radii in kpc where the thin-disk relations were fitted (Sharma et al. 2021).
-# Beyond them the dispersions keep their values at the edges.
+# Beyond them the dispersions tend to their values at the edges, reached
+# smoothly over DISK_EDGE kpc so that v_phi stays continuous.
 THIN_DISK_R_RANGE = (3.0, 20.0)
+DISK_EDGE = 1.0
 
 # Thick-disk (high-[alpha/Fe]) dispersions (sigma_R, sigma_phi, sigma_z)
 # in km/s (Anguiano et al. 2020, Table 1) and the e-folding length of the
@@ -107,7 +109,8 @@ THIN_DISK_R_RANGE = (3.0, 20.0)
 THICK_DISK_SIGMA = (64.68, 50.82, 43.60)
 THICK_DISK_R_SIGMA = 15.0
 # Radii in kpc of the Mackereth et al. (2019) sample. Beyond them the
-# thick-disk dispersions keep their values at the edges.
+# thick-disk dispersions tend to their values at the edges, as for the
+# thin disk.
 THICK_DISK_R_RANGE = (4.0, 13.0)
 
 # Halo mixture by Galactocentric radius (Lancaster et al. 2019, Table 2):
@@ -294,63 +297,73 @@ def _thin_disk_sigma0(age, feh):
 
 
 @jit(nopython=True, cache=True)
-def _thin_disk_fL(L, L_solar, L_range):
-    """Return the Sharma et al. (2021) f_L of sigma_R and of sigma_z, and
-    d ln f_L(sigma_R) / d ln L_z, with L_z clamped to ``L_range`` (L_z of
-    circular orbits at the ends of THIN_DISK_R_RANGE)."""
-    L = min(max(L, L_range[0]), L_range[1])
-    u2 = (L / L_solar) ** 2
-    a_R, a_z = THIN_DISK_ALPHA_L
-    lam_R, lam_z = THIN_DISK_LAMBDA_L
-    e_R = exp(-(L - L_solar) / lam_R)
-    f_R = (a_R * u2 + e_R) / (1.0 + a_R)
-    f_z = (a_z * u2 + exp(-(L - L_solar) / lam_z)) / (1.0 + a_z)
-    return f_R, f_z, (2.0 * a_R * u2 - (L / lam_R) * e_R) / ((1.0 + a_R) * f_R)
+def _soft_clamp(x, lo, hi, width):
+    """Return x clamped to [lo, hi] and d(clamped x) / dx. Within about
+    ``width`` of an edge the clamp is a softplus, so both are continuous."""
+    t = (x - lo) / width
+    x = lo + width * (max(t, 0.0) + log1p(exp(-abs(t))))
+    d = 1.0 / (1.0 + exp(-t))
+    t = (hi - x) / width
+    return hi - width * (max(t, 0.0) + log1p(exp(-abs(t)))), d / (1.0 + exp(-t))
 
 
 @jit(nopython=True, cache=True)
-def _thin_disk_radial(R, abs_z, sig_R0, vc, dlnvc, L, L_solar, L_range, dlnnu_dlnR):
+def _thin_disk_fL(L, L_solar, L_clamp):
+    """Return the Sharma et al. (2021) f_L of sigma_R and of sigma_z, and
+    d ln f_L(sigma_R) / d ln L_z, with L_z clamped smoothly by
+    ``L_clamp`` = (L_lo, L_hi, width): L_z of circular orbits at the ends
+    of THIN_DISK_R_RANGE, and DISK_EDGE times v_c at the Sun."""
+    L_eff, dL = _soft_clamp(L, L_clamp[0], L_clamp[1], L_clamp[2])
+    u2 = (L_eff / L_solar) ** 2
+    a_R, a_z = THIN_DISK_ALPHA_L
+    lam_R, lam_z = THIN_DISK_LAMBDA_L
+    e_R = exp(-(L_eff - L_solar) / lam_R)
+    f_R = (a_R * u2 + e_R) / (1.0 + a_R)
+    f_z = (a_z * u2 + exp(-(L_eff - L_solar) / lam_z)) / (1.0 + a_z)
+    dlnf_dlnL = (2.0 * a_R * u2 - (L_eff / lam_R) * e_R) / ((1.0 + a_R) * f_R)
+    return f_R, f_z, dlnf_dlnL * dL * L / L_eff
+
+
+@jit(nopython=True, cache=True)
+def _thin_disk_radial(R, abs_z, sig_R0, vc, dlnvc, L, L_solar, L_clamp, dlnnu_dlnR):
     """Return (v_phi, var_R, var_phi, f_L of sigma_z) of the thin disk for
     f_L at ``L``.
 
     sigma_phi follows the epicyclic ratio
     sigma_phi^2 / sigma_R^2 = (1 + d ln v_c / d ln R) / 2, and
     d ln L_z / d ln R is taken as that of a circular orbit, 1 + d ln v_c /
-    d ln R. For R_solar = 8.2 kpc, |z| <= 1 kpc and -1 <= [Fe/H] <= 0.5,
-    the derivative of the mean L_z itself would move v_phi by up to
-    3.5 km/s at 3.2 < R < 19.8 kpc, most for old metal-poor stars near
-    5 kpc, where v_c changes fastest. Outside THIN_DISK_R_RANGE the
-    Jeans equation takes the dispersions as constant in R. These edges are
-    in R, not L_z, so v_phi is continuous in L_z and the fixed point in
-    ``_thin_disk_mean_L`` converges.
+    d ln R. Outside THIN_DISK_R_RANGE the gradient term fades out over
+    DISK_EDGE, smoothly in R: a population that lags keeps an L_z below the
+    clamp a little beyond 20 kpc, and the gradient would otherwise act
+    there.
     """
-    f_R, f_z, dlnf_R = _thin_disk_fL(L, L_solar, L_range)
+    f_R, f_z, dlnf_R = _thin_disk_fL(L, L_solar, L_clamp)
     sig_R = sig_R0 * f_R * (1.0 + THIN_DISK_GAMMA_Z[0] * abs_z)
     var_R = sig_R * sig_R
     var_phi = 0.5 * var_R * (1.0 + dlnvc)
-    lo, hi = THIN_DISK_R_RANGE
-    dlnvar_dlnR = 2.0 * dlnf_R * (1.0 + dlnvc) if lo < R < hi else 0.0
+    fade = _soft_clamp(R, THIN_DISK_R_RANGE[0], THIN_DISK_R_RANGE[1], DISK_EDGE)[1]
+    dlnvar_dlnR = 2.0 * dlnf_R * (1.0 + dlnvc) * fade
     vphi = _jeans_vphi(var_R, var_phi, dlnvar_dlnR, dlnnu_dlnR, vc)
     return vphi, var_R, var_phi, f_z
 
 
 @jit(nopython=True, cache=True)
-def _thin_disk_mean_L(R, abs_z, sig_R0, vc, dlnvc, L_solar, L_range, dlnnu_dlnR):
+def _thin_disk_mean_L(R, abs_z, sig_R0, vc, dlnvc, L_solar, L_clamp, dlnnu_dlnR):
     """Return the mean L_z = R v_phi of a thin-disk population.
 
-    Three steps of the fixed point L_z = R v_phi(L_z) from the circular
+    Two steps of the fixed point L_z = R v_phi(L_z) from the circular
     L_z = R v_c. For R_solar = 8.2 kpc, 0.5 < R < 25 kpc, all ages and
-    -1 < [Fe/H] < 0.5, f_L of sigma_R is then within 0.06% of the
-    converged value at |z| < 1 kpc and 1% at |z| < 3 kpc. Where several
+    -1 < [Fe/H] < 0.5, f_L of sigma_R is then within 0.3% of the
+    converged value at |z| < 1 kpc and 2.1% at |z| < 3 kpc. Where several
     L_z solve it (old, metal-poor stars beyond 11 kpc), the steps approach
     the largest, the solution connected to circular orbits.
     """
     L = R * vc
-    for _ in range(3):
+    for _ in range(2):
         L = (
             R
             * _thin_disk_radial(
-                R, abs_z, sig_R0, vc, dlnvc, L, L_solar, L_range, dlnnu_dlnR
+                R, abs_z, sig_R0, vc, dlnvc, L, L_solar, L_clamp, dlnnu_dlnR
             )[0]
         )
     return L
@@ -358,19 +371,18 @@ def _thin_disk_mean_L(R, abs_z, sig_R0, vc, dlnvc, L_solar, L_range, dlnnu_dlnR)
 
 @jit(nopython=True, cache=True)
 def _thin_disk_moments(
-    R, abs_z, sig_R0, sig_z0, vc, dlnvc, L_solar, L_range, dlnnu_dlnR
+    R, abs_z, sig_R0, sig_z0, vc, dlnvc, L_solar, L_clamp, dlnnu_dlnR
 ):
     """Return (v_phi, var_R, var_phi, var_z) of the thin disk.
 
     ``sig_R0`` and ``sig_z0`` come from ``_thin_disk_sigma0``. The
     dispersions take f_L at the population's mean L_z from
     ``_thin_disk_mean_L``; ``L_solar`` is R_solar v_c(R_solar), the L_z of
-    a circular orbit at the Sun. ``L_range`` holds L_z at the ends of
-    THIN_DISK_R_RANGE; beyond them L_z keeps its edge value.
+    a circular orbit at the Sun, and ``L_clamp`` is as in ``_thin_disk_fL``.
     """
-    L = _thin_disk_mean_L(R, abs_z, sig_R0, vc, dlnvc, L_solar, L_range, dlnnu_dlnR)
+    L = _thin_disk_mean_L(R, abs_z, sig_R0, vc, dlnvc, L_solar, L_clamp, dlnnu_dlnR)
     vphi, var_R, var_phi, f_z = _thin_disk_radial(
-        R, abs_z, sig_R0, vc, dlnvc, L, L_solar, L_range, dlnnu_dlnR
+        R, abs_z, sig_R0, vc, dlnvc, L, L_solar, L_clamp, dlnnu_dlnR
     )
     sig_z = sig_z0 * f_z * (1.0 + THIN_DISK_GAMMA_Z[1] * abs_z)
     return vphi, var_R, var_phi, sig_z * sig_z
@@ -380,13 +392,14 @@ def _thin_disk_moments(
 def _thick_disk_moments(R, vc, var_R0, var_phi0, var_z0, R_sigma, R_solar, dlnnu_dlnR):
     """Return (v_phi, var_R, var_phi, var_z) of the thick disk.
 
-    Beyond THICK_DISK_R_RANGE the dispersions keep their edge values.
+    Beyond THICK_DISK_R_RANGE the dispersions tend to their edge values,
+    smoothly over DISK_EDGE.
     """
-    lo, hi = THICK_DISK_R_RANGE
-    f = exp(-2.0 * (min(max(R, lo), hi) - R_solar) / R_sigma)
+    R_eff, dR = _soft_clamp(R, THICK_DISK_R_RANGE[0], THICK_DISK_R_RANGE[1], DISK_EDGE)
+    f = exp(-2.0 * (R_eff - R_solar) / R_sigma)
     var_R = var_R0 * f
     var_phi = var_phi0 * f
-    dlnvar_dlnR = -2.0 * R / R_sigma if lo < R < hi else 0.0
+    dlnvar_dlnR = -2.0 * R / R_sigma * dR
     vphi = _jeans_vphi(var_R, var_phi, dlnvar_dlnR, dlnnu_dlnR, vc)
     return vphi, var_R, var_phi, var_z0 * f
 
@@ -474,7 +487,7 @@ def _thin_disk_array(R, Z, age, feh, R_scale, R_smooth, R_solar, vc_solar):
             vc,
             dlnvc,
             L_solar,
-            (L_lo, L_hi),
+            (L_lo, L_hi, DISK_EDGE * vc_solar),
             _logn_disk_dlnR(R[i], sqrt(R[i] * R[i] + R_smooth * R_smooth), R_scale),
         )
         _store(mean[i], cov[i], 0.0, vphi, 0.0, var_R, var_phi, var_z, 0.0)
@@ -596,14 +609,12 @@ def thin_disk_velocity_moments(
     + e^{-(L_z - L_{z,\odot})/\lambda_{L,v}}] / (1 + \alpha_{L,v})`. The
     :math:`L_{z,\odot} = R_\odot v_c(R_\odot)`. :math:`L_z` is the mean
     angular momentum of the population, :math:`R\,\bar{v}_\phi`, with
-    :math:`\bar{v}_\phi` from the Jeans equation below (three steps of
-    the fixed point from the circular :math:`L_z = R\,v_c`). The relations
-    were fitted at 3 < R < 20 kpc; :math:`L_z` is clamped to the circular
-    :math:`L_z` at those radii, so the dispersions do not extrapolate, and
-    the Jeans equation takes them as constant in R outside those radii.
-    :math:`\bar{v}_\phi` therefore steps at the edges, by up to 10 km/s at
-    3 kpc for old stars. The
-    azimuthal dispersion
+    :math:`\bar{v}_\phi` from the Jeans equation below (two steps of the
+    fixed point from the circular :math:`L_z = R\,v_c`). The relations
+    were fitted at 3 < R < 20 kpc. Outside those radii the dispersions tend
+    to their edge values, smoothly over 1 kpc: :math:`L_z` is clamped
+    softly to the circular :math:`L_z` at the edges, and the dispersion
+    gradient in the Jeans equation fades out in R. The azimuthal dispersion
     follows the epicyclic ratio
     :math:`\sigma_\phi^2 / \sigma_R^2 = (1 + d\ln v_c / d\ln R) / 2`.
 
@@ -715,8 +726,8 @@ def thick_disk_velocity_moments(
     The defaults are the high-[alpha/Fe] dispersions of Anguiano et al.
     (2020, Table 1) and the e-folding length of Mackereth et al. (2019).
     Beyond 4 < R < 13 kpc, the radii of the Mackereth et al. sample, the
-    dispersions keep their values at the edges, so the mean rotation
-    steps there by 10 km/s. The mean rotation is the radial Jeans solution of
+    dispersions tend to their edge values, smoothly over 1 kpc. The mean
+    rotation is the radial Jeans solution of
     `thin_disk_velocity_moments`, with
     :math:`\partial \ln \sigma_R^2 / \partial \ln R = -2R / R_\sigma`.
     With the defaults, :math:`\bar{v}_\phi = 191` km/s at the Sun;

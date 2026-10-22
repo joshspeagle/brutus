@@ -183,23 +183,26 @@ def _dln_dlnR(f, R, h=1e-5):
 
 def test_thin_disk_dispersions_use_the_mean_angular_momentum():
     # Sharma et al. (2021): sigma = sigma_0 f_L(L_z) at 10 Gyr, [Fe/H] = 0
-    # and z = 0, with L_z the population's mean R v_phi (to 0.06%).
+    # and z = 0, with L_z the population's mean R v_phi (to 0.3%).
     # Near the edges of THIN_DISK_R_RANGE the fixed point once oscillated.
     R = np.array([3.05, 4.0, R_SOLAR, 14.0, 19.95])
     mean, cov = _thin(R, age=10.0)
     vc = _vc(R)
     L_solar = R_SOLAR * _vc_solar()
-    L_range = tuple(r * _vc(r)[0] for r in THIN_DISK_R_RANGE)
+    L_clamp = tuple(r * _vc(r)[0] for r in THIN_DISK_R_RANGE)
+    L_clamp += (kin.DISK_EDGE * _vc_solar(),)
     for i in range(len(R)):
-        f_R, f_z, _ = kin._thin_disk_fL(R[i] * mean[i, 1], L_solar, L_range)
+        f_R, f_z, _ = kin._thin_disk_fL(R[i] * mean[i, 1], L_solar, L_clamp)
         np.testing.assert_allclose(
             np.sqrt(cov[i, [0, 2], [0, 2]]),
             np.multiply(THIN_DISK_SIGMA0, (f_R, f_z)),
-            rtol=1e-3,
+            rtol=5e-3,
         )
-        # The circular L_z = R v_c gives other dispersions.
-        f_c = kin._thin_disk_fL(R[i] * vc[i], L_solar, L_range)[0]
-        assert abs(f_c / f_R - 1) > 5e-3
+        # Away from the clamp, the circular L_z = R v_c gives other
+        # dispersions.
+        f_c = kin._thin_disk_fL(R[i] * vc[i], L_solar, L_clamp)[0]
+        if 4 <= R[i] <= 14:
+            assert abs(f_c / f_R - 1) > 1e-2
 
 
 def test_thin_disk_population_matches_the_measured_low_alpha_disk():
@@ -249,9 +252,9 @@ def test_disk_rotation_solves_the_jeans_equation_for_the_logn_disk_density(disk)
     rhs = cov[:, 1, 1] - cov[:, 0, 0] * (1 + dlnnu + dlnvar)
     jeans = np.sqrt(_vc(R) ** 2 - rhs)
     # The thin disk takes d ln L_z / d ln R of a circular orbit for its
-    # mean L_z, which moves v_phi by up to 2.2 km/s at 3-20 kpc.
+    # mean L_z, which moves v_phi here by up to 0.9 km/s.
     np.testing.assert_allclose(
-        mean[:, 1], jeans, rtol=1e-7, atol=2.5 if disk == "thin" else 0.0
+        mean[:, 1], jeans, rtol=1e-7, atol=1.5 if disk == "thin" else 0.0
     )
     np.testing.assert_allclose(mean[:, [0, 2]], 0.0)
 
@@ -271,18 +274,32 @@ def test_disk_rotation_stays_below_circular_and_vanishes_at_the_centre(disk):
     assert np.all(mean[:, 1] <= _vc(R) * (1 + 1e-12))
 
 
-def test_disk_dispersions_keep_their_edge_values_outside_the_fitted_radii():
-    # The thin disk is clamped in L_z, at the L_z of circular orbits at the
-    # edges of THIN_DISK_R_RANGE; its mean L_z lies below them, so the
-    # clamp holds inside 3 kpc and from a little beyond 20 kpc.
-    lo, hi = THIN_DISK_R_RANGE
-    _, cov = _thin(np.array([0.5 * lo, 0.25 * lo, 1.5 * hi, 3 * hi]))
-    np.testing.assert_allclose(cov[1, [0, 2], [0, 2]], cov[0, [0, 2], [0, 2]])
-    np.testing.assert_allclose(cov[3, [0, 2], [0, 2]], cov[2, [0, 2], [0, 2]])
-    lo, hi = THICK_DISK_R_RANGE
-    _, cov = thick_disk_velocity_moments(np.array([lo, 0.5 * lo, hi, 10 * hi]))
-    np.testing.assert_allclose(cov[1], cov[0])
-    np.testing.assert_allclose(cov[3], cov[2])
+def test_disk_dispersions_tend_to_their_edge_values_outside_the_fitted_radii():
+    # The clamp is smooth over DISK_EDGE, so the dispersions still vary a
+    # little just outside the fitted radii, and settle further out. The
+    # thin disk is clamped in L_z, which nears 0 at the centre, so its
+    # inner values settle more slowly.
+    _, cov = _thin(np.array([0.5, 0.1, 30.0, 60.0]))
+    sig = np.sqrt(cov[:, [0, 2], [0, 2]])
+    np.testing.assert_allclose(sig[1], sig[0], rtol=1e-2)
+    np.testing.assert_allclose(sig[3], sig[2], rtol=1e-3)
+    _, cov = thick_disk_velocity_moments(np.array([1.0, 0.0, 20.0, 130.0]))
+    np.testing.assert_allclose(cov[1], cov[0], rtol=5e-3)
+    np.testing.assert_allclose(cov[3], cov[2], rtol=1e-3)
+
+
+@pytest.mark.parametrize("disk", ["thin", "thick"])
+def test_disk_rotation_is_continuous_across_the_edges_of_the_fitted_radii(disk):
+    # A hard clamp made v_phi step by up to 10 km/s at the edges.
+    edges = THIN_DISK_R_RANGE if disk == "thin" else THICK_DISK_R_RANGE
+    for edge in edges:
+        R = np.linspace(edge - 1.5, edge + 1.5, 3001)
+        mean = (
+            _thin(R, age=13.8, feh=-1.0)
+            if disk == "thin"
+            else thick_disk_velocity_moments(R)
+        )[0]
+        assert np.abs(np.diff(mean[:, 1])).max() < 0.05
 
 
 def test_velocity_ellipsoids_stay_positive_definite_at_all_radii():
