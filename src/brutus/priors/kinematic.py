@@ -300,11 +300,16 @@ def _thin_disk_sigma0(age, feh):
 def _soft_clamp(x, lo, hi, width):
     """Return x clamped to [lo, hi] and d(clamped x) / dx. Within about
     ``width`` of an edge the clamp is a softplus, so both are continuous."""
+    # softplus(t) = max(t, 0) + log(1 + e^-|t|) and its derivative, the
+    # logistic function, both without overflow.
     t = (x - lo) / width
-    x = lo + width * (max(t, 0.0) + log1p(exp(-abs(t))))
-    d = 1.0 / (1.0 + exp(-t))
+    e = exp(-abs(t))
+    x = lo + width * (max(t, 0.0) + log1p(e))
+    d = 1.0 / (1.0 + e) if t >= 0.0 else e / (1.0 + e)
     t = (hi - x) / width
-    return hi - width * (max(t, 0.0) + log1p(exp(-abs(t)))), d / (1.0 + exp(-t))
+    e = exp(-abs(t))
+    d *= 1.0 / (1.0 + e) if t >= 0.0 else e / (1.0 + e)
+    return hi - width * (max(t, 0.0) + log1p(e)), d
 
 
 @jit(nopython=True, cache=True)

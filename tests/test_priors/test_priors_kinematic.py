@@ -303,7 +303,9 @@ def test_disk_rotation_is_continuous_across_the_edges_of_the_fitted_radii(disk):
 
 
 def test_velocity_ellipsoids_stay_positive_definite_at_all_radii():
-    R = np.linspace(0.0, 300.0, 3001)
+    # 1e4 kpc is far enough beyond the fitted radii to overflow a naive
+    # softplus in the edge clamps.
+    R = np.r_[np.linspace(0.0, 300.0, 3001), 1e4]
     Z = 0.3 * R
     for _, cov in (_thin(R), thick_disk_velocity_moments(R)):
         assert np.all(np.linalg.eigvalsh(cov) > 0)
