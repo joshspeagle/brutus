@@ -233,7 +233,10 @@ def test_thick_disk_rotation_matches_the_measured_high_alpha_lag():
 
 @pytest.mark.parametrize("disk", ["thin", "thick"])
 def test_disk_rotation_solves_the_jeans_equation_for_the_logn_disk_density(disk):
-    R = np.linspace(4.5, 12.5, 17)
+    # The radii miss the ends of the edge blends (5 and 12 kpc for the
+    # thick disk), where the second derivative jumps and the central
+    # differences lose precision.
+    R = np.linspace(4.6, 12.6, 17)
     density = dict(R_scale=2.3, R_smooth=1.5)
     if disk == "thin":
 
@@ -274,18 +277,19 @@ def test_disk_rotation_stays_below_circular_and_vanishes_at_the_centre(disk):
     assert np.all(mean[:, 1] <= _vc(R) * (1 + 1e-12))
 
 
-def test_disk_dispersions_tend_to_their_edge_values_outside_the_fitted_radii():
-    # The clamp is smooth over DISK_EDGE, so the dispersions still vary a
-    # little just outside the fitted radii, and settle further out. The
-    # thin disk is clamped in L_z, which nears 0 at the centre, so its
-    # inner values settle more slowly.
-    _, cov = _thin(np.array([0.5, 0.1, 30.0, 60.0]))
+def test_disk_dispersions_keep_their_edge_values_outside_the_fitted_radii():
+    # Beyond DISK_EDGE of each edge the clamp is the hard clamp. The thin
+    # disk is clamped in L_z, its mean L_z lies below the circular one, so
+    # its outer edge is reached a little beyond 21 kpc.
+    _, cov = _thin(np.array([1.5, 0.5, 30.0, 60.0]))
     sig = np.sqrt(cov[:, [0, 2], [0, 2]])
-    np.testing.assert_allclose(sig[1], sig[0], rtol=1e-2)
-    np.testing.assert_allclose(sig[3], sig[2], rtol=1e-3)
-    _, cov = thick_disk_velocity_moments(np.array([1.0, 0.0, 20.0, 130.0]))
-    np.testing.assert_allclose(cov[1], cov[0], rtol=5e-3)
-    np.testing.assert_allclose(cov[3], cov[2], rtol=1e-3)
+    np.testing.assert_allclose(sig[1], sig[0], rtol=1e-12)
+    np.testing.assert_allclose(sig[3], sig[2], rtol=1e-12)
+    lo, hi = THICK_DISK_R_RANGE
+    edge = kin.DISK_EDGE
+    _, cov = thick_disk_velocity_moments(np.array([lo - edge, 0.0, hi + edge, 130.0]))
+    np.testing.assert_allclose(cov[1], cov[0], rtol=1e-12)
+    np.testing.assert_allclose(cov[3], cov[2], rtol=1e-12)
 
 
 @pytest.mark.parametrize("disk", ["thin", "thick"])
@@ -303,9 +307,7 @@ def test_disk_rotation_is_continuous_across_the_edges_of_the_fitted_radii(disk):
 
 
 def test_velocity_ellipsoids_stay_positive_definite_at_all_radii():
-    # 1e4 kpc is far enough beyond the fitted radii to overflow a naive
-    # softplus in the edge clamps.
-    R = np.r_[np.linspace(0.0, 300.0, 3001), 1e4]
+    R = np.linspace(0.0, 300.0, 3001)
     Z = 0.3 * R
     for _, cov in (_thin(R), thick_disk_velocity_moments(R)):
         assert np.all(np.linalg.eigvalsh(cov) > 0)

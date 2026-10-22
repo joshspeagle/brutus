@@ -44,7 +44,7 @@ Examples
 """
 
 import os
-from math import asinh, exp, log1p, radians, sqrt
+from math import asinh, exp, radians, sqrt
 
 import numpy as np
 from numba import jit, prange
@@ -98,8 +98,9 @@ THIN_DISK_ALPHA_L = (0.09, 0.58)
 THIN_DISK_GAMMA_FEH = (-0.19, -0.52)
 THIN_DISK_GAMMA_Z = (0.12, 0.20)
 # Radii in kpc where the thin-disk relations were fitted (Sharma et al. 2021).
-# Beyond them the dispersions tend to their values at the edges, reached
-# smoothly over DISK_EDGE kpc so that v_phi stays continuous.
+# Beyond them the dispersions keep their values at the edges, reached
+# through a quadratic blend within DISK_EDGE kpc of each edge, so that
+# v_phi stays continuous.
 THIN_DISK_R_RANGE = (3.0, 20.0)
 DISK_EDGE = 1.0
 
@@ -109,8 +110,8 @@ DISK_EDGE = 1.0
 THICK_DISK_SIGMA = (64.68, 50.82, 43.60)
 THICK_DISK_R_SIGMA = 15.0
 # Radii in kpc of the Mackereth et al. (2019) sample. Beyond them the
-# thick-disk dispersions tend to their values at the edges, as for the
-# thin disk.
+# thick-disk dispersions keep their values at the edges, as for the thin
+# disk.
 THICK_DISK_R_RANGE = (4.0, 13.0)
 
 # Halo mixture by Galactocentric radius (Lancaster et al. 2019, Table 2):
@@ -298,24 +299,26 @@ def _thin_disk_sigma0(age, feh):
 
 @jit(nopython=True, cache=True)
 def _soft_clamp(x, lo, hi, width):
-    """Return x clamped to [lo, hi] and d(clamped x) / dx. Within about
-    ``width`` of an edge the clamp is a softplus, so both are continuous."""
-    # softplus(t) = max(t, 0) + log(1 + e^-|t|) and its derivative, the
-    # logistic function, both without overflow.
-    t = (x - lo) / width
-    e = exp(-abs(t))
-    x = lo + width * (max(t, 0.0) + log1p(e))
-    d = 1.0 / (1.0 + e) if t >= 0.0 else e / (1.0 + e)
-    t = (hi - x) / width
-    e = exp(-abs(t))
-    d *= 1.0 / (1.0 + e) if t >= 0.0 else e / (1.0 + e)
-    return hi - width * (max(t, 0.0) + log1p(e)), d
+    """Return x clamped to [lo, hi] and d(clamped x) / dx. Within ``width``
+    of an edge the clamp is a quadratic blend, so both are continuous;
+    further out it is the hard clamp. Needs hi - lo >= 2 width."""
+    if x <= lo - width:
+        return lo, 0.0
+    if x < lo + width:
+        t = x - lo + width
+        return lo + t * t / (4.0 * width), t / (2.0 * width)
+    if x <= hi - width:
+        return x, 1.0
+    if x < hi + width:
+        t = hi + width - x
+        return hi - t * t / (4.0 * width), t / (2.0 * width)
+    return hi, 0.0
 
 
 @jit(nopython=True, cache=True)
 def _thin_disk_fL(L, L_solar, L_clamp):
     """Return the Sharma et al. (2021) f_L of sigma_R and of sigma_z, and
-    d ln f_L(sigma_R) / d ln L_z, with L_z clamped smoothly by
+    d ln f_L(sigma_R) / d ln L_z, with L_z clamped by
     ``L_clamp`` = (L_lo, L_hi, width): L_z of circular orbits at the ends
     of THIN_DISK_R_RANGE, and DISK_EDGE times v_c at the Sun."""
     L_eff, dL = _soft_clamp(L, L_clamp[0], L_clamp[1], L_clamp[2])
@@ -337,8 +340,8 @@ def _thin_disk_radial(R, abs_z, sig_R0, vc, dlnvc, L, L_solar, L_clamp, dlnnu_dl
     sigma_phi follows the epicyclic ratio
     sigma_phi^2 / sigma_R^2 = (1 + d ln v_c / d ln R) / 2, and
     d ln L_z / d ln R is taken as that of a circular orbit, 1 + d ln v_c /
-    d ln R. Outside THIN_DISK_R_RANGE the gradient term fades out over
-    DISK_EDGE, smoothly in R: a population that lags keeps an L_z below the
+    d ln R. Outside THIN_DISK_R_RANGE the gradient term fades out within
+    DISK_EDGE, in R: a population that lags keeps an L_z below the
     clamp a little beyond 20 kpc, and the gradient would otherwise act
     there.
     """
@@ -397,8 +400,8 @@ def _thin_disk_moments(
 def _thick_disk_moments(R, vc, var_R0, var_phi0, var_z0, R_sigma, R_solar, dlnnu_dlnR):
     """Return (v_phi, var_R, var_phi, var_z) of the thick disk.
 
-    Beyond THICK_DISK_R_RANGE the dispersions tend to their edge values,
-    smoothly over DISK_EDGE.
+    Beyond THICK_DISK_R_RANGE the dispersions keep their edge values,
+    blended in within DISK_EDGE of each edge.
     """
     R_eff, dR = _soft_clamp(R, THICK_DISK_R_RANGE[0], THICK_DISK_R_RANGE[1], DISK_EDGE)
     f = exp(-2.0 * (R_eff - R_solar) / R_sigma)
@@ -616,10 +619,11 @@ def thin_disk_velocity_moments(
     angular momentum of the population, :math:`R\,\bar{v}_\phi`, with
     :math:`\bar{v}_\phi` from the Jeans equation below (two steps of the
     fixed point from the circular :math:`L_z = R\,v_c`). The relations
-    were fitted at 3 < R < 20 kpc. Outside those radii the dispersions tend
-    to their edge values, smoothly over 1 kpc: :math:`L_z` is clamped
-    softly to the circular :math:`L_z` at the edges, and the dispersion
-    gradient in the Jeans equation fades out in R. The azimuthal dispersion
+    were fitted at 3 < R < 20 kpc. Outside those radii the dispersions
+    keep their edge values, blended in within 1 kpc of each edge so that
+    :math:`\bar{v}_\phi` stays continuous: :math:`L_z` is clamped to the
+    circular :math:`L_z` at the edges, and the dispersion gradient in the
+    Jeans equation fades out in R. The azimuthal dispersion
     follows the epicyclic ratio
     :math:`\sigma_\phi^2 / \sigma_R^2 = (1 + d\ln v_c / d\ln R) / 2`.
 
@@ -731,7 +735,8 @@ def thick_disk_velocity_moments(
     The defaults are the high-[alpha/Fe] dispersions of Anguiano et al.
     (2020, Table 1) and the e-folding length of Mackereth et al. (2019).
     Beyond 4 < R < 13 kpc, the radii of the Mackereth et al. sample, the
-    dispersions tend to their edge values, smoothly over 1 kpc. The mean
+    dispersions keep their edge values, blended in within 1 kpc of each
+    edge. The mean
     rotation is the radial Jeans solution of
     `thin_disk_velocity_moments`, with
     :math:`\partial \ln \sigma_R^2 / \partial \ln R = -2R / R_\sigma`.
