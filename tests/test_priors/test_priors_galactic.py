@@ -41,7 +41,7 @@ def _mean_L(R, age, feh):
     kinematic kernels (tested in the kinematic tests), with the default
     thin-disk density (R_scale = 2.6, R_smooth = 2)."""
     vc, dlnvc = _vc(R)
-    L_refs = (8.2 * _vc(8.2)[0], tuple(r * _vc(r)[0] for r in kin.THIN_DISK_R_RANGE))
+    L_refs = kin._thin_disk_L_refs(*_ROT)
     dlnnu = -R * R / (2.6 * np.hypot(R, 2.0))
     sig_R0 = kin._thin_disk_sigma0(age, feh)[0]
     return kin._thin_disk_mean_L(R, 0.0, sig_R0, vc, dlnvc, *L_refs, dlnnu), L_refs
@@ -85,8 +85,8 @@ def _vertical_reference(R, Z, age, feh):
     thick = np.empty(len(R))
     for i in range(len(R)):
         S = np.exp(-(np.clip(R[i], 4.0, 9.0) - 8.2) / kin.VERTICAL_R_SCALE)
-        L, (L_sun, L_range) = _mean_L(R[i], age[i], feh[i])
-        L = np.clip(L, *L_range)
+        L, (L_sun, L_clamp) = _mean_L(R[i], age[i], feh[i])
+        L = kin._soft_clamp(L, *L_clamp)[0]
         a, lam = kin.THIN_DISK_ALPHA_L[1], kin.THIN_DISK_LAMBDA_L[1]
         f_L = (a * (L / L_sun) ** 2 + np.exp(-(L - L_sun) / lam)) / (1 + a)
         sig = (
@@ -97,7 +97,9 @@ def _vertical_reference(R, Z, age, feh):
         )
         thin[i] = _thin_lnnu(abs(Z[i]), S, sig) - _thin_lnnu(0.025, S, sig)
         var = kin.THICK_DISK_SIGMA[2] ** 2 * np.exp(
-            -2 * (np.clip(R[i], *kin.THICK_DISK_R_RANGE) - 8.2) / kin.THICK_DISK_R_SIGMA
+            -2
+            * (kin._soft_clamp(R[i], *kin.THICK_DISK_R_RANGE, kin.DISK_EDGE)[0] - 8.2)
+            / kin.THICK_DISK_R_SIGMA
         )
         thick[i] = -(_phi(abs(Z[i]), S) - _phi(0.025, S)) / var
     return thin, thick

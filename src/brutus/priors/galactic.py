@@ -133,10 +133,10 @@ def _vertical_solar(abs_Z_solar, rot):
     one flat tuple (numba's parallel loops take no nested tuples): the L_z
     references of the thin disk and both profiles' terms at the Sun's
     height. ``rot`` is (R_solar, vc_solar)."""
-    L_solar, L_range = _thin_disk_L_refs(*rot)
+    L_solar, L_clamp = _thin_disk_L_refs(*rot)
     return (
         (L_solar,)
-        + L_range
+        + L_clamp
         + _thin_disk_integrals(abs_Z_solar)
         + _vertical_potential(abs_Z_solar)
     )
@@ -168,16 +168,16 @@ def _disk_vertical_terms(
     ``thin_R`` = (scale length, smoothing radius). ``solar`` comes from
     ``_vertical_solar``.
     """
-    L_solar, L_lo, L_hi, t0, t1, t2, p0, p1 = solar
-    L_range, thin_solar, phi_solar = (L_lo, L_hi), (t0, t1, t2), (p0, p1)
+    L_solar, L_lo, L_hi, L_w, t0, t1, t2, p0, p1 = solar
+    L_clamp, thin_solar, phi_solar = (L_lo, L_hi, L_w), (t0, t1, t2), (p0, p1)
     S = _potential_scale(R, rot[0])
     vc, dlnvc = _circular_velocity(R, *rot)
     dlnnu = _logn_disk_dlnR(R, sqrt(R * R + thin_R[1] * thin_R[1]), thin_R[0])
     a, b = _thin_disk_vertical(_thin_disk_integrals(abs_Z), thin_solar, S)
     if has_age:
         sig_R0, sig_z0 = _thin_disk_sigma0(age, feh)
-        L = _thin_disk_mean_L(R, 0.0, sig_R0, vc, dlnvc, L_solar, L_range, dlnnu)
-        sig_z = sig_z0 * _thin_disk_fL(L, L_solar, L_range)[1]
+        L = _thin_disk_mean_L(R, 0.0, sig_R0, vc, dlnvc, L_solar, L_clamp, dlnnu)
+        sig_z = sig_z0 * _thin_disk_fL(L, L_solar, L_clamp)[1]
         thin = a - b / (sig_z * sig_z)
     else:
         # a + ln sum_k w_k exp(-b / sig_k^2), with a running maximum.
@@ -186,9 +186,9 @@ def _disk_vertical_terms(
         acc = 0.0
         for k in range(len(age_ln_w)):
             L = _thin_disk_mean_L(
-                R, 0.0, age_sig_R[k] * f_R, vc, dlnvc, L_solar, L_range, dlnnu
+                R, 0.0, age_sig_R[k] * f_R, vc, dlnvc, L_solar, L_clamp, dlnnu
             )
-            sig_z = age_sig_z[k] * f_z * _thin_disk_fL(L, L_solar, L_range)[1]
+            sig_z = age_sig_z[k] * f_z * _thin_disk_fL(L, L_solar, L_clamp)[1]
             v = age_ln_w[k] - b / (sig_z * sig_z)
             if v > mx:
                 acc = acc * exp(mx - v) + 1.0
@@ -196,7 +196,7 @@ def _disk_vertical_terms(
             else:
                 acc += exp(v - mx)
         thin = a + mx + log(acc)
-    var_z = thick_var_z * _thick_disk_scale(R, thick_R_sigma, rot[0])
+    var_z = thick_var_z * _thick_disk_scale(R, thick_R_sigma, rot[0])[0]
     thick = _thick_disk_vertical(_vertical_potential(abs_Z), phi_solar, var_z, S)
     return thin, thick
 
