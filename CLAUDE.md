@@ -113,6 +113,7 @@ brutus infers stellar properties, distances and extinctions from photometry and 
 - `load_models` returns every requested label, also a constant one (`afe` on a single-afe grid, `smf` without binaries). `StarGrid` treats it as a one-value axis, so a query with another value raises.
 - Bayestar queries apply the map's reliability mask by default: NaN outside each sightline's reliable distance range and in non-converged pixels, and a whole sightline when its bounds are NaN. `Bayestar(apply_reliability_mask=False)` returns raw values.
 - `EEPTracks` caches are versioned (`*_cachev3.pkl`). Caches of other versions are ignored.
+- Numba checks a cached kernel against its own file only, so `brutus/_numba_cache.py` installs cache locators whose stamp also covers every file of the package. `brutus/__init__.py` imports it first, before any kernel is decorated.
 - `quantile` uses the midpoint-CDF convention for weighted and unweighted samples, not `np.percentile`'s interpolation.
 - `StarGrid.get_seds` and `get_predictions` raise `ValueError` when a multi-valued grid axis is omitted, or a label is not finite or is outside its axis range. A single-valued axis may be omitted.
 
