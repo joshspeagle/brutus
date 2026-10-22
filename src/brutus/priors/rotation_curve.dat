@@ -6,9 +6,6 @@
 # Source 1: Eilers et al. (2019, ApJ 871, 120), Table 1: circular velocity
 #   from red giants, for (R_sun, v_c,sun) = (8.122 kpc, 229.0 km/s); the
 #   uncertainty is the larger of the two quoted errors.
-# brutus.priors.kinematic tabulates this file at import, and numba caches
-#   the table with the compiled code: after editing it, delete the numba
-#   cache files (*.nbi, *.nbc) in brutus/priors/__pycache__.
 0.050 112.37 48.44 0
 0.100 124.08 31.52 0
 0.150 131.24 29.01 0
