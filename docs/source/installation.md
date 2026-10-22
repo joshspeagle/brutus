@@ -14,7 +14,7 @@ pip install git+https://github.com/joshspeagle/brutus.git
 
 To change the code, follow {doc}`contributing`.
 
-pip installs the dependencies: numpy, scipy, matplotlib, h5py, healpy, numba, pooch and tqdm.
+pip installs the dependencies: numpy, scipy, matplotlib, h5py, healpy, astropy, numba, pooch and tqdm.
 
 ```{admonition} Windows
 :class: warning

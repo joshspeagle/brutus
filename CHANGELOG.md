@@ -329,6 +329,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `BruteForce.loglike_grid` and `logpost_grid` no longer accept unused
   `**kwargs`, so a misspelled keyword such as `av_gaus` raises `TypeError`.
   Before, it was dropped and the default applied.
+- astropy 6.1 or later is a declared dependency (`brutus.dust` imports
+  it).
 - Python 3.10 or later and numpy 2.0 or later are required (the floors were 3.9
   and 1.19). Python 3.9 is past its end of life, and no astropy release for
   Python 3.9 supports numpy 2.
@@ -367,6 +369,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- brutus's numba caches are recompiled when any file of the package
+  changes. Numba checked a cached kernel only against its own source file,
+  so a kernel that calls jitted code in another brutus module kept returning
+  results of the old code after that module changed.
 - `StarGrid.get_seds(afe=0.4)` on `grid_mist_v9.h5` raises `ValueError`.
   `load_models` dropped the constant `afe` label, so the query ignored it
   silently and returned the [α/Fe] = 0 result. `load_models` now keeps the
@@ -584,6 +590,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- New page "Migrating from 1.x to 2.0" with the old and new usage of each
+  changed argument.
 - The docstring examples of `core.individual`, `core.neural_nets` and
   `core.grid_generation` run on the shipped data: binary examples use
   [α/Fe] = 0 (the MIST tracks have no other value) and filter names are

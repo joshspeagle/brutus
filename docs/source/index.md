@@ -146,6 +146,7 @@ faq
 
 api/index
 references
+migration
 changelog
 contributing
 ```
