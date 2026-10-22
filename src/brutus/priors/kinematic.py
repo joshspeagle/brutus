@@ -44,10 +44,11 @@ Examples
 """
 
 import os
-from math import exp, log, radians, sqrt
+from math import asinh, exp, radians, sqrt
 
 import numpy as np
 from numba import jit, prange
+from scipy.interpolate import BSpline
 
 __all__ = [
     "solar_velocity",
@@ -67,25 +68,23 @@ PM_SGRA = (-6.411, -0.219)
 U_SUN = 11.1
 V_PEC_SUN = 12.24
 # Shape of the circular velocity curve, v_c(R) / v_c(R_sun) against
-# ln(R / R_sun), from the measurements in rotation_curve.dat: Sofue & Kohno
-# (2025) inside VC_JOIN and Eilers et al. (2019) outside, each scaled by its
-# own (R_sun, v_c,sun). Eilers et al. bins with errors above VC_MAX_ERR
-# (km/s) are left out: those beyond 21 kpc have 6-29 km/s. All Sofue &
-# Kohno points are kept; inside 0.4 kpc their errors reach 48 km/s. Both
-# sources are smoothed with a Gaussian, weighted by the errors, of width
-# VC_SMOOTH in ln R (0.24 kpc at 2 kpc) up to VC_SMOOTH_MAX in R / R_sun
-# (1 kpc), reached at 8.3 kpc. Sofue & Kohno are
-# scaled to Eilers et al. at the middle of VC_JOIN (up by 2.2%), and the two
-# are blended across VC_JOIN with a cosine weight, so the slope stays
-# continuous. Inside the first point v_c is proportional to R. The table
-# runs to VC_EXTEND smoothing widths beyond the last point (37 kpc), where
-# the slope is below 1e-8, and v_c is flat beyond it.
+# x = R / R_sun, from the measurements in rotation_curve.dat (Sofue & Kohno
+# 2025; Eilers et al. 2019), each scaled by its own (R_sun, v_c,sun).
+# Eilers et al. bins with errors above VC_MAX_ERR (km/s) are left out:
+# those beyond 21 kpc have 6-29 km/s. One cubic P-spline is fitted to all
+# points, weighted by their errors, in u = asinh(x / VC_CORE): linear in R
+# near the centre and close to ln R beyond it, so the roughness penalty
+# VC_PENALTY smooths over a fixed fraction of R (1-2 kpc near the Sun).
+# The spline is odd in R, so v_c is proportional to R at the centre.
+# Beyond the last point a slope penalty, ramped in over VC_FLAT, makes v_c
+# flat. Knots are VC_KNOT apart in u, out to VC_END.
 VC_SOURCES = ((8.178, 235.1), (8.122, 229.0))
 VC_MAX_ERR = 5.0
-VC_SMOOTH = 0.12
-VC_SMOOTH_MAX = 1.0 / 8.2
-VC_JOIN = (log(4.5 / 8.2), log(5.5 / 8.2))
-VC_EXTEND = 12.0
+VC_CORE = 0.3 / 8.2
+VC_PENALTY = 1e4
+VC_FLAT = 2.0 / 8.2
+VC_KNOT = 0.05
+VC_END = 40.0 / 8.2
 _VC_DU = 0.002
 
 # Thin-disk dispersion relations, (sigma_R, sigma_z) pairs (Sharma et al.
@@ -173,52 +172,62 @@ def solar_velocity(R_solar=8.2, pm_sgra=PM_SGRA, U_sun=U_SUN):
 
 
 def _rotation_curve_table():
-    """Return ln(R / R_sun) of the first grid point, the shape of v_c and
-    its slope per grid step on a grid uniform in ln(R / R_sun)."""
+    """Return the shape of v_c and its slope per grid step on a grid
+    uniform in u = asinh(x / VC_CORE), starting at u = 0."""
     data = np.loadtxt(os.path.join(os.path.dirname(__file__), "rotation_curve.dat"))
     R, v, err, src = data[(data[:, 2] <= VC_MAX_ERR) | (data[:, 3] == 0)].T
-    src = src.astype(int)
-    R_sun, vc_sun = (np.array(c)[src] for c in zip(*VC_SOURCES))
-    u, shape = np.log(R / R_sun), v / vc_sun
+    R_sun, vc_sun = (np.array(c)[src.astype(int)] for c in zip(*VC_SOURCES))
+    u = np.arcsinh(R / R_sun / VC_CORE)
+    weight = (vc_sun / err) ** 2
 
-    def width(u):
-        return np.minimum(VC_SMOOTH, VC_SMOOTH_MAX * np.exp(-u))
+    # Odd cubic B-splines on knots symmetric about u = 0: coefficient j and
+    # its mirror have opposite signs, and the middle one is 0.
+    u_end = np.arcsinh(VC_END / VC_CORE)
+    half = np.arange(0.0, u_end + VC_KNOT, VC_KNOT)
+    knots = np.r_[[-half[-1]] * 3, -half[:0:-1], half, [half[-1]] * 3]
+    n = len(knots) - 4
+    h = n // 2
+    odd = np.zeros((n, h))
+    odd[h + 1 :] = np.eye(h)
+    odd[:h] = -np.eye(h)[::-1]
+    B = BSpline(knots, odd, 3)(u)
 
-    grid = np.arange(u.min(), u.max() + VC_EXTEND * width(u.max()), _VC_DU)
-    sigma = width(grid)[:, None]
+    # Curvature penalty everywhere; beyond the last point, a slope penalty
+    # ramped in with a cosine weight, 1e4 times stronger once complete.
+    greville = np.array([knots[i + 1 : i + 4].mean() for i in range(n)])
+    mid = 0.5 * np.abs(greville[1:] + greville[:-1])
+    u_last, u_flat = u.max(), np.arcsinh(
+        (np.sinh(u.max()) * VC_CORE + VC_FLAT) / VC_CORE
+    )
+    ramp = 0.5 - 0.5 * np.cos(np.pi * np.clip((mid - u_last) / (u_flat - u_last), 0, 1))
+    D1, D2 = np.diff(np.eye(n), 1, axis=0), np.diff(np.eye(n), 2, axis=0)
+    penalty = odd.T @ (D2.T @ D2 + 1e4 * D1.T @ (ramp[:, None] * D1)) @ odd
+    coef = np.linalg.solve(
+        B.T @ (weight[:, None] * B) + VC_PENALTY * penalty,
+        B.T @ (weight * v / vc_sun),
+    )
+    spline = BSpline(knots, odd @ coef, 3)
+    grid = np.arange(0.0, u_end, _VC_DU)
+    norm = spline(np.arcsinh(1.0 / VC_CORE))
+    # The slope is per grid step, the unit the Hermite interpolation uses.
+    return spline(grid) / norm, spline.derivative()(grid) * _VC_DU / norm
 
-    def smooth(sel):
-        q = -0.5 * ((u[sel] - grid[:, None]) / sigma) ** 2
-        # Far from the points the weights underflow; only their ratios count.
-        w = np.exp(q - q.max(1, keepdims=True)) / err[sel] ** 2
-        return (w * shape[sel]).sum(1) / w.sum(1)
 
-    inner, outer = smooth(src == 0), smooth(src == 1)
-    mid = 0.5 * (VC_JOIN[0] + VC_JOIN[1])
-    inner *= np.interp(mid, grid, outer) / np.interp(mid, grid, inner)
-    t = np.clip((grid - VC_JOIN[0]) / (VC_JOIN[1] - VC_JOIN[0]), 0.0, 1.0)
-    blend = 0.5 - 0.5 * np.cos(np.pi * t)
-    curve = (1.0 - blend) * inner + blend * outer
-    curve /= np.interp(0.0, grid, curve)
-    return grid[0], curve, np.gradient(curve)
-
-
-_VC_U0, _VC_SHAPE, _VC_SLOPE = _rotation_curve_table()
+_VC_SHAPE, _VC_SLOPE = _rotation_curve_table()
 
 
 @jit(nopython=True, cache=True)
 def _circular_velocity(R, R_solar, vc_solar):
     """Return v_c(R) and d ln v_c / d ln R.
 
-    The shape is interpolated in _VC_SHAPE, against ln(R / R_solar), with
-    cubic Hermite polynomials whose slopes are _VC_SLOPE (per grid step),
-    so v_c and its derivative are continuous.
+    The shape is interpolated in _VC_SHAPE, against u = asinh(x / VC_CORE)
+    with x = R / R_solar, with cubic Hermite polynomials whose slopes are
+    _VC_SLOPE (per grid step), so v_c and its derivative are continuous.
     """
     if R <= 0.0:
         return 0.0, 1.0
-    y = (log(R / R_solar) - _VC_U0) / _VC_DU
-    if y <= 0.0:
-        return vc_solar * _VC_SHAPE[0] * exp(_VC_DU * y), 1.0
+    x = R / R_solar
+    y = asinh(x / VC_CORE) / _VC_DU
     n = len(_VC_SHAPE) - 1
     if y >= n:
         return vc_solar * _VC_SHAPE[n], 0.0
@@ -239,7 +248,8 @@ def _circular_velocity(R, R_solar, vc_solar):
         + (6.0 * w - 6.0 * w2) * p1
         + (3.0 * w2 - 2.0 * w) * m1
     )
-    return vc_solar * s, ds_dy / (_VC_DU * s)
+    # du / d ln R = x / sqrt(x^2 + VC_CORE^2)
+    return vc_solar * s, ds_dy / (_VC_DU * s) * x / sqrt(x * x + VC_CORE * VC_CORE)
 
 
 @jit(nopython=True, cache=True)
@@ -606,11 +616,12 @@ def thin_disk_velocity_moments(
         + \sigma_R^2 \left(1 + \frac{\partial \ln \nu}{\partial \ln R}
         + \frac{\partial \ln \sigma_R^2}{\partial \ln R}\right)
 
-    with the measured circular velocity :math:`v_c(R)`: Sofue & Kohno
-    (2025) inside 5 kpc and Eilers et al. (2019) outside, each scaled to
-    :math:`v_{c,\odot}` at :math:`R_\odot`, smoothed with a Gaussian of
-    width 12% of R up to 1 kpc, and flattening beyond the last measurement
-    at 21 kpc (``rotation_curve.dat``). The mean rotation is
+    with the measured circular velocity :math:`v_c(R)`: one smoothing
+    spline fitted to Sofue & Kohno (2025) and Eilers et al. (2019) together,
+    each scaled to :math:`v_{c,\odot}` at :math:`R_\odot`
+    (``rotation_curve.dat``). It smooths over 1-2 kpc near the Sun, goes
+    to 0 as R at the centre and is flat beyond the last measurement at
+    21 kpc. The mean rotation is
     clipped to :math:`[0, v_c]`: the Jeans equation has no
     solution where the right-hand side is negative, and near the centre,
     where the density gradient vanishes, it gives rotation faster than
