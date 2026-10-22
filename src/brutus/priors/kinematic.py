@@ -379,7 +379,10 @@ def _thin_disk_radial(R, abs_z, sig_R0, vc, dlnvc, L, L_solar, L_clamp, dlnnu_dl
     sigma_phi follows the epicyclic ratio
     sigma_phi^2 / sigma_R^2 = (1 + d ln v_c / d ln R) / 2, and
     d ln L_z / d ln R is taken as that of a circular orbit, 1 + d ln v_c /
-    d ln R. Outside THIN_DISK_R_RANGE the gradient term fades out within
+    d ln R. The derivative of the mean L_z itself would raise v_phi by at
+    most 3.3 km/s at 3-20 kpc and |z| <= 1 kpc (old, metal-poor stars near
+    4 kpc, where v_c changes fastest) and by at most 0.54 km/s at the Sun,
+    for R_solar = 8.2 kpc. Outside THIN_DISK_R_RANGE the gradient term fades out within
     DISK_EDGE, in R: a population that lags keeps an L_z below the
     clamp a little beyond 20 kpc, and the gradient would otherwise act
     there.
