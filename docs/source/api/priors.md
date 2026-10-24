@@ -105,6 +105,8 @@ fitter.fit(
 
 ```{eval-rst}
 .. autofunction:: logp_galactic_structure
+
+.. autofunction:: galactic_prior_summary
 ```
 
 ```{eval-rst}

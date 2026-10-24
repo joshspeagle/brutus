@@ -435,7 +435,7 @@ def galactic_prior():
         out,
         "The Galactic structure prior along three sightlines",
         "The default Galactic prior per unit log distance, from 10 pc to 100 kpc. "
-        "Per unit log distance, the volume puts the halo peak at 10 to 20 kpc; off the plane, the disks add a second peak at 3 to 4 kpc.",
+        "Per unit log distance, the volume puts the halo peak at 10 to 20 kpc; off the plane, the disks add a second peak at 2 to 4 kpc.",
     )
 
 

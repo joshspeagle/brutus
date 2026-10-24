@@ -128,6 +128,33 @@ def _thin_age_nodes(feh_thin, age_args):
     return nodes
 
 
+# Gauss-Hermite nodes for the average of the thin-disk column height over
+# the [Fe/H] prior, and the height grid of the column integrals in kpc.
+_FEH_NODES = 8
+_COLUMN_Z = np.linspace(0.0, 20.0, 4001)
+
+
+@lru_cache(maxsize=16)
+def _disk_column_heights(
+    rot, abs_Z_solar, thin_R, thick, feh_thin, feh_thin_sigma, age_args
+):
+    """Return the column heights Sigma / (2 nu(Z_sun)) in kpc of the thin and
+    thick disks at R_solar. The thin disk averages its vertical profile
+    over the age prior and, by Gauss-Hermite quadrature, over its [Fe/H]
+    prior, both of which are densities at the Sun's height."""
+    n = _COLUMN_Z.size
+    R = np.full(n, rot[0])
+    nodes = _thin_age_nodes(feh_thin, age_args)
+    x, w = np.polynomial.hermite_e.hermegauss(_FEH_NODES)
+    thin = 0.0
+    for xj, wj in zip(x, w / w.sum()):
+        feh = np.full(n, feh_thin + feh_thin_sigma * xj)
+        args = (R, _COLUMN_Z, abs_Z_solar, np.empty(0), feh, False, rot, thin_R)
+        thin_z, thick_z = _disk_vertical_array(*args, *thick, *nodes)
+        thin += wj * np.trapezoid(np.exp(thin_z), _COLUMN_Z)
+    return thin, np.trapezoid(np.exp(thick_z), _COLUMN_Z)
+
+
 @jit(nopython=True, cache=True)
 def _vertical_solar(abs_Z_solar, rot):
     """Return what ``_disk_vertical_terms`` needs that is fixed per call, as
@@ -518,6 +545,7 @@ __all__ = [
     "logp_feh",
     "logp_age_from_feh",
     "logp_galactic_structure",
+    "galactic_prior_summary",
 ]
 
 
@@ -817,6 +845,32 @@ def logp_age_from_feh(
     return logp
 
 
+def _thick_midplane_fraction(
+    f_thick_surface,
+    rot,
+    Z_solar,
+    R_thin,
+    Rs_thin,
+    thick,
+    feh_thin,
+    feh_thin_sigma,
+    age_args,
+):
+    """Return the thick- to thin-disk density ratio at the Sun from their
+    surface density ratio, after checking it is positive."""
+    _check_positive(f_thick_surface=f_thick_surface)
+    thin, thick = _disk_column_heights(
+        rot,
+        abs(float(Z_solar)),
+        (float(R_thin), float(Rs_thin)),
+        thick,
+        float(feh_thin),
+        float(feh_thin_sigma),
+        age_args,
+    )
+    return float(f_thick_surface) * thin / thick
+
+
 def logp_galactic_structure(
     dists,
     coord,
@@ -828,7 +882,7 @@ def logp_galactic_structure(
     R_thin=2.6,
     Rs_thin=2.0,
     R_thick=2.0,
-    f_thick=0.04,
+    f_thick_surface=0.18,
     Rs_thick=2.0,
     Rs_halo=2.0,
     q_halo_ctr=0.2,
@@ -890,8 +944,12 @@ def logp_galactic_structure(
         Thin disk smoothing radius in kpc. Default is 2.0.
     R_thick : float, optional
         Thick disk radial scale length in kpc. Default is 2.0.
-    f_thick : float, optional
-        Thick disk relative normalization. Default is 0.04.
+    f_thick_surface : float, optional
+        Ratio of the thick- to the thin-disk surface density at the Sun.
+        Default is 0.18, the high-[alpha/Fe] surface mass fraction of
+        Mackereth et al. (2017). The prior converts it to the ratio of
+        densities at the Sun's position with the column heights of the
+        vertical profiles; `galactic_prior_summary` returns both.
     Rs_thick : float, optional
         Thick disk smoothing radius in kpc. Default is 2.0.
     Rs_halo : float, optional
@@ -991,8 +1049,11 @@ def logp_galactic_structure(
     its edge values outside. The thick disk
     is isothermal (:math:`\gamma_z = 0`) with ``thick_sigma_z``.
     Each profile is normalized to 1 at the Sun's height, at every radius,
-    so the prior at the Sun's position does not depend on the vertical
-    model, and ``f_thick`` and the age prior stay local quantities.
+    so the age and [Fe/H] priors are distributions at the Sun's position.
+    The thick disk is normalized by its surface density: at the Sun its
+    density is ``f_thick_surface`` times that of the thin disk, times the
+    ratio of their column heights (thin over thick). The thin-disk column
+    height averages the profile over the thin-disk age and [Fe/H] priors.
 
     Each component has distinct spatial, metallicity, and age distributions
     calibrated from observations. The model accounts for:
@@ -1077,19 +1138,35 @@ def logp_galactic_structure(
     _check_positive(thick_sigma_z=thick_sigma_z, thick_R_sigma=thick_R_sigma)
     rot = (float(R_solar), _vc_solar(v_circ_solar, R_solar))
     thick = (float(thick_sigma_z) ** 2, float(thick_R_sigma))
-    if loga is None:
-        age_args = (
-            max_age,
-            min_age,
-            feh_age_ctr,
-            feh_age_scale,
-            nsigma_from_max_age,
-            max_sigma,
-            min_sigma,
+    age_args = tuple(
+        map(
+            float,
+            (
+                max_age,
+                min_age,
+                feh_age_ctr,
+                feh_age_scale,
+                nsigma_from_max_age,
+                max_sigma,
+                min_sigma,
+            ),
         )
-        age_nodes = _thin_age_nodes(float(feh_thin), tuple(map(float, age_args)))
+    )
+    if loga is None:
+        age_nodes = _thin_age_nodes(float(feh_thin), age_args)
     else:
         age_nodes = (np.empty(0),) * 3
+    f_thick = _thick_midplane_fraction(
+        f_thick_surface,
+        rot,
+        Z_solar,
+        R_thin,
+        Rs_thin,
+        thick,
+        feh_thin,
+        feh_thin_sigma,
+        age_args,
+    )
 
     # Fast path: use fused numba kernel when labels are provided and
     # return_components is not needed. Eliminates ~15 temporary arrays
@@ -1264,3 +1341,101 @@ def logp_galactic_structure(
         return logp, components
     else:
         return logp
+
+
+def galactic_prior_summary(
+    R_solar=8.2,
+    Z_solar=0.025,
+    R_thin=2.6,
+    Rs_thin=2.0,
+    f_thick_surface=0.18,
+    f_halo=0.005,
+    feh_thin=-0.2,
+    feh_thin_sigma=0.3,
+    max_age=13.8,
+    min_age=0.0,
+    feh_age_ctr=-0.5,
+    feh_age_scale=0.5,
+    nsigma_from_max_age=2.0,
+    max_sigma=4.0,
+    min_sigma=1.0,
+    v_circ_solar=None,
+    thick_sigma_z=THICK_DISK_SIGMA[2],
+    thick_R_sigma=THICK_DISK_R_SIGMA,
+):
+    r"""
+    Return the normalizations that `logp_galactic_structure` derives.
+
+    The keywords are those of `logp_galactic_structure` that set the
+    normalizations, with the same defaults. The column height of a disk
+    at the Sun is :math:`\Sigma / (2 \nu(Z_\odot))`, and the thick disk's
+    density ratio at the Sun is
+
+    .. math::
+        f_{\rm thick} = f_{\Sigma} \, \frac{h_{\rm thin}}{h_{\rm thick}}.
+
+    Returns
+    -------
+    summary : dict
+        ``thin_column_height`` and ``thick_column_height`` in kpc (the thin
+        disk averaged over its age and [Fe/H] priors),
+        ``f_thick_surface``, ``f_thick_midplane`` (the thick- to thin-disk
+        density ratio at the Sun) and ``f_halo_midplane`` (the halo to
+        thin-disk density ratio at the Sun).
+
+    Raises
+    ------
+    ValueError
+        If ``f_thick_surface``, ``thick_sigma_z``, ``thick_R_sigma`` or
+        ``v_circ_solar`` is not positive.
+
+    Examples
+    --------
+    >>> from brutus.priors import galactic_prior_summary
+    >>> round(galactic_prior_summary()["f_thick_midplane"], 3)
+    0.055
+    """
+    _check_positive(thick_sigma_z=thick_sigma_z, thick_R_sigma=thick_R_sigma)
+    rot = (float(R_solar), _vc_solar(v_circ_solar, R_solar))
+    thick = (float(thick_sigma_z) ** 2, float(thick_R_sigma))
+    age_args = tuple(
+        map(
+            float,
+            (
+                max_age,
+                min_age,
+                feh_age_ctr,
+                feh_age_scale,
+                nsigma_from_max_age,
+                max_sigma,
+                min_sigma,
+            ),
+        )
+    )
+    f_thick = _thick_midplane_fraction(
+        f_thick_surface,
+        rot,
+        Z_solar,
+        R_thin,
+        Rs_thin,
+        thick,
+        feh_thin,
+        feh_thin_sigma,
+        age_args,
+    )
+    h_thin, h_thick = _disk_column_heights(
+        rot,
+        abs(float(Z_solar)),
+        (float(R_thin), float(Rs_thin)),
+        thick,
+        float(feh_thin),
+        float(feh_thin_sigma),
+        age_args,
+    )
+    return dict(
+        thin_column_height=h_thin,
+        thick_column_height=h_thick,
+        f_thick_surface=float(f_thick_surface),
+        f_thick_midplane=f_thick,
+        f_halo_midplane=float(f_halo),
+    )

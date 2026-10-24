@@ -18,6 +18,7 @@ from .extinction import logp_extinction
 
 # Galactic structure priors
 from .galactic import (
+    galactic_prior_summary,
     logn_disk,
     logn_halo,
     logp_age_from_feh,
@@ -47,6 +48,7 @@ __all__ = [
     "convert_parallax_to_scale",
     # Galactic structure priors
     "logp_galactic_structure",
+    "galactic_prior_summary",
     "logn_disk",
     "logn_halo",
     "logp_feh",
