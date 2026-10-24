@@ -900,6 +900,7 @@ class TestThickDiskSurfaceNormalization:
             {"f_thick_surface": np.inf},
             {"feh_thin_sigma": np.nan},
             {"halo_mass": 0.0},
+            {"eta_halo_inner": np.nan},
             {"rho_thin_solar": -0.03},
         ],
     )

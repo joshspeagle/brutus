@@ -157,7 +157,8 @@ def _disk_column_heights(
 
 # Radial range of the halo mass of Lane et al. (2023), in kpc, and the
 # Gauss-Legendre nodes per axis of the halo volume integral (relative error
-# below 1e-6 for the default shape).
+# 3.4e-6 for the default shape, against an adaptive integral split at the
+# break).
 _HALO_MASS_RADII = (2.0, 70.0)
 _HALO_NODES = 200
 
@@ -169,6 +170,11 @@ def _halo_shape(R, Z, Rs, eta_inner, eta_outer, r_break, q):
     return -eta_inner * ln_m - (eta_outer - eta_inner) * np.maximum(
         ln_m - log(r_break), 0.0
     )
+
+
+def _halo_args(R_smooth, eta_inner, eta_outer, r_break, q):
+    """Return the halo-shape arguments of `_halo_shape` as floats, in order."""
+    return tuple(map(float, (R_smooth, eta_inner, eta_outer, r_break, q)))
 
 
 @lru_cache(maxsize=16)
@@ -693,9 +699,9 @@ def logn_halo(
     Amarante, Koposov & Laporte (2024), A&A (arXiv:2404.09825)
     Lane, Bovy & Mackereth (2023), MNRAS (arXiv:2306.03084)
     """
-    shape = tuple(map(float, (R_smooth, eta_inner, eta_outer, r_break, q)))
+    shape = _halo_args(R_smooth, eta_inner, eta_outer, r_break, q)
     R, Z = np.asarray(R, dtype=float), np.asarray(Z, dtype=float)
-    return _halo_shape(R, Z, *shape) - _halo_shape(R_solar, Z_solar, *shape)
+    return np.asarray(_halo_shape(R, Z, *shape) - _halo_shape(R_solar, Z_solar, *shape))
 
 
 def logp_feh(feh, feh_mean=-0.2, feh_sigma=0.3):
@@ -867,6 +873,9 @@ def _normalizations(
         feh_thin_sigma=feh_thin_sigma,
         thick_sigma_z=thick_sigma_z,
         thick_R_sigma=thick_R_sigma,
+        Rs_halo=Rs_halo,
+        eta_halo_inner=eta_halo_inner,
+        eta_halo_outer=eta_halo_outer,
         r_break_halo=r_break_halo,
         q_halo=q_halo,
         halo_mass=halo_mass,
@@ -897,8 +906,12 @@ def _normalizations(
         float(feh_thin_sigma),
         age_args,
     )
-    halo = tuple(
-        map(float, (Rs_halo, eta_halo_inner, eta_halo_outer, r_break_halo, q_halo))
+    halo = _halo_args(
+        R_smooth=Rs_halo,
+        eta_inner=eta_halo_inner,
+        eta_outer=eta_halo_outer,
+        r_break=r_break_halo,
+        q=q_halo,
     )
     # Msun/kpc^3 to Msun/pc^3.
     ln_halo_amplitude = log(
@@ -1066,8 +1079,8 @@ def logp_galactic_structure(
     ------
     ValueError
         If ``labels``, ``feh`` or ``loga`` does not have one finite entry
-        per distance; if ``thick_sigma_z`` or ``thick_R_sigma`` is not
-        positive; or if ``v_circ_solar`` is not positive.
+        per distance, or if a keyword that sets a normalization is not
+        positive and finite (see `galactic_prior_summary`).
 
     Notes
     -----
@@ -1075,7 +1088,7 @@ def logp_galactic_structure(
 
     1. **Thin Disk**: Young, metal-rich stars with small scale height
     2. **Thick Disk**: Intermediate-age, metal-poor stars with larger scale height
-    3. **Halo**: Old, very metal-poor stars with flattened power-law profile
+    3. **Halo**: Old, very metal-poor stars with a flattened broken power law
 
     The disks are exponential in radius, as in `logn_disk`. Their vertical
     profiles solve the vertical Jeans equation in one vertical potential,
@@ -1422,7 +1435,8 @@ def galactic_prior_summary(**kwargs):
         If a keyword does not set a normalization.
     ValueError
         If ``f_thick_surface``, ``feh_thin_sigma``, ``thick_sigma_z``,
-        ``thick_R_sigma``, ``v_circ_solar``, ``r_break_halo``,
+        ``thick_R_sigma``, ``v_circ_solar``, ``Rs_halo``,
+        ``eta_halo_inner``, ``eta_halo_outer``, ``r_break_halo``,
         ``q_halo``, ``halo_mass`` or ``rho_thin_solar`` is not positive
         and finite.
 

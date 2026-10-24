@@ -5,7 +5,7 @@
 Bitwise-equivalence tests for the optimized `_galactic_prior_fused` kernel.
 
 The production kernel hoists loop-invariant work out of the parallel loop
-(age-prior constants: exp, log-masses and logs per point; solar disk/halo
+(age-prior constants: exp, log-masses and logs per point; solar disk
 normalizations) and folds the Galactocentric coordinate conversion into the
 loop. These are pure performance rewrites and must be BITWISE identical to
 the unhoisted formulation. `reference_kernel` below is a copy of the fused
@@ -14,7 +14,8 @@ precomputed R/Z arrays from `galactic_to_galactocentric_cyl`) but the same
 semantics (smoothed solar disk normalization, metallicity-updated age
 weights). The disk vertical profiles come from the production
 ``_disk_vertical_array`` on the precomputed R/Z arrays; the vertical model
-itself is tested in ``test_priors_galactic.py``.
+itself is tested in ``test_priors_galactic.py``. The halo amplitude comes
+from ``_normalizations``, whose mass normalization is tested there too.
 """
 
 from math import exp, log, pi, sqrt
@@ -25,7 +26,6 @@ from numba import jit, prange
 from brutus.priors.galactic import (
     _NORMALIZATION_DEFAULTS,
     _disk_vertical_array,
-    _halo_shape,
     _normalizations,
     _thin_age_nodes,
     logp_galactic_structure,
@@ -96,7 +96,14 @@ def reference_kernel(
             + log(f_thick)
         )
 
-        lnp_halo = _halo_shape(R, Z, *halo) + vol + ln_halo_amplitude
+        Rs, eta_in, eta_out, r_break, q = halo
+        ln_m = 0.5 * log(R**2 + (Z / q) ** 2 + Rs**2)
+        lnp_halo = (
+            -eta_in * ln_m
+            - (eta_out - eta_in) * max(ln_m - log(r_break), 0.0)
+            + vol
+            + ln_halo_amplitude
+        )
 
         mx = max(lnp_thin, max(lnp_thick, lnp_halo))
         logp_total = mx + log(
