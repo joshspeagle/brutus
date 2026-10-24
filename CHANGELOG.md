@@ -238,6 +238,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `thin_disk_velocity_moments`, hold [Fe/H] at -1 or 0.5 outside that
   range, where Sharma et al. (2021) fitted them. A non-finite `feh` or
   `loga` now raises `ValueError` (#283).
+- **The thick disk is normalized by its surface density**
+  *(output-changing)*. `logp_galactic_structure` replaces `f_thick`, the
+  thick- to thin-disk density ratio at the Sun (0.04), with
+  `f_thick_surface`, their surface density ratio, 0.18 by default
+  (Mackereth et al. 2017). It derives the ratio at the Sun from the
+  column heights of the two vertical profiles, 0.055 with the defaults,
+  so a change to `thick_sigma_z` or `feh_thin` keeps the surface ratio.
+  Passing `f_thick` raises `TypeError`. The new
+  `brutus.priors.galactic_prior_summary` returns the derived
+  normalizations (#288).
 - **`load_models` keeps constant grid labels.** It returned no `afe` column
   for a single-afe grid under the default labels, and no `smf` column
   without `include_binaries`. Both are now one-value columns, so

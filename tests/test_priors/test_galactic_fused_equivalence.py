@@ -25,6 +25,7 @@ from numba import jit, prange
 from brutus.priors.galactic import (
     _disk_vertical_array,
     _thin_age_nodes,
+    galactic_prior_summary,
     logp_galactic_structure,
 )
 from brutus.priors.kinematic import THICK_DISK_R_SIGMA, THICK_DISK_SIGMA, _vc_solar
@@ -231,7 +232,7 @@ DEFAULT_ARGS = dict(
     Rs_thin=2.0,
     R_thick=2.0,
     Rs_thick=2.0,
-    f_thick=0.04,
+    f_thick=galactic_prior_summary()["f_thick_midplane"],
     Rs_halo=2.0,
     eta_halo=4.2,
     q_halo_ctr=0.2,
