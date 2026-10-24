@@ -44,7 +44,9 @@ def _mean_L(R, age, feh):
     L_refs = kin._thin_disk_L_refs(*_ROT)
     dlnnu = -R * R / (2.6 * np.hypot(R, 2.0))
     sig_R0 = kin._thin_disk_sigma0(age, feh)[0]
-    return kin._thin_disk_mean_L(R, 0.0, sig_R0, vc, dlnvc, *L_refs, dlnnu), L_refs
+    fade = kin._thin_disk_fade(R)
+    L = kin._thin_disk_mean_L(R, 0.0, sig_R0, vc, dlnvc, *L_refs, dlnnu, fade)
+    return L, L_refs
 
 
 def _Kz(t, S):
@@ -96,10 +98,9 @@ def _vertical_reference(R, Z, age, feh):
             * f_L
         )
         thin[i] = _thin_lnnu(abs(Z[i]), S, sig) - _thin_lnnu(0.025, S, sig)
-        var = kin.THICK_DISK_SIGMA[2] ** 2 * np.exp(
-            -2
-            * (kin._soft_clamp(R[i], *kin.THICK_DISK_R_RANGE, kin.DISK_EDGE)[0] - 8.2)
-            / kin.THICK_DISK_R_SIGMA
+        var = (
+            kin.THICK_DISK_SIGMA[2] ** 2
+            * kin._thick_disk_scale(R[i], kin.THICK_DISK_R_SIGMA, 8.2)[0]
         )
         thick[i] = -(_phi(abs(Z[i]), S) - _phi(0.025, S)) / var
     return thin, thick

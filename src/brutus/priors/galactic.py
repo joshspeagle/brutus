@@ -74,6 +74,7 @@ from brutus.priors.kinematic import (
     _potential_scale,
     _thick_disk_scale,
     _thick_disk_vertical,
+    _thin_disk_fade,
     _thin_disk_feh_factor,
     _thin_disk_fL,
     _thin_disk_integrals,
@@ -174,9 +175,10 @@ def _disk_vertical_terms(
     vc, dlnvc = _circular_velocity(R, *rot)
     dlnnu = _logn_disk_dlnR(R, sqrt(R * R + thin_R[1] * thin_R[1]), thin_R[0])
     a, b = _thin_disk_vertical(_thin_disk_integrals(abs_Z), thin_solar, S)
+    jeans = (L_solar, L_clamp, dlnnu, _thin_disk_fade(R))
     if has_age:
         sig_R0, sig_z0 = _thin_disk_sigma0(age, feh)
-        L = _thin_disk_mean_L(R, 0.0, sig_R0, vc, dlnvc, L_solar, L_clamp, dlnnu)
+        L = _thin_disk_mean_L(R, 0.0, sig_R0, vc, dlnvc, *jeans)
         sig_z = sig_z0 * _thin_disk_fL(L, L_solar, L_clamp)[1]
         thin = a - b / (sig_z * sig_z)
     else:
@@ -185,9 +187,7 @@ def _disk_vertical_terms(
         mx = LOG_ZERO
         acc = 0.0
         for k in range(len(age_ln_w)):
-            L = _thin_disk_mean_L(
-                R, 0.0, age_sig_R[k] * f_R, vc, dlnvc, L_solar, L_clamp, dlnnu
-            )
+            L = _thin_disk_mean_L(R, 0.0, age_sig_R[k] * f_R, vc, dlnvc, *jeans)
             sig_z = age_sig_z[k] * f_z * _thin_disk_fL(L, L_solar, L_clamp)[1]
             v = age_ln_w[k] - b / (sig_z * sig_z)
             if v > mx:

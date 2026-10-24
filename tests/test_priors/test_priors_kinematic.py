@@ -188,9 +188,7 @@ def test_thin_disk_dispersions_use_the_mean_angular_momentum():
     R = np.array([3.05, 4.0, R_SOLAR, 14.0, 19.95])
     mean, cov = _thin(R, age=10.0)
     vc = _vc(R)
-    L_solar = R_SOLAR * _vc_solar()
-    L_clamp = tuple(r * _vc(r)[0] for r in THIN_DISK_R_RANGE)
-    L_clamp += (kin.DISK_EDGE * _vc_solar(),)
+    L_solar, L_clamp = kin._thin_disk_L_refs(R_SOLAR, _vc_solar())
     for i in range(len(R)):
         f_R, f_z, _ = kin._thin_disk_fL(R[i] * mean[i, 1], L_solar, L_clamp)
         np.testing.assert_allclose(
