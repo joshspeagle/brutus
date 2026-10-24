@@ -9,9 +9,23 @@ for a grid of (l, b, d) values, tests edge cases, and checks
 that R_solar/Z_solar parameters propagate correctly.
 """
 
-import numpy as np
+import warnings
 
-from brutus.utils.math import galactic_to_galactocentric_cyl
+import numpy as np
+import pytest
+
+from brutus.utils.math import galactic_to_galactocentric_cyl, pm_equatorial_to_galactic
+
+MAS_PER_RAD = 180.0 / np.pi * 3600e3
+
+# ICRS -> Galactic rotation matrix (Gaia DR3 documentation, eq. 4.62).
+A_G = np.array(
+    [
+        [-0.0548755604162154, -0.8734370902348850, -0.4838350155487132],
+        [0.4941094278755837, -0.4448296299600112, 0.7469822444972189],
+        [-0.8676661490190047, -0.1980763734312015, 0.4559837761750669],
+    ]
+)
 
 
 class TestGalacticToGalactocentricCyl:
@@ -125,3 +139,72 @@ class TestGalacticToGalactocentricCyl:
         R, Z = galactic_to_galactocentric_cyl(dists, ell, b)
         assert R.shape == (3,)
         assert Z.shape == (3,)
+
+
+def _icrs_to_lb(ra, dec):
+    ra, dec = np.radians(ra), np.radians(dec)
+    x = A_G @ np.array(
+        [np.cos(dec) * np.cos(ra), np.cos(dec) * np.sin(ra), np.sin(dec)]
+    )
+    return np.arctan2(x[1], x[0]), np.arcsin(x[2])
+
+
+def test_pm_conversion_matches_the_motion_in_galactic_coordinates():
+    rng = np.random.default_rng(7)
+    n = 20
+    ra, dec = rng.uniform(0, 360, n), rng.uniform(-85, 85, n)
+    pmra, pmdec = rng.normal(0, 10, n), rng.normal(0, 10, n)
+    pm, _ = pm_equatorial_to_galactic(
+        ra, dec, pmra, pmdec, np.ones(n), np.ones(n), np.zeros(n)
+    )
+    # Move the star for a short time and read its Galactic motion.
+    dt = 10.0  # yr
+    deg_per_mas = 1.0 / 3.6e6
+    for i in range(n):
+        dra = pmra[i] / np.cos(np.radians(dec[i])) * dt * deg_per_mas
+        dde = pmdec[i] * dt * deg_per_mas
+        l1, b1 = _icrs_to_lb(ra[i] - dra, dec[i] - dde)
+        l2, b2 = _icrs_to_lb(ra[i] + dra, dec[i] + dde)
+        dl = np.angle(np.exp(1j * (l2 - l1)))
+        b = 0.5 * (b1 + b2)
+        mu_l = np.cos(b) * dl / (2 * dt) * MAS_PER_RAD
+        mu_b = (b2 - b1) / (2 * dt) * MAS_PER_RAD
+        np.testing.assert_allclose(pm[i], [mu_l, mu_b], rtol=1e-5, atol=1e-6)
+
+
+def test_pm_covariance_is_the_jacobian_sandwich_of_the_error_covariance():
+    rng = np.random.default_rng(9)
+    n = 10
+    ra, dec = rng.uniform(0, 360, n), rng.uniform(-85, 85, n)
+    err_ra, err_dec = rng.uniform(0.01, 1, n), rng.uniform(0.01, 1, n)
+    corr = rng.uniform(-0.9, 0.9, n)
+    zeros, ones = np.zeros(n), np.ones(n)
+    _, cov = pm_equatorial_to_galactic(ra, dec, zeros, zeros, err_ra, err_dec, corr)
+    # The map is linear in (pmra, pmdec): its Jacobian columns are the
+    # images of the unit proper motions.
+    col_a, _ = pm_equatorial_to_galactic(ra, dec, ones, zeros, ones, ones, zeros)
+    col_d, _ = pm_equatorial_to_galactic(ra, dec, zeros, ones, ones, ones, zeros)
+    jac = np.stack([col_a, col_d], axis=2)
+    eq_cov = np.empty((n, 2, 2))
+    eq_cov[:, 0, 0], eq_cov[:, 1, 1] = err_ra**2, err_dec**2
+    eq_cov[:, 0, 1] = eq_cov[:, 1, 0] = corr * err_ra * err_dec
+    expected = jac @ eq_cov @ np.transpose(jac, (0, 2, 1))
+    np.testing.assert_allclose(cov, expected, rtol=1e-12, atol=1e-15)
+
+
+@pytest.mark.parametrize(
+    "dec, corr, match",
+    [(0.0, 1.5, "pmra_pmdec_corr"), (100.0, 0.0, "dec")],
+)
+def test_pm_conversion_rejects_invalid_inputs(dec, corr, match):
+    with pytest.raises(ValueError, match=match):
+        pm_equatorial_to_galactic([0.0], [dec], [0.0], [0.0], [1.0], [1.0], [corr])
+
+
+def test_pm_conversion_returns_nan_at_the_galactic_pole_without_warning():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        pm, cov = pm_equatorial_to_galactic(
+            [192.85948], [27.12825], [1.0], [1.0], [1.0], [1.0], [0.0]
+        )
+    assert np.all(np.isnan(pm)) and np.all(np.isnan(cov))

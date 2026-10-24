@@ -14,6 +14,7 @@ from .math import (
     galactic_to_galactocentric_cyl,
     inverse3,
     isPSD,
+    pm_equatorial_to_galactic,
     truncnorm_logpdf,
     truncnorm_pdf,
 )
@@ -46,6 +47,7 @@ __all__ = [
     "uniform_outlier_loglike",
     # Mathematical functions
     "galactic_to_galactocentric_cyl",
+    "pm_equatorial_to_galactic",
     "inverse3",
     "isPSD",
     "chisquare_logpdf",
