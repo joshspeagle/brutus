@@ -221,6 +221,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The disk heights in the Galactic prior follow from the vertical
+  Jeans equation** *(output-changing)*. `logp_galactic_structure`
+  replaced the exponential scale heights (0.3 and 0.9 kpc) with profiles
+  in one vertical potential fitted to Bovy & Rix (2013) and McKee et al.
+  (2015). The thin disk takes the vertical dispersion of the star's age
+  and [Fe/H] (Sharma et al. 2021), so a 1 Gyr star lies closer to the
+  midplane than a 10 Gyr star. Without an age, it averages over the
+  thin-disk age prior; the star's [Fe/H] enters with or without an age.
+  The thick disk is isothermal. In the plane of the Sun the prior does
+  not change; above it, the age-averaged thin disk falls by e in
+  0.33 kpc and the thick disk in 0.99 kpc. `Z_thin` and `Z_thick` are
+  removed. The new keywords `thick_sigma_z` and `thick_R_sigma` set the
+  thick disk, and `v_circ_solar` scales the rotation curve. To change the thick disk height, pass a smaller `thick_sigma_z`
+  instead of `Z_thick`. The thin-disk dispersions, here and in
+  `thin_disk_velocity_moments`, hold [Fe/H] at -1 or 0.5 outside that
+  range, where Sharma et al. (2021) fitted them. A non-finite `feh` or
+  `loga` now raises `ValueError` (#283).
 - **`load_models` keeps constant grid labels.** It returned no `afe` column
   for a single-afe grid under the default labels, and no `smf` column
   without `include_binaries`. Both are now one-value columns, so

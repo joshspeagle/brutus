@@ -44,7 +44,7 @@ Examples
 """
 
 import os
-from math import asinh, exp, radians, sqrt
+from math import asinh, exp, log, radians, sqrt
 
 import numpy as np
 from numba import jit, prange
@@ -99,11 +99,13 @@ THIN_DISK_LAMBDA_L = (2300.0, 1130.0)
 THIN_DISK_ALPHA_L = (0.09, 0.58)
 THIN_DISK_GAMMA_FEH = (-0.19, -0.52)
 THIN_DISK_GAMMA_Z = (0.12, 0.20)
-# Radii in kpc where the thin-disk relations were fitted (Sharma et al. 2021).
-# Beyond them the dispersions keep their values at the edges, reached
-# through a quadratic blend within DISK_EDGE kpc of each edge, so that
-# v_phi stays continuous.
+# Radii in kpc and [Fe/H] in dex where the thin-disk relations were fitted
+# (Sharma et al. 2021, Fig. 1). Beyond the radii the dispersions keep their
+# values at the edges, reached through a quadratic blend within DISK_EDGE
+# kpc of each edge, so that v_phi stays continuous; [Fe/H] is held at the
+# edges of its range.
 THIN_DISK_R_RANGE = (3.0, 20.0)
+THIN_DISK_FEH_RANGE = (-1.0, 0.5)
 DISK_EDGE = 1.0
 
 # Thick-disk (high-[alpha/Fe]) dispersions (sigma_R, sigma_phi, sigma_z)
@@ -130,6 +132,22 @@ HALO_SIGMA_R_LOBE = (109.93, 78.21, 62.91, 176.36)
 HALO_SIGMA_T_LOBE = (58.18, 34.02, 29.14, 145.69)
 HALO_DELTA_LOBE = (104.16, 98.60, 67.75, 82.87)
 HALO_V_PHI_LOBE = (4.49, -11.54, -14.13, 27.39)
+
+# Vertical potential, in the form of Kuijken & Gilmore (1989):
+# K_z = 2 pi G [Sigma_0 z / sqrt(z^2 + D^2) + 2 rho_DM z]. Sigma_0 and D
+# follow from K_z(1.1 kpc) / 2 pi G in Msun/pc^2 (Bovy & Rix 2013) and the
+# total midplane density in Msun/pc^3 (McKee et al. 2015), with the dark
+# matter density of McKee et al. (2015). The disk term falls with radius
+# with the scale length of K_z(1.1 kpc) in kpc, and keeps its edge values
+# outside the radii of that measurement (Bovy & Rix 2013).
+VERTICAL_KZ_1KPC = 67.0
+VERTICAL_RHO_MIDPLANE = 0.097
+VERTICAL_RHO_DM = 0.013
+VERTICAL_R_SCALE = 2.7
+VERTICAL_R_RANGE = (4.0, 9.0)
+
+# 2 pi G in (km/s)^2 pc / Msun.
+_2PI_G = 2.0 * np.pi * 4.30091e-3
 
 
 def solar_velocity(R_solar=8.2, pm_sgra=PM_SGRA, U_sun=U_SUN):
@@ -282,6 +300,15 @@ def _jeans_vphi(var_R, var_phi, dlnvar_dlnR, dlnnu_dlnR, vc):
 
 
 @jit(nopython=True, cache=True)
+def _thin_disk_feh_factor(feh):
+    """Return f_[Fe/H] of sigma_R and of sigma_z, with [Fe/H] clamped to
+    THIN_DISK_FEH_RANGE."""
+    lo, hi = THIN_DISK_FEH_RANGE
+    feh = min(max(feh, lo), hi)
+    return 1.0 + THIN_DISK_GAMMA_FEH[0] * feh, 1.0 + THIN_DISK_GAMMA_FEH[1] * feh
+
+
+@jit(nopython=True, cache=True)
 def _thin_disk_sigma0(age, feh):
     """Return the Sharma et al. (2021) (sigma_R, sigma_z) of one stellar
     model at solar L_z and z = 0: sigma_0 f_tau f_[Fe/H].
@@ -290,13 +317,25 @@ def _thin_disk_sigma0(age, feh):
     positions per model computes them once.
     """
     a = (age + 0.1) / 10.1
+    f_R, f_z = _thin_disk_feh_factor(feh)
     return (
-        THIN_DISK_SIGMA0[0]
-        * a ** THIN_DISK_BETA[0]
-        * (1.0 + THIN_DISK_GAMMA_FEH[0] * feh),
-        THIN_DISK_SIGMA0[1]
-        * a ** THIN_DISK_BETA[1]
-        * (1.0 + THIN_DISK_GAMMA_FEH[1] * feh),
+        THIN_DISK_SIGMA0[0] * a ** THIN_DISK_BETA[0] * f_R,
+        THIN_DISK_SIGMA0[1] * a ** THIN_DISK_BETA[1] * f_z,
+    )
+
+
+@jit(nopython=True, cache=True)
+def _thin_disk_L_refs(R_solar, vc_solar):
+    """Return L_z of a circular orbit at the Sun and the ``L_clamp`` of
+    ``_thin_disk_fL``."""
+    lo, hi = THIN_DISK_R_RANGE
+    return (
+        R_solar * _circular_velocity(R_solar, R_solar, vc_solar)[0],
+        (
+            lo * _circular_velocity(lo, R_solar, vc_solar)[0],
+            hi * _circular_velocity(hi, R_solar, vc_solar)[0],
+            DISK_EDGE * vc_solar,
+        ),
     )
 
 
@@ -333,21 +372,6 @@ def _thin_disk_fL(L, L_solar, L_clamp):
     f_z = (a_z * u2 + exp(-(L_eff - L_solar) / lam_z)) / (1.0 + a_z)
     dlnf_dlnL = (2.0 * a_R * u2 - (L_eff / lam_R) * e_R) / ((1.0 + a_R) * f_R)
     return f_R, f_z, dlnf_dlnL * dL * L / L_eff
-
-
-@jit(nopython=True, cache=True)
-def _thin_disk_L_refs(R_solar, vc_solar):
-    """Return L_z of a circular orbit at the Sun and the ``L_clamp`` of
-    ``_thin_disk_fL``."""
-    lo, hi = THIN_DISK_R_RANGE
-    return (
-        R_solar * _circular_velocity(R_solar, R_solar, vc_solar)[0],
-        (
-            lo * _circular_velocity(lo, R_solar, vc_solar)[0],
-            hi * _circular_velocity(hi, R_solar, vc_solar)[0],
-            DISK_EDGE * vc_solar,
-        ),
-    )
 
 
 @jit(nopython=True, cache=True)
@@ -428,18 +452,25 @@ def _thin_disk_moments(
 
 
 @jit(nopython=True, cache=True)
+def _thick_disk_scale(R, R_sigma, R_solar):
+    """Return exp(-2 (R - R_solar) / R_sigma), the radial factor of the
+    thick-disk variances, with R clamped smoothly to THICK_DISK_R_RANGE
+    over DISK_EDGE, and its d ln / d ln R."""
+    R_eff, dR = _soft_clamp(R, THICK_DISK_R_RANGE[0], THICK_DISK_R_RANGE[1], DISK_EDGE)
+    return exp(-2.0 * (R_eff - R_solar) / R_sigma), -2.0 * R / R_sigma * dR
+
+
+@jit(nopython=True, cache=True)
 def _thick_disk_moments(R, vc, var_R0, var_phi0, var_z0, R_sigma, R_solar, dlnnu_dlnR):
     """Return (v_phi, var_R, var_phi, var_z) of the thick disk.
 
     Beyond THICK_DISK_R_RANGE the dispersions keep their edge values,
     blended in within DISK_EDGE of each edge.
     """
-    R_eff, dR = _soft_clamp(R, THICK_DISK_R_RANGE[0], THICK_DISK_R_RANGE[1], DISK_EDGE)
-    f = exp(-2.0 * (R_eff - R_solar) / R_sigma)
+    f, dlnf_dlnR = _thick_disk_scale(R, R_sigma, R_solar)
     var_R = var_R0 * f
     var_phi = var_phi0 * f
-    dlnvar_dlnR = -2.0 * R / R_sigma * dR
-    vphi = _jeans_vphi(var_R, var_phi, dlnvar_dlnR, dlnnu_dlnR, vc)
+    vphi = _jeans_vphi(var_R, var_phi, dlnf_dlnR, dlnnu_dlnR, vc)
     return vphi, var_R, var_phi, var_z0 * f
 
 
@@ -616,9 +647,6 @@ def _vc_solar(v_circ_solar, R_solar):
     return v_circ_solar
 
 
-_FEH_MAX = -1.0 / min(THIN_DISK_GAMMA_FEH)
-
-
 def thin_disk_velocity_moments(
     R,
     Z,
@@ -647,17 +675,18 @@ def thin_disk_velocity_moments(
     angular momentum of the population, :math:`R\,\bar{v}_\phi`, with
     :math:`\bar{v}_\phi` from the Jeans equation below (two steps of the
     fixed point from the circular :math:`L_z = R\,v_c`). The relations
-    were fitted at 3 < R < 20 kpc. Outside those radii the dispersions
-    keep their edge values, blended in so that :math:`\bar{v}_\phi` stays
-    continuous: :math:`L_z` is clamped to the circular :math:`L_z` at the
-    edges with a quadratic blend 1 kpc :math:`\times\,v_{c,\odot}` wide in
-    :math:`L_z`, and the dispersion gradient in the Jeans equation fades
-    out within 1 kpc outside the radii. A population that lags reaches the
-    outer clamp further out, at 22.8 kpc for 5 Gyr and [Fe/H] = 0 and at
-    25.6 kpc for 13.8 Gyr and [Fe/H] = -1; beyond 21 kpc its dispersions
-    still change a little, by up to 0.6 km/s in :math:`\bar{v}_\phi`
-    through the missing gradient. The azimuthal dispersion follows the
-    epicyclic ratio
+    were fitted at 3 < R < 20 kpc and -1 < [Fe/H] < 0.5. Outside those
+    radii the dispersions keep their edge values, blended in so that
+    :math:`\bar{v}_\phi` stays continuous: :math:`L_z` is clamped to the
+    circular :math:`L_z` at the edges with a quadratic blend 1 kpc
+    :math:`\times\,v_{c,\odot}` wide in :math:`L_z`, and the dispersion
+    gradient in the Jeans equation fades out within 1 kpc outside the
+    radii. A population that lags reaches the outer clamp further out, at
+    22.8 kpc for 5 Gyr and [Fe/H] = 0 and at 25.6 kpc for 13.8 Gyr and
+    [Fe/H] = -1; beyond 21 kpc its dispersions still change a little, by
+    up to 0.6 km/s in :math:`\bar{v}_\phi` through the missing gradient.
+    [Fe/H] is held at the edges of its range. The azimuthal dispersion
+    follows the epicyclic ratio
     :math:`\sigma_\phi^2 / \sigma_R^2 = (1 + d\ln v_c / d\ln R) / 2`.
 
     The mean rotation is the radial Jeans solution (Binney & Tremaine 2008,
@@ -714,9 +743,9 @@ def thin_disk_velocity_moments(
     ------
     ValueError
         If the positions are not finite 1-D arrays of one length, ``R`` or
-        ``age`` is negative, ``feh`` is not below 1.92 (where a dispersion
-        would vanish), ``age`` or ``feh`` does not broadcast to ``R``, a
-        length scale is not positive, or ``v_circ_solar`` is not positive.
+        ``age`` is negative, ``feh`` is not finite, ``age`` or ``feh`` does
+        not broadcast to ``R``, a length scale is not positive, or
+        ``v_circ_solar`` is not positive.
     """
     R = _check_radii(R)
     Z = _check_heights(Z, R)
@@ -731,8 +760,8 @@ def thin_disk_velocity_moments(
         raise ValueError(f"age and feh must broadcast to the shape of R {R.shape}")
     if not np.all(np.isfinite(age) & (age >= 0)):
         raise ValueError("age must be finite and non-negative")
-    if not np.all(np.isfinite(feh) & (feh < _FEH_MAX)):
-        raise ValueError(f"feh must be finite and below {_FEH_MAX:.2f}")
+    if not np.all(np.isfinite(feh)):
+        raise ValueError("feh must be finite")
     _check_positive(R_scale=R_scale, R_smooth=R_smooth, R_solar=R_solar)
     return _thin_disk_array(
         R,
@@ -882,6 +911,137 @@ def halo_velocity_moments(R, Z):
     """
     R = _check_radii(R)
     return _halo_array(R, _check_heights(Z, R))
+
+
+# Sigma_0 (Msun/pc^2) and D (pc) of the vertical potential, from
+# K_z(z_1) / 2 pi G = Sigma_0 z_1 / sqrt(z_1^2 + D^2) + 2 rho_DM z_1 at
+# z_1 = 1.1 kpc and Sigma_0 = 2 (rho_midplane - rho_DM) D (Poisson's
+# equation at the midplane): y = D / sqrt(z_1^2 + D^2) is then linear.
+_y = (VERTICAL_KZ_1KPC - 2.0 * VERTICAL_RHO_DM * 1100.0) / (
+    2.0 * (VERTICAL_RHO_MIDPLANE - VERTICAL_RHO_DM) * 1100.0
+)
+VERTICAL_D = 1100.0 * _y / sqrt(1.0 - _y * _y)
+VERTICAL_SIGMA0 = 2.0 * (VERTICAL_RHO_MIDPLANE - VERTICAL_RHO_DM) * VERTICAL_D
+
+# gamma_z of the thin-disk sigma_z in 1/pc.
+_GAMMA_Z = THIN_DISK_GAMMA_Z[1] / 1000.0
+
+
+def _thin_disk_force(z):
+    """Disk part of K_z / (1 + gamma_z z)^2 in (km/s)^2 / pc at z pc."""
+    return (
+        _2PI_G
+        * VERTICAL_SIGMA0
+        * z
+        / (np.sqrt(z * z + VERTICAL_D * VERTICAL_D) * (1.0 + _GAMMA_Z * z) ** 2)
+    )
+
+
+# I_D(z) = int_0^z _thin_disk_force(t) dt in (km/s)^2 at every pc to 10 kpc,
+# by Simpson's rule on each pc, and the integrand at the same nodes.
+_Z_NODES = np.arange(10001.0)
+_THIN_FORCE = _thin_disk_force(_Z_NODES)
+_THIN_VERTICAL_TABLE = np.concatenate(
+    (
+        [0.0],
+        np.cumsum(
+            (
+                _THIN_FORCE[:-1]
+                + 4.0 * _thin_disk_force(_Z_NODES[:-1] + 0.5)
+                + _THIN_FORCE[1:]
+            )
+            / 6.0
+        ),
+    )
+)
+
+
+@jit(nopython=True, cache=True)
+def _far_disk_term(t, g):
+    """Antiderivative of 1 / (t^2 (1 + g t)^2)."""
+    return -1.0 / t + 2.0 * g * log((1.0 + g * t) / t) - g / (1.0 + g * t)
+
+
+@jit(nopython=True, cache=True)
+def _thin_disk_integrals(abs_z):
+    """Return the height terms of the thin-disk vertical profile at |z| =
+    ``abs_z`` kpc: 2 ln(1 + gamma_z z), I_D(z) and I_DM(z) in (km/s)^2,
+    with I(z) = int_0^z K_z / (1 + gamma_z t)^2 dt split into its disk and
+    dark matter parts.
+
+    I_D is interpolated in _THIN_VERTICAL_TABLE with cubic Hermite
+    polynomials, whose slopes are the integrand itself.
+    """
+    g = _GAMMA_Z
+    z = abs_z * 1000.0
+    n = len(_THIN_VERTICAL_TABLE) - 1
+    if z < n:
+        i = int(z)
+        w = z - i
+        w2, w3 = w * w, w * w * w
+        I_D = (
+            (2.0 * w3 - 3.0 * w2 + 1.0) * _THIN_VERTICAL_TABLE[i]
+            + (w3 - 2.0 * w2 + w) * _THIN_FORCE[i]
+            + (3.0 * w2 - 2.0 * w3) * _THIN_VERTICAL_TABLE[i + 1]
+            + (w3 - w2) * _THIN_FORCE[i + 1]
+        )
+    else:
+        # Beyond the table, z >> D: t / sqrt(t^2 + D^2) = 1 - D^2 / (2 t^2),
+        # integrated against 1 / (1 + g t)^2 in closed form.
+        I_D = _THIN_VERTICAL_TABLE[n] + _2PI_G * VERTICAL_SIGMA0 * (
+            (1.0 / (1.0 + g * n) - 1.0 / (1.0 + g * z)) / g
+            - 0.5
+            * VERTICAL_D
+            * VERTICAL_D
+            * (_far_disk_term(z, g) - _far_disk_term(float(n), g))
+        )
+    gz = 1.0 + g * z
+    I_DM = 2.0 * _2PI_G * VERTICAL_RHO_DM * (log(gz) + 1.0 / gz - 1.0) / (g * g)
+    return 2.0 * log(gz), I_D, I_DM
+
+
+@jit(nopython=True, cache=True)
+def _thin_disk_vertical(terms, terms_solar, S):
+    """Return (a, b) with ln nu(|z|) - ln nu(|z_sun|) = a - b / sig_z0^2
+    for a thin-disk population of vertical dispersion sig_z0 (km/s).
+
+    The vertical Jeans equation d(nu sigma_z^2)/dz = -nu K_z with
+    sigma_z(z) = sig_z0 (1 + gamma_z |z|) gives
+    ln nu(z) = -2 ln(1 + gamma_z |z|) - [S I_D(|z|) + I_DM(|z|)] / sig_z0^2.
+    ``terms`` and ``terms_solar`` come from ``_thin_disk_integrals``, and
+    ``S`` scales the disk term with radius. Neither a nor b depends on
+    sig_z0, so many populations at one point share them.
+    """
+    return -(terms[0] - terms_solar[0]), S * (terms[1] - terms_solar[1]) + (
+        terms[2] - terms_solar[2]
+    )
+
+
+@jit(nopython=True, cache=True)
+def _vertical_potential(abs_z):
+    """Return the disk part (per unit S) and the dark matter part of
+    Phi_z(|z|) / 2 pi G in Msun/pc, at |z| = ``abs_z`` kpc."""
+    z = abs_z * 1000.0
+    return (
+        VERTICAL_SIGMA0 * (sqrt(z * z + VERTICAL_D * VERTICAL_D) - VERTICAL_D),
+        VERTICAL_RHO_DM * z * z,
+    )
+
+
+@jit(nopython=True, cache=True)
+def _thick_disk_vertical(phi, phi_solar, var_z, S):
+    """Return ln nu(|z|) - ln nu(|z_sun|) = -[Phi(z) - Phi(z_sun)] / sigma_z^2
+    of the isothermal thick disk, from ``_vertical_potential`` at the two
+    heights; ``var_z`` is in (km/s)^2."""
+    return -_2PI_G * (S * (phi[0] - phi_solar[0]) + (phi[1] - phi_solar[1])) / var_z
+
+
+@jit(nopython=True, cache=True)
+def _potential_scale(R, R_solar):
+    """Radial scaling of the disk term of the vertical potential, with R
+    clamped to VERTICAL_R_RANGE."""
+    lo, hi = VERTICAL_R_RANGE
+    return exp(-(min(max(R, lo), hi) - R_solar) / VERTICAL_R_SCALE)
 
 
 def _sightline(coord, v_sun):

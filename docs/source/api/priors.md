@@ -125,7 +125,7 @@ fitter.fit(
 
 ## Kinematics
 
-Velocity moments of the Galactic components and their projection to proper motions and radial velocity. The fit does not use them yet ([#275](https://github.com/joshspeagle/brutus/issues/275)).
+Velocity moments of the Galactic components and their projection to proper motions and radial velocity. The Galactic prior uses the disk vertical dispersions; the fit does not use the velocities yet ([#275](https://github.com/joshspeagle/brutus/issues/275)).
 
 ```{eval-rst}
 .. autofunction:: solar_velocity
