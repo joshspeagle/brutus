@@ -76,16 +76,18 @@ V_PEC_SUN = 12.24
 # near the centre and close to ln R beyond it, so the roughness penalty
 # VC_PENALTY smooths over a fixed fraction of R (1-2 kpc near the Sun).
 # The spline is odd in R, so v_c is proportional to R at the centre.
-# Beyond the last point a slope penalty, ramped in over VC_FLAT, makes v_c
-# flat. Knots are VC_KNOT apart in u, out to VC_END.
+# Beyond the last point a slope penalty, ramped in over VC_FLAT and
+# VC_FLAT_PENALTY times the roughness penalty once complete, makes v_c
+# flat. Knots are VC_KNOT apart in u, out to VC_END; v_c is tabulated at
+# the knots, where cubic Hermite interpolation reproduces the spline.
 VC_SOURCES = ((8.178, 235.1), (8.122, 229.0))
 VC_MAX_ERR = 5.0
 VC_CORE = 0.3 / 8.2
 VC_PENALTY = 1e4
 VC_FLAT = 2.0 / 8.2
+VC_FLAT_PENALTY = 1e4
 VC_KNOT = 0.05
 VC_END = 40.0 / 8.2
-_VC_DU = 0.002
 
 # Thin-disk dispersion relations, (sigma_R, sigma_z) pairs (Sharma et al.
 # 2021, eqs. 3-7 and Table 2): sigma at 10 Gyr, solar L_z, [Fe/H] = 0 and
@@ -176,12 +178,14 @@ def solar_velocity(R_solar=8.2, pm_sgra=PM_SGRA, U_sun=U_SUN):
 
 
 def _rotation_curve_table():
-    """Return the shape of v_c and its slope per grid step on a grid
-    uniform in u = asinh(x / VC_CORE), starting at u = 0."""
+    """Return the shape of v_c and its slope per knot step at the knots
+    u = 0, VC_KNOT, 2 VC_KNOT, ... of the fitted spline in
+    u = asinh(x / VC_CORE)."""
     data = np.loadtxt(os.path.join(os.path.dirname(__file__), "rotation_curve.dat"))
     R, v, err, src = data[(data[:, 2] <= VC_MAX_ERR) | (data[:, 3] == 0)].T
     R_sun, vc_sun = (np.array(c)[src.astype(int)] for c in zip(*VC_SOURCES))
-    u = np.arcsinh(R / R_sun / VC_CORE)
+    x = R / R_sun
+    u = np.arcsinh(x / VC_CORE)
     weight = (vc_sun / err) ** 2
 
     # Odd cubic B-splines on knots symmetric about u = 0: coefficient j and
@@ -197,24 +201,23 @@ def _rotation_curve_table():
     B = BSpline(knots, odd, 3)(u)
 
     # Curvature penalty everywhere; beyond the last point, a slope penalty
-    # ramped in with a cosine weight, 1e4 times stronger once complete.
+    # ramped in with a cosine weight.
     greville = np.array([knots[i + 1 : i + 4].mean() for i in range(n)])
     mid = 0.5 * np.abs(greville[1:] + greville[:-1])
-    u_last, u_flat = u.max(), np.arcsinh(
-        (np.sinh(u.max()) * VC_CORE + VC_FLAT) / VC_CORE
-    )
+    u_last = np.arcsinh(x.max() / VC_CORE)
+    u_flat = np.arcsinh((x.max() + VC_FLAT) / VC_CORE)
     ramp = 0.5 - 0.5 * np.cos(np.pi * np.clip((mid - u_last) / (u_flat - u_last), 0, 1))
     D1, D2 = np.diff(np.eye(n), 1, axis=0), np.diff(np.eye(n), 2, axis=0)
-    penalty = odd.T @ (D2.T @ D2 + 1e4 * D1.T @ (ramp[:, None] * D1)) @ odd
+    flat = VC_FLAT_PENALTY * D1.T @ (ramp[:, None] * D1)
+    penalty = odd.T @ (D2.T @ D2 + flat) @ odd
     coef = np.linalg.solve(
         B.T @ (weight[:, None] * B) + VC_PENALTY * penalty,
         B.T @ (weight * v / vc_sun),
     )
     spline = BSpline(knots, odd @ coef, 3)
-    grid = np.arange(0.0, u_end, _VC_DU)
     norm = spline(np.arcsinh(1.0 / VC_CORE))
-    # The slope is per grid step, the unit the Hermite interpolation uses.
-    return spline(grid) / norm, spline.derivative()(grid) * _VC_DU / norm
+    # The slope is per knot step, the unit the Hermite interpolation uses.
+    return spline(half) / norm, spline.derivative()(half) * VC_KNOT / norm
 
 
 _VC_SHAPE, _VC_SLOPE = _rotation_curve_table()
@@ -226,12 +229,12 @@ def _circular_velocity(R, R_solar, vc_solar):
 
     The shape is interpolated in _VC_SHAPE, against u = asinh(x / VC_CORE)
     with x = R / R_solar, with cubic Hermite polynomials whose slopes are
-    _VC_SLOPE (per grid step), so v_c and its derivative are continuous.
+    _VC_SLOPE (per knot step). This is the fitted spline itself.
     """
     if R <= 0.0:
         return 0.0, 1.0
     x = R / R_solar
-    y = asinh(x / VC_CORE) / _VC_DU
+    y = asinh(x / VC_CORE) / VC_KNOT
     n = len(_VC_SHAPE) - 1
     if y >= n:
         return vc_solar * _VC_SHAPE[n], 0.0
@@ -253,7 +256,7 @@ def _circular_velocity(R, R_solar, vc_solar):
         + (3.0 * w2 - 2.0 * w) * m1
     )
     # du / d ln R = x / sqrt(x^2 + VC_CORE^2)
-    return vc_solar * s, ds_dy / (_VC_DU * s) * x / sqrt(x * x + VC_CORE * VC_CORE)
+    return vc_solar * s, ds_dy / (VC_KNOT * s) * x / sqrt(x * x + VC_CORE * VC_CORE)
 
 
 @jit(nopython=True, cache=True)
@@ -333,7 +336,31 @@ def _thin_disk_fL(L, L_solar, L_clamp):
 
 
 @jit(nopython=True, cache=True)
-def _thin_disk_radial(R, abs_z, sig_R0, vc, dlnvc, L, L_solar, L_clamp, dlnnu_dlnR):
+def _thin_disk_L_refs(R_solar, vc_solar):
+    """Return L_z of a circular orbit at the Sun and the ``L_clamp`` of
+    ``_thin_disk_fL``."""
+    lo, hi = THIN_DISK_R_RANGE
+    return (
+        R_solar * _circular_velocity(R_solar, R_solar, vc_solar)[0],
+        (
+            lo * _circular_velocity(lo, R_solar, vc_solar)[0],
+            hi * _circular_velocity(hi, R_solar, vc_solar)[0],
+            DISK_EDGE * vc_solar,
+        ),
+    )
+
+
+@jit(nopython=True, cache=True)
+def _thin_disk_fade(R):
+    """Return the weight of the thin-disk dispersion gradient in the Jeans
+    equation: 1 inside THIN_DISK_R_RANGE, 0 more than DISK_EDGE outside."""
+    return _soft_clamp(R, THIN_DISK_R_RANGE[0], THIN_DISK_R_RANGE[1], DISK_EDGE)[1]
+
+
+@jit(nopython=True, cache=True)
+def _thin_disk_radial(
+    R, abs_z, sig_R0, vc, dlnvc, L, L_solar, L_clamp, dlnnu_dlnR, fade
+):
     """Return (v_phi, var_R, var_phi, f_L of sigma_z) of the thin disk for
     f_L at ``L``.
 
@@ -343,23 +370,22 @@ def _thin_disk_radial(R, abs_z, sig_R0, vc, dlnvc, L, L_solar, L_clamp, dlnnu_dl
     d ln R. The derivative of the mean L_z itself would raise v_phi by at
     most 3.3 km/s at 3-20 kpc and |z| <= 1 kpc (old, metal-poor stars near
     4 kpc, where v_c changes fastest) and by at most 0.54 km/s at the Sun,
-    for R_solar = 8.2 kpc. Outside THIN_DISK_R_RANGE the gradient term fades out within
-    DISK_EDGE, in R: a population that lags keeps an L_z below the
-    clamp a little beyond 20 kpc, and the gradient would otherwise act
-    there.
+    for R_solar = 8.2 kpc. Outside THIN_DISK_R_RANGE the gradient term
+    fades out in R by ``fade`` from ``_thin_disk_fade``: a population that
+    lags keeps an L_z below the clamp a little beyond 20 kpc, and the
+    gradient would otherwise act there.
     """
     f_R, f_z, dlnf_R = _thin_disk_fL(L, L_solar, L_clamp)
     sig_R = sig_R0 * f_R * (1.0 + THIN_DISK_GAMMA_Z[0] * abs_z)
     var_R = sig_R * sig_R
     var_phi = 0.5 * var_R * (1.0 + dlnvc)
-    fade = _soft_clamp(R, THIN_DISK_R_RANGE[0], THIN_DISK_R_RANGE[1], DISK_EDGE)[1]
     dlnvar_dlnR = 2.0 * dlnf_R * (1.0 + dlnvc) * fade
     vphi = _jeans_vphi(var_R, var_phi, dlnvar_dlnR, dlnnu_dlnR, vc)
     return vphi, var_R, var_phi, f_z
 
 
 @jit(nopython=True, cache=True)
-def _thin_disk_mean_L(R, abs_z, sig_R0, vc, dlnvc, L_solar, L_clamp, dlnnu_dlnR):
+def _thin_disk_mean_L(R, abs_z, sig_R0, vc, dlnvc, L_solar, L_clamp, dlnnu_dlnR, fade):
     """Return the mean L_z = R v_phi of a thin-disk population.
 
     Two steps of the fixed point L_z = R v_phi(L_z) from the circular
@@ -374,7 +400,7 @@ def _thin_disk_mean_L(R, abs_z, sig_R0, vc, dlnvc, L_solar, L_clamp, dlnnu_dlnR)
         L = (
             R
             * _thin_disk_radial(
-                R, abs_z, sig_R0, vc, dlnvc, L, L_solar, L_clamp, dlnnu_dlnR
+                R, abs_z, sig_R0, vc, dlnvc, L, L_solar, L_clamp, dlnnu_dlnR, fade
             )[0]
         )
     return L
@@ -391,10 +417,10 @@ def _thin_disk_moments(
     ``_thin_disk_mean_L``; ``L_solar`` is R_solar v_c(R_solar), the L_z of
     a circular orbit at the Sun, and ``L_clamp`` is as in ``_thin_disk_fL``.
     """
-    L = _thin_disk_mean_L(R, abs_z, sig_R0, vc, dlnvc, L_solar, L_clamp, dlnnu_dlnR)
-    vphi, var_R, var_phi, f_z = _thin_disk_radial(
-        R, abs_z, sig_R0, vc, dlnvc, L, L_solar, L_clamp, dlnnu_dlnR
-    )
+    fade = _thin_disk_fade(R)
+    args = (L_solar, L_clamp, dlnnu_dlnR, fade)
+    L = _thin_disk_mean_L(R, abs_z, sig_R0, vc, dlnvc, *args)
+    vphi, var_R, var_phi, f_z = _thin_disk_radial(R, abs_z, sig_R0, vc, dlnvc, L, *args)
     sig_z = sig_z0 * f_z * (1.0 + THIN_DISK_GAMMA_Z[1] * abs_z)
     return vphi, var_R, var_phi, sig_z * sig_z
 
@@ -483,10 +509,7 @@ def _thin_disk_array(R, Z, age, feh, R_scale, R_smooth, R_solar, vc_solar):
     N = len(R)
     mean = np.zeros((N, 3))
     cov = np.zeros((N, 3, 3))
-    lo, hi = THIN_DISK_R_RANGE
-    L_solar = R_solar * _circular_velocity(R_solar, R_solar, vc_solar)[0]
-    L_lo = lo * _circular_velocity(lo, R_solar, vc_solar)[0]
-    L_hi = hi * _circular_velocity(hi, R_solar, vc_solar)[0]
+    L_solar, L_clamp = _thin_disk_L_refs(R_solar, vc_solar)
     for i in prange(N):
         vc, dlnvc = _circular_velocity(R[i], R_solar, vc_solar)
         sig_R0, sig_z0 = _thin_disk_sigma0(age[i], feh[i])
@@ -498,7 +521,7 @@ def _thin_disk_array(R, Z, age, feh, R_scale, R_smooth, R_solar, vc_solar):
             vc,
             dlnvc,
             L_solar,
-            (L_lo, L_hi, DISK_EDGE * vc_solar),
+            L_clamp,
             _logn_disk_dlnR(R[i], sqrt(R[i] * R[i] + R_smooth * R_smooth), R_scale),
         )
         _store(mean[i], cov[i], 0.0, vphi, 0.0, var_R, var_phi, var_z, 0.0)
@@ -626,8 +649,8 @@ def thin_disk_velocity_moments(
     keep their edge values, blended in within 1 kpc of each edge so that
     :math:`\bar{v}_\phi` stays continuous: :math:`L_z` is clamped to the
     circular :math:`L_z` at the edges, and the dispersion gradient in the
-    Jeans equation fades out in R. The azimuthal dispersion
-    follows the epicyclic ratio
+    Jeans equation fades out in R. The azimuthal dispersion follows the
+    epicyclic ratio
     :math:`\sigma_\phi^2 / \sigma_R^2 = (1 + d\ln v_c / d\ln R) / 2`.
 
     The mean rotation is the radial Jeans solution (Binney & Tremaine 2008,
@@ -739,8 +762,7 @@ def thick_disk_velocity_moments(
     (2020, Table 1) and the e-folding length of Mackereth et al. (2019).
     Beyond 4 < R < 13 kpc, the radii of the Mackereth et al. sample, the
     dispersions keep their edge values, blended in within 1 kpc of each
-    edge. The mean
-    rotation is the radial Jeans solution of
+    edge. The mean rotation is the radial Jeans solution of
     `thin_disk_velocity_moments`, with
     :math:`\partial \ln \sigma_R^2 / \partial \ln R = -2R / R_\sigma`.
     With the defaults, :math:`\bar{v}_\phi = 191` km/s at the Sun;
