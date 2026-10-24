@@ -655,7 +655,7 @@ def thin_disk_velocity_moments(
     out within 1 kpc outside the radii. A population that lags reaches the
     outer clamp further out, at 22.8 kpc for 5 Gyr and [Fe/H] = 0 and at
     25.6 kpc for 13.8 Gyr and [Fe/H] = -1; beyond 21 kpc its dispersions
-    still change a little, by up to 0.5 km/s in :math:`\bar{v}_\phi`
+    still change a little, by up to 0.6 km/s in :math:`\bar{v}_\phi`
     through the missing gradient. The azimuthal dispersion follows the
     epicyclic ratio
     :math:`\sigma_\phi^2 / \sigma_R^2 = (1 + d\ln v_c / d\ln R) / 2`.
