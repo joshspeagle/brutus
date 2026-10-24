@@ -69,7 +69,7 @@ def _phi(abs_z, S):
 
 
 _AGE_ARGS = (13.8, 0.0, -0.5, 0.5, 2.0, 4.0, 1.0)
-_F_THICK = gal.galactic_prior_summary()["f_thick_midplane"]
+_F_THICK = gal.galactic_prior_summary()["f_thick_solar"]
 
 
 def _no_age_thin(R, abs_Z, feh, age_args=_AGE_ARGS):
@@ -237,7 +237,7 @@ class TestGalacticPriors:
 
 class TestDiskSolarNormalization:
     """logn_disk must be exactly 0 at the solar position (like logn_halo),
-    so the midplane mixture fractions are exact locally."""
+    so the mixture fractions are exact at the Sun."""
 
     def test_thin_disk_unity_at_solar(self):
         # Old code: exp(logn) = 0.9117 (normalized at un-smoothed R_solar)
@@ -860,27 +860,35 @@ class TestThickDiskSurfaceNormalization:
         np.testing.assert_allclose(summary["thin_column_height"], thin, rtol=5e-4)
         np.testing.assert_allclose(summary["thick_column_height"], thick, rtol=1e-6)
         np.testing.assert_allclose(
-            summary["f_thick_midplane"], 0.18 * thin / thick, rtol=5e-4
+            summary["f_thick_solar"], 0.18 * thin / thick, rtol=5e-4
         )
 
     @pytest.mark.parametrize(
         "kwargs",
         [{}, {"thick_sigma_z": 35.0}, {"feh_thin": -0.5}, {"f_thick_surface": 0.3}],
     )
-    def test_prior_at_the_sun_uses_the_derived_midplane_fraction(self, kwargs):
+    def test_prior_at_the_sun_uses_the_derived_thick_disk_fraction(self, kwargs):
         # Toward the north Galactic pole at 1 mpc, both disks are at the
         # Sun's position, where each profile is 1.
         _, comp = logp_galactic_structure(
             np.array([1e-6]), (0.0, 90.0), return_components=True, **kwargs
         )
         thin, thick, _ = comp["number_density"]
-        f_thick = gal.galactic_prior_summary(**kwargs)["f_thick_midplane"]
+        f_thick = gal.galactic_prior_summary(**kwargs)["f_thick_solar"]
         np.testing.assert_allclose(np.exp(thick - thin), f_thick, rtol=1e-5)
 
     def test_summary_rejects_keywords_that_set_no_normalization(self):
         with pytest.raises(TypeError, match="f_halo"):
             gal.galactic_prior_summary(f_halo=0.01)
 
-    def test_non_positive_surface_fraction_raises(self):
-        with pytest.raises(ValueError, match="f_thick_surface"):
-            logp_galactic_structure(np.array([1.0]), (0.0, 90.0), f_thick_surface=0.0)
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"f_thick_surface": 0.0},
+            {"f_thick_surface": np.inf},
+            {"feh_thin_sigma": np.nan},
+        ],
+    )
+    def test_invalid_normalization_inputs_raise(self, kwargs):
+        with pytest.raises(ValueError, match=next(iter(kwargs))):
+            logp_galactic_structure(np.array([1.0]), (0.0, 90.0), **kwargs)

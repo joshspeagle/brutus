@@ -631,8 +631,8 @@ def _check_heights(Z, R):
 
 def _check_positive(**values):
     for name, value in values.items():
-        if not value > 0:
-            raise ValueError(f"{name} must be positive, got {value}")
+        if not (np.isfinite(value) and value > 0):
+            raise ValueError(f"{name} must be positive and finite, got {value}")
 
 
 def _vc_solar(v_circ_solar, R_solar):

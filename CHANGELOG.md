@@ -245,7 +245,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Mackereth et al. 2017). It derives the ratio at the Sun from the
   column heights of the two vertical profiles, 0.055 with the defaults,
   so a change to `thick_sigma_z` or `feh_thin` keeps the surface ratio.
-  Passing `f_thick` raises `TypeError`. The new
+  Passing `f_thick` raises `TypeError`, and `f_thick_surface` must be
+  positive, so the thick disk can no longer be switched off with 0. The new
   `brutus.priors.galactic_prior_summary` returns the derived
   normalizations (#288).
 - **`load_models` keeps constant grid labels.** It returned no `afe` column

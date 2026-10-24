@@ -143,18 +143,16 @@ def _disk_column_heights(
     thick disks at R_solar. The thin disk averages its vertical profile
     over the age prior and, by Gauss-Hermite quadrature, over its [Fe/H]
     prior, both of which are densities at the Sun's height."""
-    n = _COLUMN_Z.size
-    R = np.full(n, rot[0])
-    nodes = _thin_age_nodes(feh_thin, age_args)
     x, w = np.polynomial.hermite_e.hermegauss(_FEH_NODES)
-    columns = []
-    for xj in x:
-        feh = np.full(n, feh_thin + feh_thin_sigma * xj)
-        args = (R, _COLUMN_Z, abs_Z_solar, np.empty(0), feh, False, rot, thin_R)
-        thin_z, thick_z = _disk_vertical_array(*args, *thick, *nodes)
-        columns.append(np.trapezoid(np.exp(thin_z), _COLUMN_Z))
-    # The thick disk does not depend on [Fe/H]: any node's profile serves.
-    return np.dot(w, columns) / w.sum(), np.trapezoid(np.exp(thick_z), _COLUMN_Z)
+    n = x.size * _COLUMN_Z.size
+    feh = np.repeat(feh_thin + feh_thin_sigma * x, _COLUMN_Z.size)
+    args = (np.full(n, rot[0]), np.tile(_COLUMN_Z, x.size), abs_Z_solar)
+    args += (np.empty(0), feh, False, rot, thin_R, *thick)
+    thin_z, thick_z = _disk_vertical_array(*args, *_thin_age_nodes(feh_thin, age_args))
+    thin = np.trapezoid(np.exp(thin_z).reshape(x.size, -1), _COLUMN_Z, axis=1)
+    # The thick disk does not depend on [Fe/H]: the first node's profile serves.
+    thick = np.trapezoid(np.exp(thick_z[: _COLUMN_Z.size]), _COLUMN_Z)
+    return float(np.dot(w, thin) / w.sum()), float(thick)
 
 
 @jit(nopython=True, cache=True)
@@ -597,8 +595,8 @@ def logn_disk(R, Z, R_solar=8.2, Z_solar=0.025, R_scale=2.6, Z_scale=0.3, R_smoo
     :math:`R_{\text{eff},\odot} = \sqrt{R_\odot^2 + R_{\text{smooth}}^2}`
     is the smoothed solar radius, so the normalized density is exactly 1 at
     the solar position (consistent with :func:`logn_halo`). This keeps the
-    mixture fractions (``f_thick``, ``f_halo``) in
-    :func:`logp_galactic_structure` exact at the solar position.
+    thick-disk and halo fractions of :func:`logp_galactic_structure` exact
+    at the solar position.
 
     References
     ----------
@@ -870,6 +868,7 @@ def _normalizations(
     profiles, and the normalizations that `galactic_prior_summary` reports."""
     _check_positive(
         f_thick_surface=f_thick_surface,
+        feh_thin_sigma=feh_thin_sigma,
         thick_sigma_z=thick_sigma_z,
         thick_R_sigma=thick_R_sigma,
     )
@@ -901,7 +900,7 @@ def _normalizations(
     summary = dict(
         thin_column_height=h_thin,
         thick_column_height=h_thick,
-        f_thick_midplane=float(f_thick_surface) * h_thin / h_thick,
+        f_thick_solar=float(f_thick_surface) * h_thin / h_thick,
     )
     return rot, thick, age_args, summary
 
@@ -1171,25 +1170,25 @@ def logp_galactic_structure(
     # Vertical profiles: the rotation curve, the thick disk dispersion and,
     # without an age, the nodes of the thin-disk age average.
     rot, thick, age_args, summary = _normalizations(
-        R_solar,
-        Z_solar,
-        R_thin,
-        Rs_thin,
-        f_thick_surface,
-        feh_thin,
-        feh_thin_sigma,
-        max_age,
-        min_age,
-        feh_age_ctr,
-        feh_age_scale,
-        nsigma_from_max_age,
-        max_sigma,
-        min_sigma,
-        v_circ_solar,
-        thick_sigma_z,
-        thick_R_sigma,
+        R_solar=R_solar,
+        Z_solar=Z_solar,
+        R_thin=R_thin,
+        Rs_thin=Rs_thin,
+        f_thick_surface=f_thick_surface,
+        feh_thin=feh_thin,
+        feh_thin_sigma=feh_thin_sigma,
+        max_age=max_age,
+        min_age=min_age,
+        feh_age_ctr=feh_age_ctr,
+        feh_age_scale=feh_age_scale,
+        nsigma_from_max_age=nsigma_from_max_age,
+        max_sigma=max_sigma,
+        min_sigma=min_sigma,
+        v_circ_solar=v_circ_solar,
+        thick_sigma_z=thick_sigma_z,
+        thick_R_sigma=thick_R_sigma,
     )
-    f_thick = summary["f_thick_midplane"]
+    f_thick = summary["f_thick_solar"]
     if loga is None:
         age_nodes = _thin_age_nodes(float(feh_thin), age_args)
     else:
@@ -1395,21 +1394,21 @@ def galactic_prior_summary(**kwargs):
     summary : dict
         ``thin_column_height`` and ``thick_column_height`` in kpc (the thin
         disk averaged over its age and [Fe/H] priors) and
-        ``f_thick_midplane`` (the thick- to thin-disk density ratio at the
-        Sun).
+        ``f_thick_solar`` (the thick- to thin-disk density ratio at the
+        Sun's position).
 
     Raises
     ------
     TypeError
         If a keyword does not set a normalization.
     ValueError
-        If ``f_thick_surface``, ``thick_sigma_z``, ``thick_R_sigma`` or
-        ``v_circ_solar`` is not positive.
+        If ``f_thick_surface``, ``feh_thin_sigma``, ``thick_sigma_z``,
+        ``thick_R_sigma`` or ``v_circ_solar`` is not positive and finite.
 
     Examples
     --------
     >>> from brutus.priors import galactic_prior_summary
-    >>> round(galactic_prior_summary()["f_thick_midplane"], 3)
+    >>> round(galactic_prior_summary()["f_thick_solar"], 3)
     0.055
     """
     unknown = set(kwargs) - set(_NORMALIZATION_KEYS)
