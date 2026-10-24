@@ -81,23 +81,23 @@ $$
 
 The thin-disk column height averages over the thin-disk age and [Fe/H] distributions. With the defaults it is 0.38 kpc, the thick disk's is 1.24 kpc, and $f_{\rm thick} = 0.055$. A change to a parameter that sets the heights, such as `thick_sigma_z` or the thin-disk mean [Fe/H], therefore keeps the surface ratio and moves the ratio at the Sun. {func}`~brutus.priors.galactic_prior_summary` returns these quantities for any parameters.
 
-The halo is a power law, flattened near the centre and rounder far from it:
+The halo is the broken power law of {cite:t}`amarante2024` in a flattened radius $m$, with a core $R_s$ that keeps it finite at the Galactic centre:
 
 $$
-n_{\rm halo} = \left( \frac{R_{\rm eff}}{R_{{\rm eff},\odot}} \right)^{-\eta},
+\ln n_{\rm halo} = -\eta_{\rm in} \ln m - (\eta_{\rm out} - \eta_{\rm in}) \max\!\left(\ln \frac{m}{r_b}, 0\right) + {\rm const},
 \qquad
-R_{\rm eff} = \sqrt{R^2 + (Z/q)^2 + R_s^2},
-\qquad
-q(r) = q_\infty - (q_\infty - q_0)\, e^{1 - r'/r_q},
+m = \sqrt{R^2 + (Z/q)^2 + R_s^2}.
 $$
 
-with $r' = \sqrt{R^2 + Z^2 + r_q^2}$.
+Amarante et al. step $q$ from 0.77 to 0.99 at a Galactocentric radius of 30 kpc. In a prior, that step raises the density along the poles by a factor of 3.1 and adds a false distance peak at high latitude, so brutus uses $q = 0.77$ everywhere. About 90% of the halo mass within 70 kpc lies inside 30 kpc.
+
+The halo is normalized by its stellar mass, $M_{\rm halo} = 7.5 \times 10^8\ M_\odot$ between Galactocentric radii of 2 and 70 kpc, the middle of the $6.7$ to $8.4 \times 10^8\ M_\odot$ of {cite:t}`lane2023`. Its density at the Sun is $M_{\rm halo}$ divided by the integral of its shape over that range, $5.4 \times 10^{-5}\ M_\odot\,{\rm pc}^{-3}$ with the defaults. Its ratio to the thin disk divides that by the thin disk's local density in living stars, $\rho_{\rm thin,\odot} = 0.030\ M_\odot\,{\rm pc}^{-3}$ (`rho_thin_solar`; {cite:t}`everall2022` find 0.032 including brown dwarfs and stars below 0.1 $M_\odot$), so $f_{\rm halo} = 1.8 \times 10^{-3}$. The ratio is of masses; brutus uses it as a ratio of star counts.
 
 | Component | Shape | Local fraction $f_c$ | [Fe/H] | Mean age | Age spread |
 |---|---|---|---|---|---|
 | Thin disk | $h_R = 2.6$ kpc, $\sigma_z$ by age | 1 | $-0.2 \pm 0.3$ | 4.9 Gyr | 4.0 Gyr |
 | Thick disk | $h_R = 2.0$ kpc, $\sigma_z = 43.6$ km/s | 0.055 (surface ratio 0.18) | $-0.7 \pm 0.4$ | 8.3 Gyr | 2.8 Gyr |
-| Halo | $\eta = 4.2$, $q_0 = 0.2$, $q_\infty = 0.8$, $r_q = 6$ kpc | 0.005 | $-1.6 \pm 0.5$ | 12.4 Gyr | 1.0 Gyr |
+| Halo | $\eta_{\rm in} = 2.85$, $\eta_{\rm out} = 4.55$, $r_b = 19.1$ kpc, $q = 0.77$ | 0.0018 (mass $7.5 \times 10^8\ M_\odot$) | $-1.6 \pm 0.5$ | 12.4 Gyr | 1.0 Gyr |
 
 All components use $R_s = 2$ kpc.
 
@@ -107,7 +107,7 @@ All components use $R_s = 2$ kpc.
 ```
 
 :::{div} figure-caption
-The density and volume terms of the default Galactic prior, per unit $\ln d$, the variable that brutus samples. The metallicity and age terms are left out, so a given grid model's prior can differ. Left: each sightline scaled to a peak of 1. Right: the b = 30° total and its components, scaled by the total's peak. The growing volume pushes the peak out to 10 to 20 kpc. Off the plane, the disks add a second peak at 2 to 4 kpc: at b = 30° it is the higher one, and at b = 90° it is 0.47 times the halo peak. The likelihood usually confines the distance far more than this.
+The density and volume terms of the default Galactic prior, per unit $\ln d$, the variable that brutus samples. The metallicity and age terms are left out, so a given grid model's prior can differ. Left: each sightline scaled to a peak of 1. Right: the b = 30° total and its components, scaled by the total's peak. The growing volume pushes the peak out to 10 to 20 kpc. Off the plane, the disks add a second peak at 2 to 4 kpc: at b = 30° it is the higher one, and at b = 90° it is 0.28 times the halo peak. The likelihood usually confines the distance far more than this.
 :::
 
 **Metallicity.** When the labels include `feh`, each component has a Gaussian [Fe/H] distribution (the table). The components are weighted by their density at the star's position. A metal-poor star near the Sun is therefore more likely to belong to the halo.

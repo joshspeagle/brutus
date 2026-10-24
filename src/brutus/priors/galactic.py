@@ -155,6 +155,35 @@ def _disk_column_heights(
     return float(np.dot(w, thin) / w.sum()), float(thick)
 
 
+# Radial range of the halo mass of Lane et al. (2023), in kpc, and the
+# Gauss-Legendre nodes per axis of the halo volume integral (relative error
+# below 1e-6 for the default shape).
+_HALO_MASS_RADII = (2.0, 70.0)
+_HALO_NODES = 200
+
+
+@jit(nopython=True, cache=True)
+def _halo_shape(R, Z, Rs, eta_inner, eta_outer, r_break, q):
+    """Return ln n_halo up to a constant, for scalars or arrays."""
+    ln_m = 0.5 * np.log(R**2 + (Z / q) ** 2 + Rs**2)
+    return -eta_inner * ln_m - (eta_outer - eta_inner) * np.maximum(
+        ln_m - log(r_break), 0.0
+    )
+
+
+@lru_cache(maxsize=16)
+def _halo_volume(shape):
+    """Return the integral of exp(_halo_shape) over _HALO_MASS_RADII in kpc^3,
+    by Gauss-Legendre quadrature in ln r and cos(theta)."""
+    a, b = _HALO_MASS_RADII
+    x, w = np.polynomial.legendre.leggauss(_HALO_NODES)
+    mu, w_mu = 0.5 * (x + 1.0), 0.5 * w  # cos(theta) on [0, 1]
+    half = 0.5 * log(b / a)
+    r = np.exp(half * x + 0.5 * log(a * b))[:, None]
+    f = np.exp(_halo_shape(r * np.sqrt(1.0 - mu**2), r * mu, *shape)) * r**3
+    return float(4.0 * pi * half * (w @ (f @ w_mu)))
+
+
 @jit(nopython=True, cache=True)
 def _vertical_solar(abs_Z_solar, rot):
     """Return what ``_disk_vertical_terms`` needs that is fixed per call, as
@@ -295,10 +324,10 @@ def _galactic_prior_fused(
     age_ln_w,
     # Halo
     Rs_halo,
-    eta_halo,
-    q_halo_ctr,
-    q_halo_inf,
-    r_q_halo,
+    eta_halo_inner,
+    eta_halo_outer,
+    r_break_halo,
+    q_halo,
     f_halo,
     # Metallicity
     feh_thin_mean,
@@ -334,12 +363,14 @@ def _galactic_prior_fused(
     # --- Loop-invariant constants (hoisted out of the prange loop) ---
 
     # Solar halo normalization
-    r_solar = sqrt(R_solar**2 + Z_solar**2)
-    r_prime_solar = sqrt(r_solar**2 + r_q_halo**2)
-    q_solar = q_halo_inf - (q_halo_inf - q_halo_ctr) * exp(
-        1.0 - r_prime_solar / r_q_halo
+    halo = (
+        Rs_halo,
+        eta_halo_inner,
+        eta_halo_outer,
+        r_break_halo,
+        q_halo,
     )
-    R_eff_solar_halo = sqrt(R_solar**2 + (Z_solar / q_solar) ** 2 + Rs_halo**2)
+    ln_halo_solar = _halo_shape(R_solar, Z_solar, *halo)
 
     # Solar disk normalizations use the SMOOTHED solar radius so the disk
     # density is exactly 1 at the solar position (consistent with the halo
@@ -424,11 +455,7 @@ def _galactic_prior_fused(
         )
 
         # Halo
-        r = sqrt(R**2 + Z**2)
-        r_prime = sqrt(r**2 + r_q_halo**2)
-        q = q_halo_inf - (q_halo_inf - q_halo_ctr) * exp(1.0 - r_prime / r_q_halo)
-        R_eff_halo = sqrt(R**2 + (Z / q) ** 2 + Rs_halo**2)
-        lnp_halo = -eta_halo * log(R_eff_halo / R_eff_solar_halo) + vol + ln_f_halo
+        lnp_halo = _halo_shape(R, Z, *halo) - ln_halo_solar + vol + ln_f_halo
 
         # logsumexp3
         mx = max(lnp_thin, max(lnp_thick, lnp_halo))
@@ -623,16 +650,29 @@ def logn_halo(
     R_solar=8.2,
     Z_solar=0.025,
     R_smooth=2.0,
-    eta=4.2,
-    q_ctr=0.2,
-    q_inf=0.8,
-    r_q=6.0,
+    eta_inner=2.85,
+    eta_outer=4.55,
+    r_break=19.1,
+    q=0.77,
 ):
     r"""
-    Log-number density for the Galactic halo stellar population.
+    Return the log-number density of the stellar halo relative to the Sun.
 
-    Implements a flattened power-law halo model with radius-dependent
-    oblateness following observational constraints.
+    The halo is the broken power law of Amarante et al. (2024) in a
+    flattened radius, with a core:
+
+    .. math::
+        \ln n_{\rm halo} = -\eta_{\rm in} \ln m
+        - (\eta_{\rm out} - \eta_{\rm in}) \max(\ln (m / r_b), 0)
+        - (\ldots)_\odot,
+        \qquad
+        m = \sqrt{R^2 + (Z/q)^2 + R_{\rm smooth}^2},
+
+    Amarante et al. set q = 0.77 inside a Galactocentric radius of 30 kpc
+    and 0.99 beyond. That step raises the density along the poles by a
+    factor of 3.1 at 30 kpc and adds a false distance peak toward high
+    latitudes, so q is 0.77 everywhere; 90% of the 2 to 70 kpc mass lies
+    inside 30 kpc.
 
     Parameters
     ----------
@@ -645,70 +685,43 @@ def logn_halo(
     Z_solar : float, optional
         Solar height above midplane in kpc. Default is 0.025.
     R_smooth : float, optional
-        Smoothing radius to avoid central singularity in kpc. Default is 2.0.
-    eta : float, optional
-        Power-law index for halo density profile. Default is 4.2.
-    q_ctr : float, optional
-        Halo oblateness at Galactic center. Default is 0.2.
-    q_inf : float, optional
-        Halo oblateness at large radii. Default is 0.8.
-    r_q : float, optional
-        Scale radius for oblateness transition in kpc. Default is 6.0.
+        Core radius in kpc, which keeps the density finite at the Galactic
+        centre. Default is 2.0.
+    eta_inner, eta_outer : float, optional
+        Power-law slopes inside and outside ``r_break``. Defaults are 2.85
+        and 4.55.
+    r_break : float, optional
+        Break radius of the flattened radius ``m`` in kpc. Default is 19.1.
+    q : float, optional
+        Flattening, the ratio of the vertical to the radial axis. Default
+        is 0.77.
 
     Returns
     -------
-    logn : array_like
-        Normalized log-number density relative to Solar neighborhood.
+    logn : numpy.ndarray
+        Log-number density, 0 at the Sun.
 
     See Also
     --------
     logn_disk : Disk number density
     logp_galactic_structure : Combined disk+halo model
 
-    Notes
-    -----
-    The halo follows a flattened power-law profile:
-
-    .. math::
-        n_{\text{halo}}(R, Z) \propto R_{\text{eff}}^{-\eta}
-
-    where the effective radius includes radius-dependent flattening:
-
-    .. math::
-        R_{\text{eff}} = \sqrt{R^2 + (Z/q)^2 + R_{\text{smooth}}^2}
-
-        q(r) = q_\infty - (q_\infty - q_{\text{ctr}}) e^{1 - r'/r_q}
-
-        r' = \sqrt{r^2 + r_q^2}, \quad r = \sqrt{R^2 + Z^2}
-
     References
     ----------
-    Bland-Hawthorn & Gerhard (2016) - The Galaxy in Context
-    Bell et al. (2008) - Stellar Halo Properties from SDSS
+    Amarante, Koposov & Laporte (2024), A&A (arXiv:2404.09825)
+    Lane, Bovy & Mackereth (2023), MNRAS (arXiv:2306.03084)
     """
-    R = np.asarray(R)
-    Z = np.asarray(Z)
-
-    # Spherical radius from Galactic center
-    r = np.sqrt(R**2 + Z**2)
-
-    # Radius-dependent oblateness
-    r_prime = np.sqrt(r**2 + r_q**2)
-    q = q_inf - (q_inf - q_ctr) * np.exp(1.0 - r_prime / r_q)
-
-    # Effective radius with flattening and smoothing
-    R_eff = np.sqrt(R**2 + (Z / q) ** 2 + R_smooth**2)
-
-    # Solar normalization values
-    r_solar = np.sqrt(R_solar**2 + Z_solar**2)
-    r_prime_solar = np.sqrt(r_solar**2 + r_q**2)
-    q_solar = q_inf - (q_inf - q_ctr) * np.exp(1.0 - r_prime_solar / r_q)
-    R_eff_solar = np.sqrt(R_solar**2 + (Z_solar / q_solar) ** 2 + R_smooth**2)
-
-    # Power-law halo profile
-    logn = -eta * np.log(R_eff / R_eff_solar)
-
-    return logn
+    shape = (
+        float(R_smooth),
+        float(eta_inner),
+        float(eta_outer),
+        float(r_break),
+        float(q),
+    )
+    R, Z = np.broadcast_arrays(np.asarray(R, dtype=float), np.asarray(Z, dtype=float))
+    return _halo_shape(R, Z, *shape) - _halo_shape(
+        float(R_solar), float(Z_solar), *shape
+    )
 
 
 def logp_feh(feh, feh_mean=-0.2, feh_sigma=0.3):
@@ -863,14 +876,26 @@ def _normalizations(
     v_circ_solar,
     thick_sigma_z,
     thick_R_sigma,
+    Rs_halo,
+    eta_halo_inner,
+    eta_halo_outer,
+    r_break_halo,
+    q_halo,
+    halo_mass,
+    rho_thin_solar,
 ):
-    """Return the rotation, thick-disk and age arguments of the vertical
-    profiles, and the normalizations that `galactic_prior_summary` reports."""
+    """Return the rotation, thick-disk, age and halo-shape arguments of the
+    components, and the normalizations that `galactic_prior_summary`
+    reports."""
     _check_positive(
         f_thick_surface=f_thick_surface,
         feh_thin_sigma=feh_thin_sigma,
         thick_sigma_z=thick_sigma_z,
         thick_R_sigma=thick_R_sigma,
+        r_break_halo=r_break_halo,
+        q_halo=q_halo,
+        halo_mass=halo_mass,
+        rho_thin_solar=rho_thin_solar,
     )
     rot = (float(R_solar), _vc_solar(v_circ_solar, R_solar))
     thick = (float(thick_sigma_z) ** 2, float(thick_R_sigma))
@@ -897,12 +922,33 @@ def _normalizations(
         float(feh_thin_sigma),
         age_args,
     )
+    halo = tuple(
+        map(
+            float,
+            (
+                Rs_halo,
+                eta_halo_inner,
+                eta_halo_outer,
+                r_break_halo,
+                q_halo,
+            ),
+        )
+    )
+    # Msun/kpc^3 to Msun/pc^3.
+    rho_halo = float(
+        float(halo_mass)
+        * exp(_halo_shape(rot[0], float(Z_solar), *halo))
+        / _halo_volume(halo)
+        / 1e9
+    )
     summary = dict(
         thin_column_height=h_thin,
         thick_column_height=h_thick,
         f_thick_solar=float(f_thick_surface) * h_thin / h_thick,
+        halo_density_solar=rho_halo,
+        f_halo_solar=rho_halo / float(rho_thin_solar),
     )
-    return rot, thick, age_args, summary
+    return rot, thick, age_args, halo, summary
 
 
 def logp_galactic_structure(
@@ -919,11 +965,12 @@ def logp_galactic_structure(
     f_thick_surface=0.18,
     Rs_thick=2.0,
     Rs_halo=2.0,
-    q_halo_ctr=0.2,
-    q_halo_inf=0.8,
-    r_q_halo=6.0,
-    eta_halo=4.2,
-    f_halo=0.005,
+    eta_halo_inner=2.85,
+    eta_halo_outer=4.55,
+    r_break_halo=19.1,
+    q_halo=0.77,
+    halo_mass=7.5e8,
+    rho_thin_solar=0.030,
     feh_thin=-0.2,
     feh_thin_sigma=0.3,
     feh_thick=-0.7,
@@ -987,17 +1034,21 @@ def logp_galactic_structure(
     Rs_thick : float, optional
         Thick disk smoothing radius in kpc. Default is 2.0.
     Rs_halo : float, optional
-        Halo smoothing radius in kpc. Default is 2.0.
-    q_halo_ctr : float, optional
-        Halo central oblateness. Default is 0.2.
-    q_halo_inf : float, optional
-        Halo asymptotic oblateness. Default is 0.8.
-    r_q_halo : float, optional
-        Halo oblateness transition radius in kpc. Default is 6.0.
-    eta_halo : float, optional
-        Halo power-law index. Default is 4.2.
-    f_halo : float, optional
-        Halo relative normalization. Default is 0.005.
+        Halo core radius in kpc. Default is 2.0.
+    eta_halo_inner, eta_halo_outer, r_break_halo : float, optional
+        Halo slopes inside and outside the break radius in kpc. Defaults
+        are 2.85, 4.55 and 19.1 (Amarante et al. 2024).
+    q_halo : float, optional
+        Halo flattening. Default is 0.77 (Amarante et al. 2024).
+    halo_mass : float, optional
+        Halo stellar mass in Msun between Galactocentric radii of 2 and
+        70 kpc. Default is 7.5e8, the middle of
+        the 6.7e8 to 8.4e8 of Lane et al. (2023).
+    rho_thin_solar : float, optional
+        Thin-disk stellar mass density at the Sun in Msun/pc^3, in living
+        stars. Default is 0.030. With ``halo_mass`` and the halo shape it
+        sets the halo to thin-disk density ratio at the Sun;
+        `galactic_prior_summary` returns it.
     feh_thin : float, optional
         Thin disk mean metallicity in dex. Default is -0.2.
     feh_thin_sigma : float, optional
@@ -1088,6 +1139,10 @@ def logp_galactic_structure(
     density is ``f_thick_surface`` times that of the thin disk, times the
     ratio of their column heights (thin over thick). The thin-disk column
     height averages the profile over the thin-disk age and [Fe/H] priors.
+    The halo is normalized by its mass: its density at the Sun is
+    ``halo_mass`` divided by the integral of its shape (`logn_halo`) over
+    2 to 70 kpc, and its ratio to the thin disk divides that by
+    ``rho_thin_solar``.
 
     Each component has distinct spatial, metallicity, and age distributions
     calibrated from observations. The model accounts for:
@@ -1169,7 +1224,7 @@ def logp_galactic_structure(
 
     # Vertical profiles: the rotation curve, the thick disk dispersion and,
     # without an age, the nodes of the thin-disk age average.
-    rot, thick, age_args, summary = _normalizations(
+    rot, thick, age_args, halo, summary = _normalizations(
         R_solar=R_solar,
         Z_solar=Z_solar,
         R_thin=R_thin,
@@ -1187,8 +1242,16 @@ def logp_galactic_structure(
         v_circ_solar=v_circ_solar,
         thick_sigma_z=thick_sigma_z,
         thick_R_sigma=thick_R_sigma,
+        Rs_halo=Rs_halo,
+        eta_halo_inner=eta_halo_inner,
+        eta_halo_outer=eta_halo_outer,
+        r_break_halo=r_break_halo,
+        q_halo=q_halo,
+        halo_mass=halo_mass,
+        rho_thin_solar=rho_thin_solar,
     )
     f_thick = summary["f_thick_solar"]
+    f_halo = summary["f_halo_solar"]
     if loga is None:
         age_nodes = _thin_age_nodes(float(feh_thin), age_args)
     else:
@@ -1232,11 +1295,7 @@ def logp_galactic_structure(
             *rot[1:],
             *thick,
             *age_nodes,
-            Rs_halo,
-            eta_halo,
-            q_halo_ctr,
-            q_halo_inf,
-            r_q_halo,
+            *halo,
             f_halo,
             feh_thin,
             feh_thin_sigma,
@@ -1290,17 +1349,7 @@ def logp_galactic_structure(
     logp_thick += thick_z.reshape(R.shape) + vol_factor + np.log(f_thick)
 
     # Halo component
-    logp_halo = logn_halo(
-        R,
-        Z,
-        R_solar=R_solar,
-        Z_solar=Z_solar,
-        R_smooth=Rs_halo,
-        eta=eta_halo,
-        q_ctr=q_halo_ctr,
-        q_inf=q_halo_inf,
-        r_q=r_q_halo,
-    )
+    logp_halo = _halo_shape(R, Z, *halo) - _halo_shape(rot[0], float(Z_solar), *halo)
     logp_halo += vol_factor + np.log(f_halo)
 
     # Combined number density prior
@@ -1380,14 +1429,23 @@ def galactic_prior_summary(**kwargs):
     .. math::
         f_{\rm thick} = f_{\Sigma} \, \frac{h_{\rm thin}}{h_{\rm thick}}.
 
+    The halo density at the Sun is its mass over the volume integral of
+    its shape between Galactocentric radii of 2 and 70 kpc, and its ratio
+    to the thin disk is
+
+    .. math::
+        f_{\rm halo} = \frac{M_{\rm halo}}{\rho_{\rm thin,\odot}
+        \int_{r_1}^{r_2} n_{\rm halo}\, dV}.
+
     Parameters
     ----------
     **kwargs
         Keywords of `logp_galactic_structure` that set the normalizations:
         ``R_solar``, ``Z_solar``, ``R_thin``, ``Rs_thin``,
         ``f_thick_surface``, ``feh_thin``, ``feh_thin_sigma``, the age
-        keywords, ``v_circ_solar``, ``thick_sigma_z`` and
-        ``thick_R_sigma``. Omitted keywords take its defaults.
+        keywords, ``v_circ_solar``, ``thick_sigma_z``, ``thick_R_sigma``,
+        the halo-shape keywords, ``halo_mass`` and ``rho_thin_solar``.
+        Omitted keywords take its defaults.
 
     Returns
     -------
@@ -1395,7 +1453,8 @@ def galactic_prior_summary(**kwargs):
         ``thin_column_height`` and ``thick_column_height`` in kpc (the thin
         disk averaged over its age and [Fe/H] priors) and
         ``f_thick_solar`` (the thick- to thin-disk density ratio at the
-        Sun's position).
+        Sun's position), ``halo_density_solar`` in Msun/pc^3 and
+        ``f_halo_solar`` (the halo to thin-disk density ratio at the Sun).
 
     Raises
     ------
@@ -1403,13 +1462,17 @@ def galactic_prior_summary(**kwargs):
         If a keyword does not set a normalization.
     ValueError
         If ``f_thick_surface``, ``feh_thin_sigma``, ``thick_sigma_z``,
-        ``thick_R_sigma`` or ``v_circ_solar`` is not positive and finite.
+        ``thick_R_sigma``, ``v_circ_solar``, ``r_break_halo``,
+        ``q_halo``, ``halo_mass`` or ``rho_thin_solar`` is not positive
+        and finite.
 
     Examples
     --------
     >>> from brutus.priors import galactic_prior_summary
     >>> round(galactic_prior_summary()["f_thick_solar"], 3)
     0.055
+    >>> round(galactic_prior_summary()["f_halo_solar"], 5)
+    0.00181
     """
     unknown = set(kwargs) - set(_NORMALIZATION_KEYS)
     if unknown:
@@ -1417,7 +1480,7 @@ def galactic_prior_summary(**kwargs):
             f"galactic_prior_summary() got keywords that set no "
             f"normalization: {sorted(unknown)}."
         )
-    return _normalizations(**{**_NORMALIZATION_DEFAULTS, **kwargs})[3]
+    return _normalizations(**{**_NORMALIZATION_DEFAULTS, **kwargs})[4]
 
 
 _NORMALIZATION_KEYS = tuple(inspect.signature(_normalizations).parameters)

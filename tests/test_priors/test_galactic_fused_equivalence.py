@@ -24,6 +24,7 @@ from numba import jit, prange
 
 from brutus.priors.galactic import (
     _disk_vertical_array,
+    _halo_shape,
     _thin_age_nodes,
     galactic_prior_summary,
     logp_galactic_structure,
@@ -52,11 +53,7 @@ def reference_kernel(
     R_thick,
     Rs_thick,
     f_thick,
-    Rs_halo,
-    eta_halo,
-    q_halo_ctr,
-    q_halo_inf,
-    r_q_halo,
+    halo,
     f_halo,
     feh_thin_mean,
     feh_thin_sigma,
@@ -77,12 +74,6 @@ def reference_kernel(
     N = len(dists)
     logp_out = np.empty(N)
 
-    r_solar = sqrt(R_solar**2 + Z_solar**2)
-    r_prime_solar = sqrt(r_solar**2 + r_q_halo**2)
-    q_solar = q_halo_inf - (q_halo_inf - q_halo_ctr) * exp(
-        1.0 - r_prime_solar / r_q_halo
-    )
-    R_eff_solar_halo = sqrt(R_solar**2 + (Z_solar / q_solar) ** 2 + Rs_halo**2)
     R_solar_eff_thin = sqrt(R_solar**2 + Rs_thin**2)
     R_solar_eff_thick = sqrt(R_solar**2 + Rs_thick**2)
 
@@ -104,11 +95,12 @@ def reference_kernel(
             + log(f_thick)
         )
 
-        r = sqrt(R**2 + Z**2)
-        r_prime = sqrt(r**2 + r_q_halo**2)
-        q = q_halo_inf - (q_halo_inf - q_halo_ctr) * exp(1.0 - r_prime / r_q_halo)
-        R_eff_halo = sqrt(R**2 + (Z / q) ** 2 + Rs_halo**2)
-        lnp_halo = -eta_halo * log(R_eff_halo / R_eff_solar_halo) + vol + log(f_halo)
+        lnp_halo = (
+            _halo_shape(R, Z, *halo)
+            - _halo_shape(R_solar, Z_solar, *halo)
+            + vol
+            + log(f_halo)
+        )
 
         mx = max(lnp_thin, max(lnp_thick, lnp_halo))
         logp_total = mx + log(
@@ -225,6 +217,7 @@ def reference_kernel(
     return logp_out
 
 
+_SUMMARY = galactic_prior_summary()
 DEFAULT_ARGS = dict(
     R_solar=8.2,
     Z_solar=0.025,
@@ -232,13 +225,9 @@ DEFAULT_ARGS = dict(
     Rs_thin=2.0,
     R_thick=2.0,
     Rs_thick=2.0,
-    f_thick=galactic_prior_summary()["f_thick_solar"],
-    Rs_halo=2.0,
-    eta_halo=4.2,
-    q_halo_ctr=0.2,
-    q_halo_inf=0.8,
-    r_q_halo=6.0,
-    f_halo=0.005,
+    f_thick=_SUMMARY["f_thick_solar"],
+    halo=(2.0, 2.85, 4.55, 19.1, 0.77),
+    f_halo=_SUMMARY["f_halo_solar"],
     feh_thin_mean=-0.2,
     feh_thin_sigma=0.3,
     feh_thick_mean=-0.7,

@@ -249,6 +249,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   positive, so the thick disk can no longer be switched off with 0. The new
   `brutus.priors.galactic_prior_summary` returns the derived
   normalizations (#288).
+- **The halo is a broken power law normalized by its mass**
+  *(output-changing)*. `logn_halo` and the halo of
+  `logp_galactic_structure` follow Amarante et al. (2024): slopes 2.85
+  and 4.55 either side of 19.1 kpc and a flattening of 0.77, with the
+  2 kpc core. This replaces the slope of 4.2 and the flattening that
+  rose from 0.2 to 0.8. `halo_mass`, 7.5e8 Msun between 2 and 70 kpc
+  (Lane et al. 2023), and `rho_thin_solar`, 0.030 Msun/pc^3, replace
+  `f_halo` (0.005); the derived halo to thin-disk ratio at the Sun is
+  0.0018. `eta_halo`, `q_halo_ctr`, `q_halo_inf` and `r_q_halo` are
+  replaced by `eta_halo_inner`, `eta_halo_outer`, `r_break_halo` and
+  `q_halo`, and `galactic_prior_summary` reports `halo_density_solar`
+  and `f_halo_solar` (#290).
 - **`load_models` keeps constant grid labels.** It returned no `afe` column
   for a single-afe grid under the default labels, and no `smf` column
   without `include_binaries`. Both are now one-value columns, so

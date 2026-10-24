@@ -69,7 +69,8 @@ def _phi(abs_z, S):
 
 
 _AGE_ARGS = (13.8, 0.0, -0.5, 0.5, 2.0, 4.0, 1.0)
-_F_THICK = gal.galactic_prior_summary()["f_thick_solar"]
+_SUMMARY = gal.galactic_prior_summary()
+_F_THICK, _F_HALO = _SUMMARY["f_thick_solar"], _SUMMARY["f_halo_solar"]
 
 
 def _no_age_thin(R, abs_Z, feh, age_args=_AGE_ARGS):
@@ -160,7 +161,7 @@ class TestGalacticPriors:
         zs = np.array([2.0, 2.0])
 
         logn_default = logn_halo(distances, zs)
-        logn_custom = logn_halo(distances, zs, eta=2.8, q_inf=0.8)
+        logn_custom = logn_halo(distances, zs, eta_inner=3.5, q=0.6)
 
         # Should produce different results
         assert not np.allclose(logn_default, logn_custom)
@@ -420,7 +421,7 @@ class TestJointFehAgePrior:
         # (feh_mean, feh_sigma, ln_f)
         (-0.2, 0.3, 0.0),
         (-0.7, 0.4, np.log(_F_THICK)),
-        (-1.6, 0.5, np.log(0.005)),
+        (-1.6, 0.5, np.log(_F_HALO)),
     ]
 
     def _expected_joint(self, dists, feh, loga):
@@ -716,7 +717,7 @@ class TestVerticalJeans:
             rtol=1e-12,
         )
         np.testing.assert_allclose(
-            halo, logn_halo(R, np.full_like(R, 0.025)) + vol + np.log(0.005)
+            halo, logn_halo(R, np.full_like(R, 0.025)) + vol + np.log(_F_HALO)
         )
         fused = logp_galactic_structure(d, (30.0, 0.0), **kw)
         np.testing.assert_allclose(fused, lnp, rtol=1e-12)
@@ -865,17 +866,28 @@ class TestThickDiskSurfaceNormalization:
 
     @pytest.mark.parametrize(
         "kwargs",
-        [{}, {"thick_sigma_z": 35.0}, {"feh_thin": -0.5}, {"f_thick_surface": 0.3}],
+        [
+            {},
+            {"thick_sigma_z": 35.0},
+            {"feh_thin": -0.5},
+            {"f_thick_surface": 0.3},
+            {"halo_mass": 1e9, "q_halo": 0.6},
+        ],
     )
-    def test_prior_at_the_sun_uses_the_derived_thick_disk_fraction(self, kwargs):
-        # Toward the north Galactic pole at 1 mpc, both disks are at the
-        # Sun's position, where each profile is 1.
+    def test_prior_at_the_sun_uses_the_derived_fractions(self, kwargs):
+        # Toward the north Galactic pole at 1 mpc, every component is at
+        # the Sun's position, where each profile is 1.
         _, comp = logp_galactic_structure(
             np.array([1e-6]), (0.0, 90.0), return_components=True, **kwargs
         )
-        thin, thick, _ = comp["number_density"]
-        f_thick = gal.galactic_prior_summary(**kwargs)["f_thick_solar"]
-        np.testing.assert_allclose(np.exp(thick - thin), f_thick, rtol=1e-5)
+        thin, thick, halo = comp["number_density"]
+        summary = gal.galactic_prior_summary(**kwargs)
+        np.testing.assert_allclose(
+            np.exp(thick - thin), summary["f_thick_solar"], rtol=1e-5
+        )
+        np.testing.assert_allclose(
+            np.exp(halo - thin), summary["f_halo_solar"], rtol=1e-5
+        )
 
     def test_summary_rejects_keywords_that_set_no_normalization(self):
         with pytest.raises(TypeError, match="f_halo"):
@@ -887,8 +899,46 @@ class TestThickDiskSurfaceNormalization:
             {"f_thick_surface": 0.0},
             {"f_thick_surface": np.inf},
             {"feh_thin_sigma": np.nan},
+            {"halo_mass": 0.0},
+            {"rho_thin_solar": -0.03},
         ],
     )
     def test_invalid_normalization_inputs_raise(self, kwargs):
         with pytest.raises(ValueError, match=next(iter(kwargs))):
             logp_galactic_structure(np.array([1.0]), (0.0, 90.0), **kwargs)
+
+
+class TestHaloShapeAndMass:
+    """The halo is the Amarante et al. (2024) broken power law, normalized
+    by the Lane et al. (2023) mass over 2 to 70 kpc."""
+
+    def test_halo_matches_the_broken_power_law(self):
+        # Points inside and beyond the break.
+        R = np.array([4.0, 8.2, 15.0, 25.0, 10.0, 40.0])
+        Z = np.array([3.0, 0.025, 12.0, 5.0, 35.0, 20.0])
+        m = np.sqrt(R**2 + (Z / 0.77) ** 2 + 4.0)
+        ln_n = np.where(
+            m < 19.1, -2.85 * np.log(m), -2.85 * np.log(19.1) - 4.55 * np.log(m / 19.1)
+        )
+        m_sun = np.sqrt(8.2**2 + (0.025 / 0.77) ** 2 + 4.0)
+        np.testing.assert_allclose(
+            logn_halo(R, Z), ln_n + 2.85 * np.log(m_sun), rtol=1e-12
+        )
+
+    def test_halo_density_integrates_to_the_halo_mass(self):
+        # An adaptive integral in cylindrical (R, Z), independent of the
+        # Gauss-Legendre nodes in (ln r, cos theta).
+        rho = _SUMMARY["halo_density_solar"] * 1e9  # Msun / kpc^3
+
+        def column(R):
+            z_lo = np.sqrt(max(4.0 - R**2, 0.0))
+            z_hi = np.sqrt(70.0**2 - R**2)
+            return quad(lambda z: np.exp(logn_halo(R, z)), z_lo, z_hi, limit=200)[0]
+
+        mass = (
+            4.0
+            * np.pi
+            * rho
+            * quad(lambda R: R * column(R), 0.0, 70.0, points=[2.0], limit=200)[0]
+        )
+        np.testing.assert_allclose(mass, 7.5e8, rtol=1e-4)
