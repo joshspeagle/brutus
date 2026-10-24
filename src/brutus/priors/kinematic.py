@@ -354,7 +354,9 @@ def _thin_disk_L_refs(R_solar, vc_solar):
 def _thin_disk_fade(R):
     """Return the weight of the thin-disk dispersion gradient in the Jeans
     equation: 1 inside THIN_DISK_R_RANGE, 0 more than DISK_EDGE outside."""
-    return _soft_clamp(R, THIN_DISK_R_RANGE[0], THIN_DISK_R_RANGE[1], DISK_EDGE)[1]
+    lo, hi = THIN_DISK_R_RANGE
+    half = 0.5 * DISK_EDGE
+    return _soft_clamp(R, lo - half, hi + half, half)[1]
 
 
 @jit(nopython=True, cache=True)
@@ -368,8 +370,8 @@ def _thin_disk_radial(
     sigma_phi^2 / sigma_R^2 = (1 + d ln v_c / d ln R) / 2, and
     d ln L_z / d ln R is taken as that of a circular orbit, 1 + d ln v_c /
     d ln R. The derivative of the mean L_z itself would raise v_phi by at
-    most 3.3 km/s at 3-20 kpc and |z| <= 1 kpc (old, metal-poor stars near
-    4 kpc, where v_c changes fastest) and by at most 0.54 km/s at the Sun,
+    most 2.6 km/s at 3-20 kpc and |z| <= 1 kpc (old, metal-poor stars near
+    3.8 kpc, where v_c changes fastest) and by at most 0.54 km/s at the Sun,
     for R_solar = 8.2 kpc. Outside THIN_DISK_R_RANGE the gradient term
     fades out in R by ``fade`` from ``_thin_disk_fade``: a population that
     lags keeps an L_z below the clamp a little beyond 20 kpc, and the
@@ -646,10 +648,15 @@ def thin_disk_velocity_moments(
     :math:`\bar{v}_\phi` from the Jeans equation below (two steps of the
     fixed point from the circular :math:`L_z = R\,v_c`). The relations
     were fitted at 3 < R < 20 kpc. Outside those radii the dispersions
-    keep their edge values, blended in within 1 kpc of each edge so that
-    :math:`\bar{v}_\phi` stays continuous: :math:`L_z` is clamped to the
-    circular :math:`L_z` at the edges, and the dispersion gradient in the
-    Jeans equation fades out in R. The azimuthal dispersion follows the
+    keep their edge values, blended in so that :math:`\bar{v}_\phi` stays
+    continuous: :math:`L_z` is clamped to the circular :math:`L_z` at the
+    edges with a quadratic blend 1 kpc :math:`\times\,v_{c,\odot}` wide in
+    :math:`L_z`, and the dispersion gradient in the Jeans equation fades
+    out within 1 kpc outside the radii. A population that lags reaches the
+    outer clamp further out, at 22.8 kpc for 5 Gyr and [Fe/H] = 0 and at
+    25.6 kpc for 13.8 Gyr and [Fe/H] = -1; beyond 21 kpc its dispersions
+    still change a little, by up to 0.5 km/s in :math:`\bar{v}_\phi`
+    through the missing gradient. The azimuthal dispersion follows the
     epicyclic ratio
     :math:`\sigma_\phi^2 / \sigma_R^2 = (1 + d\ln v_c / d\ln R) / 2`.
 
@@ -667,8 +674,8 @@ def thin_disk_velocity_moments(
     each scaled to :math:`v_{c,\odot}` at :math:`R_\odot`
     (``rotation_curve.dat``). It smooths over 1-2 kpc near the Sun, goes
     to 0 as R at the centre and is flat beyond the last measurement at
-    21 kpc. The mean rotation is
-    clipped to :math:`[0, v_c]`: the Jeans equation has no
+    21 kpc: d ln v_c / d ln R goes from -0.15 at 21 kpc to 0 by
+    23 kpc. The mean rotation is clipped to :math:`[0, v_c]`: the Jeans equation has no
     solution where the right-hand side is negative, and near the centre,
     where the density gradient vanishes, it gives rotation faster than
     circular. The model is axisymmetric, so it does not describe the bar
