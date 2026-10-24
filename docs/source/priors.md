@@ -79,13 +79,7 @@ $$
 f_{\rm thick} = f_\Sigma \, \frac{h_{\rm thin}}{h_{\rm thick}}.
 $$
 
-The thin-disk column height averages over the thin-disk age and [Fe/H] distributions. With the defaults it is 0.38 kpc, the thick disk's is 1.24 kpc, and $f_{\rm thick} = 0.055$. A change to a parameter that sets the heights, such as `thick_sigma_z` or the thin-disk mean [Fe/H], therefore keeps the surface ratio and moves the ratio at the Sun. {func}`~brutus.priors.galactic_prior_summary` returns these quantities for any parameters:
-
-```python
-from brutus.priors import galactic_prior_summary
-
-galactic_prior_summary()["f_thick_midplane"]  # 0.055
-```
+The thin-disk column height averages over the thin-disk age and [Fe/H] distributions. With the defaults it is 0.38 kpc, the thick disk's is 1.24 kpc, and $f_{\rm thick} = 0.055$. A change to a parameter that sets the heights, such as `thick_sigma_z` or the thin-disk mean [Fe/H], therefore keeps the surface ratio and moves the ratio at the Sun. {func}`~brutus.priors.galactic_prior_summary` returns these quantities for any parameters.
 
 The halo is a power law, flattened near the centre and rounder far from it:
 

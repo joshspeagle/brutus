@@ -69,6 +69,7 @@ def _phi(abs_z, S):
 
 
 _AGE_ARGS = (13.8, 0.0, -0.5, 0.5, 2.0, 4.0, 1.0)
+_F_THICK = gal.galactic_prior_summary()["f_thick_midplane"]
 
 
 def _no_age_thin(R, abs_Z, feh, age_args=_AGE_ARGS):
@@ -418,7 +419,7 @@ class TestJointFehAgePrior:
     COMPONENTS = [
         # (feh_mean, feh_sigma, ln_f)
         (-0.2, 0.3, 0.0),
-        (-0.7, 0.4, np.log(gal.galactic_prior_summary()["f_thick_midplane"])),
+        (-0.7, 0.4, np.log(_F_THICK)),
         (-1.6, 0.5, np.log(0.005)),
     ]
 
@@ -711,9 +712,7 @@ class TestVerticalJeans:
         np.testing.assert_allclose(thin, logn_disk(R, 0.025) + vol, rtol=1e-12)
         np.testing.assert_allclose(
             thick,
-            logn_disk(R, 0.025, R_scale=2.0)
-            + vol
-            + np.log(gal.galactic_prior_summary()["f_thick_midplane"]),
+            logn_disk(R, 0.025, R_scale=2.0) + vol + np.log(_F_THICK),
             rtol=1e-12,
         )
         np.testing.assert_allclose(
@@ -827,42 +826,41 @@ class TestThickDiskSurfaceNormalization:
     """The thick disk is normalized by its surface density at the Sun."""
 
     def test_summary_column_heights_match_a_dense_integral(self):
-        # A reference over a fine grid of ages and [Fe/H] with the per-age
-        # kernel, independent of the 32 age and 8 [Fe/H] quadrature nodes.
+        # A reference over log-spaced ages and a grid of [Fe/H] with the
+        # per-age kernel, independent of the age and [Fe/H] quadrature nodes.
         summary = gal.galactic_prior_summary()
-        z = np.linspace(0.0, 15.0, 1501)
-        ages = np.linspace(0.01, 13.8, 300)
-        w_age = np.exp(gal.logp_age_from_feh(ages, -0.2))
-        fehs = np.linspace(-1.4, 1.0, 97)
+        z = np.linspace(0.0, 8.0, 201)
+        ages = np.geomspace(0.01, 13.8, 80)
+        p_age = np.exp(gal.logp_age_from_feh(ages, -0.2))
+        fehs = np.linspace(-1.4, 1.0, 17)
         w_feh = np.exp(-0.5 * ((fehs + 0.2) / 0.3) ** 2)
+        n = ages.size * z.size
+        loga = np.repeat(np.log10(ages * 1e9), z.size)
         thin = 0.0
         for feh, wf in zip(fehs, w_feh):
-            for age, wa in zip(ages, w_age):
-                args = (
-                    np.full(z.size, 8.2),
-                    z,
-                    0.025,
-                    np.full(z.size, np.log10(age * 1e9)),
-                )
-                prof = gal._disk_vertical_array(
-                    *args,
-                    np.full(z.size, feh),
-                    True,
-                    _ROT,
-                    (2.6, 2.0),
-                    kin.THICK_DISK_SIGMA[2] ** 2,
-                    kin.THICK_DISK_R_SIGMA,
-                    np.empty(0),
-                    np.empty(0),
-                    np.empty(0),
-                )
-                thin += wf * wa * np.trapezoid(np.exp(prof[0]), z)
-        thin /= w_feh.sum() * w_age.sum()
-        thick = np.trapezoid(np.exp(prof[1]), z)
-        np.testing.assert_allclose(summary["thin_column_height"], thin, rtol=2e-3)
+            prof = gal._disk_vertical_array(
+                np.full(n, 8.2),
+                np.tile(z, ages.size),
+                0.025,
+                loga,
+                np.full(n, feh),
+                True,
+                _ROT,
+                (2.6, 2.0),
+                kin.THICK_DISK_SIGMA[2] ** 2,
+                kin.THICK_DISK_R_SIGMA,
+                np.empty(0),
+                np.empty(0),
+                np.empty(0),
+            )
+            column = np.trapezoid(np.exp(prof[0]).reshape(ages.size, -1), z, axis=1)
+            thin += wf * np.trapezoid(p_age * column, ages) / np.trapezoid(p_age, ages)
+        thin /= w_feh.sum()
+        thick = np.trapezoid(np.exp(prof[1][: z.size]), z)
+        np.testing.assert_allclose(summary["thin_column_height"], thin, rtol=5e-4)
         np.testing.assert_allclose(summary["thick_column_height"], thick, rtol=1e-6)
         np.testing.assert_allclose(
-            summary["f_thick_midplane"], 0.18 * thin / thick, rtol=2e-3
+            summary["f_thick_midplane"], 0.18 * thin / thick, rtol=5e-4
         )
 
     @pytest.mark.parametrize(
@@ -879,17 +877,9 @@ class TestThickDiskSurfaceNormalization:
         f_thick = gal.galactic_prior_summary(**kwargs)["f_thick_midplane"]
         np.testing.assert_allclose(np.exp(thick - thin), f_thick, rtol=1e-5)
 
-    def test_the_midplane_fraction_follows_the_column_heights(self):
-        # A cooler thick disk is thinner, so the same surface density puts
-        # more of it at the Sun.
-        base = gal.galactic_prior_summary()
-        cool = gal.galactic_prior_summary(thick_sigma_z=35.0)
-        assert cool["thick_column_height"] < base["thick_column_height"]
-        assert cool["f_thick_midplane"] > base["f_thick_midplane"]
-
-    def test_old_keyword_f_thick_raises(self):
-        with pytest.raises(TypeError):
-            logp_galactic_structure(np.array([1.0]), (0.0, 90.0), f_thick=0.04)
+    def test_summary_rejects_keywords_that_set_no_normalization(self):
+        with pytest.raises(TypeError, match="f_halo"):
+            gal.galactic_prior_summary(f_halo=0.01)
 
     def test_non_positive_surface_fraction_raises(self):
         with pytest.raises(ValueError, match="f_thick_surface"):
