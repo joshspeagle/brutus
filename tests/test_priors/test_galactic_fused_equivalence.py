@@ -97,10 +97,10 @@ def reference_kernel(
         )
 
         Rs, eta_in, eta_out, r_break, q = halo
-        ln_m = 0.5 * log(R**2 + (Z / q) ** 2 + Rs**2)
+        ln_m = 0.5 * np.log(R**2 + (Z / q) ** 2 + Rs**2)
         lnp_halo = (
             -eta_in * ln_m
-            - (eta_out - eta_in) * max(ln_m - log(r_break), 0.0)
+            - (eta_out - eta_in) * np.maximum(ln_m - log(r_break), 0.0)
             + vol
             + ln_halo_amplitude
         )
