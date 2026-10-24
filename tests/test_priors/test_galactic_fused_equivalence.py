@@ -23,10 +23,11 @@ import numpy as np
 from numba import jit, prange
 
 from brutus.priors.galactic import (
+    _NORMALIZATION_DEFAULTS,
     _disk_vertical_array,
     _halo_shape,
+    _normalizations,
     _thin_age_nodes,
-    galactic_prior_summary,
     logp_galactic_structure,
 )
 from brutus.priors.kinematic import THICK_DISK_R_SIGMA, THICK_DISK_SIGMA, _vc_solar
@@ -54,7 +55,7 @@ def reference_kernel(
     Rs_thick,
     f_thick,
     halo,
-    f_halo,
+    ln_halo_amplitude,
     feh_thin_mean,
     feh_thin_sigma,
     feh_thick_mean,
@@ -95,12 +96,7 @@ def reference_kernel(
             + log(f_thick)
         )
 
-        lnp_halo = (
-            _halo_shape(R, Z, *halo)
-            - _halo_shape(R_solar, Z_solar, *halo)
-            + vol
-            + log(f_halo)
-        )
+        lnp_halo = _halo_shape(R, Z, *halo) + vol + ln_halo_amplitude
 
         mx = max(lnp_thin, max(lnp_thick, lnp_halo))
         logp_total = mx + log(
@@ -217,7 +213,7 @@ def reference_kernel(
     return logp_out
 
 
-_SUMMARY = galactic_prior_summary()
+*_, _HALO, _LN_HALO_AMPLITUDE, _SUMMARY = _normalizations(**_NORMALIZATION_DEFAULTS)
 DEFAULT_ARGS = dict(
     R_solar=8.2,
     Z_solar=0.025,
@@ -226,8 +222,8 @@ DEFAULT_ARGS = dict(
     R_thick=2.0,
     Rs_thick=2.0,
     f_thick=_SUMMARY["f_thick_solar"],
-    halo=(2.0, 2.85, 4.55, 19.1, 0.77),
-    f_halo=_SUMMARY["f_halo_solar"],
+    halo=_HALO,
+    ln_halo_amplitude=_LN_HALO_AMPLITUDE,
     feh_thin_mean=-0.2,
     feh_thin_sigma=0.3,
     feh_thick_mean=-0.7,

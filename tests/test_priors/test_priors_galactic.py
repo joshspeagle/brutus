@@ -933,12 +933,16 @@ class TestHaloShapeAndMass:
         def column(R):
             z_lo = np.sqrt(max(4.0 - R**2, 0.0))
             z_hi = np.sqrt(70.0**2 - R**2)
-            return quad(lambda z: np.exp(logn_halo(R, z)), z_lo, z_hi, limit=200)[0]
+            return quad(
+                lambda z: np.exp(logn_halo(R, z)), z_lo, z_hi, epsrel=1e-5, limit=200
+            )[0]
 
         mass = (
             4.0
             * np.pi
             * rho
-            * quad(lambda R: R * column(R), 0.0, 70.0, points=[2.0], limit=200)[0]
+            * quad(
+                lambda R: R * column(R), 0.0, 70.0, points=[2.0], epsrel=1e-5, limit=200
+            )[0]
         )
         np.testing.assert_allclose(mass, 7.5e8, rtol=1e-4)
