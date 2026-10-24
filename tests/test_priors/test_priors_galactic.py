@@ -80,6 +80,15 @@ def _no_age_thin(R, abs_Z, feh, age_args=_AGE_ARGS):
     return gal._disk_vertical_array(*args, *nodes)[0]
 
 
+def _clamp(x, lo, hi, width):
+    """The quadratic edge blend of kinematic._soft_clamp, written out."""
+    if abs(x - lo) < width:
+        return lo + (x - lo + width) ** 2 / (4 * width)
+    if abs(x - hi) < width:
+        return hi - (hi + width - x) ** 2 / (4 * width)
+    return min(max(x, lo), hi)
+
+
 def _vertical_reference(R, Z, age, feh):
     """ln nu(|Z|) - ln nu(|Z_sun|) of the thin and thick disks, with the
     vertical Jeans integral done by quadrature (an independent reference)."""
@@ -88,7 +97,7 @@ def _vertical_reference(R, Z, age, feh):
     for i in range(len(R)):
         S = np.exp(-(np.clip(R[i], 4.0, 9.0) - 8.2) / kin.VERTICAL_R_SCALE)
         L, (L_sun, L_clamp) = _mean_L(R[i], age[i], feh[i])
-        L = kin._soft_clamp(L, *L_clamp)[0]
+        L = _clamp(L, *L_clamp)
         a, lam = kin.THIN_DISK_ALPHA_L[1], kin.THIN_DISK_LAMBDA_L[1]
         f_L = (a * (L / L_sun) ** 2 + np.exp(-(L - L_sun) / lam)) / (1 + a)
         sig = (
@@ -98,9 +107,9 @@ def _vertical_reference(R, Z, age, feh):
             * f_L
         )
         thin[i] = _thin_lnnu(abs(Z[i]), S, sig) - _thin_lnnu(0.025, S, sig)
-        var = (
-            kin.THICK_DISK_SIGMA[2] ** 2
-            * kin._thick_disk_scale(R[i], kin.THICK_DISK_R_SIGMA, 8.2)[0]
+        R_thick = _clamp(R[i], *kin.THICK_DISK_R_RANGE, kin.DISK_EDGE)
+        var = kin.THICK_DISK_SIGMA[2] ** 2 * np.exp(
+            -2 * (R_thick - 8.2) / kin.THICK_DISK_R_SIGMA
         )
         thick[i] = -(_phi(abs(Z[i]), S) - _phi(0.025, S)) / var
     return thin, thick

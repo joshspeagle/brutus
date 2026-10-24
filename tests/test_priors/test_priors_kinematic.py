@@ -194,10 +194,11 @@ def test_thin_disk_dispersions_use_the_mean_angular_momentum():
         np.testing.assert_allclose(
             np.sqrt(cov[i, [0, 2], [0, 2]]),
             np.multiply(THIN_DISK_SIGMA0, (f_R, f_z)),
-            rtol=5e-3,
+            rtol=2e-3,
         )
         # Away from the clamp, the circular L_z = R v_c gives other
-        # dispersions.
+        # dispersions; near the edges the clamp flattens f_L, so the two
+        # differ by less than the tolerance above.
         f_c = kin._thin_disk_fL(R[i] * vc[i], L_solar, L_clamp)[0]
         if 4 <= R[i] <= 14:
             assert abs(f_c / f_R - 1) > 1e-2
@@ -277,8 +278,8 @@ def test_disk_rotation_stays_below_circular_and_vanishes_at_the_centre(disk):
 
 def test_disk_dispersions_keep_their_edge_values_outside_the_fitted_radii():
     # Beyond DISK_EDGE of each edge the clamp is the hard clamp. The thin
-    # disk is clamped in L_z, its mean L_z lies below the circular one, so
-    # its outer edge is reached a little beyond 21 kpc.
+    # disk is clamped in L_z, and its mean L_z lies below the circular one,
+    # so at 5 Gyr and [Fe/H] = 0 its outer clamp is reached at 22.8 kpc.
     _, cov = _thin(np.array([1.5, 0.5, 30.0, 60.0]))
     sig = np.sqrt(cov[:, [0, 2], [0, 2]])
     np.testing.assert_allclose(sig[1], sig[0], rtol=1e-12)
@@ -418,3 +419,44 @@ def test_halo_components_keep_their_spherical_ellipsoids_off_the_plane():
 def test_invalid_inputs_raise_value_error(call):
     with pytest.raises(ValueError):
         call()
+
+
+def test_thick_disk_rotation_solves_the_jeans_equation_across_the_edge_blends():
+    # 2.55-15.05 kpc spans both blends; the radii miss their ends (3, 5, 12
+    # and 14 kpc), where the second derivative jumps.
+    R = np.linspace(2.55, 15.05, 26)
+    density = dict(R_scale=2.0, R_smooth=2.0)
+    mean, cov = thick_disk_velocity_moments(R, **density)
+    dlnnu = _dln_dlnR(lambda x: np.exp(logn_disk(x, 0.0, **density)), R)
+    dlnvar = _dln_dlnR(
+        lambda x: thick_disk_velocity_moments(x, **density)[1][:, 0, 0], R
+    )
+    jeans = np.sqrt(_vc(R) ** 2 - (cov[:, 1, 1] - cov[:, 0, 0] * (1 + dlnnu + dlnvar)))
+    np.testing.assert_allclose(mean[:, 1], jeans, rtol=1e-7)
+
+
+def test_thin_disk_angular_momentum_slope_holds_through_the_clamp_blends():
+    """d ln f_L / d ln L_z from _thin_disk_fL matches finite differences,
+    also where the clamp blends in."""
+    L_solar, L_clamp = kin._thin_disk_L_refs(R_SOLAR, _vc_solar())
+    lo, hi, width = L_clamp
+    # Points inside both blends, off their ends (+-width), where the second
+    # derivative jumps.
+    t = np.linspace(-0.9, 0.9, 7) * width
+    h = 1e-6
+    for x in np.r_[lo + t, hi + t]:
+        f = [kin._thin_disk_fL(x * (1 + s), L_solar, L_clamp)[0] for s in (h, -h)]
+        fd = (np.log(f[0]) - np.log(f[1])) / (2 * h)
+        np.testing.assert_allclose(
+            kin._thin_disk_fL(x, L_solar, L_clamp)[2], fd, atol=1e-6
+        )
+
+
+def test_thin_disk_gradient_fades_only_outside_the_fitted_radii():
+    # The fade once started half a blend width inside THIN_DISK_R_RANGE.
+    lo, hi = THIN_DISK_R_RANGE
+    edge = kin.DISK_EDGE
+    inside = [kin._thin_disk_fade(r) for r in np.linspace(lo, hi, 50)]
+    outside = [kin._thin_disk_fade(r) for r in (lo - edge, 0.5, hi + edge, 40.0)]
+    np.testing.assert_array_equal(inside, 1.0)
+    np.testing.assert_array_equal(outside, 0.0)
