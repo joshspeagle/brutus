@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from astropy.coordinates import SkyCoord
 from scipy.integrate import quad
+from scipy.interpolate import CubicSpline, RectBivariateSpline
 from scipy.special import logsumexp
 
 from brutus.priors import galactic as gal
@@ -20,14 +21,14 @@ from brutus.priors import (
 from brutus.utils import truncnorm_logpdf
 from brutus.utils.math import galactic_to_galactocentric_cyl
 
-# 2 pi G in (km/s)^2 pc / Msun.
-_2PI_G = 2.0 * np.pi * 4.30091e-3
 _QUAD = dict(epsabs=1e-12, epsrel=1e-12, limit=500)
 
 
 # v_c at the Sun: the default scale of the measured rotation curve.
 _VC_SUN = kin.solar_velocity(8.2)[1] - kin.V_PEC_SUN
 _ROT = (8.2, _VC_SUN)
+# The tabulated potential scales with v_c at the Sun squared.
+_PHI_SCALE = (_VC_SUN / kin._V_VC0) ** 2
 
 
 def _vc(R):
@@ -49,23 +50,29 @@ def _mean_L(R, age, feh):
     return L, L_refs
 
 
-def _Kz(t, S):
-    """Vertical force in (km/s)^2 / pc at height t pc."""
-    D, S0, rho = kin.VERTICAL_D, kin.VERTICAL_SIGMA0, kin.VERTICAL_RHO_DM
-    return _2PI_G * (S * S0 * t / np.hypot(t, D) + 2.0 * rho * t)
+def _kz_column(i):
+    """K_z(z) at table row i, a cubic spline through the tabulated values
+    in u = asinh(z / z_scale): independent of the production Hermite
+    interpolation and of the tabulated integrals."""
+    u = np.arange(kin._V_KZ.shape[1]) * kin._V_DU
+    return CubicSpline(u, kin._V_KZ[i])
 
 
-def _thin_lnnu(abs_z, S, sig):
-    """Thin-disk ln nu(|z|) - ln nu(0) by quadrature; |z| in kpc."""
-    g = kin.THIN_DISK_GAMMA_Z[1] / 1000.0
-    z = abs_z * 1000.0
-    I = quad(lambda t: _Kz(t, S) / (1 + g * t) ** 2, 0, z, **_QUAD)[0]
-    return -2 * np.log(1 + g * z) - I / sig**2
+def _fz(t):
+    """The thin-disk sigma_z height factor, written out: 1 + gamma_z |z|,
+    with |z| held at 2 kpc through a quadratic blend over 1.5-2.5 kpc."""
+    top, w = kin.THIN_DISK_Z_MAX, kin.THIN_DISK_Z_EDGE
+    return 1 + kin.THIN_DISK_GAMMA_Z[1] * _clamp(t, -1.0, top, w)
 
 
-def _phi(abs_z, S):
-    """Vertical potential Phi(|z|) - Phi(0) by quadrature; |z| in kpc."""
-    return quad(lambda t: _Kz(t, S), 0, abs_z * 1000.0, **_QUAD)[0]
+def _column_integral(i, abs_z, weight):
+    """int_0^|z| K_z(t) weight(t) dt along table row i, by quadrature."""
+    spline = _kz_column(i)
+
+    def integrand(t):
+        return spline(np.arcsinh(t / kin._V_ZS)) * weight(t)
+
+    return quad(integrand, 0.0, abs_z, **_QUAD)[0]
 
 
 _AGE_ARGS = (13.8, 0.0, -0.5, 0.5, 2.0, 4.0, 1.0)
@@ -73,13 +80,15 @@ _SUMMARY = gal.galactic_prior_summary()
 _F_THICK, _F_HALO = _SUMMARY["f_thick_solar"], _SUMMARY["f_halo_solar"]
 
 
-def _no_age_thin(R, abs_Z, feh, age_args=_AGE_ARGS):
-    """Thin-disk ln nu(|Z|) - ln nu(|Z_sun|) without an age, from the
-    production kernel, with the thin-disk age prior at feh_thin = -0.2."""
+def _no_age_vertical(R, abs_Z, feh, age_args=_AGE_ARGS):
+    """Thin- and thick-disk ln nu(|Z|) - ln nu(|Z_sun|) without an age,
+    from the production kernel, with the thin-disk age prior at
+    feh_thin = -0.2 and the default thick-disk sigma_z."""
     nodes = gal._thin_age_nodes(-0.2, age_args)
     R, abs_Z, feh = (np.atleast_1d(np.asarray(x, dtype=float)) for x in (R, abs_Z, feh))
-    args = (R, abs_Z, 0.025, np.empty(0), feh, False, _ROT, (2.6, 2.0), 1.0, 1.0)
-    return gal._disk_vertical_array(*args, *nodes)[0]
+    var_z = kin.THICK_DISK_SIGMA[2] ** 2
+    args = (R, abs_Z, 0.025, np.empty(0), feh, False, _ROT, (2.6, 2.0), var_z)
+    return gal._disk_vertical_array(*args, *nodes)
 
 
 def _clamp(x, lo, hi, width):
@@ -92,12 +101,14 @@ def _clamp(x, lo, hi, width):
 
 
 def _vertical_reference(R, Z, age, feh):
-    """ln nu(|Z|) - ln nu(|Z_sun|) of the thin and thick disks, with the
-    vertical Jeans integral done by quadrature (an independent reference)."""
+    """ln nu(|Z|) - ln nu(|Z_sun|) of the thin and thick disks, from the
+    dispersion relations written out and the vertical potential of
+    ``kin._vertical_terms`` (tested against quadrature on its own)."""
     thin = np.empty(len(R))
     thick = np.empty(len(R))
     for i in range(len(R)):
-        S = np.exp(-(np.clip(R[i], 4.0, 9.0) - 8.2) / kin.VERTICAL_R_SCALE)
+        terms = kin._vertical_terms(R[i] / 8.2, abs(Z[i]))
+        terms_sun = kin._vertical_terms(R[i] / 8.2, 0.025)
         L, (L_sun, L_clamp) = _mean_L(R[i], age[i], feh[i])
         L = _clamp(L, *L_clamp)
         a, lam = kin.THIN_DISK_ALPHA_L[1], kin.THIN_DISK_LAMBDA_L[1]
@@ -108,12 +119,11 @@ def _vertical_reference(R, Z, age, feh):
             * (1 + kin.THIN_DISK_GAMMA_FEH[1] * np.clip(feh[i], -1.0, 0.5))
             * f_L
         )
-        thin[i] = _thin_lnnu(abs(Z[i]), S, sig) - _thin_lnnu(0.025, S, sig)
-        R_thick = _clamp(R[i], *kin.THICK_DISK_R_RANGE, kin.DISK_EDGE)
-        var = kin.THICK_DISK_SIGMA[2] ** 2 * np.exp(
-            -2 * (R_thick - 8.2) / kin.THICK_DISK_R_SIGMA
+        thin[i] = (
+            -(terms[0] - terms_sun[0]) - (terms[1] - terms_sun[1]) * _PHI_SCALE / sig**2
         )
-        thick[i] = -(_phi(abs(Z[i]), S) - _phi(0.025, S)) / var
+        var = kin.THICK_DISK_SIGMA[2] ** 2 * kin._thick_disk_scale(R[i] / 8.2)[2]
+        thick[i] = -(terms[2] - terms_sun[2]) * _PHI_SCALE / var
     return thin, thick
 
 
@@ -679,24 +689,94 @@ class TestLabelsValidation:
 class TestVerticalJeans:
     """The disk vertical profiles from the vertical Jeans equation."""
 
-    def test_potential_reproduces_its_measurements(self):
-        D, S0, rho = kin.VERTICAL_D, kin.VERTICAL_SIGMA0, kin.VERTICAL_RHO_DM
-        assert np.isclose(_Kz(1100.0, 1.0) / _2PI_G, kin.VERTICAL_KZ_1KPC, rtol=1e-10)
-        assert np.isclose(S0 / (2 * D) + rho, kin.VERTICAL_RHO_MIDPLANE, rtol=1e-10)
+    def test_potential_reproduces_the_rebuilt_model(self):
+        # K_z(R0, 1.1 kpc) / 2 pi G of the rebuilt Binney & Vasiliev (2024)
+        # model is 63.9 Msun/pc^2 (66.4 in their eq. 15).
+        i = round(1.0 / kin._V_DX)
+        kz = _kz_column(i)(np.arcsinh(1.1 / kin._V_ZS))
+        assert abs(kz / (2 * np.pi * 4.30091e-6) * 1e-6 - 63.9) < 0.1
 
-    @pytest.mark.parametrize("abs_z", [0.0004, 0.3, 1.0, 9.9996, 12.0, 30.0])
-    @pytest.mark.parametrize("S", [0.3, 1.0, 3.0])
-    def test_vertical_kernels_match_quadrature(self, abs_z, S):
-        # Beyond 10 kpc the thin-disk kernel leaves its table.
-        zero = kin._thin_disk_integrals(0.0)
-        a, b = kin._thin_disk_vertical(kin._thin_disk_integrals(abs_z), zero, S)
-        thin = a - b / 20.0**2
-        assert np.isclose(thin, _thin_lnnu(abs_z, S, 20.0), rtol=1e-8)
-        zero = kin._vertical_potential(0.0)
-        thick = kin._thick_disk_vertical(
-            kin._vertical_potential(abs_z), zero, 1600.0, S
-        )
-        assert np.isclose(thick, -_phi(abs_z, S) / 1600.0)
+    @pytest.mark.parametrize("abs_z", [0.0004, 0.05, 0.3, 1.0, 1.8, 2.2, 4.0, 9.9])
+    @pytest.mark.parametrize("i", [0, 40, 80, 81, 200])
+    def test_vertical_tables_integrate_their_force(self, abs_z, i):
+        # At table radii both integrals agree with quadrature of K_z.
+        x = i * kin._V_DX
+        _, jeans, dphi = kin._vertical_terms(x, abs_z)
+        ref = _column_integral(i, abs_z, lambda t: 1.0)
+        assert np.isclose(dphi, ref, rtol=1e-4, atol=1e-3)
+        ref = _column_integral(i, abs_z, lambda t: 1.0 / _fz(t) ** 2)
+        assert np.isclose(jeans, ref, rtol=1e-4, atol=1e-3)
+
+    def test_thick_disk_column_height_has_no_kinks_in_radius(self):
+        # The clamped potential of #284 bent the column height by 0.046 kpc
+        # per 0.25 kpc step at 4 and 9 kpc. The largest bend is now 0.005,
+        # at 12.75 kpc, in the blend where the dispersions start to hold.
+        z = gal._COLUMN_Z
+        R = np.arange(3.0, 20.01, 0.25)
+        n = R.size * z.size
+        thick = _no_age_vertical(
+            np.repeat(R, z.size), np.tile(z, R.size), np.full(n, -0.2)
+        )[1]
+        h = np.trapezoid(np.exp(thick).reshape(R.size, -1), z, axis=1)
+        assert np.abs(np.diff(h, 2)).max() < 0.01
+
+    @pytest.mark.parametrize("feh", [-1.0, 0.0])
+    def test_thin_disk_falls_faster_than_z_squared_at_height(self, feh):
+        # With sigma_z growing as 1 + gamma_z |z| without bound, the Jeans
+        # integral converges and d ln nu / d ln |z| tends to -2. Holding |z|
+        # at 2 kpc gives -14 ([Fe/H] = -1) and -32 ([Fe/H] = 0) over
+        # 15-30 kpc.
+        Z = np.array([15.0, 30.0])
+        ln_nu = _no_age_vertical(np.full(2, 8.2), Z, np.full(2, feh))[0]
+        assert np.diff(ln_nu)[0] / np.log(2.0) < -10.0
+
+    @pytest.mark.parametrize("x", [0.137, 0.5046, 1.00625, 2.31, 3.6])
+    @pytest.mark.parametrize("abs_z", [0.2, 1.0, 3.0, 8.0])
+    def test_vertical_terms_between_table_radii_match_quadrature(self, x, abs_z):
+        # Between table radii both integrals agree with quadrature of a
+        # bicubic spline of K_z in (x, u) to 2e-5; a one-row offset or a
+        # wrong weight in the Catmull-Rom step misses by about 1e-2.
+        u = np.arange(kin._V_KZ.shape[1]) * kin._V_DU
+        rows = np.arange(kin._V_KZ.shape[0]) * kin._V_DX
+        spline = RectBivariateSpline(rows, u, kin._V_KZ)
+
+        def kz(t):
+            return spline(x, np.arcsinh(t / kin._V_ZS))[0, 0]
+
+        _, jeans, dphi = kin._vertical_terms(x, abs_z)
+        ref = quad(kz, 0.0, abs_z, **_QUAD)[0]
+        assert np.isclose(dphi, ref, rtol=1e-4)
+        ref = quad(lambda t: kz(t) / _fz(t) ** 2, 0.0, abs_z, **_QUAD)[0]
+        assert np.isclose(jeans, ref, rtol=1e-4)
+
+    @pytest.mark.parametrize(
+        "x, abs_z", [(np.nan, 1.0), (1.0, np.nan), (np.inf, 1.0), (1.0, np.inf)]
+    )
+    def test_non_finite_positions_give_nan(self, x, abs_z):
+        # int() of a NaN or infinite index crashed the jitted kernel.
+        assert np.isnan(kin._vertical_terms(x, abs_z)).all()
+
+    def test_vertical_terms_continue_beyond_the_table_with_its_force(self):
+        x = 1.0
+        top = kin._V_ZS * np.sinh((kin._V_KZ.shape[1] - 1) * kin._V_DU)
+        k = kin._V_KZ[round(x / kin._V_DX), -1]
+        _, j0, p0 = kin._vertical_terms(x, top)
+        _, j1, p1 = kin._vertical_terms(x, top + 5.0)
+        assert np.isclose(p1 - p0, 5.0 * k, rtol=1e-12)
+        assert np.isclose(j1 - j0, 5.0 * k / _fz(top) ** 2, rtol=1e-12)
+
+    @pytest.mark.parametrize("abs_z", [0.1, 1.0, 3.0])
+    def test_vertical_terms_have_a_continuous_radial_slope(self, abs_z):
+        # Catmull-Rom interpolation in x: at a node, the one-sided slopes
+        # differ by the curvature times the step, so the gap shrinks with
+        # the step; a jump in the slope would not.
+        def gap(x, h):
+            f0, fl, fr = (kin._vertical_terms(v, abs_z)[2] for v in (x, x - h, x + h))
+            return abs((fr - f0) - (f0 - fl)) / h
+
+        for i in (1, 80, 160, 300):
+            x = i * kin._V_DX
+            assert gap(x, 1e-7) < 0.02 * gap(x, 1e-5) + 1e-3
 
     def test_midplane_prior_equals_exponential_disks(self):
         # At Z = Z_sun (b = 0) both vertical terms vanish, so the prior is
@@ -750,7 +830,7 @@ class TestVerticalJeans:
             expected = np.log(
                 quad(weighted, 0, 13.8, **kw)[0] / quad(prior, 0, 13.8, **kw)[0]
             )
-            no_age = _no_age_thin(R, abs_Z, feh, age_args)[0]
+            no_age = _no_age_vertical(R, abs_Z, feh, age_args)[0][0]
             assert np.isclose(no_age, expected, rtol=0, atol=1e-6)
 
     def test_feh_outside_the_fitted_range_takes_the_edge_value(self):
@@ -765,13 +845,13 @@ class TestVerticalJeans:
         # New result: scale heights near 0.3 and 0.9 kpc (Juric et al. 2008)
         # follow from the dispersions and the potential.
         z = np.linspace(0.3, 1.5, 25)
-        thin = _no_age_thin(np.full(z.size, 8.2), z, np.full(z.size, -0.2))
+        thin = _no_age_vertical(np.full(z.size, 8.2), z, np.full(z.size, -0.2))[0]
         assert 0.25 < self._scale_height(thin, z) < 0.4
         z = np.linspace(0.5, 2.0, 25)
-        zero = kin._vertical_potential(0.0)
+        zero = kin._vertical_terms(1.0, 0.0)
         var_z = kin.THICK_DISK_SIGMA[2] ** 2
         thick = [
-            kin._thick_disk_vertical(kin._vertical_potential(x), zero, var_z, 1.0)
+            kin._thick_disk_vertical(kin._vertical_terms(1.0, x), zero, var_z)
             for x in z
         ]
         assert 0.8 < self._scale_height(thick, z) < 1.2
@@ -812,15 +892,11 @@ class TestVerticalInputs:
         with pytest.raises(ValueError, match=name):
             logp_galactic_structure(np.array([1.0]), (0.0, 30.0), **kw)
 
-    @pytest.mark.parametrize("name", ["v_circ_solar", "thick_sigma_z", "thick_R_sigma"])
+    @pytest.mark.parametrize("name", ["v_circ_solar", "thick_sigma_z"])
     @pytest.mark.parametrize("value", [0.0, -2.0])
     def test_non_positive_vertical_parameters_raise(self, name, value):
         with pytest.raises(ValueError, match=name):
             logp_galactic_structure(np.array([1.0]), (0.0, 30.0), **{name: value})
-
-    def test_potential_keeps_its_edge_values_outside_the_measured_radii(self):
-        for R, edge in [(0.5, 4.0), (2.0, 4.0), (12.0, 9.0), (30.0, 9.0)]:
-            assert kin._potential_scale(R, 8.2) == kin._potential_scale(edge, 8.2)
 
 
 class TestThickDiskSurfaceNormalization:
@@ -830,7 +906,7 @@ class TestThickDiskSurfaceNormalization:
         # A reference over log-spaced ages and a grid of [Fe/H] with the
         # per-age kernel, independent of the age and [Fe/H] quadrature nodes.
         summary = gal.galactic_prior_summary()
-        z = np.linspace(0.0, 8.0, 201)
+        z = np.concatenate((np.linspace(0.0, 10.0, 251), np.linspace(10.5, 100.0, 180)))
         ages = np.geomspace(0.01, 13.8, 80)
         p_age = np.exp(gal.logp_age_from_feh(ages, -0.2))
         fehs = np.linspace(-1.4, 1.0, 17)
@@ -849,7 +925,6 @@ class TestThickDiskSurfaceNormalization:
                 _ROT,
                 (2.6, 2.0),
                 kin.THICK_DISK_SIGMA[2] ** 2,
-                kin.THICK_DISK_R_SIGMA,
                 np.empty(0),
                 np.empty(0),
                 np.empty(0),
@@ -863,6 +938,30 @@ class TestThickDiskSurfaceNormalization:
         np.testing.assert_allclose(
             summary["f_thick_solar"], 0.18 * thin / thick, rtol=5e-4
         )
+
+    def test_potential_scales_with_the_circular_velocity(self):
+        # Phi scales as v_c^2, so scaling v_circ_solar and thick_sigma_z by
+        # one factor leaves the thick-disk column unchanged.
+        base = gal.galactic_prior_summary()["thick_column_height"]
+        scaled = gal.galactic_prior_summary(
+            v_circ_solar=1.2 * _VC_SUN, thick_sigma_z=1.2 * kin.THICK_DISK_SIGMA[2]
+        )["thick_column_height"]
+        np.testing.assert_allclose(scaled, base, rtol=1e-12)
+
+    def test_hot_thick_disk_column_includes_its_tail_above_10_kpc(self):
+        # In the BV24 potential a hot disk is bound only logarithmically:
+        # with sigma_z = 100 km/s, stopping the column at 10 kpc lost 5%.
+        z = np.concatenate((np.linspace(0.0, 10.0, 501), np.linspace(10.1, 100.0, 900)))
+        terms0 = kin._vertical_terms(1.0, 0.025)
+        thick = [
+            kin._thick_disk_vertical(
+                kin._vertical_terms(1.0, t), terms0, 100.0**2 / _PHI_SCALE
+            )
+            for t in z
+        ]
+        column = np.trapezoid(np.exp(thick), z)
+        summary = gal.galactic_prior_summary(thick_sigma_z=100.0)
+        np.testing.assert_allclose(summary["thick_column_height"], column, rtol=1e-4)
 
     @pytest.mark.parametrize(
         "kwargs",

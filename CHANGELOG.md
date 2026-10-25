@@ -232,8 +232,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The thick disk is isothermal. In the plane of the Sun the prior does
   not change; above it, the age-averaged thin disk falls by e in
   0.33 kpc and the thick disk in 0.99 kpc. `Z_thin` and `Z_thick` are
-  removed. The new keywords `thick_sigma_z` and `thick_R_sigma` set the
-  thick disk, and `v_circ_solar` scales the rotation curve. To change the thick disk height, pass a smaller `thick_sigma_z`
+  removed. The new keyword `thick_sigma_z` sets the thick disk, and
+  `v_circ_solar` scales the rotation curve. To change the thick disk height, pass a smaller `thick_sigma_z`
   instead of `Z_thick`. The thin-disk dispersions, here and in
   `thin_disk_velocity_moments`, hold [Fe/H] at -1 or 0.5 outside that
   range, where Sharma et al. (2021) fitted them. A non-finite `feh` or
@@ -249,6 +249,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   positive, so the thick disk can no longer be switched off with 0. The new
   `brutus.priors.galactic_prior_summary` returns the derived
   normalizations (#288).
+- **The disk vertical potential and the thick-disk dispersion profiles
+  come from Binney & Vasiliev (2024)** *(output-changing)*. The
+  Kuijken & Gilmore potential, whose disk term was clamped to 4-9 kpc,
+  is replaced by tables of the vertical potential of the Milky Way model
+  of Binney & Vasiliev (2024), rebuilt with AGAMA and scaled to the
+  rotation curve at the Sun (as v_c^2). The thick-disk column height no
+  longer bends at 4 and 9 kpc; it rises smoothly from 0.93 kpc at 4 kpc
+  to 1.29 kpc at the Sun and 2.43 kpc at 16 kpc. The thick-disk
+  dispersions keep the values of Anguiano et al. (2020) at the Sun and
+  follow the radial profiles of the model's high-alpha disk, one for each
+  of sigma_R, sigma_phi and sigma_z, out to 1.5 R_solar, where that disk
+  ends; beyond, they keep their values there. The thin-disk sigma_z stops growing
+  with height above 2 kpc, the top of the heights Sharma et al. (2021)
+  fitted, so the thin disk no longer falls only as |z|^-2 at large
+  heights. `thick_R_sigma` in
+  `logp_galactic_structure` and `R_sigma` in
+  `thick_disk_velocity_moments` are removed, and so are the constants of
+  `brutus.priors.kinematic` that set the old potential and dispersion
+  profile: `THICK_DISK_R_SIGMA`, `THICK_DISK_R_RANGE` and `VERTICAL_*`
+  (#292).
 - **The halo is a broken power law normalized by its mass**
   *(output-changing)*. `logn_halo` and the halo of
   `logp_galactic_structure` follow Amarante et al. (2024): slopes 2.85

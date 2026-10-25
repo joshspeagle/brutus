@@ -9,7 +9,7 @@ brutus infers stellar properties, distances and extinctions from photometry and 
 - `tutorials/`: Jupyter notebooks numbered 00 to 11. They need downloaded model data. The docs build copies them into `docs/source/tutorials/`.
 - `docs/source/`: the documentation site (Sphinx with the Furo theme, Markdown pages through MyST). `_static/brutus.css` holds the brutus style; the theme colours are in `conf.py`. Read the Docs builds it at https://brutus.readthedocs.io, the address that `README.md` and `pyproject.toml` give; the docs workflow also deploys it to GitHub Pages from `master`.
 - `bench/`: manual benchmark and verification tools for the `BruteForce` hot path, described in `bench/README.md`. Not packaged, not run in CI.
-- `.github/scripts/fetch_test_data.py`: downloads the data the CI tests use.
+- `.github/scripts/fetch_test_data.py`: downloads the data the CI tests use. `.github/scripts/make_bv24_tables.py` rebuilds the Binney & Vasiliev (2024) potential tables in `src/brutus/priors/bv24_tables.npz`; it needs AGAMA, a development tool only.
 - `CHANGELOG.md`: user-visible changes, in Keep a Changelog format.
 
 ## Commands

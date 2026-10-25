@@ -30,7 +30,7 @@ from brutus.priors.galactic import (
     _thin_age_nodes,
     logp_galactic_structure,
 )
-from brutus.priors.kinematic import THICK_DISK_R_SIGMA, THICK_DISK_SIGMA, _vc_solar
+from brutus.priors.kinematic import THICK_DISK_SIGMA, _vc_solar
 from brutus.utils.math import _truncnorm_lognorm_scalar, galactic_to_galactocentric_cyl
 
 _LOG_2PI = log(2.0 * pi)
@@ -267,7 +267,6 @@ def _run_reference(dists, ell, b, feh, loga):
         rot,
         (2.6, 2.0),
         THICK_DISK_SIGMA[2] ** 2,
-        THICK_DISK_R_SIGMA,
         *age_nodes,
     )
     return reference_kernel(

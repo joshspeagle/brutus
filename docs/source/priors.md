@@ -51,27 +51,17 @@ $$
 \ln n_{\rm disk} = -\frac{R_{\rm eff} - R_{{\rm eff},\odot}}{h_R} + \ln \nu(R, |Z|) - \ln \nu(R, |Z_\odot|).
 $$
 
-The vertical profile $\nu$ solves the vertical Jeans equation, $\partial(\nu \sigma_z^2)/\partial z = -\nu K_z$, in one vertical potential for both disks. The vertical force has the form of {cite:t}`kuijken1989`, a disk of surface density $\Sigma_0$ and thickness $D$ plus a constant dark matter density $\rho_{\rm DM}$:
+The vertical profile $\nu$ solves the vertical Jeans equation, $\partial(\nu \sigma_z^2)/\partial z = -\nu K_z$, in one potential for both disks: that of the Milky Way model of {cite:t}`binney2024`, which fits a self-consistent potential and distribution functions to APOGEE DR17 and Gaia DR3. brutus tabulates its vertical potential $\Phi_z(R, z) = \Phi(R, z) - \Phi(R, 0)$ and force $K_z = \partial \Phi / \partial z$ against $R / R_\odot$ and $z$, from a rebuild with AGAMA of the paper's distribution functions (`.github/scripts/make_bv24_tables.py`). The rebuilt model has $K_z(R_\odot, 1.1\ {\rm kpc}) / 2\pi G = 63.9\ M_\odot\,{\rm pc}^{-2}$, against 66.4 in the paper, and a circular speed of 235.7 km/s at the Sun. brutus scales the potential by $(v_{c,\odot} / 235.7\ {\rm km\,s^{-1}})^2$, so that it matches the rotation curve at the Sun (237.0 km/s by default), as $R / R_\odot$ scales its radii.
+
+The thin-disk dispersion $\sigma_z$ depends on the star's age $\tau$, [Fe/H] and angular momentum, and grows with height as $f_z = 1 + \gamma_z |z|$ {cite:p}`sharma2021`. The profile is then
 
 $$
-K_z(R, z) = 2\pi G \left[ S(R)\, \Sigma_0 \frac{z}{\sqrt{z^2 + D^2}} + 2 \rho_{\rm DM} z \right],
-\qquad
-S(R) = e^{-(R - R_\odot)/2.7\,{\rm kpc}}.
+\ln \nu(z) = -2 \ln f_z(|z|) - \frac{1}{\sigma_{z,0}^2} \int_0^{|z|} \frac{K_z(t)}{f_z(t)^2}\, dt,
 $$
 
-$S(R)$ keeps its edge values outside 4 to 9 kpc, the radii of the measurement.
+with $\gamma_z = 0.20\ {\rm kpc}^{-1}$. Above 2 kpc, the greatest height of the fit, $f_z$ keeps its value (with a quadratic blend over 1.5 to 2.5 kpc), so each population is isothermal there; extrapolated, the linear growth would give the disk a tail falling only as $z^{-2}$. Younger stars have smaller $\sigma_{z,0}$ and lie closer to the midplane. Without `loga`, the thin-disk profile is the average over the thin-disk age distribution (the table below), by 32-point Gauss-Legendre quadrature over the ages where it has weight. The star's `feh` sets $\sigma_{z,0}$ with or without `loga`; without `feh`, the thin-disk mean [Fe/H] does. [Fe/H] outside $-1$ to $0.5$, the range of the fit, takes the edge value. The thick disk is isothermal at each radius, so $\ln \nu = -\Phi_z / \sigma_z^2$, with $\sigma_z = 43.6$ km/s at the Sun and the radial profile of the high-α disk of {cite:t}`binney2024`, as in {func}`~brutus.priors.thick_disk_velocity_moments`. That disk is truncated beyond about 12 kpc, so the profile is held beyond $1.5 R_\odot$. Both profiles are normalized at the Sun's height at every radius, so the age and [Fe/H] distributions are those at the Sun's position.
 
-$\Sigma_0 = 39.3\ M_\odot\,{\rm pc}^{-2}$ and $D = 234$ pc reproduce $K_z(1.1\ {\rm kpc}) / 2\pi G = 67\ M_\odot\,{\rm pc}^{-2}$ and its 2.7 kpc scale length {cite:p}`bovy2013`, and a midplane density of $0.097\ M_\odot\,{\rm pc}^{-3}$ with $\rho_{\rm DM} = 0.013\ M_\odot\,{\rm pc}^{-3}$ {cite:p}`mckee2015`.
-
-The thin-disk dispersion $\sigma_z$ depends on the star's age $\tau$, [Fe/H] and angular momentum, and grows with height as $1 + \gamma_z |z|$ {cite:p}`sharma2021`. The profile is then
-
-$$
-\ln \nu(z) = -2 \ln(1 + \gamma_z |z|) - \frac{1}{\sigma_{z,0}^2} \int_0^{|z|} \frac{K_z(t)}{(1 + \gamma_z t)^2}\, dt,
-$$
-
-with $\gamma_z = 0.20\ {\rm kpc}^{-1}$. Younger stars have smaller $\sigma_{z,0}$ and lie closer to the midplane. Without `loga`, the thin-disk profile is the average over the thin-disk age distribution (the table below), by 32-point Gauss-Legendre quadrature over the ages where it has weight. The star's `feh` sets $\sigma_{z,0}$ with or without `loga`; without `feh`, the thin-disk mean [Fe/H] does. [Fe/H] outside $-1$ to $0.5$, the range of the fit, takes the edge value. The thick disk is isothermal, with $\sigma_z = 43.6$ km/s from {func}`~brutus.priors.thick_disk_velocity_moments`, so $\ln \nu = -\Phi_z / \sigma_z^2$. Both profiles are normalized at the Sun's height at every radius, so the age and [Fe/H] distributions are those at the Sun's position.
-
-The scale heights follow from these dispersions instead of being set. At the Sun, the age-averaged thin disk falls by $e$ in 0.33 kpc between 0.3 and 1.5 kpc, and the thick disk in 0.99 kpc between 0.5 and 2 kpc. Star counts give 0.3 and 0.9 kpc {cite:p}`juric2008`. A single thin-disk age is close to Gaussian near the plane, so its height depends on how it is measured; its column height $\Sigma / 2\nu(Z_\odot)$ at [Fe/H] $= -0.2$ is 0.17 kpc at 1 Gyr and 0.61 kpc at 12 Gyr.
+The scale heights follow from these dispersions instead of being set. At the Sun, the age-averaged thin disk falls by $e$ in 0.34 kpc between 0.3 and 1.5 kpc, and the thick disk in 1.05 kpc between 0.5 and 2 kpc. Star counts give 0.3 and 0.9 kpc {cite:p}`juric2008`. A single thin-disk age is close to Gaussian near the plane, so its height depends on how it is measured; its column height $\Sigma / 2\nu(Z_\odot)$ at [Fe/H] $= -0.2$ is 0.17 kpc at 1 Gyr and 0.63 kpc at 12 Gyr.
 
 The thick disk is normalized by its surface density. `f_thick_surface` is the ratio of the thick- to the thin-disk surface density at the Sun, 0.18 by default, the high-[α/Fe] surface mass fraction of {cite:t}`mackereth2017`. The prior converts it to the ratio at the Sun's position with the column heights $h = \Sigma / 2\nu(Z_\odot)$ of the two profiles:
 
@@ -79,7 +69,7 @@ $$
 f_{\rm thick} = f_\Sigma \, \frac{h_{\rm thin}}{h_{\rm thick}}.
 $$
 
-The thin-disk column height averages over the thin-disk age and [Fe/H] distributions. With the defaults it is 0.38 kpc, the thick disk's is 1.24 kpc, and $f_{\rm thick} = 0.055$. A change to a parameter that sets the heights, such as `thick_sigma_z` or the thin-disk mean [Fe/H], therefore keeps the surface ratio and moves the ratio at the Sun. {func}`~brutus.priors.galactic_prior_summary` returns these quantities for any parameters.
+The thin-disk column height averages over the thin-disk age and [Fe/H] distributions. With the defaults it is 0.39 kpc, the thick disk's is 1.30 kpc, and $f_{\rm thick} = 0.055$. A change to a parameter that sets the heights, such as `thick_sigma_z` or the thin-disk mean [Fe/H], therefore keeps the surface ratio and moves the ratio at the Sun. {func}`~brutus.priors.galactic_prior_summary` returns these quantities for any parameters.
 
 The halo is the broken power law of {cite:t}`amarante2024` in a flattened radius $m$, with a core $R_s$ that keeps it finite at the Galactic centre:
 
@@ -107,7 +97,7 @@ All components use $R_s = 2$ kpc.
 ```
 
 :::{div} figure-caption
-The density and volume terms of the default Galactic prior, per unit $\ln d$, the variable that brutus samples. The metallicity and age terms are left out, so a given grid model's prior can differ. Left: each sightline scaled to a peak of 1. Right: the b = 30° total and its components, scaled by the total's peak. The growing volume pushes the peak out to 10 to 20 kpc. Off the plane, the disks add a second peak at 2 to 4 kpc: at b = 30° it is the higher one, and at b = 90° it is 0.28 times the halo peak. The likelihood usually confines the distance far more than this.
+The density and volume terms of the default Galactic prior, per unit $\ln d$, the variable that brutus samples. The metallicity and age terms are left out, so a given grid model's prior can differ. Left: each sightline scaled to a peak of 1. Right: the b = 30° total and its components, scaled by the total's peak. The growing volume pushes the peak out to 10 to 23 kpc. Off the plane, the disks add a second peak at 2 to 4 kpc, 0.32 to 0.41 times the main peak. The likelihood usually confines the distance far more than this.
 :::
 
 **Metallicity.** When the labels include `feh`, each component has a Gaussian [Fe/H] distribution (the table). The components are weighted by their density at the star's position. A metal-poor star near the Sun is therefore more likely to belong to the halo.
