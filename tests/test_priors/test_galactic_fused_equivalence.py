@@ -12,8 +12,9 @@ the unhoisted formulation. `reference_kernel` below is a copy of the fused
 kernel with the pre-optimization structure (per-point age constants,
 precomputed R/Z arrays from `galactic_to_galactocentric_cyl`) but the same
 semantics (smoothed solar disk normalization, metallicity-updated age
-weights). The disk vertical profiles come from the production
-``_disk_vertical_array`` on the precomputed R/Z arrays; the vertical model
+weights). The disk vertical profiles and column heights come from the
+production ``_disk_vertical_array`` and ``_ln_column_array`` on the
+precomputed R/Z arrays; the vertical model
 itself is tested in ``test_priors_galactic.py``. The halo amplitude comes
 from ``_normalizations``, whose mass normalization is tested there too.
 """
@@ -26,6 +27,7 @@ from numba import jit, prange
 from brutus.priors.galactic import (
     _NORMALIZATION_DEFAULTS,
     _disk_vertical_array,
+    _ln_column_array,
     _normalizations,
     _thin_age_nodes,
     logp_galactic_structure,
@@ -43,6 +45,8 @@ def reference_kernel(
     Z_arr,
     thin_z,
     thick_z,
+    column_thin,
+    column_thick,
     feh_arr,
     loga_arr,
     has_feh,
@@ -87,6 +91,7 @@ def reference_kernel(
 
         R_eff_thin = sqrt(R**2 + Rs_thin**2)
         lnp_thin = -(R_eff_thin - R_solar_eff_thin) / R_thin + thin_z[i] + vol
+        lnp_thin -= column_thin[i]
 
         R_eff_thick = sqrt(R**2 + Rs_thick**2)
         lnp_thick = (
@@ -95,6 +100,7 @@ def reference_kernel(
             + vol
             + log(f_thick)
         )
+        lnp_thick -= column_thick[i]
 
         Rs, eta_in, eta_out, r_break, q = halo
         ln_m = 0.5 * np.log(R**2 + (Z / q) ** 2 + Rs**2)
@@ -220,13 +226,15 @@ def reference_kernel(
     return logp_out
 
 
-*_, _HALO, _LN_HALO_AMPLITUDE, _SUMMARY = _normalizations(**_NORMALIZATION_DEFAULTS)
+*_, _HALO, _LN_HALO_AMPLITUDE, _COLUMNS, _SUMMARY = _normalizations(
+    **_NORMALIZATION_DEFAULTS
+)
 DEFAULT_ARGS = dict(
     R_solar=8.2,
     Z_solar=0.025,
-    R_thin=2.6,
+    R_thin=2.74,
     Rs_thin=2.0,
-    R_thick=2.0,
+    R_thick=1.9,
     Rs_thick=2.0,
     f_thick=_SUMMARY["f_thick_solar"],
     halo=_HALO,
@@ -265,7 +273,7 @@ def _run_reference(dists, ell, b, feh, loga):
         feh if has_feh else np.full(len(R), -0.2),
         has_loga,
         rot,
-        (2.6, 2.0),
+        (2.74, 2.0),
         THICK_DISK_SIGMA[2] ** 2,
         *age_nodes,
     )
@@ -275,6 +283,7 @@ def _run_reference(dists, ell, b, feh, loga):
         Z,
         thin_z,
         thick_z,
+        *(_ln_column_array(R / 8.2, table) for table in _COLUMNS),
         feh if has_feh else np.empty(0),
         loga if has_loga else np.empty(0),
         has_feh,

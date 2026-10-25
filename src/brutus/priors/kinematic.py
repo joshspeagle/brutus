@@ -505,7 +505,7 @@ def _thick_disk_ln_var(x, k):
     x, dx = _soft_clamp(x, *THICK_DISK_X_RANGE, THICK_DISK_X_EDGE)
     h = _SIG_X[1] - _SIG_X[0]
     t = (x - _SIG_X[0]) / h
-    i = min(int(t), len(_SIG_X) - 2)
+    i = int(t)
     value, slope = _hermite(
         t - i,
         _SIG_LNVAR[i, k],
@@ -716,7 +716,7 @@ def thin_disk_velocity_moments(
     Z,
     age,
     feh,
-    R_scale=2.6,
+    R_scale=2.74,
     R_smooth=2.0,
     R_solar=8.2,
     v_circ_solar=None,
@@ -751,7 +751,7 @@ def thin_disk_velocity_moments(
     :math:`\times\,v_{c,\odot}` wide in :math:`L_z`, and the dispersion
     gradient in the Jeans equation fades out within 1 kpc outside the
     radii. A population that lags reaches the outer clamp further out, at
-    22.8 kpc for 5 Gyr and [Fe/H] = 0 and at 25.6 kpc for 13.8 Gyr and
+    22.7 kpc for 5 Gyr and [Fe/H] = 0 and at 25.2 kpc for 13.8 Gyr and
     [Fe/H] = -1; beyond 21 kpc its dispersions still change a little, by
     up to 0.6 km/s in :math:`\bar{v}_\phi` through the missing gradient.
     [Fe/H] is held at the edges of its range. The azimuthal dispersion
@@ -790,7 +790,7 @@ def thin_disk_velocity_moments(
         Metallicity [Fe/H].
     R_scale, R_smooth : float, optional
         Radial scale length and smoothing radius of the number density in
-        kpc, as in `~brutus.priors.galactic.logn_disk`. Defaults are 2.6
+        kpc, as in `~brutus.priors.galactic.logn_disk`. Defaults are 2.74
         and 2.0.
     R_solar : float, optional
         Distance of the Sun from the Galactic centre in kpc. Default is 8.2.
@@ -847,7 +847,7 @@ def thin_disk_velocity_moments(
 def thick_disk_velocity_moments(
     R,
     sigma_solar=THICK_DISK_SIGMA,
-    R_scale=2.0,
+    R_scale=1.9,
     R_smooth=2.0,
     R_solar=8.2,
     v_circ_solar=None,
@@ -863,9 +863,12 @@ def thick_disk_velocity_moments(
     Vasiliev (2024), against :math:`R / R_\odot`. That disk is truncated
     beyond about 12 kpc, so outside :math:`0.15 < R / R_\odot < 1.5`
     (``THICK_DISK_X_RANGE``) the dispersions keep their edge values, with a
-    quadratic blend 0.2 :math:`R_\odot` wide. The mean rotation is the
+    quadratic blend 0.2 :math:`R_\odot` wide. With the density falling
+    exponentially and the dispersions held, the asymmetric drift grows
+    with R, and beyond about 29 kpc it exceeds :math:`v_c`, so
+    :math:`\bar{v}_\phi` is 0 there. The mean rotation is the
     radial Jeans solution of `thin_disk_velocity_moments`. With the
-    defaults, :math:`\bar{v}_\phi = 192.6` km/s at the Sun; Anguiano et al.
+    defaults, :math:`\bar{v}_\phi = 190.3` km/s at the Sun; Anguiano et al.
     (2020) measure 191.8 km/s.
 
     Parameters
@@ -877,7 +880,7 @@ def thick_disk_velocity_moments(
         Default is ``THICK_DISK_SIGMA``, ``(64.68, 50.82, 43.60)``.
     R_scale, R_smooth : float, optional
         Radial scale length and smoothing radius of the number density in
-        kpc. Defaults are 2.0 and 2.0.
+        kpc. Defaults are 1.9 and 2.0.
     R_solar, v_circ_solar : optional
         The rotation curve, as in `thin_disk_velocity_moments`.
 

@@ -67,8 +67,13 @@ import numpy as np
 from numba import jit, prange
 
 from brutus.priors.kinematic import (
+    _V_DPHI,
+    _V_DX,
     _V_VC0,
     THICK_DISK_SIGMA,
+    THIN_DISK_Z_EDGE,
+    THIN_DISK_Z_MAX,
+    _catmull_rom_table,
     _check_positive,
     _circular_velocity,
     _logn_disk_dlnR,
@@ -128,33 +133,79 @@ def _thin_age_nodes(feh_thin, age_args):
 
 
 # Gauss-Hermite nodes for the average of the thin-disk column height over
-# the [Fe/H] prior, and the height grid of the column integrals in kpc. It
-# reaches 100 kpc because the potential binds a hot disk only
-# logarithmically.
+# the [Fe/H] prior, and the heights (kpc) and weights of the column
+# integrals: 8-point Gauss-Legendre panels, with edges at the ends of the
+# thin-disk sigma_z blend (1.5 and 2.5 kpc), out to 100 kpc because the
+# potential binds a hot disk only logarithmically. Relative error 1.4e-6.
 _FEH_NODES = 8
-_COLUMN_Z = np.concatenate(
-    (np.linspace(0.0, 10.0, 1001), np.geomspace(10.1, 100.0, 100))
+_COLUMN_EDGES = np.array(
+    [0.0, 0.25, 0.5, 1.0]
+    + [THIN_DISK_Z_MAX - THIN_DISK_Z_EDGE, THIN_DISK_Z_MAX + THIN_DISK_Z_EDGE]
+    + [4.0, 7.0, 12.0, 20.0, 35.0, 60.0, 100.0]
 )
 
 
+def _gauss_legendre_panels(edges, n):
+    """Return the nodes and weights of n-point Gauss-Legendre quadrature on
+    each interval between ``edges``."""
+    nodes, weights = np.polynomial.legendre.leggauss(n)
+    lo, hi = edges[:-1, None], edges[1:, None]
+    return (0.5 * (lo + hi) + 0.5 * (hi - lo) * nodes).ravel(), (
+        0.5 * (hi - lo) * weights
+    ).ravel()
+
+
+_COLUMN_Z, _COLUMN_W = _gauss_legendre_panels(_COLUMN_EDGES, 8)
+
+
+# Step in x = R / R_solar of the column-height tables, which run from 0 to
+# the end of the potential table; node 1 / _COLUMN_DX is the Sun.
+_COLUMN_DX = 0.1
+_COLUMN_X = np.arange(round(_V_DX * (len(_V_DPHI) - 1) / _COLUMN_DX) + 1) * _COLUMN_DX
+
+
 @lru_cache(maxsize=16)
-def _disk_column_heights(
-    rot, abs_Z_solar, thin_R, thick, feh_thin, feh_thin_sigma, age_args
-):
+def _disk_columns(rot, abs_Z_solar, thin_R, thick, feh_thin, feh_thin_sigma, age_args):
     """Return the column heights Sigma / (2 nu(Z_sun)) in kpc of the thin and
-    thick disks at R_solar. The thin disk averages its vertical profile
+    thick disks at R_solar, and ln(h(R) / h(R_solar)) of each at
+    R = _COLUMN_X R_solar. The thin disk averages its vertical profile
     over the age prior and, by Gauss-Hermite quadrature, over its [Fe/H]
-    prior, both of which are densities at the Sun's height."""
+    prior, both of which are densities at the Sun's height. Costs 0.07 s,
+    or 10 s with NUMBA_DISABLE_JIT."""
     x, w = np.polynomial.hermite_e.hermegauss(_FEH_NODES)
-    n = x.size * _COLUMN_Z.size
-    feh = np.repeat(feh_thin + feh_thin_sigma * x, _COLUMN_Z.size)
-    args = (np.full(n, rot[0]), np.tile(_COLUMN_Z, x.size), abs_Z_solar)
+    shape = (_COLUMN_X.size, x.size, _COLUMN_Z.size)
+    R = np.repeat(_COLUMN_X * rot[0], x.size * _COLUMN_Z.size)
+    feh = np.tile(np.repeat(feh_thin + feh_thin_sigma * x, _COLUMN_Z.size), shape[0])
+    args = (R, np.tile(_COLUMN_Z, shape[0] * shape[1]), abs_Z_solar)
     args += (np.empty(0), feh, False, rot, thin_R, *thick)
     thin_z, thick_z = _disk_vertical_array(*args, *_thin_age_nodes(feh_thin, age_args))
-    thin = np.trapezoid(np.exp(thin_z).reshape(x.size, -1), _COLUMN_Z, axis=1)
+    thin = np.exp(thin_z).reshape(shape) @ _COLUMN_W @ w / w.sum()
     # The thick disk does not depend on [Fe/H]: the first node's profile serves.
-    thick = np.trapezoid(np.exp(thick_z[: _COLUMN_Z.size]), _COLUMN_Z)
-    return float(np.dot(w, thin) / w.sum()), float(thick)
+    thick = np.exp(thick_z).reshape(shape)[:, 0] @ _COLUMN_W
+    sun = round(1.0 / _COLUMN_DX)
+    ln_thin, ln_thick = np.log(thin / thin[sun]), np.log(thick / thick[sun])
+    for a in (ln_thin, ln_thick):
+        a.flags.writeable = False
+    return float(thin[sun]), float(thick[sun]), ln_thin, ln_thick
+
+
+@jit(nopython=True, cache=True)
+def _ln_column(x, table):
+    """Return ln(h(R) / h(R_solar)) at x = R / R_solar from a table of
+    ``_disk_columns``, by Catmull-Rom interpolation, mirrored about x = 0
+    and held beyond its second-to-last node (x = 3.9)."""
+    if np.isnan(x):
+        return np.nan
+    return _catmull_rom_table(x / _COLUMN_DX, table)
+
+
+@jit(nopython=True, cache=True)
+def _ln_column_array(x, table):
+    """`_ln_column` at each element of the 1-D array ``x``."""
+    out = np.empty(len(x))
+    for k in range(len(x)):
+        out[k] = _ln_column(x[k], table)
+    return out
 
 
 # Radial range of the halo mass of Lane et al. (2023), in kpc, and the
@@ -319,6 +370,8 @@ def _galactic_prior_fused(
     R_thick,
     Rs_thick,
     f_thick,
+    ln_h_thin,
+    ln_h_thick,
     # Vertical profiles
     vc_solar,
     thick_var_z,
@@ -431,15 +484,16 @@ def _galactic_prior_fused(
             age_ln_w,
         )
 
-        # Thin disk
+        # Disks: exponential surface densities over the column heights.
+        x_col = R / R_solar
         R_eff_thin = sqrt(R**2 + Rs_thin**2)
         lnp_thin = -(R_eff_thin - R_solar_eff_thin) / R_thin + thin_z + vol
-
-        # Thick disk
+        lnp_thin -= _ln_column(x_col, ln_h_thin)
         R_eff_thick = sqrt(R**2 + Rs_thick**2)
         lnp_thick = (
             -(R_eff_thick - R_solar_eff_thick) / R_thick + thick_z + vol + ln_f_thick
         )
+        lnp_thick -= _ln_column(x_col, ln_h_thick)
 
         # Halo
         lnp_halo = _halo_shape(R, Z, *halo) + vol + ln_halo_amplitude
@@ -563,7 +617,9 @@ __all__ = [
 ]
 
 
-def logn_disk(R, Z, R_solar=8.2, Z_solar=0.025, R_scale=2.6, Z_scale=0.3, R_smooth=2.0):
+def logn_disk(
+    R, Z, R_solar=8.2, Z_solar=0.025, R_scale=2.74, Z_scale=0.3, R_smooth=2.0
+):
     r"""
     Log-number density for the Galactic disk stellar population.
 
@@ -581,7 +637,8 @@ def logn_disk(R, Z, R_solar=8.2, Z_solar=0.025, R_scale=2.6, Z_scale=0.3, R_smoo
     Z_solar : float, optional
         Solar height above midplane in kpc. Default is 0.025.
     R_scale : float, optional
-        Disk radial scale length in kpc. Default is 2.6.
+        Disk radial scale length in kpc. Default is 2.74, that of the thin
+        disk.
     Z_scale : float, optional
         Disk vertical scale height in kpc. Default is 0.3.
     R_smooth : float, optional
@@ -891,7 +948,7 @@ def _normalizations(
             ),
         )
     )
-    h_thin, h_thick = _disk_column_heights(
+    h_thin, h_thick, ln_h_thin, ln_h_thick = _disk_columns(
         rot,
         abs(float(Z_solar)),
         (float(R_thin), float(Rs_thin)),
@@ -919,7 +976,8 @@ def _normalizations(
         halo_density_solar=f_halo * float(rho_thin_solar),
         f_halo_solar=f_halo,
     )
-    return rot, thick, age_args, halo, ln_halo_amplitude, summary
+    columns = (ln_h_thin, ln_h_thick)
+    return rot, thick, age_args, halo, ln_halo_amplitude, columns, summary
 
 
 def logp_galactic_structure(
@@ -930,9 +988,9 @@ def logp_galactic_structure(
     loga=None,
     R_solar=8.2,
     Z_solar=0.025,
-    R_thin=2.6,
+    R_thin=2.74,
     Rs_thin=2.0,
-    R_thick=2.0,
+    R_thick=1.9,
     f_thick_surface=0.18,
     Rs_thick=2.0,
     Rs_halo=2.0,
@@ -990,11 +1048,13 @@ def logp_galactic_structure(
     Z_solar : float, optional
         Solar height above midplane in kpc. Default is 0.025.
     R_thin : float, optional
-        Thin disk radial scale length in kpc. Default is 2.6.
+        Radial scale length of the thin-disk surface density in kpc.
+        Default is 2.74 (Imig et al. 2025).
     Rs_thin : float, optional
         Thin disk smoothing radius in kpc. Default is 2.0.
     R_thick : float, optional
-        Thick disk radial scale length in kpc. Default is 2.0.
+        Radial scale length of the thick-disk surface density in kpc.
+        Default is 1.9 (Mackereth et al. 2017).
     f_thick_surface : float, optional
         Ratio of the thick- to the thin-disk surface density at the Sun.
         Default is 0.18, the high-[alpha/Fe] surface mass fraction of
@@ -1081,7 +1141,10 @@ def logp_galactic_structure(
     2. **Thick Disk**: Intermediate-age, metal-poor stars with larger scale height
     3. **Halo**: Old, very metal-poor stars with a flattened broken power law
 
-    The disks are exponential in radius, as in `logn_disk`. Their vertical
+    Each disk has an exponential surface density with scale length
+    ``R_thin`` or ``R_thick``, as in `logn_disk`; its density at the Sun's
+    height is that surface density divided by the column height of its
+    vertical profile at the same radius, relative to the Sun. Their vertical
     profiles solve the vertical Jeans equation in one vertical potential,
     that of the Milky Way model of Binney & Vasiliev (2024), tabulated in
     ``brutus.priors.kinematic``:
@@ -1190,7 +1253,7 @@ def logp_galactic_structure(
 
     # Vertical profiles: the rotation curve, the thick disk dispersion and,
     # without an age, the nodes of the thin-disk age average.
-    rot, thick, age_args, halo, ln_halo_amplitude, summary = _normalizations(
+    rot, thick, age_args, halo, ln_halo_amplitude, columns, summary = _normalizations(
         R_solar=R_solar,
         Z_solar=Z_solar,
         R_thin=R_thin,
@@ -1256,6 +1319,7 @@ def logp_galactic_structure(
             R_thick,
             Rs_thick,
             f_thick,
+            *columns,
             *rot[1:],
             *thick,
             *age_nodes,
@@ -1305,12 +1369,19 @@ def logp_galactic_structure(
         *thick,
         *age_nodes,
     )
-    # logn_disk at Z = Z_solar is its radial part alone.
+    # logn_disk at Z = Z_solar is its radial part alone: the surface density,
+    # divided by the column height to give the density at Z_solar.
     radial = dict(Z=Z_solar, R_solar=R_solar, Z_solar=Z_solar)
     logp_thin = logn_disk(R, R_scale=R_thin, R_smooth=Rs_thin, **radial)
     logp_thin += thin_z.reshape(R.shape) + vol_factor
+    ln_h_thin, ln_h_thick = (
+        _ln_column_array(R.ravel() / R_solar, table).reshape(R.shape)
+        for table in columns
+    )
+    logp_thin -= ln_h_thin
     logp_thick = logn_disk(R, R_scale=R_thick, R_smooth=Rs_thick, **radial)
     logp_thick += thick_z.reshape(R.shape) + vol_factor + np.log(f_thick)
+    logp_thick -= ln_h_thick
 
     # Halo component
     logp_halo = _halo_shape(R, Z, *halo) + vol_factor + ln_halo_amplitude
@@ -1434,7 +1505,7 @@ def galactic_prior_summary(**kwargs):
     --------
     >>> from brutus.priors import galactic_prior_summary
     >>> round(galactic_prior_summary()["f_thick_solar"], 3)
-    0.055
+    0.054
     >>> round(galactic_prior_summary()["f_halo_solar"], 5)
     0.00181
     """

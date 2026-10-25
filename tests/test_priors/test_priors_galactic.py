@@ -40,10 +40,10 @@ def _vc(R):
 def _mean_L(R, age, feh):
     """Mean L_z of a thin-disk population at R in the midplane, from the
     kinematic kernels (tested in the kinematic tests), with the default
-    thin-disk density (R_scale = 2.6, R_smooth = 2)."""
+    thin-disk density (R_scale = 2.74, R_smooth = 2)."""
     vc, dlnvc = _vc(R)
     L_refs = kin._thin_disk_L_refs(*_ROT)
-    dlnnu = -R * R / (2.6 * np.hypot(R, 2.0))
+    dlnnu = -R * R / (2.74 * np.hypot(R, 2.0))
     sig_R0 = kin._thin_disk_sigma0(age, feh)[0]
     fade = kin._thin_disk_fade(R)
     L = kin._thin_disk_mean_L(R, 0.0, sig_R0, vc, dlnvc, *L_refs, dlnnu, fade)
@@ -78,6 +78,15 @@ def _column_integral(i, abs_z, weight):
 _AGE_ARGS = (13.8, 0.0, -0.5, 0.5, 2.0, 4.0, 1.0)
 _SUMMARY = gal.galactic_prior_summary()
 _F_THICK, _F_HALO = _SUMMARY["f_thick_solar"], _SUMMARY["f_halo_solar"]
+_COLUMNS = gal._normalizations(**gal._NORMALIZATION_DEFAULTS)[5]
+
+
+def _ln_columns(R):
+    """ln(h(R) / h(R_sun)) of the thin and thick disks, from the production
+    tables (tested against direct integrals in
+    TestThickDiskSurfaceNormalization)."""
+    x = np.asarray(R, dtype=float) / 8.2
+    return [gal._ln_column_array(x, table) for table in _COLUMNS]
 
 
 def _no_age_vertical(R, abs_Z, feh, age_args=_AGE_ARGS):
@@ -87,7 +96,7 @@ def _no_age_vertical(R, abs_Z, feh, age_args=_AGE_ARGS):
     nodes = gal._thin_age_nodes(-0.2, age_args)
     R, abs_Z, feh = (np.atleast_1d(np.asarray(x, dtype=float)) for x in (R, abs_Z, feh))
     var_z = kin.THICK_DISK_SIGMA[2] ** 2
-    args = (R, abs_Z, 0.025, np.empty(0), feh, False, _ROT, (2.6, 2.0), var_z)
+    args = (R, abs_Z, 0.025, np.empty(0), feh, False, _ROT, (2.74, 2.0), var_z)
     return gal._disk_vertical_array(*args, *nodes)
 
 
@@ -446,11 +455,13 @@ class TestJointFehAgePrior:
         age = 10.0**loga / 1e9
 
         vertical = _vertical_reference(R, Z, age, feh)
+        columns = _ln_columns(R)
         terms = []
         for idx, (fm, fsig, ln_f) in enumerate(self.COMPONENTS):
             if idx < 2:
-                R_scale = (2.6, 2.0)[idx]
+                R_scale = (2.74, 1.9)[idx]
                 lnp_c = logn_disk(R, 0.025, R_scale=R_scale) + vertical[idx]
+                lnp_c -= columns[idx]
             else:
                 lnp_c = logn_halo(R, Z)
             lnp_c = lnp_c + vol + ln_f
@@ -717,7 +728,7 @@ class TestVerticalJeans:
         thick = _no_age_vertical(
             np.repeat(R, z.size), np.tile(z, R.size), np.full(n, -0.2)
         )[1]
-        h = np.trapezoid(np.exp(thick).reshape(R.size, -1), z, axis=1)
+        h = np.exp(thick).reshape(R.size, -1) @ gal._COLUMN_W
         assert np.abs(np.diff(h, 2)).max() < 0.01
 
     @pytest.mark.parametrize("feh", [-1.0, 0.0])
@@ -778,9 +789,9 @@ class TestVerticalJeans:
             x = i * kin._V_DX
             assert gap(x, 1e-7) < 0.02 * gap(x, 1e-5) + 1e-3
 
-    def test_midplane_prior_equals_exponential_disks(self):
+    def test_midplane_prior_is_the_surface_density_over_the_column(self):
         # At Z = Z_sun (b = 0) both vertical terms vanish, so the prior is
-        # that of the exponential disks with any scale height.
+        # the exponential surface density over the column height.
         d = np.linspace(0.1, 15.0, 50)
         rng = np.random.default_rng(5)
         kw = dict(feh=rng.normal(-0.3, 0.4, 50), loga=rng.uniform(8.5, 10.1, 50))
@@ -790,10 +801,12 @@ class TestVerticalJeans:
             d, (30.0, 0.0), return_components=True, **kw
         )
         thin, thick, halo = comps["number_density"]
-        np.testing.assert_allclose(thin, logn_disk(R, 0.025) + vol, rtol=1e-12)
+        col_thin, col_thick = _ln_columns(R)
+        expected_thin = logn_disk(R, 0.025) - col_thin + vol
+        np.testing.assert_allclose(thin, expected_thin, rtol=1e-12)
         np.testing.assert_allclose(
             thick,
-            logn_disk(R, 0.025, R_scale=2.0) + vol + np.log(_F_THICK),
+            logn_disk(R, 0.025, R_scale=1.9) - col_thick + vol + np.log(_F_THICK),
             rtol=1e-12,
         )
         np.testing.assert_allclose(
@@ -804,7 +817,7 @@ class TestVerticalJeans:
         # Without an age, the thin-disk age average is 0 at |Z_sun| too.
         no_age = logp_galactic_structure(d, (30.0, 0.0), return_components=True)
         thin, thick, _ = no_age[1]["number_density"]
-        np.testing.assert_allclose(thin, logn_disk(R, 0.025) + vol, rtol=1e-12)
+        np.testing.assert_allclose(thin, expected_thin, rtol=1e-12)
 
     @pytest.mark.parametrize("feh", [-0.8, -0.2, 0.3])
     @pytest.mark.parametrize(
@@ -902,6 +915,29 @@ class TestVerticalInputs:
 class TestThickDiskSurfaceNormalization:
     """The thick disk is normalized by its surface density at the Sun."""
 
+    @pytest.mark.parametrize("R", [4.1, 19.7])
+    def test_column_heights_between_radial_nodes_match_direct_integrals(self, R):
+        # The radial term divides by h(R) / h(R_sun), interpolated from a
+        # table at 0.1 R_sun steps. The reference integrates the profiles
+        # at R itself, with a grid of [Fe/H] for the thin disk and 16-point
+        # Gauss-Legendre panels in z (8 points in production).
+        z, w_z = gal._gauss_legendre_panels(gal._COLUMN_EDGES, 16)
+        fehs = np.linspace(-1.4, 1.0, 17)
+        w_feh = np.exp(-0.5 * ((fehs + 0.2) / 0.3) ** 2)
+        R_z = np.full(z.size, R)
+        thin = 0.0
+        for feh, wf in zip(fehs, w_feh):
+            profile = _no_age_vertical(R_z, z, np.full(z.size, feh))[0]
+            thin += wf * (np.exp(profile) @ w_z) / w_feh.sum()
+        thick = np.exp(_no_age_vertical(R_z, z, R_z)[1]) @ w_z
+        col_thin, col_thick = (np.exp(c[0]) for c in _ln_columns(np.array([R])))
+        np.testing.assert_allclose(
+            _SUMMARY["thin_column_height"] * col_thin, thin, rtol=5e-4
+        )
+        np.testing.assert_allclose(
+            _SUMMARY["thick_column_height"] * col_thick, thick, rtol=1e-4
+        )
+
     def test_summary_column_heights_match_a_dense_integral(self):
         # A reference over log-spaced ages and a grid of [Fe/H] with the
         # per-age kernel, independent of the age and [Fe/H] quadrature nodes.
@@ -923,7 +959,7 @@ class TestThickDiskSurfaceNormalization:
                 np.full(n, feh),
                 True,
                 _ROT,
-                (2.6, 2.0),
+                (2.74, 2.0),
                 kin.THICK_DISK_SIGMA[2] ** 2,
                 np.empty(0),
                 np.empty(0),

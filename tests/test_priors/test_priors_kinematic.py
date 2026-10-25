@@ -226,16 +226,16 @@ def test_thin_disk_population_matches_the_measured_low_alpha_disk():
 def test_thick_disk_rotation_matches_the_measured_high_alpha_lag():
     # Anguiano et al. (2020, Table 1), high-alpha disk: lag 240 - 191.82 =
     # 48.2 km/s, which does not depend on their v_c. The model predicts
-    # it (44.3 km/s); nothing is fitted to it. It moves with the thick
+    # it (46.7 km/s); nothing is fitted to it. It moves with the thick
     # disk's density gradient at the Sun, d ln nu / d ln R.
     mean, _ = thick_disk_velocity_moments(np.array([R_SOLAR]))
-    assert abs(_vc_solar() - mean[0, 1] - 48.2) < 4.0
+    assert abs(_vc_solar() - mean[0, 1] - 48.2) < 3.0
 
 
 @pytest.mark.parametrize("disk", ["thin", "thick"])
 def test_disk_rotation_solves_the_jeans_equation_for_the_logn_disk_density(disk):
-    # The radii miss the ends of the edge blends (5 and 12 kpc for the
-    # thick disk), where the second derivative jumps and the central
+    # The radii miss the ends of the edge blends (11.5 and 13.1 kpc for
+    # the thick disk), where the second derivative jumps and the central
     # differences lose precision.
     R = np.linspace(4.6, 12.6, 17)
     density = dict(R_scale=2.3, R_smooth=1.5)
@@ -281,7 +281,7 @@ def test_disk_rotation_stays_below_circular_and_vanishes_at_the_centre(disk):
 def test_disk_dispersions_keep_their_edge_values_outside_the_fitted_radii():
     # Beyond DISK_EDGE of each edge the clamp is the hard clamp. The thin
     # disk is clamped in L_z, and its mean L_z lies below the circular one,
-    # so at 5 Gyr and [Fe/H] = 0 its outer clamp is reached at 22.8 kpc.
+    # so at 5 Gyr and [Fe/H] = 0 its outer clamp is reached at 22.7 kpc.
     _, cov = _thin(np.array([1.5, 0.5, 30.0, 60.0]))
     sig = np.sqrt(cov[:, [0, 2], [0, 2]])
     np.testing.assert_allclose(sig[1], sig[0], rtol=1e-12)
