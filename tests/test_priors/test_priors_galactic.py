@@ -19,14 +19,14 @@ from brutus.priors import (
     logp_galactic_structure,
 )
 from brutus.utils import truncnorm_logpdf
-from brutus.utils.math import galactic_to_galactocentric_cyl
+from brutus.utils.math import R_SOLAR, Z_SOLAR, galactic_to_galactocentric_cyl
 
 _QUAD = dict(epsabs=1e-12, epsrel=1e-12, limit=500)
 
 
 # v_c at the Sun: the default scale of the measured rotation curve.
-_VC_SUN = kin.solar_velocity(8.2)[1] - kin.V_PEC_SUN
-_ROT = (8.2, _VC_SUN)
+_VC_SUN = kin.solar_velocity(R_SOLAR)[1] - kin.V_PEC_SUN
+_ROT = (R_SOLAR, _VC_SUN)
 # The tabulated potential scales with v_c at the Sun squared.
 _PHI_SCALE = (_VC_SUN / kin._V_VC0) ** 2
 
@@ -85,7 +85,7 @@ def _ln_columns(R):
     """ln(h(R) / h(R_sun)) of the thin and thick disks, from the production
     tables (tested against direct integrals in
     TestThickDiskSurfaceNormalization)."""
-    x = np.asarray(R, dtype=float) / 8.2
+    x = np.asarray(R, dtype=float) / R_SOLAR
     return [gal._ln_column_array(x, table) for table in _COLUMNS]
 
 
@@ -96,7 +96,7 @@ def _no_age_vertical(R, abs_Z, feh, age_args=_AGE_ARGS):
     nodes = gal._thin_age_nodes(-0.2, age_args)
     R, abs_Z, feh = (np.atleast_1d(np.asarray(x, dtype=float)) for x in (R, abs_Z, feh))
     var_z = kin.THICK_DISK_SIGMA[2] ** 2
-    args = (R, abs_Z, 0.025, np.empty(0), feh, False, _ROT, (2.74, 2.0), var_z)
+    args = (R, abs_Z, Z_SOLAR, np.empty(0), feh, False, _ROT, (2.74, 2.0), var_z)
     return gal._disk_vertical_array(*args, *nodes)
 
 
@@ -116,8 +116,8 @@ def _vertical_reference(R, Z, age, feh):
     thin = np.empty(len(R))
     thick = np.empty(len(R))
     for i in range(len(R)):
-        terms = kin._vertical_terms(R[i] / 8.2, abs(Z[i]))
-        terms_sun = kin._vertical_terms(R[i] / 8.2, 0.025)
+        terms = kin._vertical_terms(R[i] / R_SOLAR, abs(Z[i]))
+        terms_sun = kin._vertical_terms(R[i] / R_SOLAR, Z_SOLAR)
         L, (L_sun, L_clamp) = _mean_L(R[i], age[i], feh[i])
         L = _clamp(L, *L_clamp)
         a, lam = kin.THIN_DISK_ALPHA_L[1], kin.THIN_DISK_LAMBDA_L[1]
@@ -131,7 +131,7 @@ def _vertical_reference(R, Z, age, feh):
         thin[i] = (
             -(terms[0] - terms_sun[0]) - (terms[1] - terms_sun[1]) * _PHI_SCALE / sig**2
         )
-        var = kin.THICK_DISK_SIGMA[2] ** 2 * kin._thick_disk_scale(R[i] / 8.2)[2]
+        var = kin.THICK_DISK_SIGMA[2] ** 2 * kin._thick_disk_scale(R[i] / R_SOLAR)[2]
         thick[i] = -(terms[2] - terms_sun[2]) * _PHI_SCALE / var
     return thin, thick
 
@@ -261,16 +261,18 @@ class TestDiskSolarNormalization:
 
     def test_thin_disk_unity_at_solar(self):
         # Old code: exp(logn) = 0.9117 (normalized at un-smoothed R_solar)
-        logn = logn_disk(np.array([8.2]), np.array([0.025]))
+        logn = logn_disk(np.array([R_SOLAR]), np.array([Z_SOLAR]))
         assert logn[0] == 0.0
 
     def test_thick_disk_unity_at_solar(self):
         # Old code: exp(logn) = 0.8867
-        logn = logn_disk(np.array([8.2]), np.array([0.025]), R_scale=2.0, Z_scale=0.9)
+        logn = logn_disk(
+            np.array([R_SOLAR]), np.array([Z_SOLAR]), R_scale=2.0, Z_scale=0.9
+        )
         assert logn[0] == 0.0
 
     def test_halo_unity_at_solar(self):
-        logn = logn_halo(np.array([8.2]), np.array([0.025]))
+        logn = logn_halo(np.array([R_SOLAR]), np.array([Z_SOLAR]))
         assert np.isclose(logn[0], 0.0)
 
     def test_custom_solar_position(self):
@@ -460,7 +462,7 @@ class TestJointFehAgePrior:
         for idx, (fm, fsig, ln_f) in enumerate(self.COMPONENTS):
             if idx < 2:
                 R_scale = (2.74, 1.9)[idx]
-                lnp_c = logn_disk(R, 0.025, R_scale=R_scale) + vertical[idx]
+                lnp_c = logn_disk(R, Z_SOLAR, R_scale=R_scale) + vertical[idx]
                 lnp_c -= columns[idx]
             else:
                 lnp_c = logn_halo(R, Z)
@@ -738,7 +740,7 @@ class TestVerticalJeans:
         # at 2 kpc gives -14 ([Fe/H] = -1) and -32 ([Fe/H] = 0) over
         # 15-30 kpc.
         Z = np.array([15.0, 30.0])
-        ln_nu = _no_age_vertical(np.full(2, 8.2), Z, np.full(2, feh))[0]
+        ln_nu = _no_age_vertical(np.full(2, R_SOLAR), Z, np.full(2, feh))[0]
         assert np.diff(ln_nu)[0] / np.log(2.0) < -10.0
 
     @pytest.mark.parametrize("x", [0.137, 0.5046, 1.00625, 2.31, 3.6])
@@ -802,15 +804,15 @@ class TestVerticalJeans:
         )
         thin, thick, halo = comps["number_density"]
         col_thin, col_thick = _ln_columns(R)
-        expected_thin = logn_disk(R, 0.025) - col_thin + vol
+        expected_thin = logn_disk(R, Z_SOLAR) - col_thin + vol
         np.testing.assert_allclose(thin, expected_thin, rtol=1e-12)
         np.testing.assert_allclose(
             thick,
-            logn_disk(R, 0.025, R_scale=1.9) - col_thick + vol + np.log(_F_THICK),
+            logn_disk(R, Z_SOLAR, R_scale=1.9) - col_thick + vol + np.log(_F_THICK),
             rtol=1e-12,
         )
         np.testing.assert_allclose(
-            halo, logn_halo(R, np.full_like(R, 0.025)) + vol + np.log(_F_HALO)
+            halo, logn_halo(R, np.full_like(R, Z_SOLAR)) + vol + np.log(_F_HALO)
         )
         fused = logp_galactic_structure(d, (30.0, 0.0), **kw)
         np.testing.assert_allclose(fused, lnp, rtol=1e-12)
@@ -858,7 +860,7 @@ class TestVerticalJeans:
         # New result: scale heights near 0.3 and 0.9 kpc (Juric et al. 2008)
         # follow from the dispersions and the potential.
         z = np.linspace(0.3, 1.5, 25)
-        thin = _no_age_vertical(np.full(z.size, 8.2), z, np.full(z.size, -0.2))[0]
+        thin = _no_age_vertical(np.full(z.size, R_SOLAR), z, np.full(z.size, -0.2))[0]
         assert 0.25 < self._scale_height(thin, z) < 0.4
         z = np.linspace(0.5, 2.0, 25)
         zero = kin._vertical_terms(1.0, 0.0)
@@ -915,10 +917,13 @@ class TestVerticalInputs:
 class TestThickDiskSurfaceNormalization:
     """The thick disk is normalized by its surface density at the Sun."""
 
-    @pytest.mark.parametrize("R", [4.1, 19.7])
+    @pytest.mark.parametrize("R", [9.5, 19.7])
     def test_column_heights_between_radial_nodes_match_direct_integrals(self, R):
         # The radial term divides by h(R) / h(R_sun), interpolated from a
-        # table at 0.1 R_sun steps. The reference integrates the profiles
+        # table at 0.1 R_sun steps. That step does not resolve the blends of
+        # the thin-disk clamp (1% at 4.5 kpc) and the thick-disk hold (0.1%
+        # at 12 kpc); #294 replaces the table. The reference integrates the
+        # profiles
         # at R itself, with a grid of [Fe/H] for the thin disk and 16-point
         # Gauss-Legendre panels in z (8 points in production).
         z, w_z = gal._gauss_legendre_panels(gal._COLUMN_EDGES, 16)
@@ -952,9 +957,9 @@ class TestThickDiskSurfaceNormalization:
         thin = 0.0
         for feh, wf in zip(fehs, w_feh):
             prof = gal._disk_vertical_array(
-                np.full(n, 8.2),
+                np.full(n, R_SOLAR),
                 np.tile(z, ages.size),
-                0.025,
+                Z_SOLAR,
                 loga,
                 np.full(n, feh),
                 True,
@@ -988,7 +993,7 @@ class TestThickDiskSurfaceNormalization:
         # In the BV24 potential a hot disk is bound only logarithmically:
         # with sigma_z = 100 km/s, stopping the column at 10 kpc lost 5%.
         z = np.concatenate((np.linspace(0.0, 10.0, 501), np.linspace(10.1, 100.0, 900)))
-        terms0 = kin._vertical_terms(1.0, 0.025)
+        terms0 = kin._vertical_terms(1.0, Z_SOLAR)
         thick = [
             kin._thick_disk_vertical(
                 kin._vertical_terms(1.0, t), terms0, 100.0**2 / _PHI_SCALE
@@ -1050,13 +1055,13 @@ class TestHaloShapeAndMass:
 
     def test_halo_matches_the_broken_power_law(self):
         # Points inside and beyond the break.
-        R = np.array([4.0, 8.2, 15.0, 25.0, 10.0, 40.0])
-        Z = np.array([3.0, 0.025, 12.0, 5.0, 35.0, 20.0])
+        R = np.array([4.0, R_SOLAR, 15.0, 25.0, 10.0, 40.0])
+        Z = np.array([3.0, Z_SOLAR, 12.0, 5.0, 35.0, 20.0])
         m = np.sqrt(R**2 + (Z / 0.77) ** 2 + 4.0)
         ln_n = np.where(
             m < 19.1, -2.85 * np.log(m), -2.85 * np.log(19.1) - 4.55 * np.log(m / 19.1)
         )
-        m_sun = np.sqrt(8.2**2 + (0.025 / 0.77) ** 2 + 4.0)
+        m_sun = np.sqrt(R_SOLAR**2 + (Z_SOLAR / 0.77) ** 2 + 4.0)
         np.testing.assert_allclose(
             logn_halo(R, Z), ln_n + 2.85 * np.log(m_sun), rtol=1e-12
         )

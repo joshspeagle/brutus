@@ -92,6 +92,8 @@ from brutus.priors.kinematic import (
 from brutus.utils import truncnorm_logpdf
 from brutus.utils.math import (
     LOG_ZERO,
+    R_SOLAR,
+    Z_SOLAR,
     _truncnorm_lognorm_scalar,
     galactic_to_galactocentric_cyl,
 )
@@ -618,7 +620,7 @@ __all__ = [
 
 
 def logn_disk(
-    R, Z, R_solar=8.2, Z_solar=0.025, R_scale=2.74, Z_scale=0.3, R_smooth=2.0
+    R, Z, R_solar=R_SOLAR, Z_solar=Z_SOLAR, R_scale=2.74, Z_scale=0.3, R_smooth=2.0
 ):
     r"""
     Log-number density for the Galactic disk stellar population.
@@ -633,9 +635,11 @@ def logn_disk(
     Z : array_like
         Height above the Galactic midplane in kpc.
     R_solar : float, optional
-        Solar Galactocentric radius in kpc. Default is 8.2.
+        Solar Galactocentric radius in kpc.
+        Default is ``R_SOLAR``, 8.275 (GRAVITY Collaboration 2021).
     Z_solar : float, optional
-        Solar height above midplane in kpc. Default is 0.025.
+        Solar height above midplane in kpc.
+        Default is ``Z_SOLAR``, 0.0208 (Bennett & Bovy 2019).
     R_scale : float, optional
         Disk radial scale length in kpc. Default is 2.74, that of the thin
         disk.
@@ -691,8 +695,8 @@ def logn_disk(
 def logn_halo(
     R,
     Z,
-    R_solar=8.2,
-    Z_solar=0.025,
+    R_solar=R_SOLAR,
+    Z_solar=Z_SOLAR,
     R_smooth=2.0,
     eta_inner=2.85,
     eta_outer=4.55,
@@ -722,9 +726,11 @@ def logn_halo(
     Z : array_like
         Height above the Galactic midplane in kpc.
     R_solar : float, optional
-        Solar Galactocentric radius in kpc. Default is 8.2.
+        Solar Galactocentric radius in kpc.
+        Default is ``R_SOLAR``, 8.275 (GRAVITY Collaboration 2021).
     Z_solar : float, optional
-        Solar height above midplane in kpc. Default is 0.025.
+        Solar height above midplane in kpc.
+        Default is ``Z_SOLAR``, 0.0208 (Bennett & Bovy 2019).
     R_smooth : float, optional
         Core radius in kpc, which keeps the density finite at the Galactic
         centre. Default is 2.0.
@@ -986,8 +992,8 @@ def logp_galactic_structure(
     labels=None,
     feh=None,
     loga=None,
-    R_solar=8.2,
-    Z_solar=0.025,
+    R_solar=R_SOLAR,
+    Z_solar=Z_SOLAR,
     R_thin=2.74,
     Rs_thin=2.0,
     R_thick=1.9,
@@ -1044,9 +1050,11 @@ def logp_galactic_structure(
         Per-point log10(age/yr) as a plain float array, an alternative to
         ``labels`` for the age prior (see ``feh``).
     R_solar : float, optional
-        Solar Galactocentric radius in kpc. Default is 8.2.
+        Solar Galactocentric radius in kpc.
+        Default is ``R_SOLAR``, 8.275 (GRAVITY Collaboration 2021).
     Z_solar : float, optional
-        Solar height above midplane in kpc. Default is 0.025.
+        Solar height above midplane in kpc.
+        Default is ``Z_SOLAR``, 0.0208 (Bennett & Bovy 2019).
     R_thin : float, optional
         Radial scale length of the thin-disk surface density in kpc.
         Default is 2.74 (Imig et al. 2025).

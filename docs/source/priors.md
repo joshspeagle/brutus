@@ -43,7 +43,7 @@ $$
 \pi_{\rm gal}(d \mid \ell, b) \propto d^2 \sum_c f_c\, n_c\big(R(d), Z(d)\big),
 $$
 
-where $d^2$ is the volume of a shell and $(R, Z)$ are the Galactocentric radius and height. The Sun is at $R_\odot = 8.2$ kpc and $Z_\odot = 0.025$ kpc (`R_solar`, `Z_solar` in `fit()`, which apply to the default prior only).
+where $d^2$ is the volume of a shell and $(R, Z)$ are the Galactocentric radius and height. The Sun is at $R_\odot = 8.275$ kpc {cite:p}`gravity2021` and $Z_\odot = 0.0208$ kpc {cite:p}`bennett2019` (`R_solar`, `Z_solar` in `fit()`, which apply to the default prior only).
 
 Each disk has an exponential surface density $\Sigma(R)$, with the radius smoothed near the Galactic centre, $R_{\rm eff} = \sqrt{R^2 + R_s^2}$. Its density is the surface density divided by the column height $h(R) = \Sigma / 2\nu(R, Z_\odot)$, times the vertical profile:
 
@@ -53,7 +53,7 @@ $$
 
 A disk that flares therefore spreads its surface density over a greater height, instead of gaining stars. The scale lengths are those of the surface density: 2.74 kpc for the thin disk, the mass-weighted low-[α/Fe] disk of {cite:t}`imig2025`, and 1.9 kpc for the thick disk {cite:p}`mackereth2017`. brutus tabulates $h(R)$ at steps of $0.1 R_\odot$ out to $4 R_\odot$, interpolates it with Catmull-Rom cubics and holds it beyond $3.9 R_\odot$.
 
-The vertical profile $\nu$ solves the vertical Jeans equation, $\partial(\nu \sigma_z^2)/\partial z = -\nu K_z$, in one potential for both disks: that of the Milky Way model of {cite:t}`binney2024`, which fits a self-consistent potential and distribution functions to APOGEE DR17 and Gaia DR3. brutus tabulates its vertical potential $\Phi_z(R, z) = \Phi(R, z) - \Phi(R, 0)$ and force $K_z = \partial \Phi / \partial z$ against $R / R_\odot$ and $z$, from a rebuild with AGAMA of the paper's distribution functions (`.github/scripts/make_bv24_tables.py`). The rebuilt model has $K_z(R_\odot, 1.1\ {\rm kpc}) / 2\pi G = 63.9\ M_\odot\,{\rm pc}^{-2}$, against 66.4 in the paper, and a circular speed of 235.7 km/s at the Sun. brutus scales the potential by $(v_{c,\odot} / 235.7\ {\rm km\,s^{-1}})^2$, so that it matches the rotation curve at the Sun (237.0 km/s by default), as $R / R_\odot$ scales its radii.
+The vertical profile $\nu$ solves the vertical Jeans equation, $\partial(\nu \sigma_z^2)/\partial z = -\nu K_z$, in one potential for both disks: that of the Milky Way model of {cite:t}`binney2024`, which fits a self-consistent potential and distribution functions to APOGEE DR17 and Gaia DR3. brutus tabulates its vertical potential $\Phi_z(R, z) = \Phi(R, z) - \Phi(R, 0)$ and force $K_z = \partial \Phi / \partial z$ against $R / R_\odot$ and $z$, from a rebuild with AGAMA of the paper's distribution functions (`.github/scripts/make_bv24_tables.py`). The rebuilt model has $K_z(R_\odot, 1.1\ {\rm kpc}) / 2\pi G = 63.9\ M_\odot\,{\rm pc}^{-2}$, against 66.4 in the paper, and a circular speed of 235.7 km/s at the Sun. brutus scales the potential by $(v_{c,\odot} / 235.7\ {\rm km\,s^{-1}})^2$, so that it matches the rotation curve at the Sun (239.2 km/s by default), as $R / R_\odot$ scales its radii.
 
 The thin-disk dispersion $\sigma_z$ depends on the star's age $\tau$, [Fe/H] and angular momentum, and grows with height as $f_z = 1 + \gamma_z |z|$ {cite:p}`sharma2021`. The profile is then
 

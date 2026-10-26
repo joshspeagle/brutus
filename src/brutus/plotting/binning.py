@@ -16,7 +16,7 @@ import numpy as np
 from scipy.ndimage import gaussian_filter as norm_kde
 
 from ..priors import logp_galactic_structure as gal_lnprior
-from ..utils.math import AVLIM, RVLIM
+from ..utils.math import AVLIM, R_SOLAR, RVLIM, Z_SOLAR
 from .utils import _require_coord, _sar_draws
 
 __all__ = ["bin_pdfs_distred"]
@@ -40,8 +40,8 @@ def bin_pdfs_distred(
     smooth=(0.01, 0.005),
     rstate=None,
     verbose=False,
-    R_solar=8.2,
-    Z_solar=0.025,
+    R_solar=R_SOLAR,
+    Z_solar=Z_SOLAR,
 ):
     """
     Generate binned versions of the 2-D posteriors for the distance and

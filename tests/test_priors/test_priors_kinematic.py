@@ -31,9 +31,8 @@ from brutus.priors.kinematic import (
     thin_disk_velocity_moments,
     velocity_to_observables,
 )
-from brutus.utils.math import galactic_to_galactocentric_cyl
+from brutus.utils.math import R_SOLAR, galactic_to_galactocentric_cyl
 
-R_SOLAR = 8.2
 # kpc / (km/s) in years, and mas per radian, from the definitions of the
 # parsec, the astronomical unit and the Julian year.
 KPC_KM = 1000.0 * 648000.0 / np.pi * 149597870.7

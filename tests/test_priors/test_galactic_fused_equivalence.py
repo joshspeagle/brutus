@@ -33,7 +33,12 @@ from brutus.priors.galactic import (
     logp_galactic_structure,
 )
 from brutus.priors.kinematic import THICK_DISK_SIGMA, _vc_solar
-from brutus.utils.math import _truncnorm_lognorm_scalar, galactic_to_galactocentric_cyl
+from brutus.utils.math import (
+    R_SOLAR,
+    Z_SOLAR,
+    _truncnorm_lognorm_scalar,
+    galactic_to_galactocentric_cyl,
+)
 
 _LOG_2PI = log(2.0 * pi)
 
@@ -230,8 +235,8 @@ def reference_kernel(
     **_NORMALIZATION_DEFAULTS
 )
 DEFAULT_ARGS = dict(
-    R_solar=8.2,
-    Z_solar=0.025,
+    R_solar=R_SOLAR,
+    Z_solar=Z_SOLAR,
     R_thin=2.74,
     Rs_thin=2.0,
     R_thick=1.9,
@@ -258,8 +263,10 @@ DEFAULT_ARGS = dict(
 def _run_reference(dists, ell, b, feh, loga):
     has_feh = feh is not None
     has_loga = loga is not None
-    R, Z = galactic_to_galactocentric_cyl(dists, ell, b, R_solar=8.2, Z_solar=0.025)
-    rot = (8.2, _vc_solar(None, 8.2))
+    R, Z = galactic_to_galactocentric_cyl(
+        dists, ell, b, R_solar=R_SOLAR, Z_solar=Z_SOLAR
+    )
+    rot = (R_SOLAR, _vc_solar(None, R_SOLAR))
     age_nodes = (
         (np.empty(0),) * 3
         if has_loga
@@ -268,7 +275,7 @@ def _run_reference(dists, ell, b, feh, loga):
     thin_z, thick_z = _disk_vertical_array(
         R,
         np.abs(Z),
-        0.025,
+        Z_SOLAR,
         loga if has_loga else np.empty(0),
         feh if has_feh else np.full(len(R), -0.2),
         has_loga,
@@ -283,7 +290,7 @@ def _run_reference(dists, ell, b, feh, loga):
         Z,
         thin_z,
         thick_z,
-        *(_ln_column_array(R / 8.2, table) for table in _COLUMNS),
+        *(_ln_column_array(R / R_SOLAR, table) for table in _COLUMNS),
         feh if has_feh else np.empty(0),
         loga if has_loga else np.empty(0),
         has_feh,

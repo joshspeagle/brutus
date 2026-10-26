@@ -280,6 +280,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `brutus.priors.kinematic` that set the old potential and dispersion
   profile: `THICK_DISK_R_SIGMA`, `THICK_DISK_R_RANGE` and `VERTICAL_*`
   (#292).
+- **The Sun is at R = 8.275 kpc and Z = 20.8 pc by default**
+  *(output-changing)*. The defaults were 8.2 kpc and 25 pc. They now
+  follow GRAVITY Collaboration (2021) and Bennett & Bovy (2019), and
+  `brutus.utils.math` exports them as `R_SOLAR` and `Z_SOLAR`. All
+  `R_solar` and `Z_solar` defaults use them. The circular speed at the
+  Sun becomes 239.25 km/s, from 236.97 km/s (#294).
 - **The halo is a broken power law normalized by its mass**
   *(output-changing)*. `logn_halo` and the halo of
   `logp_galactic_structure` follow Amarante et al. (2024): slopes 2.85

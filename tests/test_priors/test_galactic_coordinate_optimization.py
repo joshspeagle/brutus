@@ -16,6 +16,7 @@ import pytest
 from astropy.coordinates import SkyCoord
 
 from brutus.priors.galactic import logp_galactic_structure
+from brutus.utils.math import R_SOLAR, Z_SOLAR
 
 
 class TestGalacticStructureCoordinateOptimization:
@@ -51,14 +52,14 @@ class TestGalacticStructureCoordinateOptimization:
         ), "Changing R_solar/Z_solar should produce different results"
 
     def test_default_r_solar_z_solar(self):
-        """Test that default R_solar=8.2 and Z_solar=0.025 are used."""
+        """Test that default R_solar=R_SOLAR and Z_solar=Z_SOLAR are used."""
         dists = np.array([1.0, 5.0])
         coord = (45.0, 15.0)
 
         # Explicit defaults should match implicit defaults
         logp_implicit = logp_galactic_structure(dists, coord)
         logp_explicit = logp_galactic_structure(
-            dists, coord, R_solar=8.2, Z_solar=0.025
+            dists, coord, R_solar=R_SOLAR, Z_solar=Z_SOLAR
         )
         np.testing.assert_array_almost_equal(logp_implicit, logp_explicit)
 

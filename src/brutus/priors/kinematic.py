@@ -51,6 +51,8 @@ import numpy as np
 from numba import jit, prange
 from scipy.interpolate import BSpline
 
+from brutus.utils.math import R_SOLAR
+
 __all__ = [
     "solar_velocity",
     "thin_disk_velocity_moments",
@@ -158,7 +160,7 @@ with np.load(os.path.join(os.path.dirname(__file__), "bv24_tables.npz")) as _f:
 _SIG_SLOPE = np.gradient(_SIG_LNVAR, _SIG_X, axis=0)
 
 
-def solar_velocity(R_solar=8.2, pm_sgra=PM_SGRA, U_sun=U_SUN):
+def solar_velocity(R_solar=R_SOLAR, pm_sgra=PM_SGRA, U_sun=U_SUN):
     r"""
     Return the velocity of the Sun relative to the Galactic centre.
 
@@ -176,7 +178,8 @@ def solar_velocity(R_solar=8.2, pm_sgra=PM_SGRA, U_sun=U_SUN):
     Parameters
     ----------
     R_solar : float, optional
-        Distance of the Sun from the Galactic centre in kpc. Default is 8.2.
+        Distance of the Sun from the Galactic centre in kpc.
+        Default is ``R_SOLAR``, 8.275 (GRAVITY Collaboration 2021).
     pm_sgra : tuple of float, optional
         Proper motion ``(mu_l*, mu_b)`` of Sgr A* in mas/yr. Default is
         ``(-6.411, -0.219)`` (Reid & Brunthaler 2020).
@@ -718,7 +721,7 @@ def thin_disk_velocity_moments(
     feh,
     R_scale=2.74,
     R_smooth=2.0,
-    R_solar=8.2,
+    R_solar=R_SOLAR,
     v_circ_solar=None,
 ):
     r"""
@@ -793,12 +796,13 @@ def thin_disk_velocity_moments(
         kpc, as in `~brutus.priors.galactic.logn_disk`. Defaults are 2.74
         and 2.0.
     R_solar : float, optional
-        Distance of the Sun from the Galactic centre in kpc. Default is 8.2.
+        Distance of the Sun from the Galactic centre in kpc.
+        Default is ``R_SOLAR``, 8.275 (GRAVITY Collaboration 2021).
     v_circ_solar : float, optional
         Circular velocity at ``R_solar`` in km/s, which scales the measured
         curve. Default is the solar V from ``solar_velocity(R_solar)``
         minus the peculiar 12.24 km/s of Schönrich et al. (2010):
-        236.97 km/s for ``R_solar=8.2``. The shape of the curve is a
+        239.25 km/s for the default ``R_solar``. The shape of the curve is a
         function of ``R / R_solar``.
 
     Returns
@@ -849,7 +853,7 @@ def thick_disk_velocity_moments(
     sigma_solar=THICK_DISK_SIGMA,
     R_scale=1.9,
     R_smooth=2.0,
-    R_solar=8.2,
+    R_solar=R_SOLAR,
     v_circ_solar=None,
 ):
     r"""
@@ -1173,7 +1177,7 @@ def _project_array(dists, E, sun, R_solar, mean, cov):
     return obs_mean, obs_cov
 
 
-def velocity_to_observables(dists, coord, mean, cov, R_solar=8.2, v_sun=None):
+def velocity_to_observables(dists, coord, mean, cov, R_solar=R_SOLAR, v_sun=None):
     r"""
     Project a velocity ellipsoid to proper motions and radial velocity.
 
@@ -1206,7 +1210,8 @@ def velocity_to_observables(dists, coord, mean, cov, R_solar=8.2, v_sun=None):
         `thin_disk_velocity_moments`, `thick_disk_velocity_moments` and each
         component of `halo_velocity_moments`.
     R_solar : float, optional
-        Distance of the Sun from the Galactic centre in kpc. Default is 8.2.
+        Distance of the Sun from the Galactic centre in kpc.
+        Default is ``R_SOLAR``, 8.275 (GRAVITY Collaboration 2021).
     v_sun : array_like of shape `(3,)`, optional
         Solar velocity ``(U, V, W)`` in km/s. Default is
         ``solar_velocity(R_solar)``.

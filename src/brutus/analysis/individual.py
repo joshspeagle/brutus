@@ -73,7 +73,7 @@ from ..priors.galactic import logp_galactic_structure
 from ..priors.stellar import logp_imf, logp_ps1_luminosity_function
 
 # Import utility functions
-from ..utils.math import AVLIM, LOG_ZERO, RVLIM
+from ..utils.math import AVLIM, LOG_ZERO, R_SOLAR, RVLIM, Z_SOLAR
 from ..utils.math import inverse3 as _inverse3
 from ..utils.photometry import magnitude
 from ..utils.sampling import sample_multivariate_normal
@@ -790,8 +790,8 @@ class BruteForce:
         data_coords=None,
         mag_max=50.0,
         merr_max=0.25,
-        R_solar=8.2,
-        Z_solar=0.025,
+        R_solar=R_SOLAR,
+        Z_solar=Z_SOLAR,
     ):
         """
         Pre-process data and initialize priors for fitting.
@@ -1254,8 +1254,8 @@ class BruteForce:
         mem_lim=8000.0,
         rstate=None,
         apply_av_prior=True,
-        R_solar=8.2,
-        Z_solar=0.025,
+        R_solar=R_SOLAR,
+        Z_solar=Z_SOLAR,
         return_precision=False,
     ):
         """
@@ -1341,7 +1341,8 @@ class BruteForce:
 
         R_solar, Z_solar : float, optional
             Galactocentric radius and height of the Sun, in kpc, for the
-            default Galactic prior. Defaults are 8.2 and 0.025.
+            default Galactic prior. Defaults are ``R_SOLAR`` and ``Z_SOLAR``
+            (8.275 and 0.0208).
 
         return_precision : bool, optional
             Return the (scale, A(V), R(V)) precision matrices of the selected
@@ -1793,8 +1794,8 @@ class BruteForce:
         max_models=50000,
         precision_shrinkage=0.0,
         verbose=True,
-        R_solar=8.2,
-        Z_solar=0.025,
+        R_solar=R_SOLAR,
+        Z_solar=Z_SOLAR,
     ):
         """
         Fit all input models to the input data to compute log-posteriors.
@@ -1950,11 +1951,12 @@ class BruteForce:
 
         R_solar : float, optional
             Solar galactocentric radius in kpc, used by the Galactic structure
-            prior. Default is 8.2.
+            prior. Default is ``R_SOLAR``, 8.275 (GRAVITY Collaboration 2021).
 
         Z_solar : float, optional
             Solar height above the Galactic midplane in kpc, used by the
-            Galactic structure prior. Default is 0.025.
+            Galactic structure prior.
+            Default is ``Z_SOLAR``, 0.0208 (Bennett & Bovy 2019).
 
         Returns
         -------
@@ -2258,8 +2260,8 @@ class BruteForce:
         precision_shrinkage=0.0,
         rstate=None,
         return_distreds=True,
-        R_solar=8.2,
-        Z_solar=0.025,
+        R_solar=R_SOLAR,
+        Z_solar=Z_SOLAR,
     ):
         """
         Perform internal fitting for a single object.
