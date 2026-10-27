@@ -280,6 +280,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `brutus.priors.kinematic` that set the old potential and dispersion
   profile: `THICK_DISK_R_SIGMA`, `THICK_DISK_R_RANGE` and `VERTICAL_*`
   (#292).
+- **The Sun is at R = 8.275 kpc and Z = 20.8 pc by default**
+  *(output-changing)*. The defaults were 8.2 kpc and 25 pc. They now
+  follow GRAVITY Collaboration (2021) and Bennett & Bovy (2019), and
+  `brutus.utils.math` exports them as `R_SOLAR` and `Z_SOLAR`. All
+  `R_solar` and `Z_solar` defaults use them. The circular speed at the
+  Sun becomes 239.25 km/s, from 236.97 km/s (#294).
+- **The thick-disk dispersions are held inside 3 kpc**
+  *(output-changing)*. The inner edge of `THICK_DISK_X_RANGE` moves from
+  0.15 to 0.36 R_solar. Inside 3 kpc the high-alpha disk of Binney &
+  Vasiliev (2024) has sigma_z up to 119 km/s, which put two more peaks of
+  thick-disk density kiloparsecs above the Galactic centre. The hold also
+  sets the thick-disk velocity ellipsoid of
+  `thick_disk_velocity_moments` inside 3 kpc (#294).
+- **The Galactic prior's [Fe/H] and age distributions come from
+  measurements** *(output-changing)*. The thin disk follows the star
+  formation, enrichment and radial migration model of Frankel et al.
+  (2018): its labels depend on radius, held outside 5 to 14 kpc, with a
+  0.03 dex birth scatter, and its star formation fades beyond 8 Gyr and
+  ends at 12 Gyr. The thick disk has a skew-normal [Fe/H] (mean -0.45,
+  standard deviation 0.22, skewness -0.5) and ages on the old sequence of
+  Xiang & Rix (2022). The halo [Fe/H] has a skew-normal core through the
+  percentiles of Naidu et al. (2020) and a 10^[Fe/H] tail below -1.95
+  (Youakim et al. 2020); its ages are 12 +/- 1.5 Gyr. The labels are
+  blurred by the systematics between scales, `feh_systematic` (0.1, 0.15
+  and 0.15 dex for the thin disk, thick disk and halo), `age_systematic`
+  (10%, 15% and 15%) and `age_floor` (0.2 Gyr). Each thin-disk
+  population now has its own vertical profile and column, and labels not
+  given are summed over. At the Sun, [Fe/H] is -0.03 +/- 0.23, against
+  -0.23 +/- 0.33 before. Labelled ages above 13.8 Gyr have zero prior in
+  every component.
+  `thick_feh`, `thick_age`, `halo_feh` and `halo_age` replace
+  `feh_thin`, `feh_thin_sigma`, `feh_thick`, `feh_thick_sigma`,
+  `feh_halo`, `feh_halo_sigma`, `max_age`, `min_age`, `feh_age_ctr`,
+  `feh_age_scale`, `nsigma_from_max_age`, `max_sigma` and `min_sigma`.
+  `logp_feh` and `logp_age_from_feh` are removed. With
+  `return_components`, the `'feh'` and `'age'` entries are replaced by
+  `'labels'`, and `'number_density'` no longer depends on the labels.
+  Labels may span only the trailing axes of `dists`, and broadcast over
+  the leading ones: `logpost_grid` passes one label per model with
+  distances of shape (Nmc, Nmodels), so the terms of each model's labels
+  are computed once (#294).
 - **The halo is a broken power law normalized by its mass**
   *(output-changing)*. `logn_halo` and the halo of
   `logp_galactic_structure` follow Amarante et al. (2024): slopes 2.85

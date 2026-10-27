@@ -10,7 +10,7 @@ import pytest
 from scipy.interpolate import CubicHermiteSpline
 
 from brutus.priors import kinematic as kin
-from brutus.priors.galactic import logn_disk, logp_age_from_feh
+from brutus.priors.galactic import logn_disk, logp_galactic_structure
 from brutus.priors.kinematic import (
     HALO_DELTA_LOBE,
     HALO_F_ISO,
@@ -31,9 +31,8 @@ from brutus.priors.kinematic import (
     thin_disk_velocity_moments,
     velocity_to_observables,
 )
-from brutus.utils.math import galactic_to_galactocentric_cyl
+from brutus.utils.math import R_SOLAR, galactic_to_galactocentric_cyl
 
-R_SOLAR = 8.2
 # kpc / (km/s) in years, and mas per radian, from the definitions of the
 # parsec, the astronomical unit and the Julian year.
 KPC_KM = 1000.0 * 648000.0 / np.pi * 149597870.7
@@ -208,8 +207,15 @@ def test_thin_disk_population_matches_the_measured_low_alpha_disk():
     # Average over the local thin-disk age prior of brutus at [Fe/H] = -0.2.
     # Anguiano et al. (2020, Table 1), low-alpha disk: lag 240 - 229.43 =
     # 10.6 km/s, sigma_phi / sigma_R = 0.66, sigma_z / sigma_R = 0.49.
+    # Weighted by the thin-disk age distribution at the Sun.
     ages = np.linspace(0.05, 13.8, 400)
-    w = np.exp(logp_age_from_feh(ages, feh_mean=-0.2))
+    _, comps = logp_galactic_structure(
+        np.full(ages.size, 1e-3),
+        (0.0, 0.0),
+        loga=np.log10(ages * 1e9),
+        return_components=True,
+    )
+    w = np.exp(comps["labels"][0])
     w /= w.sum()
     mean, cov = thin_disk_velocity_moments(
         np.full_like(ages, R_SOLAR), np.zeros_like(ages), ages, -0.2
@@ -311,10 +317,10 @@ def test_thick_disk_dispersion_profiles_match_a_hermite_spline(k):
 @pytest.mark.parametrize("disk", ["thin", "thick"])
 def test_disk_rotation_is_continuous_across_the_edges_of_the_fitted_radii(disk):
     # A hard clamp made v_phi step by up to 10 km/s at the edges.
-    # The thick disk's inner hold, at 0.8 kpc, lies where v_c itself rises
-    # by more than 0.05 km/s per pc.
     edges = (
-        THIN_DISK_R_RANGE if disk == "thin" else (kin.THICK_DISK_X_RANGE[1] * R_SOLAR,)
+        THIN_DISK_R_RANGE
+        if disk == "thin"
+        else np.array(kin.THICK_DISK_X_RANGE) * R_SOLAR
     )
     for edge in edges:
         R = np.linspace(edge - 1.5, edge + 1.5, 3001)

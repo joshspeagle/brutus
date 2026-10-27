@@ -117,14 +117,6 @@ fitter.fit(
 .. autofunction:: logn_halo
 ```
 
-```{eval-rst}
-.. autofunction:: logp_feh
-```
-
-```{eval-rst}
-.. autofunction:: logp_age_from_feh
-```
-
 ## Kinematics
 
 Velocity moments of the Galactic components and their projection to proper motions and radial velocity. The Galactic prior uses the disk vertical dispersions; the fit does not use the velocities yet ([#275](https://github.com/joshspeagle/brutus/issues/275)).

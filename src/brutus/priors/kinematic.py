@@ -51,6 +51,8 @@ import numpy as np
 from numba import jit, prange
 from scipy.interpolate import BSpline
 
+from brutus.utils.math import R_SOLAR
+
 __all__ = [
     "solar_velocity",
     "thin_disk_velocity_moments",
@@ -122,9 +124,11 @@ THICK_DISK_SIGMA = (64.68, 50.82, 43.60)
 # Range of x = R / R_solar over which the thick-disk dispersions follow the
 # high-alpha disk of Binney & Vasiliev (2024), and the half-width of the
 # quadratic blend at each end. Outside it they keep their edge values: that
-# disk is truncated beyond x = 1.5 (12.3 kpc for R_solar = 8.2 kpc), its
+# disk is truncated beyond x = 1.5 (12.4 kpc for R_solar = 8.275 kpc), its
 # density 10 times below an exponential of scale length 1.9 kpc at 15 kpc.
-THICK_DISK_X_RANGE = (0.15, 1.5)
+# Inside x = 0.36 (3 kpc) its sigma_z rises to 119 km/s, which puts a
+# second peak of thick-disk density kiloparsecs above the Galactic centre.
+THICK_DISK_X_RANGE = (0.36, 1.5)
 THICK_DISK_X_EDGE = 0.1
 
 # Halo mixture by Galactocentric radius (Lancaster et al. 2019, Table 2):
@@ -158,7 +162,7 @@ with np.load(os.path.join(os.path.dirname(__file__), "bv24_tables.npz")) as _f:
 _SIG_SLOPE = np.gradient(_SIG_LNVAR, _SIG_X, axis=0)
 
 
-def solar_velocity(R_solar=8.2, pm_sgra=PM_SGRA, U_sun=U_SUN):
+def solar_velocity(R_solar=R_SOLAR, pm_sgra=PM_SGRA, U_sun=U_SUN):
     r"""
     Return the velocity of the Sun relative to the Galactic centre.
 
@@ -176,7 +180,8 @@ def solar_velocity(R_solar=8.2, pm_sgra=PM_SGRA, U_sun=U_SUN):
     Parameters
     ----------
     R_solar : float, optional
-        Distance of the Sun from the Galactic centre in kpc. Default is 8.2.
+        Distance of the Sun from the Galactic centre in kpc.
+        Default is ``R_SOLAR``, 8.275 (GRAVITY Collaboration 2021).
     pm_sgra : tuple of float, optional
         Proper motion ``(mu_l*, mu_b)`` of Sgr A* in mas/yr. Default is
         ``(-6.411, -0.219)`` (Reid & Brunthaler 2020).
@@ -718,7 +723,7 @@ def thin_disk_velocity_moments(
     feh,
     R_scale=2.74,
     R_smooth=2.0,
-    R_solar=8.2,
+    R_solar=R_SOLAR,
     v_circ_solar=None,
 ):
     r"""
@@ -793,12 +798,13 @@ def thin_disk_velocity_moments(
         kpc, as in `~brutus.priors.galactic.logn_disk`. Defaults are 2.74
         and 2.0.
     R_solar : float, optional
-        Distance of the Sun from the Galactic centre in kpc. Default is 8.2.
+        Distance of the Sun from the Galactic centre in kpc.
+        Default is ``R_SOLAR``, 8.275 (GRAVITY Collaboration 2021).
     v_circ_solar : float, optional
         Circular velocity at ``R_solar`` in km/s, which scales the measured
         curve. Default is the solar V from ``solar_velocity(R_solar)``
         minus the peculiar 12.24 km/s of Schönrich et al. (2010):
-        236.97 km/s for ``R_solar=8.2``. The shape of the curve is a
+        239.25 km/s for the default ``R_solar``. The shape of the curve is a
         function of ``R / R_solar``.
 
     Returns
@@ -849,7 +855,7 @@ def thick_disk_velocity_moments(
     sigma_solar=THICK_DISK_SIGMA,
     R_scale=1.9,
     R_smooth=2.0,
-    R_solar=8.2,
+    R_solar=R_SOLAR,
     v_circ_solar=None,
 ):
     r"""
@@ -861,7 +867,8 @@ def thick_disk_velocity_moments(
     Table 1), and each follows the radial profile of the midplane
     dispersion of the high-alpha disk in the Milky Way model of Binney &
     Vasiliev (2024), against :math:`R / R_\odot`. That disk is truncated
-    beyond about 12 kpc, so outside :math:`0.15 < R / R_\odot < 1.5`
+    beyond about 12 kpc, and inside about 3 kpc its :math:`\sigma_z` rises
+    steeply, so outside :math:`0.36 < R / R_\odot < 1.5`
     (``THICK_DISK_X_RANGE``) the dispersions keep their edge values, with a
     quadratic blend 0.2 :math:`R_\odot` wide. With the density falling
     exponentially and the dispersions held, the asymmetric drift grows
@@ -1061,29 +1068,6 @@ _V_INV_FZ2 = 1.0 / np.vectorize(_thin_disk_fz)(_V_Z) ** 2
 _V_JEANS = _jeans_table()
 
 
-@jit(nopython=True, cache=True)
-def _thin_disk_vertical(terms, terms_solar):
-    """Return (a, b) with ln nu(|z|) - ln nu(|z_sun|) = a - b / sig_z0^2
-    for a thin-disk population of vertical dispersion sig_z0 (km/s).
-
-    The vertical Jeans equation d(nu sigma_z^2)/dz = -nu K_z with
-    sigma_z(z) = sig_z0 f_z(|z|) gives
-    ln nu(z) = -2 ln f_z(|z|) - J(z) / sig_z0^2, with the Jeans
-    integral J of ``_vertical_terms``. ``terms`` and ``terms_solar`` come
-    from ``_vertical_terms`` at the same radius. Neither a nor b depends on
-    sig_z0, so many populations at one point share them.
-    """
-    return -(terms[0] - terms_solar[0]), terms[1] - terms_solar[1]
-
-
-@jit(nopython=True, cache=True)
-def _thick_disk_vertical(terms, terms_solar, var_z):
-    """Return ln nu(|z|) - ln nu(|z_sun|) = -[Phi(z) - Phi(z_sun)] / sigma_z^2
-    of the isothermal thick disk, from ``_vertical_terms`` at the two
-    heights; ``var_z`` is in (km/s)^2."""
-    return -(terms[2] - terms_solar[2]) / var_z
-
-
 def _sightline(coord, v_sun):
     """Return the unit vectors (e_l, e_b, e_r) as rows, and e . v_sun.
 
@@ -1173,7 +1157,7 @@ def _project_array(dists, E, sun, R_solar, mean, cov):
     return obs_mean, obs_cov
 
 
-def velocity_to_observables(dists, coord, mean, cov, R_solar=8.2, v_sun=None):
+def velocity_to_observables(dists, coord, mean, cov, R_solar=R_SOLAR, v_sun=None):
     r"""
     Project a velocity ellipsoid to proper motions and radial velocity.
 
@@ -1206,7 +1190,8 @@ def velocity_to_observables(dists, coord, mean, cov, R_solar=8.2, v_sun=None):
         `thin_disk_velocity_moments`, `thick_disk_velocity_moments` and each
         component of `halo_velocity_moments`.
     R_solar : float, optional
-        Distance of the Sun from the Galactic centre in kpc. Default is 8.2.
+        Distance of the Sun from the Galactic centre in kpc.
+        Default is ``R_SOLAR``, 8.275 (GRAVITY Collaboration 2021).
     v_sun : array_like of shape `(3,)`, optional
         Solar velocity ``(U, V, W)`` in km/s. Default is
         ``solar_velocity(R_solar)``.
