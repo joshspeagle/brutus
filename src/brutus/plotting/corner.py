@@ -18,7 +18,7 @@ from scipy.ndimage import gaussian_filter as norm_kde
 
 from ..priors import logp_galactic_structure as gal_lnprior
 from ..priors import logp_parallax
-from ..utils.math import AVLIM, RVLIM
+from ..utils.math import AVLIM, R_SOLAR, RVLIM, Z_SOLAR
 from ..utils.sampling import quantile
 from .utils import _require_coord, _resolve_span, _sar_draws, hist2d
 
@@ -61,8 +61,8 @@ def cornerplot(
     verbose=False,
     fig=None,
     rstate=None,
-    R_solar=8.2,
-    Z_solar=0.025,
+    R_solar=R_SOLAR,
+    Z_solar=Z_SOLAR,
 ):
     """
     Generate a corner plot of the 1-D and 2-D marginalized posteriors.

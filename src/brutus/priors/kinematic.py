@@ -20,7 +20,8 @@ motions to this frame.
 The disk dispersions are fits to Gaia-era data: the thin disk follows the
 age, angular-momentum, metallicity and height relations of Sharma et al.
 (2021), and the thick disk the high-[alpha/Fe] dispersions of Anguiano et
-al. (2020) with the radial profile of Mackereth et al. (2019). The mean
+al. (2020) with the radial profiles of the high-[alpha/Fe] disk of Binney &
+Vasiliev (2024). The mean
 rotation of both disks is the radial Jeans solution for the density of
 `~brutus.priors.galactic.logn_disk`. The halo is the isotropic plus
 radially anisotropic mixture of Lancaster et al. (2019).
@@ -44,11 +45,13 @@ Examples
 """
 
 import os
-from math import asinh, exp, radians, sqrt
+from math import asinh, exp, isfinite, log, radians, sqrt
 
 import numpy as np
 from numba import jit, prange
 from scipy.interpolate import BSpline
+
+from brutus.utils.math import R_SOLAR
 
 __all__ = [
     "solar_velocity",
@@ -99,22 +102,34 @@ THIN_DISK_LAMBDA_L = (2300.0, 1130.0)
 THIN_DISK_ALPHA_L = (0.09, 0.58)
 THIN_DISK_GAMMA_FEH = (-0.19, -0.52)
 THIN_DISK_GAMMA_Z = (0.12, 0.20)
-# Radii in kpc where the thin-disk relations were fitted (Sharma et al. 2021).
-# Beyond them the dispersions keep their values at the edges, reached
-# through a quadratic blend within DISK_EDGE kpc of each edge, so that
-# v_phi stays continuous.
+# Radii in kpc and [Fe/H] in dex where the thin-disk relations were fitted
+# (Sharma et al. 2021, Fig. 1). Beyond the radii the dispersions keep their
+# values at the edges, reached through a quadratic blend within DISK_EDGE
+# kpc of each edge, so that v_phi stays continuous; [Fe/H] is held at the
+# edges of its range.
 THIN_DISK_R_RANGE = (3.0, 20.0)
+THIN_DISK_FEH_RANGE = (-1.0, 0.5)
 DISK_EDGE = 1.0
+# Greatest |z| in kpc of the Sharma et al. (2021) fit of the height term
+# (their Fig. 1), and the half-width in kpc of its quadratic blend: above
+# it, sigma_z keeps its value, so each population is isothermal there.
+THIN_DISK_Z_MAX = 2.0
+THIN_DISK_Z_EDGE = 0.5
 
 # Thick-disk (high-[alpha/Fe]) dispersions (sigma_R, sigma_phi, sigma_z)
-# in km/s (Anguiano et al. 2020, Table 1) and the e-folding length of the
-# dispersions in kpc (Mackereth et al. 2019, h_sigma_R).
+# at the Sun in km/s (Anguiano et al. 2020, Table 1). Their radial profiles
+# are those of the high-alpha disk of Binney & Vasiliev (2024), below.
 THICK_DISK_SIGMA = (64.68, 50.82, 43.60)
-THICK_DISK_R_SIGMA = 15.0
-# Radii in kpc of the Mackereth et al. (2019) sample. Beyond them the
-# thick-disk dispersions keep their values at the edges, as for the thin
-# disk.
-THICK_DISK_R_RANGE = (4.0, 13.0)
+
+# Range of x = R / R_solar over which the thick-disk dispersions follow the
+# high-alpha disk of Binney & Vasiliev (2024), and the half-width of the
+# quadratic blend at each end. Outside it they keep their edge values: that
+# disk is truncated beyond x = 1.5 (12.4 kpc for R_solar = 8.275 kpc), its
+# density 10 times below an exponential of scale length 1.9 kpc at 15 kpc.
+# Inside x = 0.36 (3 kpc) its sigma_z rises to 119 km/s, which puts a
+# second peak of thick-disk density kiloparsecs above the Galactic centre.
+THICK_DISK_X_RANGE = (0.36, 1.5)
+THICK_DISK_X_EDGE = 0.1
 
 # Halo mixture by Galactocentric radius (Lancaster et al. 2019, Table 2):
 # centres of the radial bins in kpc; weight of the isotropic component;
@@ -131,8 +146,23 @@ HALO_SIGMA_T_LOBE = (58.18, 34.02, 29.14, 145.69)
 HALO_DELTA_LOBE = (104.16, 98.60, 67.75, 82.87)
 HALO_V_PHI_LOBE = (4.49, -11.54, -14.13, 27.39)
 
+# Vertical potential and thick-disk dispersion profiles of the Milky Way
+# model of Binney & Vasiliev (2024), rebuilt with AGAMA by
+# .github/scripts/make_bv24_tables.py, against x = R / R0 with their
+# R0 = 8.27 kpc, so that x = R / R_solar here. ``dphi`` is
+# Phi(R, z) - Phi(R, 0) in (km/s)^2 and ``kz`` is K_z = dPhi/dz in
+# (km/s)^2/kpc, at x = 0, dx, ... and z = z_scale sinh(u) with
+# u = 0, du, ...; ``vc0`` is the model's v_c at R0 in km/s; ``ln_var`` is
+# ln(sigma^2 / sigma^2(R0)) of the high-alpha disk's midplane
+# (sigma_R, sigma_phi, sigma_z) on ``x_sigma``.
+with np.load(os.path.join(os.path.dirname(__file__), "bv24_tables.npz")) as _f:
+    _V_DX, _V_ZS, _V_DU, _V_VC0 = (float(_f[k]) for k in ("dx", "z_scale", "du", "vc0"))
+    _V_DPHI, _V_KZ = _f["dphi"], _f["kz"]
+    _SIG_X, _SIG_LNVAR = _f["x_sigma"], _f["ln_var"]
+_SIG_SLOPE = np.gradient(_SIG_LNVAR, _SIG_X, axis=0)
 
-def solar_velocity(R_solar=8.2, pm_sgra=PM_SGRA, U_sun=U_SUN):
+
+def solar_velocity(R_solar=R_SOLAR, pm_sgra=PM_SGRA, U_sun=U_SUN):
     r"""
     Return the velocity of the Sun relative to the Galactic centre.
 
@@ -150,7 +180,8 @@ def solar_velocity(R_solar=8.2, pm_sgra=PM_SGRA, U_sun=U_SUN):
     Parameters
     ----------
     R_solar : float, optional
-        Distance of the Sun from the Galactic centre in kpc. Default is 8.2.
+        Distance of the Sun from the Galactic centre in kpc.
+        Default is ``R_SOLAR``, 8.275 (GRAVITY Collaboration 2021).
     pm_sgra : tuple of float, optional
         Proper motion ``(mu_l*, mu_b)`` of Sgr A* in mas/yr. Default is
         ``(-6.411, -0.219)`` (Reid & Brunthaler 2020).
@@ -224,6 +255,47 @@ _VC_SHAPE, _VC_SLOPE = _rotation_curve_table()
 
 
 @jit(nopython=True, cache=True)
+def _hermite(w, p0, m0, p1, m1):
+    """Return the cubic Hermite polynomial through (0, p0) and (1, p1)
+    with slopes m0 and m1, and its derivative, at ``w``."""
+    w2, w3 = w * w, w * w * w
+    value = (
+        (2.0 * w3 - 3.0 * w2 + 1.0) * p0
+        + (w3 - 2.0 * w2 + w) * m0
+        + (3.0 * w2 - 2.0 * w3) * p1
+        + (w3 - w2) * m1
+    )
+    slope = (
+        (6.0 * w2 - 6.0 * w) * p0
+        + (3.0 * w2 - 4.0 * w + 1.0) * m0
+        + (6.0 * w - 6.0 * w2) * p1
+        + (3.0 * w2 - 2.0 * w) * m1
+    )
+    return value, slope
+
+
+@jit(nopython=True, cache=True)
+def _catmull_rom(p0, p1, p2, p3, t):
+    """Return the Catmull-Rom cubic between p1 (t = 0) and p2 (t = 1)."""
+    return p1 + 0.5 * t * (
+        p2
+        - p0
+        + t * (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3 + t * (3.0 * (p1 - p2) + p3 - p0))
+    )
+
+
+@jit(nopython=True, cache=True)
+def _catmull_rom_table(f, table):
+    """Return the Catmull-Rom interpolation of the uniform 1-D ``table`` at
+    the fractional index ``f`` >= 0, mirrored about index 0 and held
+    beyond index n - 2."""
+    n = len(table)
+    f = min(f, n - 2.0)
+    i = min(int(f), n - 3)
+    return _catmull_rom(table[abs(i - 1)], table[i], table[i + 1], table[i + 2], f - i)
+
+
+@jit(nopython=True, cache=True)
 def _circular_velocity(R, R_solar, vc_solar):
     """Return v_c(R) and d ln v_c / d ln R.
 
@@ -240,20 +312,8 @@ def _circular_velocity(R, R_solar, vc_solar):
         return vc_solar * _VC_SHAPE[n], 0.0
     i = int(y)
     w = y - i
-    p0, p1 = _VC_SHAPE[i], _VC_SHAPE[i + 1]
-    m0, m1 = _VC_SLOPE[i], _VC_SLOPE[i + 1]
-    w2, w3 = w * w, w * w * w
-    s = (
-        (2.0 * w3 - 3.0 * w2 + 1.0) * p0
-        + (w3 - 2.0 * w2 + w) * m0
-        + (3.0 * w2 - 2.0 * w3) * p1
-        + (w3 - w2) * m1
-    )
-    ds_dy = (
-        (6.0 * w2 - 6.0 * w) * p0
-        + (3.0 * w2 - 4.0 * w + 1.0) * m0
-        + (6.0 * w - 6.0 * w2) * p1
-        + (3.0 * w2 - 2.0 * w) * m1
+    s, ds_dy = _hermite(
+        w, _VC_SHAPE[i], _VC_SLOPE[i], _VC_SHAPE[i + 1], _VC_SLOPE[i + 1]
     )
     # du / d ln R = x / sqrt(x^2 + VC_CORE^2)
     return vc_solar * s, ds_dy / (VC_KNOT * s) * x / sqrt(x * x + VC_CORE * VC_CORE)
@@ -282,6 +342,15 @@ def _jeans_vphi(var_R, var_phi, dlnvar_dlnR, dlnnu_dlnR, vc):
 
 
 @jit(nopython=True, cache=True)
+def _thin_disk_feh_factor(feh):
+    """Return f_[Fe/H] of sigma_R and of sigma_z, with [Fe/H] clamped to
+    THIN_DISK_FEH_RANGE."""
+    lo, hi = THIN_DISK_FEH_RANGE
+    feh = min(max(feh, lo), hi)
+    return 1.0 + THIN_DISK_GAMMA_FEH[0] * feh, 1.0 + THIN_DISK_GAMMA_FEH[1] * feh
+
+
+@jit(nopython=True, cache=True)
 def _thin_disk_sigma0(age, feh):
     """Return the Sharma et al. (2021) (sigma_R, sigma_z) of one stellar
     model at solar L_z and z = 0: sigma_0 f_tau f_[Fe/H].
@@ -290,13 +359,25 @@ def _thin_disk_sigma0(age, feh):
     positions per model computes them once.
     """
     a = (age + 0.1) / 10.1
+    f_R, f_z = _thin_disk_feh_factor(feh)
     return (
-        THIN_DISK_SIGMA0[0]
-        * a ** THIN_DISK_BETA[0]
-        * (1.0 + THIN_DISK_GAMMA_FEH[0] * feh),
-        THIN_DISK_SIGMA0[1]
-        * a ** THIN_DISK_BETA[1]
-        * (1.0 + THIN_DISK_GAMMA_FEH[1] * feh),
+        THIN_DISK_SIGMA0[0] * a ** THIN_DISK_BETA[0] * f_R,
+        THIN_DISK_SIGMA0[1] * a ** THIN_DISK_BETA[1] * f_z,
+    )
+
+
+@jit(nopython=True, cache=True)
+def _thin_disk_L_refs(R_solar, vc_solar):
+    """Return L_z of a circular orbit at the Sun and the ``L_clamp`` of
+    ``_thin_disk_fL``."""
+    lo, hi = THIN_DISK_R_RANGE
+    return (
+        R_solar * _circular_velocity(R_solar, R_solar, vc_solar)[0],
+        (
+            lo * _circular_velocity(lo, R_solar, vc_solar)[0],
+            hi * _circular_velocity(hi, R_solar, vc_solar)[0],
+            DISK_EDGE * vc_solar,
+        ),
     )
 
 
@@ -319,6 +400,14 @@ def _soft_clamp(x, lo, hi, width):
 
 
 @jit(nopython=True, cache=True)
+def _thin_disk_fz(abs_z):
+    """Return the height factor of the thin-disk sigma_z, 1 + gamma_z |z|,
+    with |z| held at THIN_DISK_Z_MAX through a THIN_DISK_Z_EDGE blend."""
+    z = _soft_clamp(abs_z, -1.0, THIN_DISK_Z_MAX, THIN_DISK_Z_EDGE)[0]
+    return 1.0 + THIN_DISK_GAMMA_Z[1] * z
+
+
+@jit(nopython=True, cache=True)
 def _thin_disk_fL(L, L_solar, L_clamp):
     """Return the Sharma et al. (2021) f_L of sigma_R and of sigma_z, and
     d ln f_L(sigma_R) / d ln L_z, with L_z clamped by
@@ -333,21 +422,6 @@ def _thin_disk_fL(L, L_solar, L_clamp):
     f_z = (a_z * u2 + exp(-(L_eff - L_solar) / lam_z)) / (1.0 + a_z)
     dlnf_dlnL = (2.0 * a_R * u2 - (L_eff / lam_R) * e_R) / ((1.0 + a_R) * f_R)
     return f_R, f_z, dlnf_dlnL * dL * L / L_eff
-
-
-@jit(nopython=True, cache=True)
-def _thin_disk_L_refs(R_solar, vc_solar):
-    """Return L_z of a circular orbit at the Sun and the ``L_clamp`` of
-    ``_thin_disk_fL``."""
-    lo, hi = THIN_DISK_R_RANGE
-    return (
-        R_solar * _circular_velocity(R_solar, R_solar, vc_solar)[0],
-        (
-            lo * _circular_velocity(lo, R_solar, vc_solar)[0],
-            hi * _circular_velocity(hi, R_solar, vc_solar)[0],
-            DISK_EDGE * vc_solar,
-        ),
-    )
 
 
 @jit(nopython=True, cache=True)
@@ -423,24 +497,52 @@ def _thin_disk_moments(
     args = (L_solar, L_clamp, dlnnu_dlnR, fade)
     L = _thin_disk_mean_L(R, abs_z, sig_R0, vc, dlnvc, *args)
     vphi, var_R, var_phi, f_z = _thin_disk_radial(R, abs_z, sig_R0, vc, dlnvc, L, *args)
-    sig_z = sig_z0 * f_z * (1.0 + THIN_DISK_GAMMA_Z[1] * abs_z)
+    sig_z = sig_z0 * f_z * _thin_disk_fz(abs_z)
     return vphi, var_R, var_phi, sig_z * sig_z
 
 
 @jit(nopython=True, cache=True)
-def _thick_disk_moments(R, vc, var_R0, var_phi0, var_z0, R_sigma, R_solar, dlnnu_dlnR):
-    """Return (v_phi, var_R, var_phi, var_z) of the thick disk.
+def _thick_disk_ln_var(x, k):
+    """Return ln(sigma_k^2 / sigma_k^2(R0)) of the thick disk at
+    x = R / R_solar and its derivative in x, by cubic Hermite interpolation
+    in column k of _SIG_LNVAR, with x held in THICK_DISK_X_RANGE through
+    blends of half-width THICK_DISK_X_EDGE."""
+    x, dx = _soft_clamp(x, *THICK_DISK_X_RANGE, THICK_DISK_X_EDGE)
+    h = _SIG_X[1] - _SIG_X[0]
+    t = (x - _SIG_X[0]) / h
+    i = int(t)
+    value, slope = _hermite(
+        t - i,
+        _SIG_LNVAR[i, k],
+        _SIG_SLOPE[i, k] * h,
+        _SIG_LNVAR[i + 1, k],
+        _SIG_SLOPE[i + 1, k] * h,
+    )
+    return value, slope / h * dx
 
-    Beyond THICK_DISK_R_RANGE the dispersions keep their edge values,
-    blended in within DISK_EDGE of each edge.
-    """
-    R_eff, dR = _soft_clamp(R, THICK_DISK_R_RANGE[0], THICK_DISK_R_RANGE[1], DISK_EDGE)
-    f = exp(-2.0 * (R_eff - R_solar) / R_sigma)
-    var_R = var_R0 * f
-    var_phi = var_phi0 * f
-    dlnvar_dlnR = -2.0 * R / R_sigma * dR
-    vphi = _jeans_vphi(var_R, var_phi, dlnvar_dlnR, dlnnu_dlnR, vc)
-    return vphi, var_R, var_phi, var_z0 * f
+
+@jit(nopython=True, cache=True)
+def _thick_disk_scale(x):
+    """Return the variances (sigma_R^2, sigma_phi^2, sigma_z^2) of the thick
+    disk relative to the Sun at x = R / R_solar, and
+    d ln sigma_R^2 / d ln R."""
+    ln_R, dln_R = _thick_disk_ln_var(x, 0)
+    return (
+        exp(ln_R),
+        exp(_thick_disk_ln_var(x, 1)[0]),
+        exp(_thick_disk_ln_var(x, 2)[0]),
+        x * dln_R,
+    )
+
+
+@jit(nopython=True, cache=True)
+def _thick_disk_moments(R, vc, var_R0, var_phi0, var_z0, R_solar, dlnnu_dlnR):
+    """Return (v_phi, var_R, var_phi, var_z) of the thick disk."""
+    f_R, f_phi, f_z, dlnf_dlnR = _thick_disk_scale(R / R_solar)
+    var_R = var_R0 * f_R
+    var_phi = var_phi0 * f_phi
+    vphi = _jeans_vphi(var_R, var_phi, dlnf_dlnR, dlnnu_dlnR, vc)
+    return vphi, var_R, var_phi, var_z0 * f_z
 
 
 @jit(nopython=True, cache=True)
@@ -536,7 +638,6 @@ def _thick_disk_array(
     var_R0,
     var_phi0,
     var_z0,
-    R_sigma,
     R_scale,
     R_smooth,
     R_solar,
@@ -553,7 +654,6 @@ def _thick_disk_array(
             var_R0,
             var_phi0,
             var_z0,
-            R_sigma,
             R_solar,
             _logn_disk_dlnR(R[i], sqrt(R[i] * R[i] + R_smooth * R_smooth), R_scale),
         )
@@ -600,8 +700,8 @@ def _check_heights(Z, R):
 
 def _check_positive(**values):
     for name, value in values.items():
-        if not value > 0:
-            raise ValueError(f"{name} must be positive, got {value}")
+        if not (np.isfinite(value) and value > 0):
+            raise ValueError(f"{name} must be positive and finite, got {value}")
 
 
 def _vc_solar(v_circ_solar, R_solar):
@@ -616,17 +716,14 @@ def _vc_solar(v_circ_solar, R_solar):
     return v_circ_solar
 
 
-_FEH_MAX = -1.0 / min(THIN_DISK_GAMMA_FEH)
-
-
 def thin_disk_velocity_moments(
     R,
     Z,
     age,
     feh,
-    R_scale=2.6,
+    R_scale=2.74,
     R_smooth=2.0,
-    R_solar=8.2,
+    R_solar=R_SOLAR,
     v_circ_solar=None,
 ):
     r"""
@@ -647,17 +744,23 @@ def thin_disk_velocity_moments(
     angular momentum of the population, :math:`R\,\bar{v}_\phi`, with
     :math:`\bar{v}_\phi` from the Jeans equation below (two steps of the
     fixed point from the circular :math:`L_z = R\,v_c`). The relations
-    were fitted at 3 < R < 20 kpc. Outside those radii the dispersions
-    keep their edge values, blended in so that :math:`\bar{v}_\phi` stays
-    continuous: :math:`L_z` is clamped to the circular :math:`L_z` at the
-    edges with a quadratic blend 1 kpc :math:`\times\,v_{c,\odot}` wide in
-    :math:`L_z`, and the dispersion gradient in the Jeans equation fades
-    out within 1 kpc outside the radii. A population that lags reaches the
-    outer clamp further out, at 22.8 kpc for 5 Gyr and [Fe/H] = 0 and at
-    25.6 kpc for 13.8 Gyr and [Fe/H] = -1; beyond 21 kpc its dispersions
-    still change a little, by up to 0.6 km/s in :math:`\bar{v}_\phi`
-    through the missing gradient. The azimuthal dispersion follows the
-    epicyclic ratio
+    were fitted at 3 < R < 20 kpc, :math:`|z|` < 2 kpc and
+    -1 < [Fe/H] < 0.5.
+    In the height factor of :math:`\sigma_z`, :math:`|z|` is held at
+    2 kpc (``THIN_DISK_Z_MAX``) with a quadratic blend from 1.5 kpc
+    (``THIN_DISK_Z_EDGE`` = 0.5 kpc). Without the hold, the thin-disk
+    density would fall as :math:`|z|^{-2}` at large heights. Outside
+    3 < R < 20 kpc the dispersions keep their edge values, blended in so that
+    :math:`\bar{v}_\phi` stays continuous: :math:`L_z` is clamped to the
+    circular :math:`L_z` at the edges with a quadratic blend 1 kpc
+    :math:`\times\,v_{c,\odot}` wide in :math:`L_z`, and the dispersion
+    gradient in the Jeans equation fades out within 1 kpc outside the
+    radii. A population that lags reaches the outer clamp further out, at
+    22.7 kpc for 5 Gyr and [Fe/H] = 0 and at 25.2 kpc for 13.8 Gyr and
+    [Fe/H] = -1; beyond 21 kpc its dispersions still change a little, by
+    up to 0.6 km/s in :math:`\bar{v}_\phi` through the missing gradient.
+    [Fe/H] is held at the edges of its range. The azimuthal dispersion
+    follows the epicyclic ratio
     :math:`\sigma_\phi^2 / \sigma_R^2 = (1 + d\ln v_c / d\ln R) / 2`.
 
     The mean rotation is the radial Jeans solution (Binney & Tremaine 2008,
@@ -692,15 +795,16 @@ def thin_disk_velocity_moments(
         Metallicity [Fe/H].
     R_scale, R_smooth : float, optional
         Radial scale length and smoothing radius of the number density in
-        kpc, as in `~brutus.priors.galactic.logn_disk`. Defaults are 2.6
+        kpc, as in `~brutus.priors.galactic.logn_disk`. Defaults are 2.74
         and 2.0.
     R_solar : float, optional
-        Distance of the Sun from the Galactic centre in kpc. Default is 8.2.
+        Distance of the Sun from the Galactic centre in kpc.
+        Default is ``R_SOLAR``, 8.275 (GRAVITY Collaboration 2021).
     v_circ_solar : float, optional
         Circular velocity at ``R_solar`` in km/s, which scales the measured
         curve. Default is the solar V from ``solar_velocity(R_solar)``
         minus the peculiar 12.24 km/s of Schönrich et al. (2010):
-        236.97 km/s for ``R_solar=8.2``. The shape of the curve is a
+        239.25 km/s for the default ``R_solar``. The shape of the curve is a
         function of ``R / R_solar``.
 
     Returns
@@ -714,9 +818,9 @@ def thin_disk_velocity_moments(
     ------
     ValueError
         If the positions are not finite 1-D arrays of one length, ``R`` or
-        ``age`` is negative, ``feh`` is not below 1.92 (where a dispersion
-        would vanish), ``age`` or ``feh`` does not broadcast to ``R``, a
-        length scale is not positive, or ``v_circ_solar`` is not positive.
+        ``age`` is negative, ``feh`` is not finite, ``age`` or ``feh`` does
+        not broadcast to ``R``, a length scale is not positive, or
+        ``v_circ_solar`` is not positive.
     """
     R = _check_radii(R)
     Z = _check_heights(Z, R)
@@ -731,8 +835,8 @@ def thin_disk_velocity_moments(
         raise ValueError(f"age and feh must broadcast to the shape of R {R.shape}")
     if not np.all(np.isfinite(age) & (age >= 0)):
         raise ValueError("age must be finite and non-negative")
-    if not np.all(np.isfinite(feh) & (feh < _FEH_MAX)):
-        raise ValueError(f"feh must be finite and below {_FEH_MAX:.2f}")
+    if not np.all(np.isfinite(feh)):
+        raise ValueError("feh must be finite")
     _check_positive(R_scale=R_scale, R_smooth=R_smooth, R_solar=R_solar)
     return _thin_disk_array(
         R,
@@ -749,31 +853,30 @@ def thin_disk_velocity_moments(
 def thick_disk_velocity_moments(
     R,
     sigma_solar=THICK_DISK_SIGMA,
-    R_sigma=THICK_DISK_R_SIGMA,
-    R_scale=2.0,
+    R_scale=1.9,
     R_smooth=2.0,
-    R_solar=8.2,
+    R_solar=R_SOLAR,
     v_circ_solar=None,
 ):
     r"""
     Return the velocity ellipsoid of the thick disk.
 
     The dispersions do not depend on age (Mackereth et al. 2019 find the
-    high-[alpha/Fe] age-velocity relations flat) or on height, and fall
-    off with radius as
-
-    .. math::
-        \sigma_i(R) = \sigma_{i,\odot}\, e^{-(R - R_\odot)/R_\sigma}.
-
-    The defaults are the high-[alpha/Fe] dispersions of Anguiano et al.
-    (2020, Table 1) and the e-folding length of Mackereth et al. (2019).
-    Beyond 4 < R < 13 kpc, the radii of the Mackereth et al. sample, the
-    dispersions keep their edge values, blended in within 1 kpc of each
-    edge. The mean rotation is the radial Jeans solution of
-    `thin_disk_velocity_moments`, with
-    :math:`\partial \ln \sigma_R^2 / \partial \ln R = -2R / R_\sigma`.
-    With the defaults, :math:`\bar{v}_\phi = 191` km/s at the Sun;
-    Anguiano et al. (2020) measure 191.8 km/s.
+    high-[alpha/Fe] age-velocity relations flat) or on height. Their values
+    at the Sun are the high-[alpha/Fe] dispersions of Anguiano et al. (2020,
+    Table 1), and each follows the radial profile of the midplane
+    dispersion of the high-alpha disk in the Milky Way model of Binney &
+    Vasiliev (2024), against :math:`R / R_\odot`. That disk is truncated
+    beyond about 12 kpc, and inside about 3 kpc its :math:`\sigma_z` rises
+    steeply, so outside :math:`0.36 < R / R_\odot < 1.5`
+    (``THICK_DISK_X_RANGE``) the dispersions keep their edge values, with a
+    quadratic blend 0.2 :math:`R_\odot` wide. With the density falling
+    exponentially and the dispersions held, the asymmetric drift grows
+    with R, and beyond about 29 kpc it exceeds :math:`v_c`, so
+    :math:`\bar{v}_\phi` is 0 there. The mean rotation is the
+    radial Jeans solution of `thin_disk_velocity_moments`. With the
+    defaults, :math:`\bar{v}_\phi = 190.3` km/s at the Sun; Anguiano et al.
+    (2020) measure 191.8 km/s.
 
     Parameters
     ----------
@@ -782,12 +885,9 @@ def thick_disk_velocity_moments(
     sigma_solar : tuple of float, optional
         Dispersions ``(sigma_R, sigma_phi, sigma_z)`` at the Sun in km/s.
         Default is ``THICK_DISK_SIGMA``, ``(64.68, 50.82, 43.60)``.
-    R_sigma : float, optional
-        E-folding length of the dispersions in kpc. Default is
-        ``THICK_DISK_R_SIGMA``, 15.0.
     R_scale, R_smooth : float, optional
         Radial scale length and smoothing radius of the number density in
-        kpc. Defaults are 2.0 and 2.0.
+        kpc. Defaults are 1.9 and 2.0.
     R_solar, v_circ_solar : optional
         The rotation curve, as in `thin_disk_velocity_moments`.
 
@@ -811,7 +911,6 @@ def thick_disk_velocity_moments(
             f"sigma_solar must be 3 non-negative dispersions, got {sigma_solar}"
         )
     _check_positive(
-        R_sigma=R_sigma,
         R_scale=R_scale,
         R_smooth=R_smooth,
         R_solar=R_solar,
@@ -822,7 +921,6 @@ def thick_disk_velocity_moments(
         var_R,
         var_phi,
         var_z,
-        float(R_sigma),
         float(R_scale),
         float(R_smooth),
         float(R_solar),
@@ -882,6 +980,92 @@ def halo_velocity_moments(R, Z):
     """
     R = _check_radii(R)
     return _halo_array(R, _check_heights(Z, R))
+
+
+@jit(nopython=True, cache=True)
+def _vertical_row(i, j, w):
+    """Return (dphi, jeans) of table row ``i`` at u = (j + w) du, by cubic
+    Hermite interpolation whose slopes per step in u are K_z dz/du and
+    K_z dz/du / f_z(z)^2; the table is mirrored about R = 0."""
+    i = abs(i)
+    m0, m1 = _V_KZ[i, j] * _V_DZ[j], _V_KZ[i, j + 1] * _V_DZ[j + 1]
+    dphi = _hermite(w, _V_DPHI[i, j], m0, _V_DPHI[i, j + 1], m1)[0]
+    jeans = _hermite(
+        w,
+        _V_JEANS[i, j],
+        m0 * _V_INV_FZ2[j],
+        _V_JEANS[i, j + 1],
+        m1 * _V_INV_FZ2[j + 1],
+    )[0]
+    return dphi, jeans
+
+
+@jit(nopython=True, cache=True)
+def _vertical_terms(x, abs_z):
+    """Return the height terms of the disk vertical profiles at
+    x = R / R_solar and |z| = ``abs_z`` kpc: 2 ln f_z(|z|) of
+    ``_thin_disk_fz``, the thin-disk Jeans integral and
+    Phi(R, z) - Phi(R, 0), in (km/s)^2 of the tabulated model, before the
+    scaling to v_c at the Sun.
+
+    The tables are interpolated with Catmull-Rom cubics in x, which keep
+    the radial derivative continuous, and cubic Hermite polynomials in z.
+    Beyond R = (n - 2) dx R_solar they keep their values; beyond the
+    highest z they continue with the K_z of the last node.
+    """
+    if not (isfinite(x) and isfinite(abs_z)):
+        return np.nan, np.nan, np.nan
+    n, m = _V_DPHI.shape
+    fi = min(x / _V_DX, n - 2.0)
+    i = min(int(fi), n - 3)
+    t = fi - i
+    u = asinh(abs_z / _V_ZS) / _V_DU
+    j = min(int(u), m - 2)
+    w = min(u - j, 1.0)
+    p0, q0 = _vertical_row(i - 1, j, w)
+    p1, q1 = _vertical_row(i, j, w)
+    p2, q2 = _vertical_row(i + 1, j, w)
+    p3, q3 = _vertical_row(i + 2, j, w)
+    dphi = _catmull_rom(p0, p1, p2, p3, t)
+    jeans = _catmull_rom(q0, q1, q2, q3, t)
+    if u > m - 1:
+        # Linear in z beyond the table with the edge K_z (interpolated in
+        # x); f_z is constant there.
+        kt = _catmull_rom_table(x / _V_DX, _V_KZ[:, m - 1])
+        extra = kt * (abs_z - _V_Z[m - 1])
+        dphi += extra
+        jeans += extra * _V_INV_FZ2[m - 1]
+    return 2.0 * log(_thin_disk_fz(abs_z)), jeans, dphi
+
+
+def _jeans_table():
+    """Return int_0^z K_z(t) / f_z(t)^2 dt at the table nodes, in
+    (km/s)^2: the integral, by 8-point Gauss-Legendre quadrature in each
+    step of u, of the derivative of the cubic Hermite interpolant of dphi
+    that ``_vertical_row`` uses, so that the two agree."""
+    nodes, weights = np.polynomial.legendre.leggauss(8)
+    w = 0.5 * (nodes + 1.0)
+    m = _V_DPHI.shape[1]
+    j = np.arange(m - 1)[:, None]
+    slope = _V_KZ * _V_DZ
+    # The pure-Python _hermite, broadcast over (row, step, node).
+    d_dphi = getattr(_hermite, "py_func", _hermite)(
+        w,
+        _V_DPHI[:, :-1, None],
+        slope[:, :-1, None],
+        _V_DPHI[:, 1:, None],
+        slope[:, 1:, None],
+    )[1]
+    fz = np.vectorize(_thin_disk_fz)(_V_ZS * np.sinh((j + w) * _V_DU))
+    steps = (d_dphi / fz**2) @ (0.5 * weights)
+    return np.concatenate((np.zeros((len(steps), 1)), np.cumsum(steps, axis=1)), axis=1)
+
+
+# z at the nodes, dz/du per step in u, and 1 / f_z^2 there.
+_V_Z = _V_ZS * np.sinh(np.arange(_V_DPHI.shape[1]) * _V_DU)
+_V_DZ = _V_ZS * np.cosh(np.arange(_V_DPHI.shape[1]) * _V_DU) * _V_DU
+_V_INV_FZ2 = 1.0 / np.vectorize(_thin_disk_fz)(_V_Z) ** 2
+_V_JEANS = _jeans_table()
 
 
 def _sightline(coord, v_sun):
@@ -973,7 +1157,7 @@ def _project_array(dists, E, sun, R_solar, mean, cov):
     return obs_mean, obs_cov
 
 
-def velocity_to_observables(dists, coord, mean, cov, R_solar=8.2, v_sun=None):
+def velocity_to_observables(dists, coord, mean, cov, R_solar=R_SOLAR, v_sun=None):
     r"""
     Project a velocity ellipsoid to proper motions and radial velocity.
 
@@ -1006,7 +1190,8 @@ def velocity_to_observables(dists, coord, mean, cov, R_solar=8.2, v_sun=None):
         `thin_disk_velocity_moments`, `thick_disk_velocity_moments` and each
         component of `halo_velocity_moments`.
     R_solar : float, optional
-        Distance of the Sun from the Galactic centre in kpc. Default is 8.2.
+        Distance of the Sun from the Galactic centre in kpc.
+        Default is ``R_SOLAR``, 8.275 (GRAVITY Collaboration 2021).
     v_sun : array_like of shape `(3,)`, optional
         Solar velocity ``(U, V, W)`` in km/s. Default is
         ``solar_velocity(R_solar)``.
