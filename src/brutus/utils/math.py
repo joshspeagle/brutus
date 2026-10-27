@@ -50,6 +50,13 @@ from scipy.special import log_ndtr, xlogy
 #: where -inf would give NaN (for example -inf - -inf).
 LOG_ZERO = -1e300
 
+#: Default distance of the Sun from the Galactic centre, in kpc
+#: (GRAVITY Collaboration 2021).
+R_SOLAR = 8.275
+#: Default height of the Sun above the Galactic midplane, in kpc
+#: (Bennett & Bovy 2019).
+Z_SOLAR = 0.0208
+
 #: Default fit limits on A(V), in mag.
 AVLIM = (0.0, 20.0)
 #: Default fit limits on R(V).
@@ -615,7 +622,7 @@ def truncnorm_logpdf(x, a, b, loc=0.0, scale=1.0):
     return np.where((x < _a) | (x > _b), LOG_ZERO, lnphi - lndenom)[()]
 
 
-def galactic_to_galactocentric_cyl(dists, ell, b, R_solar=8.2, Z_solar=0.025):
+def galactic_to_galactocentric_cyl(dists, ell, b, R_solar=R_SOLAR, Z_solar=Z_SOLAR):
     r"""
     Convert Galactic coordinates to Galactocentric cylindrical coordinates.
 
@@ -633,9 +640,11 @@ def galactic_to_galactocentric_cyl(dists, ell, b, R_solar=8.2, Z_solar=0.025):
     b : float or array_like
         Galactic latitude in degrees.
     R_solar : float, optional
-        Solar Galactocentric radius in kpc. Default is 8.2.
+        Solar Galactocentric radius in kpc.
+        Default is ``R_SOLAR``, 8.275 (GRAVITY Collaboration 2021).
     Z_solar : float, optional
-        Solar height above the Galactic midplane in kpc. Default is 0.025.
+        Solar height above the Galactic midplane in kpc.
+        Default is ``Z_SOLAR``, 0.0208 (Bennett & Bovy 2019).
 
     Returns
     -------
