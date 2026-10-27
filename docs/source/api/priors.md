@@ -105,6 +105,8 @@ fitter.fit(
 
 ```{eval-rst}
 .. autofunction:: logp_galactic_structure
+
+.. autofunction:: galactic_prior_summary
 ```
 
 ```{eval-rst}
@@ -113,14 +115,6 @@ fitter.fit(
 
 ```{eval-rst}
 .. autofunction:: logn_halo
-```
-
-```{eval-rst}
-.. autofunction:: logp_feh
-```
-
-```{eval-rst}
-.. autofunction:: logp_age_from_feh
 ```
 
 ## Kinematics

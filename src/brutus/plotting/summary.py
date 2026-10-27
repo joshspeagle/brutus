@@ -7,6 +7,7 @@ corner plot to eliminate white space and provide a single diagnostic view.
 
 import numpy as np
 
+from ..utils.math import R_SOLAR, Z_SOLAR
 from .corner import cornerplot
 from .sed import posterior_predictive
 
@@ -31,8 +32,8 @@ def summary_plot(
     color="black",
     vcolor="black",
     pcolor="black",
-    R_solar=8.2,
-    Z_solar=0.025,
+    R_solar=R_SOLAR,
+    Z_solar=Z_SOLAR,
     figsize=None,
     rstate=None,
     **corner_kwargs,
@@ -104,10 +105,12 @@ def summary_plot(
         Color for the SED data points. Default is ``'black'``.
 
     R_solar : float, optional
-        Solar galactocentric radius in kpc. Default is 8.2.
+        Solar galactocentric radius in kpc.
+        Default is ``R_SOLAR``, 8.275 (GRAVITY Collaboration 2021).
 
     Z_solar : float, optional
-        Solar height above midplane in kpc. Default is 0.025.
+        Solar height above midplane in kpc.
+        Default is ``Z_SOLAR``, 0.0208 (Bennett & Bovy 2019).
 
     figsize : tuple, optional
         Figure size. If None, determined automatically.

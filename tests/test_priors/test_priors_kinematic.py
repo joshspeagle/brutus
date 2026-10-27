@@ -7,9 +7,10 @@ import os
 
 import numpy as np
 import pytest
+from scipy.interpolate import CubicHermiteSpline
 
 from brutus.priors import kinematic as kin
-from brutus.priors.galactic import logn_disk, logp_age_from_feh
+from brutus.priors.galactic import logn_disk, logp_galactic_structure
 from brutus.priors.kinematic import (
     HALO_DELTA_LOBE,
     HALO_F_ISO,
@@ -19,7 +20,6 @@ from brutus.priors.kinematic import (
     HALO_SIGMA_T_ISO,
     HALO_SIGMA_T_LOBE,
     PM_SGRA,
-    THICK_DISK_R_RANGE,
     THIN_DISK_R_RANGE,
     THIN_DISK_SIGMA0,
     U_SUN,
@@ -31,9 +31,8 @@ from brutus.priors.kinematic import (
     thin_disk_velocity_moments,
     velocity_to_observables,
 )
-from brutus.utils.math import galactic_to_galactocentric_cyl
+from brutus.utils.math import R_SOLAR, galactic_to_galactocentric_cyl
 
-R_SOLAR = 8.2
 # kpc / (km/s) in years, and mas per radian, from the definitions of the
 # parsec, the astronomical unit and the Julian year.
 KPC_KM = 1000.0 * 648000.0 / np.pi * 149597870.7
@@ -208,8 +207,15 @@ def test_thin_disk_population_matches_the_measured_low_alpha_disk():
     # Average over the local thin-disk age prior of brutus at [Fe/H] = -0.2.
     # Anguiano et al. (2020, Table 1), low-alpha disk: lag 240 - 229.43 =
     # 10.6 km/s, sigma_phi / sigma_R = 0.66, sigma_z / sigma_R = 0.49.
+    # Weighted by the thin-disk age distribution at the Sun.
     ages = np.linspace(0.05, 13.8, 400)
-    w = np.exp(logp_age_from_feh(ages, feh_mean=-0.2))
+    _, comps = logp_galactic_structure(
+        np.full(ages.size, 1e-3),
+        (0.0, 0.0),
+        loga=np.log10(ages * 1e9),
+        return_components=True,
+    )
+    w = np.exp(comps["labels"][0])
     w /= w.sum()
     mean, cov = thin_disk_velocity_moments(
         np.full_like(ages, R_SOLAR), np.zeros_like(ages), ages, -0.2
@@ -225,15 +231,17 @@ def test_thin_disk_population_matches_the_measured_low_alpha_disk():
 
 def test_thick_disk_rotation_matches_the_measured_high_alpha_lag():
     # Anguiano et al. (2020, Table 1), high-alpha disk: lag 240 - 191.82 =
-    # 48.2 km/s. The model predicts it; nothing is fitted to it.
+    # 48.2 km/s, which does not depend on their v_c. The model predicts
+    # it (46.7 km/s); nothing is fitted to it. It moves with the thick
+    # disk's density gradient at the Sun, d ln nu / d ln R.
     mean, _ = thick_disk_velocity_moments(np.array([R_SOLAR]))
     assert abs(_vc_solar() - mean[0, 1] - 48.2) < 3.0
 
 
 @pytest.mark.parametrize("disk", ["thin", "thick"])
 def test_disk_rotation_solves_the_jeans_equation_for_the_logn_disk_density(disk):
-    # The radii miss the ends of the edge blends (5 and 12 kpc for the
-    # thick disk), where the second derivative jumps and the central
+    # The radii miss the ends of the edge blends (11.5 and 13.1 kpc for
+    # the thick disk), where the second derivative jumps and the central
     # differences lose precision.
     R = np.linspace(4.6, 12.6, 17)
     density = dict(R_scale=2.3, R_smooth=1.5)
@@ -245,7 +253,7 @@ def test_disk_rotation_solves_the_jeans_equation_for_the_logn_disk_density(disk)
     else:
 
         def moments(R):
-            return thick_disk_velocity_moments(R, R_sigma=9.0, **density)
+            return thick_disk_velocity_moments(R, **density)
 
     mean, cov = moments(R)
     dlnnu = _dln_dlnR(lambda x: np.exp(logn_disk(x, 0.0, **density)), R)
@@ -279,22 +287,41 @@ def test_disk_rotation_stays_below_circular_and_vanishes_at_the_centre(disk):
 def test_disk_dispersions_keep_their_edge_values_outside_the_fitted_radii():
     # Beyond DISK_EDGE of each edge the clamp is the hard clamp. The thin
     # disk is clamped in L_z, and its mean L_z lies below the circular one,
-    # so at 5 Gyr and [Fe/H] = 0 its outer clamp is reached at 22.8 kpc.
+    # so at 5 Gyr and [Fe/H] = 0 its outer clamp is reached at 22.7 kpc.
     _, cov = _thin(np.array([1.5, 0.5, 30.0, 60.0]))
     sig = np.sqrt(cov[:, [0, 2], [0, 2]])
     np.testing.assert_allclose(sig[1], sig[0], rtol=1e-12)
     np.testing.assert_allclose(sig[3], sig[2], rtol=1e-12)
-    lo, hi = THICK_DISK_R_RANGE
-    edge = kin.DISK_EDGE
-    _, cov = thick_disk_velocity_moments(np.array([lo - edge, 0.0, hi + edge, 130.0]))
-    np.testing.assert_allclose(cov[1], cov[0], rtol=1e-12)
-    np.testing.assert_allclose(cov[3], cov[2], rtol=1e-12)
+    # The thick disk holds its dispersions outside THICK_DISK_X_RANGE,
+    # beyond the blends.
+    (lo, hi), w = kin.THICK_DISK_X_RANGE, kin.THICK_DISK_X_EDGE
+    R = np.array([0.0, lo - w, hi + w, 1e3 / R_SOLAR]) * R_SOLAR
+    _, cov = thick_disk_velocity_moments(R)
+    var = cov[:, [0, 1, 2], [0, 1, 2]]
+    np.testing.assert_allclose(var[1], var[0], rtol=1e-12)
+    np.testing.assert_allclose(var[3], var[2], rtol=1e-12)
+
+
+@pytest.mark.parametrize("k", [0, 1, 2])
+def test_thick_disk_dispersion_profiles_match_a_hermite_spline(k):
+    # Between the blends, ln sigma^2 and its slope are scipy's cubic Hermite
+    # spline through the tabulated values and np.gradient slopes.
+    ref = CubicHermiteSpline(kin._SIG_X, kin._SIG_LNVAR[:, k], kin._SIG_SLOPE[:, k])
+    (lo, hi), w = kin.THICK_DISK_X_RANGE, kin.THICK_DISK_X_EDGE
+    for x in np.linspace(lo + w, hi - w, 41):
+        value, slope = kin._thick_disk_ln_var(x, k)
+        assert np.isclose(value, ref(x), rtol=0, atol=1e-12)
+        assert np.isclose(slope, ref(x, 1), rtol=0, atol=1e-10)
 
 
 @pytest.mark.parametrize("disk", ["thin", "thick"])
 def test_disk_rotation_is_continuous_across_the_edges_of_the_fitted_radii(disk):
     # A hard clamp made v_phi step by up to 10 km/s at the edges.
-    edges = THIN_DISK_R_RANGE if disk == "thin" else THICK_DISK_R_RANGE
+    edges = (
+        THIN_DISK_R_RANGE
+        if disk == "thin"
+        else np.array(kin.THICK_DISK_X_RANGE) * R_SOLAR
+    )
     for edge in edges:
         R = np.linspace(edge - 1.5, edge + 1.5, 3001)
         mean = (
@@ -391,7 +418,6 @@ def test_halo_components_keep_their_spherical_ellipsoids_off_the_plane():
         lambda: velocity_to_observables(
             np.array([1.0]), (0, 0), np.zeros((1, 3)), np.zeros((1, 3, 3)), R_solar=-8.2
         ),
-        lambda: thick_disk_velocity_moments(np.array([8.0]), R_sigma=0.0),
         lambda: thick_disk_velocity_moments(np.array([-1.0])),
         lambda: _thin(8.0, age=-1.0),
         lambda: _thin(8.0, feh=np.nan),
@@ -421,10 +447,14 @@ def test_invalid_inputs_raise_value_error(call):
         call()
 
 
-def test_thick_disk_rotation_solves_the_jeans_equation_across_the_edge_blends():
-    # 2.55-15.05 kpc spans both blends; the radii miss their ends (3, 5, 12
-    # and 14 kpc), where the second derivative jumps.
-    R = np.linspace(2.55, 15.05, 26)
+def test_thick_disk_rotation_solves_the_jeans_equation():
+    # The radii sit between the nodes of the dispersion table, where the
+    # second derivative of the Hermite interpolation jumps.
+    # From 2 kpc out: nearer the centre ln sigma^2 curves so strongly that
+    # the test's own finite differences lose precision. To 24 kpc: further
+    # out the asymmetric drift of the held dispersions exceeds v_c, and
+    # v_phi is clipped to 0.
+    R = (np.arange(8, 120, 6) + 0.5) * (kin._SIG_X[1] - kin._SIG_X[0]) * R_SOLAR
     density = dict(R_scale=2.0, R_smooth=2.0)
     mean, cov = thick_disk_velocity_moments(R, **density)
     dlnnu = _dln_dlnR(lambda x: np.exp(logn_disk(x, 0.0, **density)), R)

@@ -14,7 +14,12 @@ import warnings
 import numpy as np
 import pytest
 
-from brutus.utils.math import galactic_to_galactocentric_cyl, pm_equatorial_to_galactic
+from brutus.utils.math import (
+    R_SOLAR,
+    Z_SOLAR,
+    galactic_to_galactocentric_cyl,
+    pm_equatorial_to_galactic,
+)
 
 MAS_PER_RAD = 180.0 / np.pi * 3600e3
 
@@ -41,40 +46,40 @@ class TestGalacticToGalactocentricCyl:
     def test_scalar_distance(self):
         """Test with a scalar distance value."""
         R, Z = galactic_to_galactocentric_cyl(1.0, ell=0.0, b=0.0)
-        # At l=0, b=0, d=1 kpc: x=1, y=0 -> R = |1 - 8.2| = 7.2
-        assert np.isclose(R, 7.2, atol=1e-10)
-        assert np.isclose(Z, 0.025, atol=1e-10)
+        # At l=0, b=0, d=1 kpc: x=1, y=0 -> R = |1 - R_SOLAR|
+        assert np.isclose(R, R_SOLAR - 1.0, atol=1e-10)
+        assert np.isclose(Z, Z_SOLAR, atol=1e-10)
 
     def test_galactic_center_direction(self):
         """Test pointing toward the Galactic center (l=0, b=0)."""
-        dists = np.array([8.2])
+        dists = np.array([R_SOLAR])
         R, Z = galactic_to_galactocentric_cyl(dists, ell=0.0, b=0.0)
         # At distance = R_solar along l=0, should be at R=0
         assert np.isclose(R, 0.0, atol=1e-10)
-        assert np.isclose(Z, 0.025, atol=1e-10)
+        assert np.isclose(Z, Z_SOLAR, atol=1e-10)
 
     def test_anticenter_direction(self):
         """Test pointing toward the Galactic anticenter (l=180, b=0)."""
         dists = np.array([1.0])
         R, Z = galactic_to_galactocentric_cyl(dists, ell=180.0, b=0.0)
-        # At l=180, d=1: x=-1, y=0 -> R = |(-1) - 8.2| = 9.2
-        assert np.isclose(R, 9.2, atol=1e-10)
+        # At l=180, d=1: x=-1, y=0 -> R = |(-1) - R_SOLAR|
+        assert np.isclose(R, R_SOLAR + 1.0, atol=1e-10)
 
     def test_north_pole(self):
         """Test pointing to the North Galactic Pole (b=90)."""
         dists = np.array([1.0])
         R, Z = galactic_to_galactocentric_cyl(dists, ell=0.0, b=90.0)
-        # At b=90: x=0, y=0 -> R = R_solar = 8.2, Z = 1.0 + 0.025
-        assert np.isclose(R, 8.2, atol=1e-10)
-        assert np.isclose(Z, 1.025, atol=1e-10)
+        # At b=90: x=0, y=0 -> R = R_solar, Z = 1.0 + Z_solar
+        assert np.isclose(R, R_SOLAR, atol=1e-10)
+        assert np.isclose(Z, 1.0 + Z_SOLAR, atol=1e-10)
 
     def test_south_pole(self):
         """Test pointing to the South Galactic Pole (b=-90)."""
         dists = np.array([1.0])
         R, Z = galactic_to_galactocentric_cyl(dists, ell=0.0, b=-90.0)
-        # At b=-90: x=0, y=0 -> R = R_solar = 8.2, Z = -1.0 + 0.025
-        assert np.isclose(R, 8.2, atol=1e-10)
-        assert np.isclose(Z, -0.975, atol=1e-10)
+        # At b=-90: x=0, y=0 -> R = R_solar, Z = -1.0 + Z_solar
+        assert np.isclose(R, R_SOLAR, atol=1e-10)
+        assert np.isclose(Z, -1.0 + Z_SOLAR, atol=1e-10)
 
     def test_custom_solar_position(self):
         """Test with custom R_solar and Z_solar values."""
@@ -119,8 +124,8 @@ class TestGalacticToGalactocentricCyl:
         dists = np.array([0.0])
         R, Z = galactic_to_galactocentric_cyl(dists, ell=0.0, b=0.0)
         # At d=0, should be at the Sun's position
-        assert np.isclose(R, 8.2, atol=1e-10)
-        assert np.isclose(Z, 0.025, atol=1e-10)
+        assert np.isclose(R, R_SOLAR, atol=1e-10)
+        assert np.isclose(Z, Z_SOLAR, atol=1e-10)
 
     def test_large_distance_array(self):
         """Test with a large array of distances (performance check)."""
