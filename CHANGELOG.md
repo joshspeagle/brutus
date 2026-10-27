@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed — statistical correctness *(output-changing)*
 
+- **The grid-spacing correction (`apply_grad`) uses only the grid axes.**
+  `BruteForce` took every field of `StarGrid.labels` as a grid axis. With
+  `StarGrid(models, labels)` and the label array of `load_models`, as in
+  tutorial 05, it also added a spacing term for each prediction (`loga`,
+  `logl`, `logt`, `logg`, `agewt`). For a mock bulge giant at 8.3 kpc these
+  terms favoured a dwarf model by 17.6 in ln over the true model, and on 200
+  mock bulge giants 88 posteriors missed the true distance entirely. Only
+  the grid inputs now get the term: `mini`, `eep`, `feh`, `afe` and `smf`,
+  and `Mr` on a grid without `mini` (the Bayestar grid).
 - **The `max_models` cap no longer biases the posterior.** Above the
   cap, `logpost_grid` kept a weighted sample of models but gave them their
   full weights, which narrowed the distance posterior by up to 31% and
