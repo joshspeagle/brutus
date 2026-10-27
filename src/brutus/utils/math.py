@@ -50,6 +50,13 @@ from scipy.special import log_ndtr, xlogy
 #: where -inf would give NaN (for example -inf - -inf).
 LOG_ZERO = -1e300
 
+#: Default distance of the Sun from the Galactic centre, in kpc
+#: (GRAVITY Collaboration 2021).
+R_SOLAR = 8.275
+#: Default height of the Sun above the Galactic midplane, in kpc
+#: (Bennett & Bovy 2019).
+Z_SOLAR = 0.0208
+
 #: Default fit limits on A(V), in mag.
 AVLIM = (0.0, 20.0)
 #: Default fit limits on R(V).
@@ -59,7 +66,9 @@ _SQRT2 = sqrt(2.0)
 _DBL_MIN = 2.2250738585072014e-308  # smallest normal float64
 
 __all__ = [
+    "galactic_to_galactocentric",
     "galactic_to_galactocentric_cyl",
+    "pm_equatorial_to_galactic",
     "inverse3",
     "isPSD",
     "chisquare_logpdf",
@@ -614,7 +623,53 @@ def truncnorm_logpdf(x, a, b, loc=0.0, scale=1.0):
     return np.where((x < _a) | (x > _b), LOG_ZERO, lnphi - lndenom)[()]
 
 
-def galactic_to_galactocentric_cyl(dists, ell, b, R_solar=8.2, Z_solar=0.025):
+def galactic_to_galactocentric(dists, ell, b, R_solar=R_SOLAR, Z_solar=Z_SOLAR):
+    r"""
+    Convert Galactic coordinates to Galactocentric Cartesian coordinates.
+
+    The Sun is at :math:`(X, Y, Z) = (-R_\odot, 0, Z_\odot)`, with Y toward
+    l = 90 deg:
+
+    .. math::
+
+        X = d \cos b \cos l - R_\odot, \quad
+        Y = d \cos b \sin l, \quad
+        Z = d \sin b + Z_\odot
+
+    Parameters
+    ----------
+    dists : array_like
+        Heliocentric distances in kpc.
+    ell : float or array_like
+        Galactic longitude in degrees.
+    b : float or array_like
+        Galactic latitude in degrees.
+    R_solar : float, optional
+        Solar Galactocentric radius in kpc. Default is ``R_SOLAR``, 8.275.
+    Z_solar : float, optional
+        Solar height above the Galactic midplane in kpc. Default is
+        ``Z_SOLAR``, 0.0208.
+
+    Returns
+    -------
+    X, Y, Z : ndarray
+        Galactocentric position in kpc.
+
+    See Also
+    --------
+    brutus.priors.galactic.logp_galactic_structure : Uses this for coordinate
+        conversion instead of astropy SkyCoord.
+    """
+    ell_rad = np.deg2rad(ell)
+    b_rad = np.deg2rad(b)
+    in_plane = dists * np.cos(b_rad)
+    X = in_plane * np.cos(ell_rad) - R_solar
+    Y = in_plane * np.sin(ell_rad)
+    Z = dists * np.sin(b_rad) + Z_solar
+    return X, Y, Z
+
+
+def galactic_to_galactocentric_cyl(dists, ell, b, R_solar=R_SOLAR, Z_solar=Z_SOLAR):
     r"""
     Convert Galactic coordinates to Galactocentric cylindrical coordinates.
 
@@ -632,9 +687,11 @@ def galactic_to_galactocentric_cyl(dists, ell, b, R_solar=8.2, Z_solar=0.025):
     b : float or array_like
         Galactic latitude in degrees.
     R_solar : float, optional
-        Solar Galactocentric radius in kpc. Default is 8.2.
+        Solar Galactocentric radius in kpc.
+        Default is ``R_SOLAR``, 8.275 (GRAVITY Collaboration 2021).
     Z_solar : float, optional
-        Solar height above the Galactic midplane in kpc. Default is 0.025.
+        Solar height above the Galactic midplane in kpc.
+        Default is ``Z_SOLAR``, 0.0208 (Bennett & Bovy 2019).
 
     Returns
     -------
@@ -670,8 +727,7 @@ def galactic_to_galactocentric_cyl(dists, ell, b, R_solar=8.2, Z_solar=0.025):
 
     See Also
     --------
-    brutus.priors.galactic.logp_galactic_structure : Uses this for coordinate
-        conversion instead of astropy SkyCoord.
+    galactic_to_galactocentric : The Cartesian position.
 
     Examples
     --------
@@ -681,12 +737,96 @@ def galactic_to_galactocentric_cyl(dists, ell, b, R_solar=8.2, Z_solar=0.025):
     ...     dists=np.array([1.0, 5.0]), ell=90.0, b=0.0
     ... )
     """
-    ell_rad = np.deg2rad(ell)
-    b_rad = np.deg2rad(b)
-    cos_b = np.cos(b_rad)
-    x = dists * cos_b * np.cos(ell_rad)
-    y = dists * cos_b * np.sin(ell_rad)
-    R = np.sqrt((x - R_solar) ** 2 + y**2)
-    Z = dists * np.sin(b_rad) + Z_solar
+    X, Y, Z = galactic_to_galactocentric(dists, ell, b, R_solar, Z_solar)
+    return np.sqrt(X**2 + Y**2), Z
 
-    return R, Z
+
+# North Galactic pole in ICRS, in degrees (Hipparcos convention, as Gaia).
+_RA_NGP = 192.85948
+_DEC_NGP = 27.12825
+
+
+def pm_equatorial_to_galactic(
+    ra, dec, pmra, pmdec, pmra_error, pmdec_error, pmra_pmdec_corr
+):
+    r"""
+    Convert Gaia proper motions to Galactic coordinates with covariance.
+
+    The proper motion rotates by the angle between the directions to the
+    north celestial and north Galactic poles (Poleski 2013):
+
+    .. math::
+        \begin{pmatrix} \mu_{l*} \\ \mu_b \end{pmatrix}
+        = \begin{pmatrix} c & s \\ -s & c \end{pmatrix}
+        \begin{pmatrix} \mu_{\alpha*} \\ \mu_\delta \end{pmatrix}
+
+    with :math:`c = C_1 / \cos b`, :math:`s = C_2 / \cos b`,
+    :math:`C_1 = \sin\delta_G \cos\delta - \cos\delta_G \sin\delta
+    \cos(\alpha - \alpha_G)`, :math:`C_2 = \cos\delta_G \sin(\alpha -
+    \alpha_G)` and :math:`\cos b = \sqrt{C_1^2 + C_2^2}`, where
+    :math:`(\alpha_G, \delta_G)` is the north Galactic pole. The
+    covariance rotates with the same matrix.
+
+    Parameters
+    ----------
+    ra, dec : array_like of shape `(N,)`
+        ICRS right ascension and declination in degrees.
+    pmra : array_like of shape `(N,)`
+        Proper motion in right ascension, :math:`\mu_{\alpha*} =
+        \mu_\alpha \cos\delta`, in mas/yr (Gaia ``pmra``).
+    pmdec : array_like of shape `(N,)`
+        Proper motion in declination in mas/yr (Gaia ``pmdec``).
+    pmra_error, pmdec_error : array_like of shape `(N,)`
+        Standard errors of ``pmra`` and ``pmdec`` in mas/yr.
+    pmra_pmdec_corr : array_like of shape `(N,)`
+        Correlation between the ``pmra`` and ``pmdec`` errors.
+
+    Returns
+    -------
+    pm : `~numpy.ndarray` of shape `(N, 2)`
+        Proper motion ``(mu_l*, mu_b)`` in mas/yr.
+    pm_cov : `~numpy.ndarray` of shape `(N, 2, 2)`
+        Covariance of ``pm`` in (mas/yr)^2. At the Galactic poles, where
+        the direction of increasing ``l`` is undefined, ``pm`` and
+        ``pm_cov`` are NaN.
+
+    Raises
+    ------
+    ValueError
+        If the inputs do not share one 1-D shape, an error is negative, a
+        correlation is outside [-1, 1], ``ra`` is not finite or ``dec`` is
+        outside [-90, 90].
+    """
+    ra, dec, pmra, pmdec, err_a, err_d, corr = (
+        np.asarray(x, dtype=np.float64)
+        for x in (ra, dec, pmra, pmdec, pmra_error, pmdec_error, pmra_pmdec_corr)
+    )
+    if ra.ndim != 1 or any(
+        x.shape != ra.shape for x in (dec, pmra, pmdec, err_a, err_d, corr)
+    ):
+        raise ValueError("all inputs must be 1-D arrays of the same length")
+    if np.any(err_a < 0) or np.any(err_d < 0):
+        raise ValueError("pmra_error and pmdec_error must be non-negative")
+    if np.any(np.abs(corr) > 1):
+        raise ValueError("pmra_pmdec_corr must be in [-1, 1]")
+    if not (np.all(np.isfinite(ra)) and np.all(np.abs(dec) <= 90)):
+        raise ValueError("ra must be finite and dec in [-90, 90]")
+
+    ra_g, dec_g = np.radians(_RA_NGP), np.radians(_DEC_NGP)
+    ra, dec = np.radians(ra), np.radians(dec)
+    c1 = np.sin(dec_g) * np.cos(dec) - np.cos(dec_g) * np.sin(dec) * np.cos(ra - ra_g)
+    c2 = np.cos(dec_g) * np.sin(ra - ra_g)
+    cos_b = np.hypot(c1, c2)
+    with np.errstate(invalid="ignore", divide="ignore"):  # NaN at the poles
+        c, s = c1 / cos_b, c2 / cos_b
+
+    pm = np.stack([c * pmra + s * pmdec, -s * pmra + c * pmdec], axis=1)
+    var_a, var_d = err_a**2, err_d**2
+    cov_ad = corr * err_a * err_d
+    pm_cov = np.empty((len(ra), 2, 2))
+    pm_cov[:, 0, 0] = c * c * var_a + 2 * c * s * cov_ad + s * s * var_d
+    pm_cov[:, 1, 1] = s * s * var_a - 2 * c * s * cov_ad + c * c * var_d
+    pm_cov[:, 0, 1] = pm_cov[:, 1, 0] = (c * c - s * s) * cov_ad + c * s * (
+        var_d - var_a
+    )
+    return pm, pm_cov

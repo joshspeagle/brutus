@@ -5,9 +5,9 @@
 Prior probability distributions for stellar and galactic modeling.
 
 This module provides log-prior functions for Bayesian stellar parameter estimation,
-including stellar, astrometric, galactic structure, and extinction priors.
-All functions follow the naming convention logp_* for log-probability densities
-and logn_* for log-number densities.
+including stellar, astrometric, galactic structure, and extinction priors, and
+the velocity moments of the Galactic components. The log-prior functions are
+named logp_* for log-probability densities and logn_* for log-number densities.
 """
 
 # Astrometric priors
@@ -18,11 +18,19 @@ from .extinction import logp_extinction
 
 # Galactic structure priors
 from .galactic import (
+    galactic_prior_summary,
     logn_disk,
     logn_halo,
-    logp_age_from_feh,
-    logp_feh,
     logp_galactic_structure,
+)
+
+# Kinematics
+from .kinematic import (
+    halo_velocity_moments,
+    solar_velocity,
+    thick_disk_velocity_moments,
+    thin_disk_velocity_moments,
+    velocity_to_observables,
 )
 
 # Stellar priors
@@ -38,10 +46,15 @@ __all__ = [
     "convert_parallax_to_scale",
     # Galactic structure priors
     "logp_galactic_structure",
+    "galactic_prior_summary",
     "logn_disk",
     "logn_halo",
-    "logp_feh",
-    "logp_age_from_feh",
+    # Kinematics
+    "solar_velocity",
+    "thin_disk_velocity_moments",
+    "thick_disk_velocity_moments",
+    "halo_velocity_moments",
+    "velocity_to_observables",
     # Extinction priors
     "logp_extinction",
 ]

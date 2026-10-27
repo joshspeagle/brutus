@@ -73,7 +73,7 @@ from ..priors.galactic import logp_galactic_structure
 from ..priors.stellar import logp_imf, logp_ps1_luminosity_function
 
 # Import utility functions
-from ..utils.math import AVLIM, LOG_ZERO, RVLIM
+from ..utils.math import AVLIM, LOG_ZERO, R_SOLAR, RVLIM, Z_SOLAR
 from ..utils.math import inverse3 as _inverse3
 from ..utils.photometry import magnitude
 from ..utils.sampling import sample_multivariate_normal
@@ -789,8 +789,8 @@ class BruteForce:
         data_coords=None,
         mag_max=50.0,
         merr_max=0.25,
-        R_solar=8.2,
-        Z_solar=0.025,
+        R_solar=R_SOLAR,
+        Z_solar=Z_SOLAR,
     ):
         """
         Pre-process data and initialize priors for fitting.
@@ -1251,8 +1251,8 @@ class BruteForce:
         mem_lim=8000.0,
         rstate=None,
         apply_av_prior=True,
-        R_solar=8.2,
-        Z_solar=0.025,
+        R_solar=R_SOLAR,
+        Z_solar=Z_SOLAR,
         return_precision=False,
     ):
         """
@@ -1338,7 +1338,8 @@ class BruteForce:
 
         R_solar, Z_solar : float, optional
             Galactocentric radius and height of the Sun, in kpc, for the
-            default Galactic prior. Defaults are 8.2 and 0.025.
+            default Galactic prior. Defaults are ``R_SOLAR`` and ``Z_SOLAR``
+            (8.275 and 0.0208).
 
         return_precision : bool, optional
             Return the (scale, A(V), R(V)) precision matrices of the selected
@@ -1627,49 +1628,36 @@ class BruteForce:
                     logp_galactic_structure, R_solar=R_solar, Z_solar=Z_solar
                 )
 
-            # Galactic prior evaluation (FULLY VECTORIZED).
-            # dist_mc has shape (Nmc, Nsel); we evaluate the prior for every
-            # (MC sample, model) pair. The labels (feh/loga) repeat across the
-            # Nmc samples of a given model, so they must be broadcast to match
-            # dist_mc.ravel() (row-major: [model0..modelN]*Nmc).
-            dist_flat = dist_mc.ravel()
-
-            # Detect the default galactic-structure prior (bare or partial). For
-            # it we pass the per-point feh/loga as plain float64 arrays, which
-            # is bitwise-identical to passing a structured `labels` array but
-            # avoids a numpy structured-dtype np.tile -- pathologically slow
-            # (~100x a float tile, ~200 ms at Nsel=50000). Casting before the
-            # tile spares the prior a second full-size copy.
+            # Galactic prior evaluation for every (MC sample, model) pair.
+            # dist_mc has shape (Nmc, Nsel); the labels (feh/loga) of a model
+            # are the same for its Nmc samples.
             gal_is_default = lngalprior is logp_galactic_structure or (
                 getattr(lngalprior, "func", None) is logp_galactic_structure
             )
 
-            if dlabels is None:
-                # No labels - evaluate once for all distances
-                lnp_gal_flat = lngalprior(dist_flat, coord, labels=None)
-            elif gal_is_default:
-                if dlabels.dtype.names is None:
+            if gal_is_default:
+                if dlabels is not None and dlabels.dtype.names is None:
                     raise ValueError(
                         "`dlabels` must be a structured array for the default "
                         "Galactic prior, which reads its 'feh' and 'loga' fields."
                     )
-                tiled = {
-                    name: np.tile(
-                        dlabels[name][sel].astype(np.float64, copy=False), Nmc
-                    )
+                # Per-model float arrays broadcast over the samples, so the
+                # prior computes each model's label terms once.
+                names = () if dlabels is None else dlabels.dtype.names
+                per_model = {
+                    name: dlabels[name][sel].astype(np.float64, copy=False)
                     for name in ("feh", "loga")
-                    if name in dlabels.dtype.names
+                    if name in names
                 }
-                lnp_gal_flat = lngalprior(dist_flat, coord, **tiled)
+                lnp_gal = lngalprior(dist_mc, coord, **per_model)
             else:
-                # Custom prior: tile the full structured label array to match
-                # the flattened distances.
-                labels_flat = np.tile(dlabels[sel], Nmc)
-                lnp_gal_flat = lngalprior(dist_flat, coord, labels=labels_flat)
-
-            # Reshape back to (Nmc, Nsel)
-            lnp_gal_reshaped = lnp_gal_flat.reshape(Nmc, Nsel)
-            lnp_mc += lnp_gal_reshaped
+                # Custom prior: the structured labels tiled to match the
+                # flattened distances.
+                labels_flat = None if dlabels is None else np.tile(dlabels[sel], Nmc)
+                lnp_gal = lngalprior(
+                    dist_mc.ravel(), coord, labels=labels_flat
+                ).reshape(Nmc, Nsel)
+            lnp_mc += lnp_gal
 
         if dustfile is not None and apply_av_prior:
             # Load dust map from file path (str or os.PathLike) if needed
@@ -1790,8 +1778,8 @@ class BruteForce:
         max_models=50000,
         precision_shrinkage=0.0,
         verbose=True,
-        R_solar=8.2,
-        Z_solar=0.025,
+        R_solar=R_SOLAR,
+        Z_solar=Z_SOLAR,
     ):
         """
         Fit all input models to the input data to compute log-posteriors.
@@ -1947,11 +1935,12 @@ class BruteForce:
 
         R_solar : float, optional
             Solar galactocentric radius in kpc, used by the Galactic structure
-            prior. Default is 8.2.
+            prior. Default is ``R_SOLAR``, 8.275 (GRAVITY Collaboration 2021).
 
         Z_solar : float, optional
             Solar height above the Galactic midplane in kpc, used by the
-            Galactic structure prior. Default is 0.025.
+            Galactic structure prior.
+            Default is ``Z_SOLAR``, 0.0208 (Bennett & Bovy 2019).
 
         Returns
         -------
@@ -2255,8 +2244,8 @@ class BruteForce:
         precision_shrinkage=0.0,
         rstate=None,
         return_distreds=True,
-        R_solar=8.2,
-        Z_solar=0.025,
+        R_solar=R_SOLAR,
+        Z_solar=Z_SOLAR,
     ):
         """
         Perform internal fitting for a single object.

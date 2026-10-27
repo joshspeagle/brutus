@@ -16,7 +16,8 @@ Photometry alone cannot uniquely determine stellar properties—a faint red star
 1. **Stellar Priors**: Initial Mass Function (IMF) and luminosity functions
 2. **Astrometric Priors**: Parallax-based distance constraints
 3. **Galactic Structure Priors**: 3-D spatial distribution of stars (thin/thick disk, halo)
-4. **Extinction Priors**: 3-D dust maps and R_V variation
+4. **Kinematics**: velocity moments of the same components, projected to proper motions and radial velocity
+5. **Extinction Priors**: 3-D dust maps and R_V variation
 
 **Typical Usage:**
 
@@ -104,6 +105,8 @@ fitter.fit(
 
 ```{eval-rst}
 .. autofunction:: logp_galactic_structure
+
+.. autofunction:: galactic_prior_summary
 ```
 
 ```{eval-rst}
@@ -114,12 +117,28 @@ fitter.fit(
 .. autofunction:: logn_halo
 ```
 
+## Kinematics
+
+Velocity moments of the Galactic components and their projection to proper motions and radial velocity. The Galactic prior uses the disk vertical dispersions; the fit does not use the velocities yet ([#275](https://github.com/joshspeagle/brutus/issues/275)).
+
 ```{eval-rst}
-.. autofunction:: logp_feh
+.. autofunction:: solar_velocity
 ```
 
 ```{eval-rst}
-.. autofunction:: logp_age_from_feh
+.. autofunction:: thin_disk_velocity_moments
+```
+
+```{eval-rst}
+.. autofunction:: thick_disk_velocity_moments
+```
+
+```{eval-rst}
+.. autofunction:: halo_velocity_moments
+```
+
+```{eval-rst}
+.. autofunction:: velocity_to_observables
 ```
 
 ## Extinction Priors
@@ -150,6 +169,14 @@ For advanced users who need access to internal implementations:
 
 ```{eval-rst}
 .. automodule:: brutus.priors.galactic
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :no-index:
+```
+
+```{eval-rst}
+.. automodule:: brutus.priors.kinematic
    :members:
    :undoc-members:
    :show-inheritance:

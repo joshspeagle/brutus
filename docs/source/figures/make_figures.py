@@ -362,8 +362,8 @@ def degeneracy():
 
 
 def galactic_prior():
-    W, H = 820, 330
-    panels = [(70, 30, 370, 260), (470, 30, 770, 260)]
+    W, H = 1220, 330
+    panels = [(70, 30, 370, 260), (470, 30, 770, 260), (870, 30, 1170, 260)]
     lo, hi = -2, 2
     dist = np.logspace(lo, hi, 400)  # kpc
 
@@ -373,9 +373,9 @@ def galactic_prior():
     def Y(y0, y1, p):
         return y1 - p / 1.1 * (y1 - y0)
 
-    def prior(b):
+    def prior(b, ell=90.0):
         # Per unit ln d, as the Monte Carlo draws see it: pi(d) * d.
-        logp, comp = logp_galactic_structure(dist, (90.0, b), return_components=True)
+        logp, comp = logp_galactic_structure(dist, (ell, b), return_components=True)
         logd = np.log(dist)
         peak = (logp + logd).max()
         return np.exp(logp + logd - peak), [
@@ -410,19 +410,27 @@ def galactic_prior():
 
     sightlines = {0: c("red"), 30: c("copper"), 90: c("amber")}
     priors = {b: prior(b) for b in sightlines}
-    total, parts = priors[30]
+
+    def components(total, parts, colour):
+        # The total keeps its colour; the components are dashed.
+        names = ("thin disk", "thick disk", "halo", "bar")
+        dashes = ("2 3", "7 4", None, "1 3")
+        return [
+            (name, part, "currentColor", 1.5, dash)
+            for name, part, dash in zip(names, parts, dashes)
+            if part.max() > 1e-3
+        ] + [("total", total, colour, 2.5, None)]
+
     drawn = [
         [(f"b = {b}°", priors[b][0], col, 2.5, None) for b, col in sightlines.items()],
-        # The b = 30° total keeps its left-panel colour; components are dashed.
-        [
-            (name, part, "currentColor", 1.5, dash)
-            for name, part, dash in zip(
-                ("thin disk", "thick disk", "halo"), parts, ("2 3", "7 4", None)
-            )
-        ]
-        + [("total", total, c("copper"), 2.5, None)],
+        components(*priors[30], c("copper")),
+        components(*prior(4.0, ell=0.0), c("red")),
     ]
-    titles = ("total, at ℓ = 90°", "components, at ℓ = 90°, b = 30°")
+    titles = (
+        "total, at ℓ = 90°",
+        "components, at ℓ = 90°, b = 30°",
+        "components, at ℓ = 0°, b = 4°",
+    )
     for panel, items, title in zip(panels, drawn, titles):
         for _, p, col, width, dash in items:
             out += curve(panel, p, col, width, dash)
@@ -433,9 +441,10 @@ def galactic_prior():
         W,
         H,
         out,
-        "The Galactic structure prior along three sightlines",
+        "The Galactic structure prior along four sightlines",
         "The default Galactic prior per unit log distance, from 10 pc to 100 kpc. "
-        "Per unit log distance, the volume makes every sightline peak at 10 to 20 kpc; at higher latitude the halo dominates beyond a few kpc.",
+        "Per unit log distance, the volume puts the halo peak at 10 to 20 kpc; off the plane, the disks add a second peak at 2 to 4 kpc. "
+        "Toward the bulge, the bar puts the peak near 8 kpc.",
     )
 
 
