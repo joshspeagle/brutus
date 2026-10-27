@@ -11,6 +11,7 @@ throughout the codebase, now organized by functionality.
 # Mathematical functions
 from .math import (
     chisquare_logpdf,
+    galactic_to_galactocentric,
     galactic_to_galactocentric_cyl,
     inverse3,
     isPSD,
@@ -46,6 +47,7 @@ __all__ = [
     "chisquare_outlier_loglike",
     "uniform_outlier_loglike",
     # Mathematical functions
+    "galactic_to_galactocentric",
     "galactic_to_galactocentric_cyl",
     "pm_equatorial_to_galactic",
     "inverse3",

@@ -1,5 +1,6 @@
 """Tests of brutus.priors.galactic."""
 
+import os
 import warnings
 
 import numpy as np
@@ -13,7 +14,12 @@ from scipy.special import logsumexp
 from brutus.priors import galactic as gal
 from brutus.priors import kinematic as kin
 from brutus.priors import logn_disk, logn_halo, logp_galactic_structure
-from brutus.utils.math import R_SOLAR, Z_SOLAR, galactic_to_galactocentric_cyl
+from brutus.utils.math import (
+    R_SOLAR,
+    Z_SOLAR,
+    galactic_to_galactocentric,
+    galactic_to_galactocentric_cyl,
+)
 
 _QUAD = dict(epsabs=1e-12, epsrel=1e-12, limit=500)
 
@@ -74,6 +80,62 @@ _F_THICK, _F_HALO = _SUMMARY["f_thick_solar"], _SUMMARY["f_halo_solar"]
 _NO_SYSTEMATICS = dict(
     feh_systematic=(0.0, 0.0, 0.0), age_systematic=(0.0, 0.0, 0.0), age_floor=0.0
 )
+
+
+def _x_bar_reference(x, y, z):
+    """The X-shaped bar of Sormani et al. (2022), eqs. 2-5, in Msun/kpc^3,
+    vectorized, in the bar frame."""
+    rho, x0, y0, z0, c_par, c_perp, m, r_cut, alpha, c, n, xc, yc = gal._BAR_X
+    x, y, z = np.broadcast_arrays(*map(np.asarray, (x, y, z)))
+    a = (
+        (np.abs(x / x0) ** c_perp + np.abs(y / y0) ** c_perp) ** (c_par / c_perp)
+        + np.abs(z / z0) ** c_par
+    ) ** (1 / c_par)
+    a_pm = [np.hypot((x + sign * c * z) / xc, y / yc) for sign in (1, -1)]
+    return (
+        rho
+        / np.cosh(a**m)
+        * np.exp(-((np.sqrt(x**2 + y**2 + z**2) / r_cut) ** 2))
+        * (1 + alpha * sum(np.exp(-(ap**n)) for ap in a_pm))
+    )
+
+
+def _bar_reference(x, y, z):
+    """The bar of Sormani et al. (2022): the X-shaped bar and the two long
+    bars of eqs. 6-8."""
+    out = _x_bar_reference(x, y, z)
+    R = np.hypot(x, y)
+    with np.errstate(divide="ignore", over="ignore"):
+        for rho, x0, y0, h, c_perp, n, r_out, r_in, n_out, n_in in gal._BAR_LONG:
+            a = (np.abs(x / x0) ** c_perp + np.abs(y / y0) ** c_perp) ** (1 / c_perp)
+            out = out + rho / np.cosh(z / h) ** 2 * np.exp(
+                -(a**n) - (R / r_out) ** n_out - (r_in / R) ** n_in
+            )
+    return out
+
+
+def _bar_frame(d, ell, b, angle=gal.BAR_ANGLE):
+    """Bar-frame position of a star at distance d toward (l, b)."""
+    X, Y, Z = galactic_to_galactocentric(d, ell, b)
+    ar = np.radians(angle)
+    return X * np.cos(ar) - Y * np.sin(ar), X * np.sin(ar) + Y * np.cos(ar), Z
+
+
+def _ln_bar_labels(feh, age, feh_sys, age_frac, age_floor=0.0):
+    """ln p([Fe/H], age) of the default bar populations, with the given
+    systematics."""
+    out = []
+    for fm, fs, am, asd in ((-0.31, 0.31, 11.0, 1.5), (0.26, 0.20, 8.0, 3.0)):
+        sf = np.hypot(fs, feh_sys)
+        sa = np.sqrt(asd**2 + (age_frac * am) ** 2 + age_floor**2)
+        out.append(
+            np.log(0.5)
+            + stats.norm.logpdf(feh, fm, sf)
+            + stats.truncnorm.logpdf(age, -am / sa, (13.8 - am) / sa, am, sa)
+        )
+    return np.logaddexp(*out)
+
+
 # Keys of the thin-disk tables with the default parameters and systematics:
 # R_solar, v_c at the Sun, R_thin, Rs_thin and sig_birth in kpc.
 _THIN_KEY = (R_SOLAR, _VC_SUN, 2.74, 2.0, np.hypot(0.03, 0.1) / 0.075)
@@ -160,10 +222,10 @@ class TestGalacticPriors:
         # Check components structure
         assert "number_density" in components
         assert isinstance(components["number_density"], list)
-        assert len(components["number_density"]) == 3  # thin, thick, halo components
+        assert len(components["number_density"]) == 4  # thin, thick, halo, bar
 
         # Each component should have right length
-        for comp in components.values():
+        for comp in components["number_density"]:
             assert len(comp) == len(distances)
             assert np.all(np.isfinite(comp))
 
@@ -744,7 +806,12 @@ class TestColumnsAndNormalization:
                 - np.log(halo_norm)
                 + stats.truncnorm.logpdf(age[i], -8.0, 1.8 / 1.5, 12.0, 1.5)
             )
-            np.testing.assert_allclose(got[:, i], [thin, thick, halo], atol=5e-4)
+            ln_bar = np.log(
+                _bar_reference(*_bar_frame(d[i], *coord)) / 0.030e9
+            ) + _ln_bar_labels(feh[i], age[i], 0.0, 0.0)
+            np.testing.assert_allclose(
+                got[:, i], [thin, thick, halo, ln_bar], atol=5e-4
+            )
 
     def test_thin_disk_density_without_labels_is_the_sum_over_populations(self):
         # Off the nodes of the summed table in x and z.
@@ -891,8 +958,12 @@ class TestColumnsAndNormalization:
         _, comp = logp_galactic_structure(
             np.array([1e-6]), (0.0, 90.0), return_components=True, **kwargs
         )
-        thin, thick, halo = comp["number_density"]
+        thin, thick, halo, bar = comp["number_density"]
         summary = gal.galactic_prior_summary(**kwargs)
+        # The bar's sightline table holds its value at 1 pc below 1 pc.
+        np.testing.assert_allclose(
+            np.exp(bar - thin), summary["f_bar_solar"], rtol=1e-3
+        )
         np.testing.assert_allclose(thin - 2 * np.log(1e-6), 0.0, atol=1e-5)
         np.testing.assert_allclose(
             np.exp(thick - thin), summary["f_thick_solar"], rtol=1e-5
@@ -1059,6 +1130,8 @@ class TestThinDiskLabels:
             (13.0, -4.0, 0.8),
             (-1.18, 0.28, -0.67, -1.95, 1.0),
             (12.0, 1.5),
+            (0.5, -0.31, 0.31, 0.26, 0.20),
+            (11.0, 1.5, 8.0, 3.0),
             (systematic, 0.0, 0.0),
             (0.0, 0.0, 0.0),
             0.0,
@@ -1177,6 +1250,7 @@ class TestThickDiskAndHaloLabels:
         ((90.0, 60.0), 1.5, {}),
         ((180.0, 5.0), 6.0, {}),
         ((90.0, 60.0), 1.5, _NO_SYSTEMATICS),
+        ((30.0, 0.0), 5.0, {}),  # in the long bar
     ],
 )
 def test_label_distributions_sum_to_the_density_without_labels(coord, d, systematics):
@@ -1190,15 +1264,20 @@ def test_label_distributions_sum_to_the_density_without_labels(coord, d, systema
     ages, w_age = gal._gauss_legendre_panels(gal._AGE_EDGES + [13.8], 16)
     F, A = np.meshgrid(fehs, ages, indexing="ij")
 
+    # A component with no density at the position (the bar, far from the
+    # centre) has no label distribution there.
+    _, comps = logp_galactic_structure(np.array([d]), coord, return_components=True)
+    present = np.ravel(comps["number_density"]) > gal.LOG_ZERO / 2
+
     def labels(**kw):
         n = len(next(iter(kw.values())))
         comps = logp_galactic_structure(
             np.full(n, d), coord, return_components=True, **systematics, **kw
         )[1]
-        return np.exp(comps["labels"])
+        return np.exp(comps["labels"])[present]
 
     joint = labels(feh=F.ravel(), loga=np.log10(A.ravel() * 1e9))
-    joint = joint.reshape((3,) + F.shape)
+    joint = joint.reshape((-1,) + F.shape)
     with_feh = labels(feh=fehs)
     with_age = labels(loga=np.log10(ages * 1e9))
     np.testing.assert_allclose(w_feh @ joint @ w_age, 1.0, atol=0.003)
@@ -1258,3 +1337,128 @@ def test_thick_disk_has_one_near_side_peak_toward_the_galactic_centre():
     lnp = comp["number_density"][1]
     peaks = d[1:-1][(lnp[1:-1] > lnp[:-2]) & (lnp[1:-1] > lnp[2:])]
     assert peaks.size == 1 and peaks[0] < 6.0
+
+
+class TestBar:
+    """The bar is the Sormani et al. (2022) density, turned by bar_angle
+    and scaled to bar_mass, with position-independent labels."""
+
+    def test_jitted_density_matches_the_equations_of_the_paper(self):
+        rng = np.random.default_rng(5)
+        pts = rng.uniform(-6.0, 6.0, (400, 3)) * [1.0, 1.0, 0.4]
+        pts[0] = (0.0, 0.0, 0.0)  # the centre, where R = 0
+        got = [gal._bar_density(*p) for p in pts]
+        np.testing.assert_allclose(got, _bar_reference(*pts.T), rtol=1e-12)
+
+    def test_masses_are_those_of_the_paper(self):
+        # Midpoint rule in one octant, 0.05 kpc steps.
+        h = 0.05
+        x = np.arange(h / 2, 9.0, h)
+        z = np.arange(h / 2, 4.0, h)
+        X, Y, Z = np.meshgrid(x, x, z, indexing="ij", sparse=True)
+        mass = 8 * h**3 * _bar_reference(X, Y, Z).sum()
+        np.testing.assert_allclose(mass, gal.BAR_MASS, rtol=2e-4)
+        # The X-shaped bar alone is 1.28e10 in Table 1 of the paper.
+        x_only = 8 * h**3 * _x_bar_reference(X, Y, Z).sum()
+        assert abs(x_only - 1.28e10) < 0.005e10
+
+    def test_prior_matches_the_density_scaled_by_its_mass(self):
+        # Several sightlines: the density is evaluated at each point.
+        d = np.linspace(4.0, 12.0, 9)
+        ell, b = np.linspace(-8.0, 8.0, 9), np.full(9, -3.0)
+        _, comps = logp_galactic_structure(
+            d, (ell, b), bar_mass=2 * gal.BAR_MASS, return_components=True
+        )
+        expected = np.log(
+            2 * _bar_reference(*_bar_frame(d, ell, b)) / 0.030e9
+        ) + 2 * np.log(d)
+        np.testing.assert_allclose(comps["number_density"][3], expected, rtol=1e-12)
+
+    @pytest.mark.parametrize("coord", [(0.0, 0.0), (-6.0, 3.0), (10.0, 5.0)])
+    def test_sightline_table_matches_the_density_at_each_point(self, coord):
+        # One sightline interpolates in the table; several sightlines
+        # evaluate the density at each point. A second sightline far away
+        # makes the call one with several.
+        d = np.exp(np.random.default_rng(2).uniform(np.log(1e-3), np.log(25), 4000))
+        _, table = logp_galactic_structure(d, coord, return_components=True)
+        ell, b = np.full(d.size + 1, coord[0]), np.full(d.size + 1, coord[1])
+        ell[-1] = 180.0
+        _, exact = logp_galactic_structure(
+            np.append(d, 1.0), (ell, b), return_components=True
+        )
+        exact = {k: [v[:-1] for v in vs] for k, vs in exact.items()}
+        bar = exact["number_density"][3] - 2 * np.log(d)
+        keep = bar > np.log(1e3 / 0.030e9)  # above 1e3 Msun/kpc^3
+        np.testing.assert_allclose(
+            table["number_density"][3][keep],
+            exact["number_density"][3][keep],
+            atol=2e-3,
+        )
+
+    def test_one_sightline_as_an_array_gives_the_scalar_result(self):
+        d = np.linspace(0.5, 15.0, 50)
+        scalar = logp_galactic_structure(d, (5.0, -3.0))
+        array = logp_galactic_structure(d, (np.full(50, 5.0), np.full(50, -3.0)))
+        np.testing.assert_array_equal(array, scalar)
+
+    def test_density_next_to_the_axis_does_not_overflow(self):
+        # Regression: the long-bar cutoffs overflowed without JIT at R ~ 0.
+        got = gal._bar_density(1e-12, 0.0, 0.1)
+        np.testing.assert_allclose(got, _x_bar_reference(1e-12, 0.0, 0.1), rtol=1e-12)
+
+    @pytest.mark.skipif(
+        os.environ.get("NUMBA_DISABLE_JIT") == "1",
+        reason="without JIT, log of a negative distance raises",
+    )
+    def test_negative_distance_gives_nan_inside_the_table(self):
+        # Regression: a NaN table index read outside the table.
+        assert np.isnan(logp_galactic_structure(np.array([-3.0]), (0.0, 4.0)))[0]
+
+    def test_near_end_is_at_positive_longitude(self):
+        d = np.linspace(4.0, 13.0, 901)
+        peak = {}
+        for ell in (6.0, -6.0):
+            _, comps = logp_galactic_structure(d, (ell, 3.0), return_components=True)
+            peak[ell] = d[np.argmax(comps["number_density"][3])]
+        assert peak[6.0] < peak[-6.0] - 0.5
+
+    def test_zero_mass_gives_the_three_component_prior(self):
+        d = np.linspace(0.1, 15.0, 50)
+        coord = (0.0, 4.0)
+        feh, loga = np.full(50, 0.1), np.full(50, 9.9)
+        lp, comps = logp_galactic_structure(
+            d, coord, feh=feh, loga=loga, bar_mass=0.0, return_components=True
+        )
+        terms = np.add(comps["number_density"], comps["labels"])
+        assert np.all(terms[3] <= gal.LOG_ZERO / 2)
+        np.testing.assert_allclose(
+            lp, logsumexp(terms[:3], axis=0), rtol=1e-12, atol=1e-15
+        )
+
+    def test_labels_are_the_mixture_with_the_thick_disk_systematics(self):
+        rng = np.random.default_rng(8)
+        feh = rng.uniform(-1.0, 0.5, 20)
+        age = rng.uniform(1.0, 13.0, 20)
+        _, comps = logp_galactic_structure(
+            np.full(20, 8.0),
+            (0.0, 4.0),
+            feh=feh,
+            loga=np.log10(age * 1e9),
+            return_components=True,
+        )
+        expected = _ln_bar_labels(feh, age, 0.15, 0.15, 0.2)
+        np.testing.assert_allclose(comps["labels"][3], expected, atol=1e-9)
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"bar_mass": -1.0},
+            {"bar_angle": np.nan},
+            {"bar_feh": (1.5, -0.3, 0.3, 0.3, 0.2)},
+            {"bar_feh": (0.5, -0.3, 0.0, 0.3, 0.2)},
+            {"bar_age": (11.0, 1.5, 8.0)},
+        ],
+    )
+    def test_invalid_bar_keywords_raise(self, kwargs):
+        with pytest.raises(ValueError, match="bar_"):
+            logp_galactic_structure(np.array([8.0]), (0.0, 4.0), **kwargs)
