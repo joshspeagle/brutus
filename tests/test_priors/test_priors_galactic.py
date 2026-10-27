@@ -723,9 +723,10 @@ class TestVerticalJeans:
     def test_thick_disk_column_height_has_no_kinks_in_radius(self):
         # The clamped potential of #284 bent the column height by 0.046 kpc
         # per 0.25 kpc step at 4 and 9 kpc. The largest bend is now 0.005,
-        # at 12.75 kpc, in the blend where the dispersions start to hold.
+        # at 13 kpc, in the blend where the dispersions start to hold. The
+        # radii start outside the inner blend, which ends at 3.8 kpc.
         z = gal._COLUMN_Z
-        R = np.arange(3.0, 20.01, 0.25)
+        R = np.arange(3.75, 20.01, 0.25)
         n = R.size * z.size
         thick = _no_age_vertical(
             np.repeat(R, z.size), np.tile(z, R.size), np.full(n, -0.2)
@@ -1087,3 +1088,14 @@ class TestHaloShapeAndMass:
             )[0]
         )
         np.testing.assert_allclose(mass, 7.5e8, rtol=1e-4)
+
+
+def test_thick_disk_has_one_near_side_peak_toward_the_galactic_centre():
+    # Inside 3 kpc the BV24 high-alpha sigma_z rises to 119 km/s. Without
+    # the inner hold, the thick disk toward (l, b) = (0, 30) deg had two
+    # more distance peaks, at 7.8 and 10.2 kpc, above the Galactic centre.
+    d = np.linspace(0.05, 12.0, 4000)
+    _, comp = logp_galactic_structure(d, (0.0, 30.0), return_components=True)
+    lnp = comp["number_density"][1]
+    peaks = d[1:-1][(lnp[1:-1] > lnp[:-2]) & (lnp[1:-1] > lnp[2:])]
+    assert peaks.size == 1 and peaks[0] < 6.0

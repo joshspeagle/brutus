@@ -286,6 +286,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `brutus.utils.math` exports them as `R_SOLAR` and `Z_SOLAR`. All
   `R_solar` and `Z_solar` defaults use them. The circular speed at the
   Sun becomes 239.25 km/s, from 236.97 km/s (#294).
+- **The thick-disk dispersions are held inside 3 kpc**
+  *(output-changing)*. The inner edge of `THICK_DISK_X_RANGE` moves from
+  0.15 to 0.36 R_solar. Inside 3 kpc the high-alpha disk of Binney &
+  Vasiliev (2024) has sigma_z up to 119 km/s, which put two more peaks of
+  thick-disk density kiloparsecs above the Galactic centre. The hold also
+  sets the thick-disk velocity ellipsoid of
+  `thick_disk_velocity_moments` inside 3 kpc (#294).
 - **The halo is a broken power law normalized by its mass**
   *(output-changing)*. `logn_halo` and the halo of
   `logp_galactic_structure` follow Amarante et al. (2024): slopes 2.85

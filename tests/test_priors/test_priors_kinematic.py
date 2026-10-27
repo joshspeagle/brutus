@@ -310,10 +310,10 @@ def test_thick_disk_dispersion_profiles_match_a_hermite_spline(k):
 @pytest.mark.parametrize("disk", ["thin", "thick"])
 def test_disk_rotation_is_continuous_across_the_edges_of_the_fitted_radii(disk):
     # A hard clamp made v_phi step by up to 10 km/s at the edges.
-    # The thick disk's inner hold, at 0.8 kpc, lies where v_c itself rises
-    # by more than 0.05 km/s per pc.
     edges = (
-        THIN_DISK_R_RANGE if disk == "thin" else (kin.THICK_DISK_X_RANGE[1] * R_SOLAR,)
+        THIN_DISK_R_RANGE
+        if disk == "thin"
+        else np.array(kin.THICK_DISK_X_RANGE) * R_SOLAR
     )
     for edge in edges:
         R = np.linspace(edge - 1.5, edge + 1.5, 3001)

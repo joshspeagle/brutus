@@ -124,9 +124,11 @@ THICK_DISK_SIGMA = (64.68, 50.82, 43.60)
 # Range of x = R / R_solar over which the thick-disk dispersions follow the
 # high-alpha disk of Binney & Vasiliev (2024), and the half-width of the
 # quadratic blend at each end. Outside it they keep their edge values: that
-# disk is truncated beyond x = 1.5 (12.3 kpc for R_solar = 8.2 kpc), its
+# disk is truncated beyond x = 1.5 (12.4 kpc for R_solar = 8.275 kpc), its
 # density 10 times below an exponential of scale length 1.9 kpc at 15 kpc.
-THICK_DISK_X_RANGE = (0.15, 1.5)
+# Inside x = 0.36 (3 kpc) its sigma_z rises to 119 km/s, which puts a
+# second peak of thick-disk density kiloparsecs above the Galactic centre.
+THICK_DISK_X_RANGE = (0.36, 1.5)
 THICK_DISK_X_EDGE = 0.1
 
 # Halo mixture by Galactocentric radius (Lancaster et al. 2019, Table 2):
@@ -865,7 +867,8 @@ def thick_disk_velocity_moments(
     Table 1), and each follows the radial profile of the midplane
     dispersion of the high-alpha disk in the Milky Way model of Binney &
     Vasiliev (2024), against :math:`R / R_\odot`. That disk is truncated
-    beyond about 12 kpc, so outside :math:`0.15 < R / R_\odot < 1.5`
+    beyond about 12 kpc, and inside about 3 kpc its :math:`\sigma_z` rises
+    steeply, so outside :math:`0.36 < R / R_\odot < 1.5`
     (``THICK_DISK_X_RANGE``) the dispersions keep their edge values, with a
     quadratic blend 0.2 :math:`R_\odot` wide. With the density falling
     exponentially and the dispersions held, the asymmetric drift grows
