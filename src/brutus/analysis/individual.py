@@ -680,8 +680,9 @@ class BruteForce:
 
         Creates a dictionary mapping label names to boolean values indicating
         whether each label is a grid parameter (True) or a derived prediction
-        (False). Grid parameters are the dimensions used to construct the grid,
-        while predictions are stellar properties interpolated from the grid.
+        (False). Grid parameters are the labels in `StarGrid.grid_axes`, and
+        ``Mr`` on a grid without ``mini`` (the Bayestar grid). Every other
+        label, in ``labels`` or in ``params``, is a prediction.
 
         Returns
         -------
@@ -696,18 +697,16 @@ class BruteForce:
         (only to grid parameters) and for understanding which parameters
         define the grid structure vs. which are interpolated outputs.
         """
-        labels_mask = {}
-
-        # Grid parameters (used to compute the grid)
-        for label in self.star_grid.label_names:
-            labels_mask[label] = True
-
-        # Predictions (derived from grid)
-        if self.star_grid.param_names:
-            for param in self.star_grid.param_names:
-                labels_mask[param] = False
-
-        return labels_mask
+        # `load_models` returns the predictions in the same array as the axes.
+        # `Mr` is a prediction of the MIST grids but an input of the Bayestar
+        # grid, which has no `mini` (as for the luminosity-function prior).
+        axes = set(self.star_grid.grid_axes)
+        if "mini" not in axes:
+            axes.add("Mr")
+        names = self.star_grid.label_names + self.star_grid.param_names
+        return {
+            name: name in axes and name in self.star_grid.label_names for name in names
+        }
 
     def get_sed_grid(self, indices=None, av=None, rv=None, return_flux=False):
         r"""
@@ -871,14 +870,12 @@ class BruteForce:
 
         # Reweight based on grid spacing
         if apply_grad:
-            for lbl in self.models_labels.dtype.names:
+            for lbl in (name for name, axis in self.labels_mask.items() if axis):
                 label = self.models_labels[lbl]
-                if self.labels_mask[lbl]:  # Only for grid parameters
-                    ulabel = np.unique(label)
-                    if len(ulabel) > 1:
-                        # Compute and add gradient
-                        lngrad_label = np.log(np.gradient(ulabel))
-                        lnprior += np.interp(label, ulabel, lngrad_label)
+                ulabel = np.unique(label[np.isfinite(label)])
+                if len(ulabel) > 1:
+                    lngrad_label = np.log(np.gradient(ulabel))
+                    lnprior += np.interp(label, ulabel, lngrad_label)
 
         # Initialize Galactic prior
         if lngalprior is None and data_coords is None:

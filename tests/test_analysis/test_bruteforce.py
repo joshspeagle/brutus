@@ -164,6 +164,34 @@ class TestBruteForceInitialization:
         assert grid_params == 5
         assert pred_params > 0  # Should have some predictions
 
+    def test_predictions_in_the_label_array_get_no_grid_spacing_term(self, mock_grid):
+        """Regression (#296): `StarGrid(models, labels)` with the predictions in
+        `labels`, as `load_models` returns them, gives the prior of the split
+        form."""
+        from numpy.lib import recfunctions
+
+        joined = recfunctions.merge_arrays(
+            (mock_grid.labels, mock_grid.params), flatten=True
+        )
+        split = BruteForce(mock_grid, verbose=False)
+        merged = BruteForce(StarGrid(mock_grid.models, joined), verbose=False)
+        assert merged.labels_mask == split.labels_mask
+
+        flux = 10 ** (-0.4 * np.array([15.0, 14.8, 14.7, 14.6, 14.55]))
+        args = (flux, 0.05 * flux, np.ones(5, dtype=bool))
+        kwargs = dict(data_coords=(120.0, 45.0))
+        np.testing.assert_array_equal(
+            merged._setup(*args, **kwargs)[3], split._setup(*args, **kwargs)[3]
+        )
+
+    def test_bayestar_inputs_get_the_grid_spacing_term(self, mock_grid):
+        """Regression (#296): `Mr` and `feh` of the Bayestar grid stay axes."""
+        labels = np.zeros(27, dtype=[("feh", "f8"), ("Mr", "f8")])
+        labels["feh"] = np.repeat([-1.0, 0.0, 0.5], 9)
+        labels["Mr"] = np.tile(np.arange(9.0), 3)
+        fitter = BruteForce(StarGrid(mock_grid.models, labels), verbose=False)
+        assert fitter.labels_mask == {"feh": True, "Mr": True}
+
     def test_verbose_output(self, mock_grid, capsys):
         """Test verbose initialization output."""
         fitter = BruteForce(mock_grid, verbose=True)
