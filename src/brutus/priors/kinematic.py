@@ -1068,29 +1068,6 @@ _V_INV_FZ2 = 1.0 / np.vectorize(_thin_disk_fz)(_V_Z) ** 2
 _V_JEANS = _jeans_table()
 
 
-@jit(nopython=True, cache=True)
-def _thin_disk_vertical(terms, terms_solar):
-    """Return (a, b) with ln nu(|z|) - ln nu(|z_sun|) = a - b / sig_z0^2
-    for a thin-disk population of vertical dispersion sig_z0 (km/s).
-
-    The vertical Jeans equation d(nu sigma_z^2)/dz = -nu K_z with
-    sigma_z(z) = sig_z0 f_z(|z|) gives
-    ln nu(z) = -2 ln f_z(|z|) - J(z) / sig_z0^2, with the Jeans
-    integral J of ``_vertical_terms``. ``terms`` and ``terms_solar`` come
-    from ``_vertical_terms`` at the same radius. Neither a nor b depends on
-    sig_z0, so many populations at one point share them.
-    """
-    return -(terms[0] - terms_solar[0]), terms[1] - terms_solar[1]
-
-
-@jit(nopython=True, cache=True)
-def _thick_disk_vertical(terms, terms_solar, var_z):
-    """Return ln nu(|z|) - ln nu(|z_sun|) = -[Phi(z) - Phi(z_sun)] / sigma_z^2
-    of the isothermal thick disk, from ``_vertical_terms`` at the two
-    heights; ``var_z`` is in (km/s)^2."""
-    return -(terms[2] - terms_solar[2]) / var_z
-
-
 def _sightline(coord, v_sun):
     """Return the unit vectors (e_l, e_b, e_r) as rows, and e . v_sun.
 

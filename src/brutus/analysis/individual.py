@@ -1631,49 +1631,36 @@ class BruteForce:
                     logp_galactic_structure, R_solar=R_solar, Z_solar=Z_solar
                 )
 
-            # Galactic prior evaluation (FULLY VECTORIZED).
-            # dist_mc has shape (Nmc, Nsel); we evaluate the prior for every
-            # (MC sample, model) pair. The labels (feh/loga) repeat across the
-            # Nmc samples of a given model, so they must be broadcast to match
-            # dist_mc.ravel() (row-major: [model0..modelN]*Nmc).
-            dist_flat = dist_mc.ravel()
-
-            # Detect the default galactic-structure prior (bare or partial). For
-            # it we pass the per-point feh/loga as plain float64 arrays, which
-            # is bitwise-identical to passing a structured `labels` array but
-            # avoids a numpy structured-dtype np.tile -- pathologically slow
-            # (~100x a float tile, ~200 ms at Nsel=50000). Casting before the
-            # tile spares the prior a second full-size copy.
+            # Galactic prior evaluation for every (MC sample, model) pair.
+            # dist_mc has shape (Nmc, Nsel); the labels (feh/loga) of a model
+            # are the same for its Nmc samples.
             gal_is_default = lngalprior is logp_galactic_structure or (
                 getattr(lngalprior, "func", None) is logp_galactic_structure
             )
 
-            if dlabels is None:
-                # No labels - evaluate once for all distances
-                lnp_gal_flat = lngalprior(dist_flat, coord, labels=None)
-            elif gal_is_default:
-                if dlabels.dtype.names is None:
+            if gal_is_default:
+                if dlabels is not None and dlabels.dtype.names is None:
                     raise ValueError(
                         "`dlabels` must be a structured array for the default "
                         "Galactic prior, which reads its 'feh' and 'loga' fields."
                     )
-                tiled = {
-                    name: np.tile(
-                        dlabels[name][sel].astype(np.float64, copy=False), Nmc
-                    )
+                # Per-model float arrays broadcast over the samples, so the
+                # prior computes each model's label terms once.
+                names = () if dlabels is None else dlabels.dtype.names
+                per_model = {
+                    name: dlabels[name][sel].astype(np.float64, copy=False)
                     for name in ("feh", "loga")
-                    if name in dlabels.dtype.names
+                    if name in names
                 }
-                lnp_gal_flat = lngalprior(dist_flat, coord, **tiled)
+                lnp_gal = lngalprior(dist_mc, coord, **per_model)
             else:
-                # Custom prior: tile the full structured label array to match
-                # the flattened distances.
-                labels_flat = np.tile(dlabels[sel], Nmc)
-                lnp_gal_flat = lngalprior(dist_flat, coord, labels=labels_flat)
-
-            # Reshape back to (Nmc, Nsel)
-            lnp_gal_reshaped = lnp_gal_flat.reshape(Nmc, Nsel)
-            lnp_mc += lnp_gal_reshaped
+                # Custom prior: the structured labels tiled to match the
+                # flattened distances.
+                labels_flat = None if dlabels is None else np.tile(dlabels[sel], Nmc)
+                lnp_gal = lngalprior(
+                    dist_mc.ravel(), coord, labels=labels_flat
+                ).reshape(Nmc, Nsel)
+            lnp_mc += lnp_gal
 
         if dustfile is not None and apply_av_prior:
             # Load dust map from file path (str or os.PathLike) if needed

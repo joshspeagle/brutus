@@ -21,8 +21,6 @@ from .galactic import (
     galactic_prior_summary,
     logn_disk,
     logn_halo,
-    logp_age_from_feh,
-    logp_feh,
     logp_galactic_structure,
 )
 
@@ -51,8 +49,6 @@ __all__ = [
     "galactic_prior_summary",
     "logn_disk",
     "logn_halo",
-    "logp_feh",
-    "logp_age_from_feh",
     # Kinematics
     "solar_velocity",
     "thin_disk_velocity_moments",

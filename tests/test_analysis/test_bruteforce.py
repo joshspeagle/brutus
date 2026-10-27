@@ -2272,9 +2272,9 @@ def test_misspelled_keyword_raises(fitter, observation):
 def test_galactic_prior_gets_each_draw_paired_with_its_model_labels(
     fitter, observation, Nmc_prior
 ):
-    """Draws are flattened draw-major, so the labels are tiled, not repeated;
-    the default prior, which gets plain feh and loga arrays, must give the
-    same weights on its numpy path and its fused path."""
+    """Draws are flattened draw-major, so a custom prior gets the labels
+    tiled, not repeated; the default prior, which gets one label per model
+    broadcast over the draws, must give the same weights."""
     flux, flux_err, mask = observation
     like = fitter.loglike_grid(flux, flux_err, mask, return_vals=True)
     seen = {}
@@ -2290,8 +2290,7 @@ def test_galactic_prior_gets_each_draw_paired_with_its_model_labels(
         like, lngalprior=lngalprior, rstate=np.random.RandomState(5), **kwargs
     )
     Nsel, Nmc = dist_mc.shape
-    # The prior takes its fused kernel only above 1000 draws in all.
-    assert Nsel > 1 and (Nmc * Nsel > 1000) == (Nmc_prior == 100)
+    assert Nsel > 1
     np.testing.assert_array_equal(seen["dists"], dist_mc.T.ravel())
     np.testing.assert_array_equal(
         seen["labels"], np.tile(fitter.models_labels[sel], Nmc)

@@ -5,20 +5,14 @@ import warnings
 import numpy as np
 import pytest
 from astropy.coordinates import SkyCoord
+from scipy import stats
 from scipy.integrate import quad
 from scipy.interpolate import CubicSpline, RectBivariateSpline
 from scipy.special import logsumexp
 
 from brutus.priors import galactic as gal
 from brutus.priors import kinematic as kin
-from brutus.priors import (
-    logn_disk,
-    logn_halo,
-    logp_age_from_feh,
-    logp_feh,
-    logp_galactic_structure,
-)
-from brutus.utils import truncnorm_logpdf
+from brutus.priors import logn_disk, logn_halo, logp_galactic_structure
 from brutus.utils.math import R_SOLAR, Z_SOLAR, galactic_to_galactocentric_cyl
 
 _QUAD = dict(epsabs=1e-12, epsrel=1e-12, limit=500)
@@ -75,29 +69,14 @@ def _column_integral(i, abs_z, weight):
     return quad(integrand, 0.0, abs_z, **_QUAD)[0]
 
 
-_AGE_ARGS = (13.8, 0.0, -0.5, 0.5, 2.0, 4.0, 1.0)
 _SUMMARY = gal.galactic_prior_summary()
 _F_THICK, _F_HALO = _SUMMARY["f_thick_solar"], _SUMMARY["f_halo_solar"]
-_COLUMNS = gal._normalizations(**gal._NORMALIZATION_DEFAULTS)[5]
-
-
-def _ln_columns(R):
-    """ln(h(R) / h(R_sun)) of the thin and thick disks, from the production
-    tables (tested against direct integrals in
-    TestThickDiskSurfaceNormalization)."""
-    x = np.asarray(R, dtype=float) / R_SOLAR
-    return [gal._ln_column_array(x, table) for table in _COLUMNS]
-
-
-def _no_age_vertical(R, abs_Z, feh, age_args=_AGE_ARGS):
-    """Thin- and thick-disk ln nu(|Z|) - ln nu(|Z_sun|) without an age,
-    from the production kernel, with the thin-disk age prior at
-    feh_thin = -0.2 and the default thick-disk sigma_z."""
-    nodes = gal._thin_age_nodes(-0.2, age_args)
-    R, abs_Z, feh = (np.atleast_1d(np.asarray(x, dtype=float)) for x in (R, abs_Z, feh))
-    var_z = kin.THICK_DISK_SIGMA[2] ** 2
-    args = (R, abs_Z, Z_SOLAR, np.empty(0), feh, False, _ROT, (2.74, 2.0), var_z)
-    return gal._disk_vertical_array(*args, *nodes)
+_NO_SYSTEMATICS = dict(
+    feh_systematic=(0.0, 0.0, 0.0), age_systematic=(0.0, 0.0, 0.0), age_floor=0.0
+)
+# Keys of the thin-disk tables with the default parameters and systematics:
+# R_solar, v_c at the Sun, R_thin, Rs_thin and sig_birth in kpc.
+_THIN_KEY = (R_SOLAR, _VC_SUN, 2.74, 2.0, np.hypot(0.03, 0.1) / 0.075)
 
 
 def _clamp(x, lo, hi, width):
@@ -107,33 +86,6 @@ def _clamp(x, lo, hi, width):
     if abs(x - hi) < width:
         return hi - (hi + width - x) ** 2 / (4 * width)
     return min(max(x, lo), hi)
-
-
-def _vertical_reference(R, Z, age, feh):
-    """ln nu(|Z|) - ln nu(|Z_sun|) of the thin and thick disks, from the
-    dispersion relations written out and the vertical potential of
-    ``kin._vertical_terms`` (tested against quadrature on its own)."""
-    thin = np.empty(len(R))
-    thick = np.empty(len(R))
-    for i in range(len(R)):
-        terms = kin._vertical_terms(R[i] / R_SOLAR, abs(Z[i]))
-        terms_sun = kin._vertical_terms(R[i] / R_SOLAR, Z_SOLAR)
-        L, (L_sun, L_clamp) = _mean_L(R[i], age[i], feh[i])
-        L = _clamp(L, *L_clamp)
-        a, lam = kin.THIN_DISK_ALPHA_L[1], kin.THIN_DISK_LAMBDA_L[1]
-        f_L = (a * (L / L_sun) ** 2 + np.exp(-(L - L_sun) / lam)) / (1 + a)
-        sig = (
-            kin.THIN_DISK_SIGMA0[1]
-            * ((age[i] + 0.1) / 10.1) ** kin.THIN_DISK_BETA[1]
-            * (1 + kin.THIN_DISK_GAMMA_FEH[1] * np.clip(feh[i], -1.0, 0.5))
-            * f_L
-        )
-        thin[i] = (
-            -(terms[0] - terms_sun[0]) - (terms[1] - terms_sun[1]) * _PHI_SCALE / sig**2
-        )
-        var = kin.THICK_DISK_SIGMA[2] ** 2 * kin._thick_disk_scale(R[i] / R_SOLAR)[2]
-        thick[i] = -(terms[2] - terms_sun[2]) * _PHI_SCALE / var
-    return thin, thick
 
 
 class TestGalacticPriors:
@@ -184,45 +136,6 @@ class TestGalacticPriors:
 
         # Should produce different results
         assert not np.allclose(logn_default, logn_custom)
-
-    def test_logp_feh_basic(self):
-        """Test metallicity prior evaluation."""
-        fehs = np.array([-2.0, -1.0, 0.0, 0.5])
-
-        # Basic evaluation with default parameters
-        logp = logp_feh(fehs)
-        assert np.all(np.isfinite(logp))
-        assert len(logp) == len(fehs)
-
-    def test_logp_feh_custom_parameters(self):
-        """Test metallicity prior with custom parameters."""
-        fehs = np.array([-1.0, 0.0])
-
-        logp_default = logp_feh(fehs)
-        logp_custom = logp_feh(fehs, feh_mean=-0.1, feh_sigma=0.4)
-
-        # Should produce different results
-        assert not np.allclose(logp_default, logp_custom)
-
-    def test_logp_age_from_feh_basic(self):
-        """Test age-metallicity relation."""
-        ages = np.array([1.0, 5.0, 10.0, 13.0])  # Gyr
-        fehs = np.array([-0.5, -0.2, 0.0, -0.1])
-
-        logp = logp_age_from_feh(ages, fehs)
-
-        # Should be finite
-        assert np.all(np.isfinite(logp))
-
-    def test_logp_age_from_feh_custom_parameters(self):
-        """Test age-metallicity relation with custom parameters."""
-        ages = np.array([5.0, 8.0])
-
-        logp_default = logp_age_from_feh(ages)
-        logp_custom = logp_age_from_feh(ages, feh_mean=-0.1, max_age=12.0)
-
-        # Should produce different results
-        assert not np.allclose(logp_default, logp_custom)
 
     def test_logp_galactic_structure_basic(self):
         """Test combined Galactic structure prior."""
@@ -289,7 +202,7 @@ def _make_labels(feh, loga, dtype=float):
 
 class TestFehLogaArrayPaths:
     """Plain feh/loga arrays must produce the same prior as structured
-    labels on every code path (fused kernel and small-N numpy)."""
+    labels."""
 
     COORD = (90.0, 30.0)
 
@@ -374,9 +287,7 @@ class TestFehLogaArrayPaths:
         with pytest.raises(ValueError, match="labels"):
             logp_galactic_structure(d, self.COORD, labels=labels)
 
-    def test_array_coordinates_use_numpy_path(self):
-        # Per-point sky coordinates cannot use the fused kernel (scalar
-        # trig factors); must fall through to the numpy path silently.
+    def test_per_point_sky_coordinates_give_finite_priors_without_warnings(self):
         N = 1500
         rng = np.random.default_rng(2)
         d = np.linspace(0.1, 5.0, N)
@@ -399,7 +310,7 @@ class TestMixedArrayAndLabels:
 
     COORD = (90.0, 30.0)
 
-    @pytest.mark.parametrize("N", [500, 2000])  # small-N and fused paths
+    @pytest.mark.parametrize("N", [500, 2000])
     def test_feh_array_plus_labels_with_loga_keeps_age_prior(self, N):
         rng = np.random.default_rng(1)
         d = np.linspace(0.1, 5.0, N)
@@ -431,93 +342,6 @@ class TestMixedArrayAndLabels:
         assert np.array_equal(mixed, both_arrays)
 
 
-class TestJointFehAgePrior:
-    """The (feh, age) prior must be the mixture sum_c w_c p(feh|c) p(age|c),
-    not the product of marginal mixtures."""
-
-    COORD = (90.0, 30.0)
-
-    # Default component parameters of logp_galactic_structure
-    COMPONENTS = [
-        # (feh_mean, feh_sigma, ln_f)
-        (-0.2, 0.3, 0.0),
-        (-0.7, 0.4, np.log(_F_THICK)),
-        (-1.6, 0.5, np.log(_F_HALO)),
-    ]
-
-    def _expected_joint(self, dists, feh, loga):
-        """Independent reference: logsumexp_c[lnp_c + ln p(feh|c) + ln p(age|c)].
-
-        The vertical integrals are done by quadrature here and from a
-        1 pc table in the production code.
-        """
-        ell, b = self.COORD
-        R, Z = galactic_to_galactocentric_cyl(dists, ell, b)
-        vol = 2.0 * np.log(dists + 1e-300)
-        age = 10.0**loga / 1e9
-
-        vertical = _vertical_reference(R, Z, age, feh)
-        columns = _ln_columns(R)
-        terms = []
-        for idx, (fm, fsig, ln_f) in enumerate(self.COMPONENTS):
-            if idx < 2:
-                R_scale = (2.74, 1.9)[idx]
-                lnp_c = logn_disk(R, Z_SOLAR, R_scale=R_scale) + vertical[idx]
-                lnp_c -= columns[idx]
-            else:
-                lnp_c = logn_halo(R, Z)
-            lnp_c = lnp_c + vol + ln_f
-
-            lp_feh = logp_feh(feh, feh_mean=fm, feh_sigma=fsig)
-
-            age_mean = 13.8 / (1.0 + np.exp((fm + 0.5) / 0.5))
-            age_sigma = np.clip((13.8 - age_mean) / 2.0, 1.0, 4.0)
-            lp_age = truncnorm_logpdf(
-                age,
-                (0.0 - age_mean) / age_sigma,
-                (13.8 - age_mean) / age_sigma,
-                loc=age_mean,
-                scale=age_sigma,
-            )
-            terms.append(lnp_c + lp_feh + lp_age)
-
-        return logsumexp(np.vstack(terms), axis=0)
-
-    def test_numpy_path_matches_mixture(self):
-        rng = np.random.default_rng(3)
-        N = 200
-        d = rng.uniform(0.05, 10.0, N)
-        feh = rng.normal(-0.8, 0.7, N)
-        loga = rng.uniform(8.0, 10.1, N)
-
-        logp = logp_galactic_structure(d, self.COORD, labels=_make_labels(feh, loga))
-        expected = self._expected_joint(d, feh, loga)
-        np.testing.assert_allclose(logp, expected, rtol=1e-9, atol=1e-9)
-
-    def test_fused_path_matches_mixture(self):
-        rng = np.random.default_rng(4)
-        N = 1200
-        d = rng.uniform(0.05, 10.0, N)
-        feh = rng.normal(-0.8, 0.7, N)
-        loga = rng.uniform(8.0, 10.1, N)
-
-        logp = logp_galactic_structure(d, self.COORD, feh=feh, loga=loga)
-        expected = self._expected_joint(d, feh, loga)
-        np.testing.assert_allclose(logp, expected, rtol=1e-9, atol=1e-9)
-
-    def test_metal_poor_nearby_star_favors_old_age(self):
-        # Old code: age weights ignored feh, so a nearby feh=-1.6 star was
-        # weighted by the (thin-disk-dominated) position-only weights and
-        # 12 Gyr was DISFAVORED vs 3 Gyr by ~e^-1.2.
-        d = np.array([0.3, 0.3])
-        labels = _make_labels(
-            np.array([-1.6, -1.6]),
-            np.array([np.log10(12e9), np.log10(3e9)]),
-        )
-        logp = logp_galactic_structure(d, self.COORD, labels=labels)
-        assert logp[0] > logp[1]
-
-
 class TestGalacticCoverage:
     """Tests to improve galactic.py code coverage."""
 
@@ -527,49 +351,6 @@ class TestGalacticCoverage:
         coord_tuple = (180.0, 0.0)  # (l, b) in degrees
 
         logp = logp_galactic_structure(distances, coord_tuple)
-
-        assert np.all(np.isfinite(logp))
-        assert len(logp) == len(distances)
-
-    def test_galactic_structure_with_labels_feh(self):
-        """Test galactic structure with metallicity labels."""
-        distances = np.array([1.0, 2.0])
-        coord = SkyCoord(ra=180.0, dec=0.0, unit="deg")
-
-        # Create structured array with metallicity data
-        labels = np.array([(0.0,), (-0.5,)], dtype=[("feh", "f4")])
-
-        logp = logp_galactic_structure(distances, coord, labels=labels)
-
-        assert np.all(np.isfinite(logp))
-        assert len(logp) == len(distances)
-
-    def test_galactic_structure_with_labels_age(self):
-        """Test galactic structure with age labels."""
-        distances = np.array([1.0, 2.0])
-        coord = SkyCoord(ra=180.0, dec=0.0, unit="deg")
-
-        # Create structured array with log(age) data
-        labels = np.array(
-            [(9.0,), (9.5,)], dtype=[("loga", "f4")]
-        )  # log10(age in years)
-
-        logp = logp_galactic_structure(distances, coord, labels=labels)
-
-        assert np.all(np.isfinite(logp))
-        assert len(logp) == len(distances)
-
-    def test_galactic_structure_with_labels_both(self):
-        """Test galactic structure with both metallicity and age labels."""
-        distances = np.array([1.0, 2.0])
-        coord = SkyCoord(ra=180.0, dec=0.0, unit="deg")
-
-        # Create structured array with both feh and loga
-        labels = np.array(
-            [(0.0, 9.0), (-0.5, 9.5)], dtype=[("feh", "f4"), ("loga", "f4")]
-        )
-
-        logp = logp_galactic_structure(distances, coord, labels=labels)
 
         assert np.all(np.isfinite(logp))
         assert len(logp) == len(distances)
@@ -600,72 +381,65 @@ class TestGalacticCoverage:
             distances, coord, labels=labels, return_components=True
         )
 
-        # Should have all component types
-        assert "number_density" in components
-        assert "feh" in components
-        assert "age" in components
-
-        # Each component should have three subcomponents (thin, thick, halo)
-        assert len(components["number_density"]) == 3
-        assert len(components["feh"]) == 3
-        assert len(components["age"]) == 3
-
-    def test_logp_age_from_feh_parameter_matching(self):
-        """Test age-metallicity function with correct parameter names."""
-        ages = np.array([5.0, 8.0])
-
-        # Check actual function signature parameters
-        logp_default = logp_age_from_feh(ages)
-        logp_custom = logp_age_from_feh(ages, feh_mean=-0.1, max_age=12.0, min_age=0.5)
-
-        # Should produce different results
-        assert not np.allclose(logp_default, logp_custom)
-        assert np.all(np.isfinite(logp_default))
-        assert np.all(np.isfinite(logp_custom))
+        # The terms of the prior are the components' densities plus the ln
+        # densities of their labels.
+        terms = np.add(components["number_density"], components["labels"])
+        np.testing.assert_allclose(logp, np.logaddexp.reduce(terms), rtol=1e-12)
 
 
-class TestLegacyImportFallback:
-    """Test legacy import fallback (difficult to test without modifying imports)."""
+@pytest.mark.parametrize("feh", [None, np.zeros(3)])
+def test_labelled_ages_out_of_reach_of_thin_disk_stars_have_no_density(feh):
+    # Regression: with a spread of 0.05 Gyr, no true age below the end of
+    # thin-disk star formation (12 Gyr) reaches a labelled 13 Gyr, and the
+    # sum over true ages had an empty range that gave NaN.
+    _, comps = logp_galactic_structure(
+        np.full(3, 1.0),
+        (30.0, 10.0),
+        feh=feh,
+        loga=np.full(3, np.log10(13e9)),
+        age_systematic=(0.0, 0.15, 0.15),
+        age_floor=0.05,
+        return_components=True,
+    )
+    assert np.all(np.isfinite(comps["labels"])) and np.all(comps["labels"][0] < -1e299)
 
-    def test_scipy_import_works(self):
-        """Test that scipy.special.logsumexp is available."""
-        # This implicitly tests that the import succeeded
-        from brutus.priors.galactic import logp_galactic_structure
 
-        distances = np.array([1.0, 2.0, 3.0])
-        coord = SkyCoord(ra=0.0, dec=0.0, unit="deg")
-
-        logp = logp_galactic_structure(distances, coord)
-
-        # The fact that this works means logsumexp was imported correctly
-        assert np.all(np.isfinite(logp))
-        assert len(logp) == 3
+@pytest.mark.parametrize("feh", [None, np.zeros(3)])
+def test_ages_beyond_the_age_of_the_universe_have_zero_prior(feh):
+    lnp = logp_galactic_structure(
+        np.full(3, 1.0), (30.0, 10.0), feh=feh, loga=np.full(3, 10.15)
+    )
+    np.testing.assert_array_equal(lnp, -1e300)
 
 
-class TestLogZeroBeyondMaxAge:
-    def test_fused_and_numpy_paths_agree_beyond_max_age(self):
-        # Arrays of more than 1000 distances take the fused kernel.
-        for n in (1000, 1001):
-            lnp = logp_galactic_structure(
-                np.full(n, 1.0),
-                (30.0, 10.0),
-                feh=np.zeros(n),
-                loga=np.full(n, 10.2),
-            )
-            np.testing.assert_array_equal(lnp, -1e300)
+@pytest.mark.parametrize("names", [("feh",), ("loga",), ("feh", "loga")])
+def test_labels_on_the_trailing_axis_match_tiled_labels(names):
+    # One label per model, broadcast over 40 draws, as logpost_grid passes
+    # them; the terms of each label are computed once.
+    rng = np.random.default_rng(5)
+    d = rng.uniform(0.05, 8.0, (40, 300))
+    values = {"feh": rng.uniform(-2.0, 0.5, 300), "loga": rng.uniform(8.0, 10.1, 300)}
+    per_model = {k: values[k] for k in names}
+    tiled = {k: np.tile(values[k], 40) for k in names}
+    got = logp_galactic_structure(d, (30.0, 10.0), **per_model)
+    ref = logp_galactic_structure(d.ravel(), (30.0, 10.0), **tiled)
+    assert got.shape == d.shape
+    np.testing.assert_array_equal(got.ravel(), ref)
 
-    def test_age_prior_accepts_scalar_age(self):
-        from brutus.priors.galactic import logp_age_from_feh
 
-        lnp = logp_age_from_feh(5.0)
-        assert np.isfinite(lnp)
-        assert lnp == logp_age_from_feh(np.array([5.0]))[0]
+def test_tabulated_ln_ndtr_matches_scipy():
+    from scipy.special import log_ndtr
+
+    t = np.concatenate(
+        [np.linspace(-40.0, 9.0, 20001), np.linspace(-37.01, -36.99, 101)]
+    )
+    got = np.array([gal._ln_ndtr(v) for v in t])
+    np.testing.assert_allclose(got, log_ndtr(t), rtol=1e-12, atol=3e-9)
 
 
 class TestLabelsValidation:
     @pytest.mark.parametrize("n", [10, 2000])
     def test_labels_length_mismatch_raises(self, n):
-        # 2000 distances take the fused kernel, which would read past labels.
         labels = np.zeros(5, dtype=[("feh", float), ("loga", float)])
         with pytest.raises(ValueError, match="labels"):
             logp_galactic_structure(
@@ -680,9 +454,8 @@ class TestLabelsValidation:
         assert np.isfinite(with_feh)
         assert np.ndim(logp_galactic_structure(1.0, (90.0, 30.0))) == 0
 
-    @pytest.mark.parametrize("shape", [(3, 2), (600, 2)])
+    @pytest.mark.parametrize("shape", [(3, 2)])
     def test_labels_matching_multidimensional_dists_broadcast(self, shape):
-        # 1200 distances would take the fused kernel, which is 1-D only.
         n = int(np.prod(shape))
         labels = np.zeros(shape, dtype=[("feh", float), ("loga", float)])
         labels["loga"] = 9.5
@@ -720,29 +493,32 @@ class TestVerticalJeans:
         ref = _column_integral(i, abs_z, lambda t: 1.0 / _fz(t) ** 2)
         assert np.isclose(jeans, ref, rtol=1e-4, atol=1e-3)
 
-    def test_thick_disk_column_height_has_no_kinks_in_radius(self):
+    def test_thick_disk_column_has_no_kinks_in_radius(self):
         # The clamped potential of #284 bent the column height by 0.046 kpc
         # per 0.25 kpc step at 4 and 9 kpc. The largest bend is now 0.005,
         # at 13 kpc, in the blend where the dispersions start to hold. The
         # radii start outside the inner blend, which ends at 3.8 kpc.
-        z = gal._COLUMN_Z
-        R = np.arange(3.75, 20.01, 0.25)
-        n = R.size * z.size
-        thick = _no_age_vertical(
-            np.repeat(R, z.size), np.tile(z, R.size), np.full(n, -0.2)
-        )[1]
-        h = np.exp(thick).reshape(R.size, -1) @ gal._COLUMN_W
+        x = np.arange(3.75, 20.01, 0.25) / R_SOLAR
+        var = [kin.THICK_DISK_SIGMA[2] ** 2 * kin._thick_disk_scale(v)[2] for v in x]
+        ln_s = np.log(np.array(var) / _PHI_SCALE)
+        h = [np.exp(gal._ln_column(v, k, gal._THICK_COLUMN)) for v, k in zip(x, ln_s)]
         assert np.abs(np.diff(h, 2)).max() < 0.01
 
     @pytest.mark.parametrize("feh", [-1.0, 0.0])
     def test_thin_disk_falls_faster_than_z_squared_at_height(self, feh):
         # With sigma_z growing as 1 + gamma_z |z| without bound, the Jeans
         # integral converges and d ln nu / d ln |z| tends to -2. Holding |z|
-        # at 2 kpc gives -14 ([Fe/H] = -1) and -32 ([Fe/H] = 0) over
-        # 15-30 kpc.
-        Z = np.array([15.0, 30.0])
-        ln_nu = _no_age_vertical(np.full(2, R_SOLAR), Z, np.full(2, feh))[0]
-        assert np.diff(ln_nu)[0] / np.log(2.0) < -10.0
+        # at 2 kpc makes it fall far faster over 15-30 kpc.
+        d = np.array([15.0, 30.0])
+        _, comps = logp_galactic_structure(
+            d,
+            (0.0, 90.0),
+            feh=np.full(2, feh),
+            loga=np.full(2, 9.7),
+            return_components=True,
+        )
+        thin = comps["number_density"][0] + comps["labels"][0] - 2 * np.log(d)
+        assert np.diff(thin)[0] / np.log(2.0) < -10.0
 
     @pytest.mark.parametrize("x", [0.137, 0.5046, 1.00625, 2.31, 3.6])
     @pytest.mark.parametrize("abs_z", [0.2, 1.0, 3.0, 8.0])
@@ -792,63 +568,6 @@ class TestVerticalJeans:
             x = i * kin._V_DX
             assert gap(x, 1e-7) < 0.02 * gap(x, 1e-5) + 1e-3
 
-    def test_midplane_prior_is_the_surface_density_over_the_column(self):
-        # At Z = Z_sun (b = 0) both vertical terms vanish, so the prior is
-        # the exponential surface density over the column height.
-        d = np.linspace(0.1, 15.0, 50)
-        rng = np.random.default_rng(5)
-        kw = dict(feh=rng.normal(-0.3, 0.4, 50), loga=rng.uniform(8.5, 10.1, 50))
-        R, _ = galactic_to_galactocentric_cyl(d, 30.0, 0.0)
-        vol = 2.0 * np.log(d)
-        lnp, comps = logp_galactic_structure(
-            d, (30.0, 0.0), return_components=True, **kw
-        )
-        thin, thick, halo = comps["number_density"]
-        col_thin, col_thick = _ln_columns(R)
-        expected_thin = logn_disk(R, Z_SOLAR) - col_thin + vol
-        np.testing.assert_allclose(thin, expected_thin, rtol=1e-12)
-        np.testing.assert_allclose(
-            thick,
-            logn_disk(R, Z_SOLAR, R_scale=1.9) - col_thick + vol + np.log(_F_THICK),
-            rtol=1e-12,
-        )
-        np.testing.assert_allclose(
-            halo, logn_halo(R, np.full_like(R, Z_SOLAR)) + vol + np.log(_F_HALO)
-        )
-        fused = logp_galactic_structure(d, (30.0, 0.0), **kw)
-        np.testing.assert_allclose(fused, lnp, rtol=1e-12)
-        # Without an age, the thin-disk age average is 0 at |Z_sun| too.
-        no_age = logp_galactic_structure(d, (30.0, 0.0), return_components=True)
-        thin, thick, _ = no_age[1]["number_density"]
-        np.testing.assert_allclose(thin, expected_thin, rtol=1e-12)
-
-    @pytest.mark.parametrize("feh", [-0.8, -0.2, 0.3])
-    @pytest.mark.parametrize(
-        "age_args", [_AGE_ARGS, (13.8, 0.0, -0.5, 0.5, 2.0, 0.5, 0.3)]
-    )
-    def test_age_average_matches_quadrature_over_ages(self, feh, age_args):
-        # Without an age, the thin disk averages over the age prior of the
-        # thin disk (at feh_thin), with the star's own [Fe/H] in sigma_z.
-        # The second prior is narrow (sigma of 0.5 Gyr), where the nodes
-        # must sit on its support.
-        def prior(age):
-            return np.exp(logp_age_from_feh(np.array([age]), -0.2, *age_args)[0])
-
-        for R, abs_Z in [(4.0, 0.5), (8.25, 0.3), (8.25, 2.0), (15.0, 1.0), (8.2, 6.0)]:
-
-            def weighted(age):
-                args = np.array([R]), np.array([abs_Z]), np.array([age])
-                return prior(age) * np.exp(
-                    _vertical_reference(*args, np.array([feh]))[0][0]
-                )
-
-            kw = dict(epsrel=1e-10, limit=200, points=[1.0, 4.0, 8.0, 12.0])
-            expected = np.log(
-                quad(weighted, 0, 13.8, **kw)[0] / quad(prior, 0, 13.8, **kw)[0]
-            )
-            no_age = _no_age_vertical(R, abs_Z, feh, age_args)[0][0]
-            assert np.isclose(no_age, expected, rtol=0, atol=1e-6)
-
     def test_feh_outside_the_fitted_range_takes_the_edge_value(self):
         for feh, edge in [(-2.5, -1.0), (1.0, 0.5), (3.0, 0.5)]:
             assert kin._thin_disk_sigma0(4.0, feh) == kin._thin_disk_sigma0(4.0, edge)
@@ -860,17 +579,12 @@ class TestVerticalJeans:
     def test_disk_scale_heights_match_star_counts(self):
         # New result: scale heights near 0.3 and 0.9 kpc (Juric et al. 2008)
         # follow from the dispersions and the potential.
-        z = np.linspace(0.3, 1.5, 25)
-        thin = _no_age_vertical(np.full(z.size, R_SOLAR), z, np.full(z.size, -0.2))[0]
-        assert 0.25 < self._scale_height(thin, z) < 0.4
-        z = np.linspace(0.5, 2.0, 25)
-        zero = kin._vertical_terms(1.0, 0.0)
-        var_z = kin.THICK_DISK_SIGMA[2] ** 2
-        thick = [
-            kin._thick_disk_vertical(kin._vertical_terms(1.0, x), zero, var_z)
-            for x in z
-        ]
-        assert 0.8 < self._scale_height(thick, z) < 1.2
+        d = np.linspace(0.3, 2.0, 35)
+        _, comps = logp_galactic_structure(d, (0.0, 90.0), return_components=True)
+        thin, thick = (c - 2 * np.log(d) for c in comps["number_density"][:2])
+        near, far = d < 1.5, d > 0.5
+        assert 0.25 < self._scale_height(thin[near], d[near]) < 0.4
+        assert 0.8 < self._scale_height(thick[far], d[far]) < 1.2
 
     def test_younger_thin_disk_stars_lie_closer_to_the_plane(self):
         d = np.linspace(0.2, 1.5, 20)
@@ -881,8 +595,9 @@ class TestVerticalJeans:
                 (0.0, 90.0),
                 loga=np.full(d.size, loga),
                 return_components=True,
-            )[1]["number_density"]
-            heights.append(self._scale_height(comps[0] - 2 * np.log(d), d))
+            )[1]
+            thin = comps["number_density"][0] + comps["labels"][0] - 2 * np.log(d)
+            heights.append(self._scale_height(thin, d))
         assert heights[0] < heights[1] < heights[2]
 
 
@@ -915,71 +630,233 @@ class TestVerticalInputs:
             logp_galactic_structure(np.array([1.0]), (0.0, 30.0), **{name: value})
 
 
-class TestThickDiskSurfaceNormalization:
-    """The thick disk is normalized by its surface density at the Sun."""
+def _sigma_z(R, age, feh):
+    """Midplane sigma_z of a thin-disk population, with the dispersion
+    relations written out and the mean L_z of the kinematic kernels."""
+    L, (L_sun, L_clamp) = _mean_L(R, age, feh)
+    L = _clamp(L, *L_clamp)
+    a, lam = kin.THIN_DISK_ALPHA_L[1], kin.THIN_DISK_LAMBDA_L[1]
+    f_L = (a * (L / L_sun) ** 2 + np.exp(-(L - L_sun) / lam)) / (1 + a)
+    return (
+        kin.THIN_DISK_SIGMA0[1]
+        * ((age + 0.1) / 10.1) ** kin.THIN_DISK_BETA[1]
+        * (1 + kin.THIN_DISK_GAMMA_FEH[1] * np.clip(feh, -1.0, 0.5))
+        * f_L
+    )
 
-    @pytest.mark.parametrize("R", [9.5, 19.7])
-    def test_column_heights_between_radial_nodes_match_direct_integrals(self, R):
-        # The radial term divides by h(R) / h(R_sun), interpolated from a
-        # table at 0.1 R_sun steps. That step does not resolve the blends of
-        # the thin-disk clamp (1% at 4.5 kpc) and the thick-disk hold (0.1%
-        # at 12 kpc); #294 replaces the table. The reference integrates the
-        # profiles
-        # at R itself, with a grid of [Fe/H] for the thin disk and 16-point
-        # Gauss-Legendre panels in z (8 points in production).
-        z, w_z = gal._gauss_legendre_panels(gal._COLUMN_EDGES, 16)
-        fehs = np.linspace(-1.4, 1.0, 17)
-        w_feh = np.exp(-0.5 * ((fehs + 0.2) / 0.3) ** 2)
-        R_z = np.full(z.size, R)
-        thin = 0.0
-        for feh, wf in zip(fehs, w_feh):
-            profile = _no_age_vertical(R_z, z, np.full(z.size, feh))[0]
-            thin += wf * (np.exp(profile) @ w_z) / w_feh.sum()
-        thick = np.exp(_no_age_vertical(R_z, z, R_z)[1]) @ w_z
-        col_thin, col_thick = (np.exp(c[0]) for c in _ln_columns(np.array([R])))
-        np.testing.assert_allclose(
-            _SUMMARY["thin_column_height"] * col_thin, thin, rtol=5e-4
-        )
-        np.testing.assert_allclose(
-            _SUMMARY["thick_column_height"] * col_thick, thick, rtol=1e-4
-        )
 
-    def test_summary_column_heights_match_a_dense_integral(self):
-        # A reference over log-spaced ages and a grid of [Fe/H] with the
-        # per-age kernel, independent of the age and [Fe/H] quadrature nodes.
-        summary = gal.galactic_prior_summary()
-        z = np.concatenate((np.linspace(0.0, 10.0, 251), np.linspace(10.5, 100.0, 180)))
-        ages = np.geomspace(0.01, 13.8, 80)
-        p_age = np.exp(gal.logp_age_from_feh(ages, -0.2))
-        fehs = np.linspace(-1.4, 1.0, 17)
-        w_feh = np.exp(-0.5 * ((fehs + 0.2) / 0.3) ** 2)
-        n = ages.size * z.size
-        loga = np.repeat(np.log10(ages * 1e9), z.size)
-        thin = 0.0
-        for feh, wf in zip(fehs, w_feh):
-            prof = gal._disk_vertical_array(
-                np.full(n, R_SOLAR),
-                np.tile(z, ages.size),
-                Z_SOLAR,
-                loga,
-                np.full(n, feh),
-                True,
-                _ROT,
-                (2.74, 2.0),
-                kin.THICK_DISK_SIGMA[2] ** 2,
-                np.empty(0),
-                np.empty(0),
-                np.empty(0),
+def _ln_profile(x, s, thin):
+    """ln nu(|z|) with nu = 1 at the midplane, and ln of its column to
+    100 kpc by adaptive quadrature, for s = sigma_z^2 / phi."""
+
+    def ln_nu(z):
+        ln_fz2, jeans, dphi = kin._vertical_terms(x, z)
+        return -ln_fz2 - jeans / s if thin else -dphi / s
+
+    edges = [0.0, 0.05, 0.3, 1.0, 1.5, 2.5, 5.0, 20.0, 100.0]
+    column = sum(
+        quad(lambda z: np.exp(ln_nu(z)), a, b, epsrel=1e-10, limit=200)[0]
+        for a, b in zip(edges[:-1], edges[1:])
+    )
+    return ln_nu, np.log(column)
+
+
+class TestColumnsAndNormalization:
+    """Each disk population's density is its surface density times
+    nu(z) / 2H, and the components are normalized at the Sun."""
+
+    @pytest.mark.parametrize("thin", [True, False])
+    @pytest.mark.parametrize(
+        "x, sigma", [(0.031, 4.0), (0.613, 12.5), (1.007, 31.0), (2.55, 77.0)]
+    )
+    def test_column_tables_match_quadrature(self, thin, x, sigma):
+        # Off the table nodes in x and ln s.
+        s = sigma**2 / _PHI_SCALE
+        table = gal._THIN_COLUMN if thin else gal._THICK_COLUMN
+        expected = _ln_profile(x, s, thin)[1]
+        assert np.isclose(gal._ln_column(x, np.log(s), table), expected, atol=2e-4)
+
+    def test_components_match_a_direct_computation(self):
+        # Surface density, labels and nu / 2H from the written-out
+        # dispersions and quadrature columns; the thin-disk label density
+        # is tested against its defining integral below.
+        rng = np.random.default_rng(3)
+        d = rng.uniform(0.2, 6.0, 6)
+        feh = rng.uniform(-1.2, 0.3, 6)
+        age = rng.uniform(0.5, 11.5, 6)
+        coord = (60.0, 25.0)
+        _, comps = logp_galactic_structure(
+            d,
+            coord,
+            feh=feh,
+            loga=np.log10(age * 1e9),
+            return_components=True,
+            **_NO_SYSTEMATICS,
+        )
+        got = np.add(comps["number_density"], comps["labels"]) - 2 * np.log(d)
+        R, Z = galactic_to_galactocentric_cyl(d, *coord)
+        summary = gal.galactic_prior_summary(feh_systematic=(0.0, 0.0, 0.0))
+        ln_d0 = -np.log(2 * summary["thin_column_height"])
+        f_halo = summary["f_halo_solar"]
+        thick_sn = gal._skew_normal_args("thick_feh", (-0.45, 0.22, -0.5), 0.0)
+        halo_sn = gal._skew_normal_args("halo_feh", (-1.18, 0.28, -0.67), 0.0)
+        # The halo core, normalized with the 10^[Fe/H] tail below -1.95.
+        halo_norm = stats.skewnorm.sf(
+            -1.95, halo_sn[2], *halo_sn[:2]
+        ) + stats.skewnorm.pdf(-1.95, halo_sn[2], *halo_sn[:2]) / np.log(10)
+        sig_birth = 0.03 / 0.075
+        ln_norm = gal._thin_disk_norm_table(sig_birth)
+        for i in range(d.size):
+            x = R[i] / R_SOLAR
+            ln_nu, ln_col = _ln_profile(
+                x, _sigma_z(R[i], age[i], feh[i]) ** 2 / _PHI_SCALE, True
             )
-            column = np.trapezoid(np.exp(prof[0]).reshape(ages.size, -1), z, axis=1)
-            thin += wf * np.trapezoid(p_age * column, ages) / np.trapezoid(p_age, ages)
-        thin /= w_feh.sum()
-        thick = np.trapezoid(np.exp(prof[1][: z.size]), z)
-        np.testing.assert_allclose(summary["thin_column_height"], thin, rtol=5e-4)
-        np.testing.assert_allclose(summary["thick_column_height"], thick, rtol=1e-6)
-        np.testing.assert_allclose(
-            summary["f_thick_solar"], 0.18 * thin / thick, rtol=5e-4
-        )
+            R_fit, ln_norm_R = gal._thin_disk_fit_radius(R[i], ln_norm)
+            terms = gal._thin_disk_age_terms(age[i])
+            thin = (
+                logn_disk(R[i], Z_SOLAR)
+                + gal._thin_disk_ln_joint(feh[i], R_fit, *terms, sig_birth)
+                - ln_norm_R
+                + ln_nu(abs(Z[i]))
+                - np.log(2)
+                - ln_col
+                - ln_d0
+            )
+            s = kin.THICK_DISK_SIGMA[2] ** 2 * kin._thick_disk_scale(x)[2] / _PHI_SCALE
+            ln_nu, ln_col = _ln_profile(x, s, False)
+            mean_age = 13.0 - 4.0 * (max(feh[i], -1.0) + 1.0)
+            thick = (
+                logn_disk(R[i], Z_SOLAR, R_scale=1.9)
+                + np.log(0.18)
+                + ln_nu(abs(Z[i]))
+                - np.log(2)
+                - ln_col
+                - ln_d0
+                + stats.skewnorm.logpdf(feh[i], thick_sn[2], *thick_sn[:2])
+                + stats.truncnorm.logpdf(
+                    age[i], -mean_age / 0.8, (13.8 - mean_age) / 0.8, mean_age, 0.8
+                )
+            )
+            halo = (
+                logn_halo(R[i], Z[i])
+                + np.log(f_halo)
+                + stats.skewnorm.logpdf(feh[i], halo_sn[2], *halo_sn[:2])
+                - np.log(halo_norm)
+                + stats.truncnorm.logpdf(age[i], -8.0, 1.8 / 1.5, 12.0, 1.5)
+            )
+            np.testing.assert_allclose(got[:, i], [thin, thick, halo], atol=5e-4)
+
+    def test_thin_disk_density_without_labels_is_the_sum_over_populations(self):
+        # Off the nodes of the summed table in x and z.
+        f_L, table, ln_norm = gal._thin_disk_tables(*_THIN_KEY)
+        ln_phi = np.log(_PHI_SCALE)
+        for x, z in [(0.3137, 0.0123), (1.0213, 0.41), (1.62, 2.3), (2.9, 7.7)]:
+            R_fit, ln_norm_R = gal._thin_disk_fit_radius(x * R_SOLAR, ln_norm)
+            ln_w, ln_s, ln_col = gal._thin_disk_age_sum(
+                gal._AGE_NODES, gal._AGE_LN_W, x, R_fit, ln_phi, f_L, _THIN_KEY[-1]
+            )
+            ln_fz2, jeans, _ = kin._vertical_terms(x, z)
+            terms = ln_w - ln_norm_R - ln_col - np.log(2) - ln_fz2
+            terms -= jeans * np.exp(-ln_s)
+            assert np.isclose(
+                gal._ln_marginal(x, z, table), logsumexp(terms), atol=2e-3
+            )
+
+    def test_feh_table_matches_the_sum_over_ages(self):
+        # Off the nodes of the table in [Fe/H], x and z.
+        f_L, _, ln_norm = gal._thin_disk_tables(*_THIN_KEY)
+        table = gal._thin_disk_feh_table(*_THIN_KEY)
+        labels = (_THIN_KEY[-1], 0.1, 0.2)
+        ln_phi = np.log(_PHI_SCALE)
+        for x, z, feh in [
+            (0.47, 0.031, 0.21),
+            (1.013, 0.62, -0.307),
+            (1.71, 2.3, -0.66),
+        ]:
+            R_fit, ln_norm_R = gal._thin_disk_fit_radius(x * R_SOLAR, ln_norm)
+            nodes = gal._thin_disk_feh_ages(
+                feh, gal._AGE_NODES, gal._AGE_LN_W, _THIN_KEY[-1]
+            )
+            ln_fz2, jeans, _ = kin._vertical_terms(x, z)
+            ref = gal._thin_disk_ln_feh_sum(nodes, R_fit, x, ln_phi, f_L, ln_fz2, jeans)
+            ref -= ln_norm_R
+            fl = gal._label_index(feh, 0.0, True, labels, table)
+            fi = x / (kin._V_DX * gal._LABEL_STEPS[0])
+            fk = np.arcsinh(z / kin._V_ZS) / (kin._V_DU * gal._LABEL_STEPS[1])
+            assert np.isclose(gal._catmull_rom_3d(fl, fi, fk, table), ref, atol=4e-3)
+
+    @pytest.mark.parametrize("age", [0.07, 2.3, 9.4, 13.1])
+    def test_blurred_thin_disk_ages_match_quadrature_over_the_true_age(self, age):
+        # Both the joint density with [Fe/H] and the table by age alone,
+        # against the trapezoid rule on 4001 true ages.
+        frac, floor = 0.1, 0.2
+        f_L, _, ln_norm = gal._thin_disk_tables(*_THIN_KEY)
+        table = gal._thin_disk_age_table(*_THIN_KEY, frac, floor)
+        ln_phi, sig_birth = np.log(_PHI_SCALE), _THIN_KEY[-1]
+        true = np.linspace(0.0, 12.0 - 1e-9, 4001)
+        ln_k = [gal._ln_age_kernel(age, t, frac, floor) for t in true]
+        ln_k = np.log(np.gradient(true)) + ln_k
+        ln_k[[0, -1]] -= np.log(2.0)
+        for x, z, feh in [(1.0, 0.05, 0.0), (0.83, 0.7, -0.3), (1.37, 1.6, -0.6)]:
+            R_fit, ln_norm_R = gal._thin_disk_fit_radius(x * R_SOLAR, ln_norm)
+            ln_fz2, jeans, _ = kin._vertical_terms(x, z)
+            args = (x, ln_phi, f_L, ln_fz2, jeans)
+            by_age = [
+                gal._ln_sum_nu(
+                    *gal._thin_disk_age_populations(
+                        t, x, R_fit, ln_phi, f_L, sig_birth
+                    ),
+                    ln_fz2,
+                    jeans,
+                )
+                for t in true
+            ]
+            joint = []
+            for t in true:
+                sig_R0, sig_z0 = kin._thin_disk_sigma0(t, feh)
+                ln_s = gal._thin_disk_ln_s(
+                    np.log(sig_R0), np.log(sig_z0), x, ln_phi, f_L
+                )
+                joint.append(
+                    gal._thin_disk_ln_joint(
+                        feh, R_fit, *gal._thin_disk_age_terms(t), sig_birth
+                    )
+                    + gal._thin_disk_ln_nu(
+                        ln_s, gal._ln_column(x, ln_s, gal._THIN_COLUMN), ln_fz2, jeans
+                    )
+                )
+            ages, ln_w = gal._true_age_nodes(age, frac, floor)
+            populations = gal._thin_disk_age_sum(
+                ages, ln_w, x, R_fit, ln_phi, f_L, sig_birth
+            )
+            nodes = gal._thin_disk_feh_ages(feh, ages, ln_w, sig_birth)
+            for got, ln_f in [
+                (gal._ln_sum_nu(*populations, ln_fz2, jeans), by_age),
+                (gal._thin_disk_ln_feh_sum(nodes, R_fit, *args), joint),
+            ]:
+                # 16 true ages; the third position is e^-23 for age 0.07.
+                assert np.isclose(got, logsumexp(ln_k + ln_f), atol=0.015)
+            fl = gal._label_index(0.0, age, False, (0.0, frac, floor), table)
+            fi = x / (kin._V_DX * gal._LABEL_STEPS[0])
+            fk = np.arcsinh(z / kin._V_ZS) / (kin._V_DU * gal._LABEL_STEPS[1])
+            assert np.isclose(
+                gal._catmull_rom_3d(fl, fi, fk, table) + ln_norm_R,
+                logsumexp(ln_k + by_age),
+                atol=5e-3,
+            )
+
+    def test_fL_table_matches_the_mean_angular_momentum(self):
+        # f_L of sigma_z at the population's mean L_z, from the kinematic
+        # kernels, between the table nodes.
+        f_L = gal._thin_disk_fL_rows(R_SOLAR, _VC_SUN, 2.74, 2.0)
+        for R in [0.9, 3.03, 4.1, 8.3, 13.7, 19.6, 21.1]:
+            for age, feh in [(0.2, 0.3), (4.0, -0.2), (11.0, -0.9)]:
+                L, (L_sun, L_clamp) = _mean_L(R, age, feh)
+                ref = np.log(kin._thin_disk_fL(L, L_sun, L_clamp)[1])
+                ln_sig = np.log(kin._thin_disk_sigma0(age, feh)[0])
+                k = (ln_sig - gal._FL_LNSIG0) / gal._FL_DLNSIG
+                got = gal._catmull_rom_2d(R / R_SOLAR / kin._V_DX, k, f_L)
+                assert np.isclose(got, ref, atol=2e-4)
 
     def test_potential_scales_with_the_circular_velocity(self):
         # Phi scales as v_c^2, so scaling v_circ_solar and thick_sigma_z by
@@ -988,20 +865,13 @@ class TestThickDiskSurfaceNormalization:
         scaled = gal.galactic_prior_summary(
             v_circ_solar=1.2 * _VC_SUN, thick_sigma_z=1.2 * kin.THICK_DISK_SIGMA[2]
         )["thick_column_height"]
-        np.testing.assert_allclose(scaled, base, rtol=1e-12)
+        np.testing.assert_allclose(scaled, base, rtol=1e-10)
 
     def test_hot_thick_disk_column_includes_its_tail_above_10_kpc(self):
         # In the BV24 potential a hot disk is bound only logarithmically:
         # with sigma_z = 100 km/s, stopping the column at 10 kpc lost 5%.
-        z = np.concatenate((np.linspace(0.0, 10.0, 501), np.linspace(10.1, 100.0, 900)))
-        terms0 = kin._vertical_terms(1.0, Z_SOLAR)
-        thick = [
-            kin._thick_disk_vertical(
-                kin._vertical_terms(1.0, t), terms0, 100.0**2 / _PHI_SCALE
-            )
-            for t in z
-        ]
-        column = np.trapezoid(np.exp(thick), z)
+        ln_nu, ln_col = _ln_profile(1.0, 100.0**2 / _PHI_SCALE, False)
+        column = np.exp(ln_col - ln_nu(Z_SOLAR))
         summary = gal.galactic_prior_summary(thick_sigma_z=100.0)
         np.testing.assert_allclose(summary["thick_column_height"], column, rtol=1e-4)
 
@@ -1010,19 +880,20 @@ class TestThickDiskSurfaceNormalization:
         [
             {},
             {"thick_sigma_z": 35.0},
-            {"feh_thin": -0.5},
+            {"R_thin": 2.5},
             {"f_thick_surface": 0.3},
             {"halo_mass": 1e9, "q_halo": 0.6},
         ],
     )
     def test_prior_at_the_sun_uses_the_derived_fractions(self, kwargs):
         # Toward the north Galactic pole at 1 mpc, every component is at
-        # the Sun's position, where each profile is 1.
+        # the Sun's position, where the thin disk is 1.
         _, comp = logp_galactic_structure(
             np.array([1e-6]), (0.0, 90.0), return_components=True, **kwargs
         )
         thin, thick, halo = comp["number_density"]
         summary = gal.galactic_prior_summary(**kwargs)
+        np.testing.assert_allclose(thin - 2 * np.log(1e-6), 0.0, atol=1e-5)
         np.testing.assert_allclose(
             np.exp(thick - thin), summary["f_thick_solar"], rtol=1e-5
         )
@@ -1039,15 +910,303 @@ class TestThickDiskSurfaceNormalization:
         [
             {"f_thick_surface": 0.0},
             {"f_thick_surface": np.inf},
-            {"feh_thin_sigma": np.nan},
+            {"R_thin": np.nan},
             {"halo_mass": 0.0},
             {"eta_halo_inner": np.nan},
             {"rho_thin_solar": -0.03},
+            {"thick_feh": (-0.45, 0.0, -0.5)},
+            {"thick_feh": 0.5},
+            {"halo_feh": -1.2},
+            {"thick_feh": (-0.45, 0.22, -1.0)},
+            {"halo_feh": (-1.2, 0.3)},
+            {"thick_age": (13.0, -4.0, 0.0)},
+            {"halo_age": (12.0, np.nan)},
         ],
     )
-    def test_invalid_normalization_inputs_raise(self, kwargs):
+    def test_invalid_inputs_raise(self, kwargs):
         with pytest.raises(ValueError, match=next(iter(kwargs))):
             logp_galactic_structure(np.array([1.0]), (0.0, 90.0), **kwargs)
+
+
+def _frankel_reference(feh, age, R, scatter=0.03):
+    """p([Fe/H], age, R) of Frankel et al. (2018) by quadrature over the
+    birth radius, with a birth scatter of ``scatter`` dex (None for the
+    age density alone), and the onset fade beyond 8 Gyr."""
+    tau_m, tau_sfr = gal.THIN_DISK_SFH
+    f_m, grad, r_now, gamma = gal.THIN_DISK_ENRICHMENT
+    sfr = np.exp(-(tau_m - age) / tau_sfr - 0.5 * max(age - 8.0, 0.0) ** 2)
+    rexp = 3 * (1 - 0.42 * age / 8)
+    s = 3.6 * np.sqrt(age / 8)
+    f = (1 - age / tau_m) ** gamma
+
+    def integrand(r0):
+        kernel = stats.norm.pdf(R, r0, s) / stats.norm.cdf(r0 / s)
+        feh0 = f_m + grad * r0 - (f_m + grad * r_now) * f
+        birth = 1.0 if scatter is None else stats.norm.pdf(feh, feh0, scatter)
+        return np.exp(-r0 / rexp) / rexp * kernel * birth
+
+    return sfr * quad(integrand, 0.0, 60.0, points=[R], epsrel=1e-10, limit=400)[0]
+
+
+class TestThinDiskLabels:
+    """The thin-disk ages and [Fe/H] of Frankel et al. (2018)."""
+
+    @pytest.mark.parametrize(
+        "feh, age, R, rtol",
+        [
+            (0.1, 0.3, 8.0, 1e-6),
+            (-0.2, 2.0, 11.0, 1e-4),
+            (0.0, 4.0, 6.0, 1e-3),
+            # Born near R0 = 0, where the kernel normalization is
+            # approximated.
+            (0.1, 7.5, 8.3, 0.03),
+            (0.05, 6.0, 5.0, 0.03),
+            (-0.4, 9.5, 8.0, 0.03),
+        ],
+    )
+    def test_joint_density_matches_its_integral_over_birth_radius(
+        self, feh, age, R, rtol
+    ):
+        terms = gal._thin_disk_age_terms(age)
+        got = np.exp(gal._thin_disk_ln_joint(feh, R, *terms, 0.03 / 0.075))
+        assert np.isclose(got, _frankel_reference(feh, age, R), rtol=rtol, atol=0)
+
+    @pytest.mark.parametrize(
+        "age, R", [(0.3, 8.0), (4.0, 6.0), (7.9, 5.0), (10.0, 9.0)]
+    )
+    @pytest.mark.parametrize("sig_birth", [0.4, 1.4])
+    def test_feh_nodes_sum_to_the_integral_over_feh(self, age, R, sig_birth):
+        terms = gal._thin_disk_age_terms(age)
+        fehs, ln_w = np.empty(gal._FEH_NODES), np.empty(gal._FEH_NODES)
+        gal._thin_disk_feh_nodes(R, terms, sig_birth, fehs, ln_w)
+        ref = quad(
+            lambda f: np.exp(gal._thin_disk_ln_joint(f, R, *terms, sig_birth)),
+            -3.0,
+            2.0,
+            points=[fehs[np.argmax(ln_w)]],
+            **_QUAD,
+        )[0]
+        assert np.isclose(np.exp(logsumexp(ln_w)), ref, rtol=1e-4)
+
+    @pytest.mark.parametrize("age, R", [(4.0, 6.0), (7.9, 5.0), (10.0, 9.0)])
+    def test_age_density_with_the_default_scatter_is_within_4_percent(self, age, R):
+        # With the 0.1 dex systematic, the kernel normalization taken at the
+        # mean birth radius misses the exact integral by up to 3.2%.
+        fehs, ln_w = np.empty(gal._FEH_NODES), np.empty(gal._FEH_NODES)
+        gal._thin_disk_feh_nodes(R, gal._thin_disk_age_terms(age), 1.39, fehs, ln_w)
+        ref = _frankel_reference(0.0, age, R, scatter=None)
+        assert np.isclose(np.exp(logsumexp(ln_w)), ref, rtol=0.04)
+
+    def test_labels_keep_their_edge_values_outside_the_fitted_radii(self):
+        ln_norm = gal._thin_disk_norm_table(1.4)
+        lo, hi = gal.THIN_DISK_FIT_RADII
+        for inside, outside in [(lo - 1.0, 0.0), (hi + 1.0, 30.0)]:
+            assert gal._thin_disk_fit_radius(
+                outside, ln_norm
+            ) == gal._thin_disk_fit_radius(inside, ln_norm)
+
+    def test_star_formation_fades_beyond_8_gyr_and_stops_at_12_gyr(self):
+        # A half-Gaussian of width 1 Gyr times the exponential star
+        # formation history, continuous at the onset.
+        def ln_sfr(age):
+            return gal._thin_disk_age_terms(age)[0]
+
+        assert ln_sfr(8.0) == pytest.approx(-4.0 / 5.9)
+        assert ln_sfr(10.0) == pytest.approx(-2.0 / 5.9 - 2.0)
+        assert ln_sfr(12.0) == -1e300
+
+    def test_thin_disk_age_density_is_smooth_across_the_onset(self):
+        # The labelled-age density at the Sun has no step at 8 Gyr and
+        # falls beyond it.
+        ages = np.linspace(6.0, 13.0, 701)
+        _, comps = logp_galactic_structure(
+            np.full(ages.size, 1e-3),
+            (0.0, 90.0),
+            loga=np.log10(ages * 1e9),
+            return_components=True,
+        )
+        ln_p = comps["labels"][0]
+        assert np.abs(np.diff(ln_p)).max() < 0.03
+        assert np.all(np.diff(ln_p[ages > 8.5]) < 0)
+
+    def test_local_feh_matches_the_solar_neighbourhood(self):
+        # All components: -0.06 +/- 0.22 (GCS) and +0.01 +/- 0.20 (APOGEE),
+        # with the 0.1 dex systematic added in quadrature.
+        fehs = np.linspace(-3.0, 1.0, 2001)
+        lnp = logp_galactic_structure(np.full(fehs.size, 1e-3), (0.0, 0.0), feh=fehs)
+        p = np.exp(lnp - lnp.max())
+        p /= np.trapezoid(p, fehs)
+        mean = np.trapezoid(p * fehs, fehs)
+        sd = np.sqrt(np.trapezoid(p * (fehs - mean) ** 2, fehs))
+        assert -0.06 < mean < 0.01 and 0.21 < sd < 0.25
+
+    def test_young_stars_follow_the_ism_gradient(self):
+        fehs = np.linspace(-1.5, 1.0, 2501)
+        radii = np.array([6.0, 8.0, 10.0, 12.0])
+        terms = gal._thin_disk_age_terms(0.2)
+        means = []
+        for R in radii:
+            p = np.exp([gal._thin_disk_ln_joint(f, R, *terms, 0.4) for f in fehs])
+            means.append(np.trapezoid(p * fehs, fehs) / np.trapezoid(p, fehs))
+        assert np.allclose(np.diff(means) / 2.0, -0.075, atol=0.005)
+
+    @pytest.mark.parametrize("systematic", [0.0, 0.1, 0.25])
+    def test_feh_systematic_adds_to_the_birth_scatter(self, systematic):
+        # The youngest stars have the birth scatter in [Fe/H], with the
+        # systematic added in quadrature.
+        sig_birth = gal._label_args(
+            (-0.45, 0.22, -0.5),
+            (13.0, -4.0, 0.8),
+            (-1.18, 0.28, -0.67, -1.95, 1.0),
+            (12.0, 1.5),
+            (systematic, 0.0, 0.0),
+            (0.0, 0.0, 0.0),
+            0.0,
+        )[0][0]
+        fehs = np.linspace(-1.5, 1.5, 3001)
+        terms = gal._thin_disk_age_terms(1e-6)
+        p = np.exp([gal._thin_disk_ln_joint(f, 8.0, *terms, sig_birth) for f in fehs])
+        mean = np.trapezoid(p * fehs, fehs) / np.trapezoid(p, fehs)
+        sd = np.sqrt(np.trapezoid(p * (fehs - mean) ** 2, fehs) / np.trapezoid(p, fehs))
+        assert sd == pytest.approx(np.hypot(0.03, systematic), rel=1e-3)
+
+
+class TestThickDiskAndHaloLabels:
+    """Skew-normal [Fe/H] and ages tied to [Fe/H] (thick disk) or not
+    (halo)."""
+
+    @pytest.mark.parametrize(
+        "moments", [(-0.45, 0.22, -0.5), (0.3, 1.5, 0.9), (-1.0, 0.1, 0.0)]
+    )
+    def test_skew_normal_has_the_requested_moments(self, moments):
+        xi, omega, alpha, *_ = gal._skew_normal_args("thick_feh", moments, 0.0)
+        got = stats.skewnorm.stats(alpha, xi, omega, moments="mvs")
+        np.testing.assert_allclose(
+            [got[0], np.sqrt(got[1]), got[2]], moments, rtol=1e-10, atol=1e-12
+        )
+        v = xi + omega * np.linspace(-3.0, 3.0, 7)
+        # ln Phi is tabulated to within 3e-9.
+        np.testing.assert_allclose(
+            [gal._ln_skew_normal(u, xi, omega, alpha) for u in v],
+            stats.skewnorm.logpdf(v, alpha, xi, omega),
+            rtol=0,
+            atol=1e-8,
+        )
+
+    @pytest.mark.parametrize("blur", [0.05, 0.15])
+    def test_blurred_skew_normal_is_its_convolution_with_a_normal(self, blur):
+        xi, omega, alpha, *_ = gal._skew_normal_args(
+            "thick_feh", (-0.45, 0.22, -0.5), 0
+        )
+        args = gal._skew_normal_args("thick_feh", (-0.45, 0.22, -0.5), blur)
+        for v in [-1.3, -0.6, -0.2, 0.3]:
+            ref = quad(
+                lambda u: stats.skewnorm.pdf(u, alpha, xi, omega)
+                * stats.norm.pdf(v, u, blur),
+                -4.0,
+                2.0,
+                **_QUAD,
+            )[0]
+            assert np.isclose(np.exp(gal._ln_skew_normal(v, *args[:3])), ref, rtol=1e-8)
+
+    def test_default_halo_feh_reproduces_the_naidu_percentiles(self):
+        # Core and tail before the systematic, normalized on its grid.
+        xi, omega, alpha, *_ = gal._skew_normal_args(
+            "halo_feh", (-1.18, 0.28, -0.67), 0.0
+        )
+        ln_p = gal._halo_feh_table(xi, omega, alpha, -1.95, 1.0, 0.0)
+        fehs = gal._HALO_FEHS
+        cdf = np.cumsum(np.exp(ln_p)) * gal._HALO_DFEH
+        np.testing.assert_allclose(
+            np.interp([0.16, 0.5, 0.84], cdf, fehs), [-1.48, -1.15, -0.91], atol=0.01
+        )
+
+    @pytest.mark.parametrize("blur", [0.0, 0.15])
+    def test_halo_tail_falls_as_a_power_of_ten_and_keeps_the_mass(self, blur):
+        # 10^[Fe/H] below the break (Youakim et al. 2020), and a normalized
+        # density with or without the systematic.
+        xi, omega, alpha, *_ = gal._skew_normal_args(
+            "halo_feh", (-1.18, 0.28, -0.67), 0.0
+        )
+        ln_p = gal._halo_feh_table(xi, omega, alpha, -1.95, 1.0, blur)
+        fehs = gal._HALO_FEHS
+        i, j = np.searchsorted(fehs, [-4.0, -3.0])
+        assert (ln_p[j] - ln_p[i]) / np.log(10) == pytest.approx(1.0, abs=1e-6)
+        assert np.trapezoid(np.exp(ln_p), fehs) == pytest.approx(1.0, abs=1e-5)
+
+    def test_thick_disk_and_halo_ages_include_the_systematics(self):
+        # Standard deviations: the intrinsic spread, 15% of the mean age
+        # and the 0.2 Gyr floor, in quadrature.
+        ages = np.array([4.0, 9.0, 12.5])
+        _, comps = logp_galactic_structure(
+            np.full(3, 1.0),
+            (0.0, 90.0),
+            feh=np.full(3, -0.5),
+            loga=np.log10(ages * 1e9),
+            return_components=True,
+        )
+        _, no_age = logp_galactic_structure(
+            np.full(3, 1.0), (0.0, 90.0), feh=np.full(3, -0.5), return_components=True
+        )
+        got = np.subtract(comps["labels"], no_age["labels"])[1:]
+        for mean, sd, row in [(11.0, 0.8, got[0]), (12.0, 1.5, got[1])]:
+            sd = np.sqrt(sd**2 + (0.15 * mean) ** 2 + 0.2**2)
+            ref = stats.truncnorm.logpdf(ages, -mean / sd, (13.8 - mean) / sd, mean, sd)
+            np.testing.assert_allclose(row, ref, atol=1e-10)
+
+    @pytest.mark.parametrize("feh, peak", [(0.0, 9.0), (-1.0, 13.0), (-1.5, 13.0)])
+    def test_thick_disk_ages_follow_the_old_sequence(self, feh, peak):
+        # Xiang & Rix (2022): 13 Gyr at [Fe/H] = -1 to about 7 Gyr at +0.5,
+        # held below -1, where their sequence starts.
+        ages = np.linspace(0.01, 13.8, 1380)
+        _, comps = logp_galactic_structure(
+            np.full(ages.size, 1.0),
+            (0.0, 90.0),
+            feh=np.full(ages.size, feh),
+            loga=np.log10(ages * 1e9),
+            return_components=True,
+        )
+        assert abs(ages[np.argmax(comps["labels"][1])] - peak) < 0.02
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "coord, d, systematics",
+    [
+        ((0.0, 0.0), 1e-3, {}),
+        ((90.0, 60.0), 1.5, {}),
+        ((180.0, 5.0), 6.0, {}),
+        ((90.0, 60.0), 1.5, _NO_SYSTEMATICS),
+    ],
+)
+def test_label_distributions_sum_to_the_density_without_labels(coord, d, systematics):
+    # The labels of each component integrate to 1 at every position, and a
+    # density with one label is the joint density summed over the other.
+    # Gauss-Legendre panels: 8 points per 0.1 dex down to the halo tail, and
+    # 16 per age panel, twice the production nodes, to MAX_AGE.
+    fehs, w_feh = gal._gauss_legendre_panels(
+        np.concatenate(([-6.0, -4.0], np.arange(-3.0, 1.21, 0.1))), 8
+    )
+    ages, w_age = gal._gauss_legendre_panels(gal._AGE_EDGES + [13.8], 16)
+    F, A = np.meshgrid(fehs, ages, indexing="ij")
+
+    def labels(**kw):
+        n = len(next(iter(kw.values())))
+        comps = logp_galactic_structure(
+            np.full(n, d), coord, return_components=True, **systematics, **kw
+        )[1]
+        return np.exp(comps["labels"])
+
+    joint = labels(feh=F.ravel(), loga=np.log10(A.ravel() * 1e9))
+    joint = joint.reshape((3,) + F.shape)
+    with_feh = labels(feh=fehs)
+    with_age = labels(loga=np.log10(ages * 1e9))
+    np.testing.assert_allclose(w_feh @ joint @ w_age, 1.0, atol=0.003)
+    np.testing.assert_allclose(with_feh @ w_feh, 1.0, atol=0.003)
+    np.testing.assert_allclose(with_age @ w_age, 1.0, atol=0.003)
+    for marginal, summed in [(with_feh, joint @ w_age), (with_age, w_feh @ joint)]:
+        keep = marginal > 1e-3 * marginal.max(axis=1, keepdims=True)
+        np.testing.assert_allclose(summed[keep], marginal[keep], rtol=0.01)
 
 
 class TestHaloShapeAndMass:

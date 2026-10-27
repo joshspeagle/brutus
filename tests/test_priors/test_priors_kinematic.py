@@ -10,7 +10,7 @@ import pytest
 from scipy.interpolate import CubicHermiteSpline
 
 from brutus.priors import kinematic as kin
-from brutus.priors.galactic import logn_disk, logp_age_from_feh
+from brutus.priors.galactic import logn_disk, logp_galactic_structure
 from brutus.priors.kinematic import (
     HALO_DELTA_LOBE,
     HALO_F_ISO,
@@ -207,8 +207,15 @@ def test_thin_disk_population_matches_the_measured_low_alpha_disk():
     # Average over the local thin-disk age prior of brutus at [Fe/H] = -0.2.
     # Anguiano et al. (2020, Table 1), low-alpha disk: lag 240 - 229.43 =
     # 10.6 km/s, sigma_phi / sigma_R = 0.66, sigma_z / sigma_R = 0.49.
+    # Weighted by the thin-disk age distribution at the Sun.
     ages = np.linspace(0.05, 13.8, 400)
-    w = np.exp(logp_age_from_feh(ages, feh_mean=-0.2))
+    _, comps = logp_galactic_structure(
+        np.full(ages.size, 1e-3),
+        (0.0, 0.0),
+        loga=np.log10(ages * 1e9),
+        return_components=True,
+    )
+    w = np.exp(comps["labels"][0])
     w /= w.sum()
     mean, cov = thin_disk_velocity_moments(
         np.full_like(ages, R_SOLAR), np.zeros_like(ages), ages, -0.2
