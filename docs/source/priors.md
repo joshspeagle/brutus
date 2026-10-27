@@ -5,7 +5,7 @@ Photometry alone often allows several solutions: a nearer, cooler star or a fart
 | Prior | Depends on | Default | Changed by |
 |---|---|---|---|
 | [Model prior](#model-prior) | grid model | Kroupa IMF × age weight × grid volume | `lnprior`, `apply_agewt`, `apply_grad` |
-| [Galactic structure](#galactic-structure) | distance, sightline, [Fe/H], age | thin disk + thick disk + halo | `lngalprior`, `data_coords` |
+| [Galactic structure](#galactic-structure) | distance, sightline, [Fe/H], age | thin disk + thick disk + halo + bar | `lngalprior`, `data_coords` |
 | [Dust map](#dust-map) | $A_V$, distance, sightline | none | `dustfile`, `lndustprior` |
 | [Extinction curve](#extinction-curve) | $R_V$, $A_V$ | $R_V \sim \mathcal{N}(3.32, 0.18^2)$, flat $A_V$ | `rv_gauss`, `rvlim`, `av_gauss`, `avlim` |
 
@@ -37,13 +37,13 @@ At 0.5 M☉ the density is $2^{2.3} \approx 4.9$ times that at 1 M☉. A grid wi
 
 ## Galactic structure
 
-{func}`~brutus.priors.logp_galactic_structure` is a three-component model of the Milky Way with the structure of {cite:t}`blandhawthorn2016`. Each component $c$ has a number density $n_c$, normalized to 1 at the Sun and weighted by its local fraction $f_c$. The distance prior along the sightline $(\ell, b)$ is
+{func}`~brutus.priors.logp_galactic_structure` is a four-component model of the Milky Way: the thin disk, thick disk and halo, with the structure of {cite:t}`blandhawthorn2016`, and the bar. Each component $c$ has a number density $n_c$, relative to the thin disk at the Sun. The distance prior along the sightline $(\ell, b)$ is
 
 $$
-\pi_{\rm gal}(d \mid \ell, b) \propto d^2 \sum_c f_c\, n_c\big(R(d), Z(d)\big),
+\pi_{\rm gal}(d \mid \ell, b) \propto d^2 \sum_c n_c\big(\mathbf{x}(d)\big),
 $$
 
-where $d^2$ is the volume of a shell and $(R, Z)$ are the Galactocentric radius and height. The Sun is at $R_\odot = 8.275$ kpc {cite:p}`gravity2021` and $Z_\odot = 0.0208$ kpc {cite:p}`bennett2019` (`R_solar`, `Z_solar` in `fit()`, which apply to the default prior only).
+where $d^2$ is the volume of a shell and $\mathbf{x}$ the Galactocentric position: the radius $R$ and height $Z$ for the disks and the halo, and also the azimuth for the bar. The Sun is at $R_\odot = 8.275$ kpc {cite:p}`gravity2021` and $Z_\odot = 0.0208$ kpc {cite:p}`bennett2019` (`R_solar`, `Z_solar` in `fit()`, which apply to the default prior only).
 
 Each disk has an exponential surface density $\Sigma(R)$, with the radius smoothed near the Galactic centre, $R_{\rm eff} = \sqrt{R^2 + R_s^2}$. A disk population with vertical profile $\nu(R, z)$, 1 at the midplane, has the density
 
@@ -87,13 +87,16 @@ Amarante et al. step $q$ from 0.77 to 0.99 at a Galactocentric radius of 30 kpc.
 
 The halo is normalized by its stellar mass, $M_{\rm halo} = 7.5 \times 10^8\ M_\odot$ between Galactocentric radii of 2 and 70 kpc, the middle of the $6.7$ to $8.4 \times 10^8\ M_\odot$ of {cite:t}`lane2023`. Its density at the Sun is $M_{\rm halo}$ divided by the integral of its shape over that range, $5.3 \times 10^{-5}\ M_\odot\,{\rm pc}^{-3}$ with the defaults. Its ratio to the thin disk divides that by the thin disk's local density in living stars, $\rho_{\rm thin,\odot} = 0.030\ M_\odot\,{\rm pc}^{-3}$ (`rho_thin_solar`; {cite:t}`everall2022` find 0.032 including brown dwarfs and stars below 0.1 $M_\odot$), so $f_{\rm halo} = 1.8 \times 10^{-3}$. The ratio is of masses; brutus uses it as a ratio of star counts.
 
-| Component | Shape | Local fraction $f_c$ | [Fe/H] at the Sun | Age at the Sun |
+The bar is the analytic density of {cite:t}`sormani2022`, a fit to the dynamical model of {cite:t}`portail2017`, which reproduces the red-clump star counts and kinematics of the inner Galaxy. It has an X-shaped bar of $1.28 \times 10^{10}\ M_\odot$ and a long bar of $0.55 \times 10^{10}\ M_\odot$ that reaches 5 kpc from the centre in the plane. Its long axis is at $25°$ to the line from the Sun to the centre, with the near end at $\ell > 0$ (`bar_angle`). It is normalized by its mass, $1.83 \times 10^{10}\ M_\odot$ (`bar_mass`; 0 removes the bar), divided by $\rho_{\rm thin,\odot}$ like the halo. Inside the box $|x| < 2.2$, $|y| < 1.4$, $|z| < 1.2$ kpc of the bar frame it holds $1.27 \times 10^{10}\ M_\odot$, against $0.32 \times 10^{10}$ in the two disks, which stay unchanged. The bar is left out beyond 12 kpc from the centre, where it is at most $1.4 \times 10^{-4}$ of the disks. Its long-bar term decays slowly along the long axis, so at the Sun the bar is $7 \times 10^{-4}$ of the thin disk. Along one sightline the bar density depends only on $d$, so brutus interpolates its logarithm in 4096 nodes from 1 pc to 25 kpc, uniform in $\ln d$; the error is at most $1.2 \times 10^{-3}$ in $\ln n_{\rm bar}$. {mod}`brutus.priors.kinematic` has no velocity model for the bar.
+
+| Component | Shape | Density at the Sun, relative to the thin disk | [Fe/H] at the Sun | Age at the Sun |
 |---|---|---|---|---|
 | Thin disk | $h_R = 2.74$ kpc, $\sigma_z$ by age and [Fe/H] | 1 | $-0.01 \pm 0.20$ | $5.2 \pm 2.9$ Gyr |
 | Thick disk | $h_R = 1.9$ kpc, $\sigma_z = 43.6$ km/s | 0.046 (surface ratio 0.18) | $-0.45 \pm 0.27$ | $10.5 \pm 1.8$ Gyr |
 | Halo | $\eta_{\rm in} = 2.85$, $\eta_{\rm out} = 4.55$, $r_b = 19.1$ kpc, $q = 0.77$ | 0.0018 (mass $7.5 \times 10^8\ M_\odot$) | $-1.21 \pm 0.37$ | $11.1 \pm 1.8$ Gyr |
+| Bar | {cite:t}`sormani2022`, at $25°$ | 0.0007 (mass $1.83 \times 10^{10}\ M_\odot$) | $-0.03 \pm 0.41$ | $9.2 \pm 2.8$ Gyr |
 
-The label columns give means and standard deviations, with the systematics. All components use $R_s = 2$ kpc.
+The label columns give means and standard deviations, with the systematics. The disks and the halo use $R_s = 2$ kpc.
 
 ```{raw} html
 :file: figures/galactic-prior.svg
@@ -101,7 +104,7 @@ The label columns give means and standard deviations, with the systematics. All 
 ```
 
 :::{div} figure-caption
-The density and volume terms of the default Galactic prior, per unit $\ln d$, the variable that brutus samples. The thin disk is summed over its ages and [Fe/H]; a grid model with given labels has its own prior. Left: each sightline scaled to a peak of 1. Right: the b = 30° total and its components, scaled by the total's peak. The growing volume pushes the peak out to 8 to 18 kpc. Off the plane, the disks add a second peak at 2 to 4 kpc: 0.25 times the main peak at b = 90° and 0.67 times at b = 30°. The likelihood usually confines the distance far more than this.
+The density and volume terms of the default Galactic prior, per unit $\ln d$, the variable that brutus samples. The thin disk is summed over its ages and [Fe/H]; a grid model with given labels has its own prior. Left: each sightline at ℓ = 90° scaled to a peak of 1. Middle: the b = 30° total and its components, scaled by the total's peak. Right: the same toward the bulge, at ℓ = 0° and b = 4°, where the bar peaks at 8.3 kpc. At ℓ = 90° the growing volume pushes the peak out to 8 to 18 kpc. Off the plane, the disks add a second peak at 2 to 4 kpc: 0.25 times the main peak at b = 90° and 0.67 times at b = 30°. The likelihood usually confines the distance far more than this.
 :::
 
 **Labels.** With `feh` and `loga` in the labels, each component's density is that of stars with those labels, per dex and per Gyr; a label not given is summed over. A metal-poor star near the Sun is therefore more likely to belong to the halo, and an old one to the thick disk. Ages are capped at 13.8 Gyr, the age of the Universe.
@@ -122,9 +125,11 @@ Without the systematics below, all components together give [Fe/H] $= -0.03 \pm 
 
 The thick-disk [Fe/H] is skew-normal, with mean $-0.45$, standard deviation 0.22 and skewness $-0.5$ (`thick_feh`): the high-[α/Fe] distributions of {cite:t}`hayden2015` with their metal-poor tail. Its age is normal with a standard deviation of 0.8 Gyr, truncated to 0 to 13.8 Gyr, about a mean of 13 Gyr at [Fe/H] $\le -1$ that falls by 4 Gyr per dex above (`thick_age`). That is the old sequence of {cite:t}`xiang2022`, from 13 Gyr at [Fe/H] $= -1$ to about 7 Gyr at $+0.5$, with an intrinsic spread below 0.82 Gyr. The halo [Fe/H] has a skew-normal core through the 16th, 50th and 84th percentiles of {cite:t}`naidu2020`, $-1.48$, $-1.15$ and $-0.91$. Below [Fe/H] $= -1.95$ it continues as $10^{k\,{\rm [Fe/H]}}$ with $k = 1$, the slope that {cite:t}`youakim2020` measure between $-3.4$ and $-2.5$ (`halo_feh`: the mean, standard deviation and skewness of the core, the break and $k$). Of the halo stars, 2.7% lie below $-2$ and 0.27% below $-3$. Its age is $12 \pm 1.5$ Gyr, truncated likewise (`halo_age`): isochrone and colour-magnitude-diagram ages give 11.5 to 12.3 Gyr and asteroseismology about 10 Gyr, and the width covers that spread.
 
+The bar has two populations, each normal in [Fe/H] and in age (`bar_feh`, `bar_age`). In [Fe/H] they are the two components that {cite:t}`gonzalez2015` fit to bulge red-clump stars: $-0.31 \pm 0.31$ and $+0.26 \pm 0.20$. The metal-poor fraction is 0.5; {cite:t}`zoccali2017` find 0.73 at $b = -8.5°$ and 0.33 at $-3.5°$, rising again toward the plane, and brutus does not follow that change with position. The metal-poor population is $11 \pm 1.5$ Gyr old and the metal-rich one $8 \pm 3$ Gyr, truncated to 0 to 13.8 Gyr: among microlensed bulge dwarfs, most stars below [Fe/H] $= -0.5$ are older than 10 Gyr, and over 35% of those above solar are younger than 8 Gyr {cite:p}`bensby2017`.
+
 **Systematics.** These distributions are measured on the scales of their surveys and models: APOGEE [Fe/H], and the ages of Frankel et al. and Xiang & Rix. brutus labels a star on the scale of its model grid, so it blurs each distribution by the mismatch between the scales. It widens them but does not shift them, because the offset depends on the grid.
 
-- `feh_systematic`, 0.1, 0.15 and 0.15 dex for the thin disk, thick disk and halo, is the standard deviation of a Gaussian in [Fe/H]. Surveys that measure the same stars differ by about 0.1 dex {cite:p}`hegedus2023`. A solar-scaled grid, such as the default MIST grid, returns about [M/H] for an α-rich star: 0.14 to 0.21 dex above its [Fe/H] at [α/Fe] $= 0.2$ to $0.3$ {cite:p}`salaris1993`.
+- `feh_systematic`, 0.1, 0.15 and 0.15 dex for the thin disk, thick disk and halo (the bar takes the thick-disk value), is the standard deviation of a Gaussian in [Fe/H]. Surveys that measure the same stars differ by about 0.1 dex {cite:p}`hegedus2023`. A solar-scaled grid, such as the default MIST grid, returns about [M/H] for an α-rich star: 0.14 to 0.21 dex above its [Fe/H] at [α/Fe] $= 0.2$ to $0.3$ {cite:p}`salaris1993`.
 - `age_systematic`, 0.1, 0.15 and 0.15, is the standard deviation of a Gaussian in age as a fraction of the true age, with `age_floor` (0.2 Gyr, the floor that Frankel et al. use) added in quadrature. Isochrone grids differ by about 10% in age {cite:p}`tayar2022,pinsonneault2025`. Solar-scaled ages of α-rich stars run 1 to 2 Gyr older than α-enhanced ones {cite:p}`xiang2022`.
 
 Each blurred distribution stays normalized. The thin-disk birth scatter becomes $\sqrt{0.03^2 + \sigma_{\rm [Fe/H]}^2}$. A skew-normal convolved with a Gaussian is again skew-normal, and the halo [Fe/H] with its tail is convolved numerically. The thick-disk and halo age widths add the systematic at their mean ages. A thin-disk star's labelled age is a normal about its true age, truncated to 0 to 13.8 Gyr, and its vertical profile is that of the true age; brutus sums over the true ages by Gauss-Legendre quadrature, with 16 nodes about the labelled age and the onset. With one label, brutus interpolates in cached tables of the thin disk against that label, $R / R_\odot$ and $z$, built once per parameter set. With both, the sum over true ages runs at each distance, but its terms that depend only on the labels are computed once per model.

@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `brutus.utils.pm_equatorial_to_galactic` converts Gaia proper motions
   and their covariance to Galactic coordinates. The fit does not use them
   yet (#275).
+- **`brutus.utils.galactic_to_galactocentric`** converts distance and
+  (l, b) to Galactocentric Cartesian positions;
+  `galactic_to_galactocentric_cyl` now builds on it (#299).
 
 ### Fixed — statistical correctness *(output-changing)*
 
@@ -321,6 +324,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the leading ones: `logpost_grid` passes one label per model with
   distances of shape (Nmc, Nmodels), so the terms of each model's labels
   are computed once (#294).
+- **The Galactic prior has a bar** *(output-changing)*.
+  `logp_galactic_structure` adds the analytic bar of Sormani et al.
+  (2022), a fit to the dynamical model of Portail et al. (2017), as a
+  fourth component, on by default. It is normalized by `bar_mass`,
+  1.8252e10 Msun (0 removes it), and turned by `bar_angle`, 25 deg. Its
+  [Fe/H] mixes the two bulge components of Gonzalez et al. (2015) in
+  equal parts, with ages of 11 +/- 1.5 and 8 +/- 3 Gyr (`bar_feh`,
+  `bar_age`). Toward the bulge, the prior now peaks at the bar instead of
+  being almost flat from 5 to 13 kpc: at (l, b) = (0, 4 deg) the bar
+  holds 90% of the prior. With `return_components`, each list has a
+  fourth entry, the bar. `BAR_MASS` and `BAR_ANGLE` hold the defaults,
+  and `galactic_prior_summary` takes `bar_mass` and `bar_angle` and
+  returns `f_bar_solar`, the bar's density at the Sun relative to the
+  thin disk, 7e-4 (#299).
 - **The halo is a broken power law normalized by its mass**
   *(output-changing)*. `logn_halo` and the halo of
   `logp_galactic_structure` follow Amarante et al. (2024): slopes 2.85

@@ -4,8 +4,8 @@
 """
 Galactic structure priors for Bayesian stellar parameter estimation.
 
-This module gives the number density of stars in a three-component model
-of the Milky Way (thin disk, thick disk and halo), as a function of
+This module gives the number density of stars in a four-component model
+of the Milky Way (thin disk, thick disk, halo and bar), as a function of
 position and, optionally, of [Fe/H] and age. `logp_galactic_structure`
 turns it into a prior on distance along a sightline.
 
@@ -41,7 +41,7 @@ Combined Galactic structure prior:
 
 import inspect
 from functools import lru_cache
-from math import asinh, exp, isfinite, log, pi, sqrt
+from math import asinh, cos, exp, isfinite, log, pi, sin, sqrt
 
 import numpy as np
 from numba import get_num_threads, jit, prange
@@ -83,7 +83,7 @@ from brutus.utils.math import (
     Z_SOLAR,
     _log_ndtr_tail,
     _truncnorm_lognorm_scalar,
-    galactic_to_galactocentric_cyl,
+    galactic_to_galactocentric,
 )
 
 _LOG_2PI = log(2.0 * pi)
@@ -461,6 +461,110 @@ def _halo_volume(shape):
     return float(4.0 * pi * half * (w @ (f @ w_mu)))
 
 
+# Bar of Sormani et al. (2022), Table 1: their analytic fit to the stellar
+# density of the made-to-measure model of Portail et al. (2017), with the
+# full-precision values of AGAMA (py/example_mw_bar_potential.py). Lengths
+# in kpc, densities in Msun/kpc^3; x is the long axis, y the intermediate.
+# The X-shaped bar (their eqs. 2-5): rho, x, y, z scales, c_par, c_perp, m,
+# outer cutoff, alpha, c, n, x_c, y_c.
+_BAR_X = (
+    3.16273226e09,
+    0.490209137,
+    0.392017253,
+    0.229482096,
+    1.99110223,
+    2.23179266,
+    0.873227940,
+    4.36983774,
+    0.625670015,
+    1.34152138,
+    1.94025114,
+    0.750504078,
+    0.468875471,
+)
+# The two long-bar terms (their eq. 6): rho, x, y scales, scale height,
+# c_perp, n, outer and inner cutoff radii and their exponents.
+_BAR_LONG = (
+    (
+        4.95381575e08,
+        5.36363324,
+        0.958522229,
+        0.610542494,
+        0.969645220,
+        3.05125124,
+        3.19043585,
+        0.558255674,
+        16.7310332,
+        3.19575493,
+    ),
+    (
+        1.74304936e13,
+        0.477961423,
+        0.266853061,
+        0.251516920,
+        1.87882599,
+        0.980136710,
+        2.20415408,
+        7.60708626,
+        -27.2907665,
+        1.62966434,
+    ),
+)
+# Integral of the density in Msun: 1.27656e10, 0.33319e10 and 0.21542e10
+# for the three terms (Table 1: 1.28, 0.33, 0.22), by the midpoint rule on
+# grids of 0.04 and 0.02 kpc with Richardson extrapolation.
+BAR_MASS = 1.8252e10
+# Angle in degrees between the long axis and the Sun-centre line, near end
+# at l > 0 (AGAMA, after Portail et al. 2017).
+BAR_ANGLE = 25.0
+# Beyond this distance in kpc from the Galactic centre the bar is left out
+# to save its evaluation; on that sphere it is at most 1.4e-4 of the disks.
+_BAR_R_MAX = 12.0
+# With one sightline, ln of the bar density is interpolated in a table of
+# _BAR_NODES distances, uniform in ln d from 1 pc to 25 kpc; beyond 25 kpc
+# a star is more than _BAR_R_MAX from the centre while R_solar < 13 kpc. The density has kinks
+# (|y|^0.97 in a long-bar term), so the error falls slowly with the step:
+# at most 1.2e-3 in ln n_bar where the bar exceeds 1e3 Msun/kpc^3, on 10
+# sightlines.
+_BAR_NODES = 4096
+_BAR_LN_D0 = log(1e-3)
+_BAR_DLN_D = (log(25.0) - _BAR_LN_D0) / (_BAR_NODES - 3)
+
+
+@jit(nopython=True, cache=True)
+def _bar_density(x, y, z):
+    """Return the bar density in Msun/kpc^3 at (x, y, z) in the bar frame,
+    for scalars."""
+    ax, ay, az = abs(x), abs(y), abs(z)
+    rho, x0, y0, z0, c_par, c_perp, m, r_cut, alpha, c, n, xc, yc = _BAR_X
+    a = (
+        ((ax / x0) ** c_perp + (ay / y0) ** c_perp) ** (c_par / c_perp)
+        + (az / z0) ** c_par
+    ) ** (1.0 / c_par)
+    a_plus = sqrt(((x + c * z) / xc) ** 2 + (y / yc) ** 2)
+    a_minus = sqrt(((x - c * z) / xc) ** 2 + (y / yc) ** 2)
+    out = (
+        rho
+        / np.cosh(a**m)
+        * exp(-(x * x + y * y + z * z) / (r_cut * r_cut))
+        * (1.0 + alpha * (exp(-(a_plus**n)) + exp(-(a_minus**n))))
+    )
+    R = sqrt(x * x + y * y)
+    if R == 0.0:
+        return out  # both long-bar terms have an inner cutoff
+    for rho, x0, y0, h, c_perp, n, r_out, r_in, n_out, n_in in _BAR_LONG:
+        # The radial cutoffs in log space: either beyond 700 leaves nothing,
+        # and its power would overflow without JIT.
+        cut_out = n_out * log(R / r_out)
+        cut_in = n_in * log(r_in / R)
+        if cut_out > 700.0 or cut_in > 700.0:
+            continue
+        a = ((ax / x0) ** c_perp + (ay / y0) ** c_perp) ** (1.0 / c_perp)
+        sech = 1.0 / np.cosh(z / h)
+        out += rho * sech * sech * exp(-(a**n) - exp(cut_out) - exp(cut_in))
+    return out
+
+
 @jit(nopython=True, cache=True)
 def _thin_disk_ln_s(ln_sig_R0, ln_sig_z0, x, ln_phi, f_L):
     """Return ln s = ln(sigma_z^2 / phi) at the midplane of a thin-disk
@@ -517,13 +621,30 @@ def _age_spread(age, frac, floor, sd=0.0):
 
 
 @jit(nopython=True, cache=True)
-def _ln_labels(feh, age, has_feh, has_age, labels, thick_ages, halo_feh):
-    """Return ln p of the given labels for the thick disk and the halo,
-    with ``labels``, ``thick_ages`` and ``halo_feh`` from `_label_args`."""
+def _ln_labels(feh, age, has_feh, has_age, labels, thick_ages, halo_feh, bar_pops):
+    """Return ln p of the given labels for the thick disk, the halo and the
+    bar, with ``labels``, ``thick_ages``, ``halo_feh`` and ``bar_pops`` from
+    `_label_args`."""
     floor = labels[2]
     thick_xi, thick_omega, thick_alpha = labels[3:6]
     age_at_floor, slope, thick_sd, thick_frac = labels[6:10]
     halo_mean, halo_sd, halo_norm = labels[10:]
+    if has_age and age > MAX_AGE:
+        return LOG_ZERO, LOG_ZERO, LOG_ZERO
+    # The bar: a mixture of populations, each normal in [Fe/H] and in age.
+    bar = 0.0
+    if has_feh or has_age:
+        mx, acc = LOG_ZERO, 0.0
+        for ln_w, feh_mean, feh_sd, age_mean, age_sd, age_norm in bar_pops:
+            v = ln_w
+            if has_feh:
+                u = (feh - feh_mean) / feh_sd
+                v -= 0.5 * (u * u + _LOG_2PI) + log(feh_sd)
+            if has_age:
+                u = (age - age_mean) / age_sd
+                v -= 0.5 * u * u + age_norm
+            mx, acc = _accumulate(mx, acc, v)
+        bar = mx + log(acc)
     thick = 0.0
     halo = 0.0
     if has_feh:
@@ -531,8 +652,6 @@ def _ln_labels(feh, age, has_feh, has_age, labels, thick_ages, halo_feh):
         fk = max((feh - _HALO_FEH0) / _HALO_DFEH, 0.0)
         halo = _catmull_rom_table(fk, halo_feh)
     if has_age:
-        if age > MAX_AGE:
-            return LOG_ZERO, LOG_ZERO
         u = (age - halo_mean) / halo_sd
         halo -= 0.5 * u * u + halo_norm
         if has_feh:
@@ -546,7 +665,7 @@ def _ln_labels(feh, age, has_feh, has_age, labels, thick_ages, halo_feh):
                 u = (age - thick_ages[k, 1]) / thick_ages[k, 2]
                 mx, acc = _accumulate(mx, acc, thick_ages[k, 0] - 0.5 * u * u)
             thick = mx + log(acc)
-    return thick, halo
+    return thick, halo, bar
 
 
 @jit(nopython=True, cache=True)
@@ -789,6 +908,24 @@ def _components(
 
 
 @jit(nopython=True, cache=True)
+def _ln_bar_density(X, Y, Z, cos_a, sin_a):
+    """Return ln of the bar density in Msun/kpc^3 at the Galactocentric
+    (X, Y, Z), with the bar at the angle of (cos_a, sin_a); ln 1e-300
+    where it underflows."""
+    rho = _bar_density(X * cos_a - Y * sin_a, X * sin_a + Y * cos_a, Z)
+    return log(max(rho, 1e-300))
+
+
+@jit(nopython=True, parallel=True, cache=True)
+def _ln_bar_densities(X, Y, Z, cos_a, sin_a):
+    """Return `_ln_bar_density` at each of the positions (X, Y, Z)."""
+    out = np.empty(len(X))
+    for i in prange(len(X)):
+        out[i] = _ln_bar_density(X[i], Y[i], Z[i], cos_a, sin_a)
+    return out
+
+
+@jit(nopython=True, cache=True)
 def _label_terms(
     feh,
     age,
@@ -797,6 +934,7 @@ def _label_terms(
     labels,
     thick_ages,
     halo_feh,
+    bar_pops,
     by_label,
     no_nodes,
     no_ages,
@@ -804,10 +942,11 @@ def _label_terms(
     """Return the terms of `_components` that depend on the labels alone:
     the thick-disk and halo ln p(labels), the index of `_label_index` in
     ``by_label``, and where the thin-disk sum is direct, its true ages and
-    ln weights and, with [Fe/H], their nodes of `_thin_disk_feh_ages`.
-    ``no_nodes`` and ``no_ages`` stand in for those not needed."""
-    ln_thick, ln_halo = _ln_labels(
-        feh, age, has_feh, has_age, labels, thick_ages, halo_feh
+    ln weights and, with [Fe/H], their nodes of `_thin_disk_feh_ages`; and
+    beside them the bar ln p(labels). ``no_nodes`` and ``no_ages`` stand in
+    for those not needed."""
+    ln_thick, ln_halo, ln_bar = _ln_labels(
+        feh, age, has_feh, has_age, labels, thick_ages, halo_feh, bar_pops
     )
     fl = -1.0
     if has_feh != has_age:
@@ -821,13 +960,14 @@ def _label_terms(
             ages, ln_w = _AGE_NODES.copy(), _AGE_LN_W.copy()
         if has_feh:
             nodes = _thin_disk_feh_ages(feh, ages, ln_w, labels[0])
-    return ln_thick, ln_halo, fl, nodes, ages, ln_w
+    return (ln_thick, ln_halo, fl, nodes, ages, ln_w), ln_bar
 
 
 @jit(nopython=True, parallel=True, cache=True)
 def _galactic_prior_array(
     dists,
-    R,
+    X,
+    Y,
     Z,
     feh,
     loga,
@@ -836,9 +976,12 @@ def _galactic_prior_array(
     has_age,
     disk,
     halo,
+    bar,
+    bar_line,
     labels,
     thick_ages,
     halo_feh,
+    bar_pops,
     f_L,
     marginal,
     ln_norm,
@@ -846,15 +989,19 @@ def _galactic_prior_array(
     comps,
 ):
     """Return ln of the summed number density, with the volume factor d^2,
-    at each point; fill ``comps`` with the components unless it is empty.
-    Point i has the labels of entry i % n_labels of ``feh`` and ``loga``,
-    whose terms are computed once."""
-    out = np.empty(len(R))
+    at each point of Galactocentric (X, Y, Z); fill ``comps`` with the
+    components unless it is empty. Point i has the labels of entry
+    i % n_labels of ``feh`` and ``loga``, whose terms are computed once.
+    ``bar`` comes from `_bar_args`; unless ``bar_line`` is empty, the bar
+    density is interpolated in it, `_ln_bar_density` at ln d =
+    _BAR_LN_D0 + k _BAR_DLN_D along the sightline."""
+    cos_a, sin_a, ln_bar_amp = bar
+    out = np.empty(len(Z))
     no_nodes, no_ages = np.empty((0, 11)), np.empty(0)
     for c in prange(n_labels):
         feh_c = feh[c] if has_feh else 0.0
         age_c = 10.0 ** loga[c] / 1e9 if has_age else 0.0
-        label_terms = _label_terms(
+        label_terms, ln_bar = _label_terms(
             feh_c,
             age_c,
             has_feh,
@@ -862,13 +1009,15 @@ def _galactic_prior_array(
             labels,
             thick_ages,
             halo_feh,
+            bar_pops,
             by_label,
             no_nodes,
             no_ages,
         )
-        for i in range(c, len(R), n_labels):
+        for i in range(c, len(Z), n_labels):
+            R = sqrt(X[i] * X[i] + Y[i] * Y[i])
             thin, thick, hal = _components(
-                R[i],
+                R,
                 Z[i],
                 feh_c,
                 age_c,
@@ -883,13 +1032,29 @@ def _galactic_prior_array(
                 ln_norm,
                 by_label,
             )
-            vol = 2.0 * log(dists[i] + 1e-300)
-            mx = max(thin, max(thick, hal))
-            out[i] = mx + log(exp(thin - mx) + exp(thick - mx) + exp(hal - mx)) + vol
+            ln_d = log(dists[i] + 1e-300)
+            # Bar: by mass like the halo, left out far from the centre.
+            bar_n = LOG_ZERO
+            if ln_bar_amp > LOG_ZERO and R * R + Z[i] * Z[i] < _BAR_R_MAX**2:
+                if len(bar_line):
+                    f = (ln_d - _BAR_LN_D0) / _BAR_DLN_D
+                    if not f > 0.0:  # below 1 pc, or NaN for a bad distance
+                        f = 0.0
+                    ln_rho = _catmull_rom_table(f, bar_line)
+                else:
+                    ln_rho = _ln_bar_density(X[i], Y[i], Z[i], cos_a, sin_a)
+                bar_n = ln_rho + ln_bar_amp + ln_bar
+            mx = max(max(thin, thick), max(hal, bar_n))
+            acc = exp(thin - mx) + exp(thick - mx) + exp(hal - mx)
+            if bar_n > LOG_ZERO:
+                acc += exp(bar_n - mx)
+            vol = 2.0 * ln_d
+            out[i] = mx + log(acc) + vol
             if len(comps):
                 comps[0, i] = thin + vol
                 comps[1, i] = thick + vol
                 comps[2, i] = hal + vol
+                comps[3, i] = bar_n + vol
     return out
 
 
@@ -1171,12 +1336,21 @@ def _thin_disk_sig_birth(feh_systematic):
 
 
 def _label_args(
-    thick_feh, thick_age, halo_feh, halo_age, feh_systematic, age_systematic, age_floor
+    thick_feh,
+    thick_age,
+    halo_feh,
+    halo_age,
+    bar_feh,
+    bar_age,
+    feh_systematic,
+    age_systematic,
+    age_floor,
 ):
     """Return the label arguments of `_components`: a flat tuple; the
     thick-disk age density summed over [Fe/H], as rows of (ln weight less
-    the normalizations, mean age, standard deviation); and the halo [Fe/H]
-    table of `_halo_feh_table`."""
+    the normalizations, mean age, standard deviation); the halo [Fe/H]
+    table of `_halo_feh_table`; and the bar populations of
+    `_bar_populations`."""
     _, thick_feh_sys, halo_feh_sys = _feh_systematics(feh_systematic)
     thick_feh = _floats("thick_feh", thick_feh, 3)
     halo_feh = _floats("halo_feh", halo_feh, 5)
@@ -1226,7 +1400,70 @@ def _label_args(
         halo_sd,
         _ln_age_norm(halo_mean, halo_sd),
     )
-    return labels, np.column_stack((ln_w, ages, sds)), halo_table
+    bar_pops = _bar_populations(bar_feh, bar_age, thick_feh_sys, thick_frac, floor)
+    return labels, np.column_stack((ln_w, ages, sds)), halo_table, bar_pops
+
+
+def _bar_populations(bar_feh, bar_age, feh_sys, age_frac, age_floor):
+    """Return the bar populations as rows of (ln weight, [Fe/H] mean and
+    standard deviation, age mean and standard deviation, ln normalization
+    of the age density), each width widened by the thick-disk systematics."""
+    bar_feh = _floats("bar_feh", bar_feh, 5)
+    bar_age = _floats("bar_age", bar_age, 4)
+    if not 0.0 <= bar_feh[0] <= 1.0:
+        raise ValueError(
+            f"bar_feh[0], the metal-poor fraction, must be in [0, 1]; got {bar_feh}"
+        )
+    _check_positive(
+        **{"bar_feh[2]": bar_feh[2], "bar_feh[4]": bar_feh[4]},
+        **{"bar_age[1]": bar_age[1], "bar_age[3]": bar_age[3]},
+    )
+    rows = []
+    for weight, k in ((bar_feh[0], 0), (1.0 - bar_feh[0], 2)):
+        age_mean = bar_age[k]
+        age_sd = _age_spread(age_mean, age_frac, age_floor, bar_age[k + 1])
+        rows.append(
+            (
+                log(weight) if weight > 0.0 else LOG_ZERO,
+                bar_feh[k + 1],
+                sqrt(bar_feh[k + 2] ** 2 + feh_sys**2),
+                age_mean,
+                age_sd,
+                _ln_age_norm(age_mean, age_sd),
+            )
+        )
+    return np.array(rows)
+
+
+def _bar_args(bar_mass, bar_angle, rho_thin_solar):
+    """Return the bar arguments of `_galactic_prior_array`: the cosine and
+    sine of ``bar_angle`` and ln of the bar amplitude relative to the thin
+    disk at the Sun (LOG_ZERO for no bar)."""
+    (bar_mass,) = _floats("bar_mass", (bar_mass,), 1)
+    (bar_angle,) = _floats("bar_angle", (bar_angle,), 1)
+    if bar_mass < 0:
+        raise ValueError(f"bar_mass must not be negative, got {bar_mass}")
+    angle = np.deg2rad(bar_angle)
+    # Msun/kpc^3 to Msun/pc^3.
+    amp = bar_mass / (BAR_MASS * 1e9 * float(rho_thin_solar))
+    return cos(angle), sin(angle), log(amp) if amp > 0.0 else LOG_ZERO
+
+
+def _bar_table(ell, b, R_solar, Z_solar, bar):
+    """Return ln of the bar density at the _BAR_NODES distances of its table
+    toward (l, b), or an empty table where the call has more than one
+    sightline, R_solar is 13 kpc or more, or there is no bar."""
+    ell, b = np.ravel(ell), np.ravel(b)
+    if (
+        np.ptp(ell) > 0
+        or np.ptp(b) > 0
+        or R_solar + _BAR_R_MAX >= 25.0
+        or bar[2] <= LOG_ZERO
+    ):
+        return np.empty(0)
+    d = np.exp(_BAR_LN_D0 + _BAR_DLN_D * np.arange(_BAR_NODES))
+    X, Y, Z = galactic_to_galactocentric(d, ell[0], b[0], R_solar, Z_solar)
+    return _ln_bar_densities(X, Y, Z, bar[0], bar[1])
 
 
 def _normalizations(
@@ -1245,12 +1482,14 @@ def _normalizations(
     r_break_halo,
     q_halo,
     halo_mass,
+    bar_mass,
+    bar_angle,
     rho_thin_solar,
     feh_systematic,
 ):
-    """Return the disk and halo arguments of `_components`, the tables of
-    `_thin_disk_tables` and their key, and the normalizations that
-    `galactic_prior_summary` reports."""
+    """Return the disk and halo arguments of `_components`, the bar
+    arguments of `_bar_args`, the tables of `_thin_disk_tables` and their
+    key, and the normalizations that `galactic_prior_summary` reports."""
     _check_positive(
         R_thin=R_thin,
         R_thick=R_thick,
@@ -1311,14 +1550,16 @@ def _normalizations(
         *tables,
         np.empty((0, 0, 0)),
     )
+    bar = _bar_args(bar_mass, bar_angle, rho_thin_solar)
     summary = dict(
         thin_column_height=0.5 * exp(-ln_d0),
         thick_column_height=0.5 * exp(ln_f_thick - ln_d0 - thick),
         f_thick_solar=exp(thick),
         halo_density_solar=exp(ln_f_halo) * float(rho_thin_solar),
         f_halo_solar=exp(ln_f_halo),
+        f_bar_solar=exp(_ln_bar_density(-R_solar, 0.0, Z_solar, *bar[:2]) + bar[2]),
     )
-    return disk, halo, tables, key, summary
+    return disk, halo, bar, tables, key, summary
 
 
 __all__ = [
@@ -1492,11 +1733,15 @@ def logp_galactic_structure(
     r_break_halo=19.1,
     q_halo=0.77,
     halo_mass=7.5e8,
+    bar_mass=BAR_MASS,
+    bar_angle=BAR_ANGLE,
     rho_thin_solar=0.030,
     thick_feh=(-0.45, 0.22, -0.5),
     thick_age=(13.0, -4.0, 0.8),
     halo_feh=(-1.18, 0.28, -0.67, -1.95, 1.0),
     halo_age=(12.0, 1.5),
+    bar_feh=(0.5, -0.31, 0.31, 0.26, 0.20),
+    bar_age=(11.0, 1.5, 8.0, 3.0),
     feh_systematic=(0.1, 0.15, 0.15),
     age_systematic=(0.1, 0.15, 0.15),
     age_floor=0.2,
@@ -1509,8 +1754,8 @@ def logp_galactic_structure(
 
     The prior is the number density of stars with the given labels at each
     distance along the sightline, times the volume factor :math:`d^2`,
-    summed over three components: the thin disk, the thick disk and the
-    halo. It is relative to the thin disk at the Sun.
+    summed over four components: the thin disk, the thick disk, the halo
+    and the bar. It is relative to the thin disk at the Sun.
 
     Parameters
     ----------
@@ -1564,11 +1809,19 @@ def logp_galactic_structure(
         Halo stellar mass in Msun between Galactocentric radii of 2 and
         70 kpc. Default is 7.5e8, the middle of the 6.7e8 to 8.4e8 of
         Lane et al. (2023).
+    bar_mass : float, optional
+        Stellar mass of the bar in Msun. Default is ``BAR_MASS``, 1.8252e10,
+        the integral of the density of Sormani et al. (2022). 0 removes the
+        bar.
+    bar_angle : float, optional
+        Angle in degrees between the long axis of the bar and the line from
+        the Sun to the Galactic centre, with the near end at l > 0. Default
+        is ``BAR_ANGLE``, 25.0.
     rho_thin_solar : float, optional
         Thin-disk stellar mass density at the Sun in Msun/pc^3, in living
         stars. Default is 0.030. With ``halo_mass`` it sets the halo to
         thin-disk density ratio at the Sun that `galactic_prior_summary`
-        returns.
+        returns, and with ``bar_mass`` the bar's amplitude.
     thick_feh : tuple of 3 floats, optional
         Mean, standard deviation and skewness of the skew-normal [Fe/H]
         distribution of the thick disk. Default is (-0.45, 0.22, -0.5):
@@ -1591,17 +1844,30 @@ def logp_galactic_structure(
         Mean and standard deviation in Gyr of the halo age, a normal
         truncated to 0 to 13.8 Gyr. Default is (12.0, 1.5); the width
         covers the spread between age methods.
+    bar_feh : tuple of 5 floats, optional
+        The bar [Fe/H] distribution, two normal populations: the fraction
+        of the metal-poor one, then the mean and standard deviation of the
+        metal-poor and of the metal-rich population. Default is
+        (0.5, -0.31, 0.31, 0.26, 0.20): the components of Gonzalez et al.
+        (2015), with a fraction between the 0.33 and 0.73 that Zoccali et
+        al. (2017) find at latitudes -3.5 and -8.5 deg.
+    bar_age : tuple of 4 floats, optional
+        Mean and standard deviation in Gyr of the age of the metal-poor and
+        of the metal-rich population, each a normal truncated to 0 to 13.8
+        Gyr. Default is (11.0, 1.5, 8.0, 3.0), after Bensby et al. (2017).
     feh_systematic : tuple of 3 floats, optional
         Standard deviation in dex of the difference between the [Fe/H]
         scale of the grid and that of the measured distributions, for the
-        thin disk, thick disk and halo. Each [Fe/H] distribution is
+        thin disk, thick disk and halo; the bar takes the thick-disk value.
+        Each [Fe/H] distribution is
         convolved with it. Default is (0.1, 0.15, 0.15): survey [Fe/H]
         scales differ by about 0.1 dex, and a solar-scaled grid reads
         alpha-rich stars 0.14 to 0.21 dex high.
     age_systematic : tuple of 3 floats, optional
         Fractional standard deviation of the difference between the age
         scale of the grid and that of the measured distributions, for the
-        thin disk, thick disk and halo, added in quadrature to
+        thin disk, thick disk and halo (the bar takes the thick-disk value),
+        added in quadrature to
         ``age_floor``. Default is (0.1, 0.15, 0.15): grids differ by about
         10% in age, and a solar-scaled grid makes alpha-rich stars 1 to
         2 Gyr older.
@@ -1628,10 +1894,12 @@ def logp_galactic_structure(
         and per Gyr of age (for the labels given) times :math:`d^2`.
     components : dict, optional
         If ``return_components``: ``'number_density'``, the list of ln
-        number density times :math:`d^2` of the thin disk, thick disk and
-        halo; and, with labels, ``'labels'``, the list of ln p(labels) of
-        each component at that position. Their sums are the terms of
-        ``logp``.
+        number density times :math:`d^2` of the thin disk, thick disk, halo
+        and bar; and, with labels, ``'labels'``, the list of ln p(labels) of
+        each component at that position, 0 where the component has no
+        stars (the bar beyond 12 kpc from the centre, or with
+        ``bar_mass=0``). Their sums are the
+        terms of ``logp``.
 
     Raises
     ------
@@ -1675,12 +1943,26 @@ def logp_galactic_structure(
     the halo do not depend on position. The halo, `logn_halo`, is
     normalized by ``halo_mass``, as in `galactic_prior_summary`.
 
+    The bar is the analytic density of Sormani et al. (2022), a fit to the
+    dynamical model of Portail et al. (2017): an X-shaped bar and a long
+    bar, which together reach 5 kpc from the centre. It is turned by
+    ``bar_angle`` and scaled to ``bar_mass``, and is left out beyond
+    12 kpc from the Galactic centre, where it is at most 1.4e-4 of the
+    disks.
+    Its labels do not depend on position, and its [Fe/H] and ages are
+    widened by the thick-disk systematics.
+
     References
     ----------
     Frankel et al. (2018), ApJ, 865, 96
     Xiang & Rix (2022), Nature, 603, 599
     Naidu et al. (2020), ApJ, 901, 48
     Youakim et al. (2020), MNRAS, 492, 4986
+    Sormani et al. (2022), MNRAS, 514, L1
+    Portail et al. (2017), MNRAS, 465, 1621
+    Gonzalez et al. (2015), A&A, 584, A46
+    Zoccali et al. (2017), A&A, 599, A12
+    Bensby et al. (2017), A&A, 605, A89
     """
     dists = np.asarray(dists, dtype=float)
 
@@ -1710,11 +1992,13 @@ def logp_galactic_structure(
         thick_age,
         halo_feh,
         halo_age,
+        bar_feh,
+        bar_age,
         feh_systematic,
         age_systematic,
         age_floor,
     )
-    disk, halo, tables, key, _ = _normalizations(
+    disk, halo, bar, tables, key, _ = _normalizations(
         R_solar=R_solar,
         Z_solar=Z_solar,
         R_thin=R_thin,
@@ -1730,23 +2014,26 @@ def logp_galactic_structure(
         r_break_halo=r_break_halo,
         q_halo=q_halo,
         halo_mass=halo_mass,
+        bar_mass=bar_mass,
+        bar_angle=bar_angle,
         rho_thin_solar=rho_thin_solar,
         feh_systematic=feh_systematic,
     )
     by_label = _label_table(key, feh is not None, loga is not None, label_args[0])
 
-    R, Z = galactic_to_galactocentric_cyl(
-        dists, ell, b, R_solar=R_solar, Z_solar=Z_solar
+    X, Y, Z = np.broadcast_arrays(
+        *galactic_to_galactocentric(dists, ell, b, float(R_solar), float(Z_solar))
     )
+    bar_line = _bar_table(ell, b, float(R_solar), float(Z_solar), bar)
 
-    # Array coordinates broadcast R past the shape of `dists`. Labels that
-    # span only the trailing axes of R are kept unbroadcast, so that their
-    # terms are computed once per label, unless they are too few to share
-    # among the threads.
+    # Array coordinates broadcast the positions past the shape of `dists`.
+    # Labels that span only their trailing axes are kept unbroadcast, so
+    # that their terms are computed once per label, unless they are too few
+    # to share among the threads.
     given = [v.shape for v in (feh, loga) if v is not None]
-    label_shape = R.shape
+    label_shape = X.shape
     if given and given.count(given[0]) == len(given):
-        trailing = R.shape[R.ndim - len(given[0]) :] == given[0]
+        trailing = X.shape[X.ndim - len(given[0]) :] == given[0]
         if trailing and np.prod(given[0]) >= 4 * get_num_threads():
             label_shape = given[0]
 
@@ -1754,28 +2041,29 @@ def logp_galactic_structure(
         return np.empty(0) if v is None else np.broadcast_to(v, label_shape).ravel()
 
     args = (
-        np.broadcast_to(dists, R.shape).ravel(),
-        R.ravel(),
+        np.broadcast_to(dists, X.shape).ravel(),
+        X.ravel(),
+        Y.ravel(),
         Z.ravel(),
         per_label(feh),
         per_label(loga),
         int(np.prod(label_shape)),
     )
     has = (feh is not None, loga is not None)
-    rest = (disk, halo) + label_args + tables + (by_label,)
+    rest = (disk, halo, bar, bar_line) + label_args + tables + (by_label,)
     if not return_components:
         return _galactic_prior_array(*args, *has, *rest, np.empty((0, 0))).reshape(
-            R.shape
+            X.shape
         )
-    joint = np.empty((3, R.size))
-    logp = _galactic_prior_array(*args, *has, *rest, joint).reshape(R.shape)
+    joint = np.empty((4, X.size))
+    logp = _galactic_prior_array(*args, *has, *rest, joint).reshape(X.shape)
     if not any(has):
-        return logp, {"number_density": list(joint.reshape((3,) + R.shape))}
+        return logp, {"number_density": list(joint.reshape((4,) + X.shape))}
     density = np.empty_like(joint)
     _galactic_prior_array(*args, False, False, *rest, density)
     return logp, {
-        "number_density": list(density.reshape((3,) + R.shape)),
-        "labels": list((joint - density).reshape((3,) + R.shape)),
+        "number_density": list(density.reshape((4,) + X.shape)),
+        "labels": list((joint - density).reshape((4,) + X.shape)),
     }
 
 
@@ -1839,17 +2127,19 @@ def galactic_prior_summary(**kwargs):
         Keywords of `logp_galactic_structure` that set the normalizations:
         ``R_solar``, ``Z_solar``, the disk scale lengths and smoothing
         radii, ``f_thick_surface``, ``v_circ_solar``, ``thick_sigma_z``,
-        the halo-shape keywords, ``halo_mass``, ``rho_thin_solar`` and
-        ``feh_systematic``, whose thin-disk entry changes the thin-disk
-        column. Omitted keywords take its defaults.
+        the halo-shape keywords, ``halo_mass``, ``bar_mass``,
+        ``bar_angle``, ``rho_thin_solar`` and ``feh_systematic``, whose
+        thin-disk entry changes the thin-disk column. Omitted keywords take
+        its defaults.
 
     Returns
     -------
     summary : dict
         ``thin_column_height`` and ``thick_column_height`` in kpc,
         ``f_thick_solar`` (the thick- to thin-disk density ratio at the
-        Sun's position), ``halo_density_solar`` in Msun/pc^3 and
-        ``f_halo_solar`` (the halo to thin-disk density ratio at the Sun).
+        Sun's position), ``halo_density_solar`` in Msun/pc^3,
+        ``f_halo_solar`` (the halo to thin-disk density ratio at the Sun)
+        and ``f_bar_solar`` (the same for the bar).
 
     Raises
     ------
@@ -1859,7 +2149,8 @@ def galactic_prior_summary(**kwargs):
         If ``R_thin``, ``R_thick``, ``f_thick_surface``, ``thick_sigma_z``,
         ``v_circ_solar``, ``Rs_halo``, ``eta_halo_inner``,
         ``eta_halo_outer``, ``r_break_halo``, ``q_halo``, ``halo_mass`` or
-        ``rho_thin_solar`` is not positive and finite.
+        ``rho_thin_solar`` is not positive and finite, if ``bar_mass`` is
+        negative or not finite, or if ``bar_angle`` is not finite.
 
     Examples
     --------

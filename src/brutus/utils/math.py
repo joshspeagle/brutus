@@ -66,6 +66,7 @@ _SQRT2 = sqrt(2.0)
 _DBL_MIN = 2.2250738585072014e-308  # smallest normal float64
 
 __all__ = [
+    "galactic_to_galactocentric",
     "galactic_to_galactocentric_cyl",
     "pm_equatorial_to_galactic",
     "inverse3",
@@ -622,6 +623,52 @@ def truncnorm_logpdf(x, a, b, loc=0.0, scale=1.0):
     return np.where((x < _a) | (x > _b), LOG_ZERO, lnphi - lndenom)[()]
 
 
+def galactic_to_galactocentric(dists, ell, b, R_solar=R_SOLAR, Z_solar=Z_SOLAR):
+    r"""
+    Convert Galactic coordinates to Galactocentric Cartesian coordinates.
+
+    The Sun is at :math:`(X, Y, Z) = (-R_\odot, 0, Z_\odot)`, with Y toward
+    l = 90 deg:
+
+    .. math::
+
+        X = d \cos b \cos l - R_\odot, \quad
+        Y = d \cos b \sin l, \quad
+        Z = d \sin b + Z_\odot
+
+    Parameters
+    ----------
+    dists : array_like
+        Heliocentric distances in kpc.
+    ell : float or array_like
+        Galactic longitude in degrees.
+    b : float or array_like
+        Galactic latitude in degrees.
+    R_solar : float, optional
+        Solar Galactocentric radius in kpc. Default is ``R_SOLAR``, 8.275.
+    Z_solar : float, optional
+        Solar height above the Galactic midplane in kpc. Default is
+        ``Z_SOLAR``, 0.0208.
+
+    Returns
+    -------
+    X, Y, Z : ndarray
+        Galactocentric position in kpc.
+
+    See Also
+    --------
+    brutus.priors.galactic.logp_galactic_structure : Uses this for coordinate
+        conversion instead of astropy SkyCoord.
+    """
+    ell_rad = np.deg2rad(ell)
+    b_rad = np.deg2rad(b)
+    in_plane = dists * np.cos(b_rad)
+    X = in_plane * np.cos(ell_rad) - R_solar
+    Y = in_plane * np.sin(ell_rad)
+    Z = dists * np.sin(b_rad) + Z_solar
+    return X, Y, Z
+
+
 def galactic_to_galactocentric_cyl(dists, ell, b, R_solar=R_SOLAR, Z_solar=Z_SOLAR):
     r"""
     Convert Galactic coordinates to Galactocentric cylindrical coordinates.
@@ -680,8 +727,7 @@ def galactic_to_galactocentric_cyl(dists, ell, b, R_solar=R_SOLAR, Z_solar=Z_SOL
 
     See Also
     --------
-    brutus.priors.galactic.logp_galactic_structure : Uses this for coordinate
-        conversion instead of astropy SkyCoord.
+    galactic_to_galactocentric : The Cartesian position.
 
     Examples
     --------
@@ -691,15 +737,8 @@ def galactic_to_galactocentric_cyl(dists, ell, b, R_solar=R_SOLAR, Z_solar=Z_SOL
     ...     dists=np.array([1.0, 5.0]), ell=90.0, b=0.0
     ... )
     """
-    ell_rad = np.deg2rad(ell)
-    b_rad = np.deg2rad(b)
-    cos_b = np.cos(b_rad)
-    x = dists * cos_b * np.cos(ell_rad)
-    y = dists * cos_b * np.sin(ell_rad)
-    R = np.sqrt((x - R_solar) ** 2 + y**2)
-    Z = dists * np.sin(b_rad) + Z_solar
-
-    return R, Z
+    X, Y, Z = galactic_to_galactocentric(dists, ell, b, R_solar, Z_solar)
+    return np.sqrt(X**2 + Y**2), Z
 
 
 # North Galactic pole in ICRS, in degrees (Hipparcos convention, as Gaia).
