@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed — statistical correctness *(output-changing)*
 
+- **The parallax selection gate no longer removes the true models.**
+  `logpost_grid` selects models by a weight that includes the parallax.
+  That term was a Gaussian in the flux scale, and it was left out when
+  the parallax SNR was 4 or less. A dwarf favoured by the model prior then
+  removed a reddened giant that the parallax requires. On 120 mock giants
+  at 6-10 kpc with parallax SNR -1.3 to 3.7, the posterior median was below
+  half the true distance for 15.8% (now 2.5%). The term is now the
+  parallax likelihood averaged over each model's Gaussian in ln(d), by
+  five-node adaptive Gauss-Hermite quadrature, at every SNR. Fits with a
+  parallax can select different models.
 - **`BruteForce` reads the predictions in `StarGrid.params`.** With
   `StarGrid(models, labels, params)`, the fit read `agewt`, `feh` and
   `loga` from `labels` only. It dropped the age weights without a
