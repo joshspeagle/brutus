@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.0.0] - 2026-10-29
 
-This release collects the pull requests merged since 1.2.0, #71 to #305,
+This release collects the pull requests merged since 1.2.0, #71 to #306,
 most of them from the fix plan of #99. It fixes the statistics of the
 individual-star fit, the priors, the population and line-of-sight fits,
 and the photometric offsets, and it validates the inputs of the public
