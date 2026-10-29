@@ -93,4 +93,4 @@ See [Results that change](#results-that-change).
 
 ## Results that change
 
-The [changelog](changelog.md) lists each change in results for the same inputs and seed. The entries marked *(output-changing)* change fit results, and most of them are in the first "Fixed" section under "Unreleased". Other entries change plotted values and the log-likelihoods of the cluster and line-of-sight fits.
+The [changelog](changelog.md) lists each change in results for the same inputs and seed. The entries marked *(output-changing)* change fit results, and most of them are in the first "Fixed" section under 2.0.0. Other entries change plotted values and the log-likelihoods of the cluster and line-of-sight fits.
