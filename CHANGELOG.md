@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed — statistical correctness *(output-changing)*
 
+- **`BruteForce` reads the predictions in `StarGrid.params`.** With
+  `StarGrid(models, labels, params)`, the fit read `agewt`, `feh` and
+  `loga` from `labels` only. It dropped the age weights without a
+  warning, and the Galactic prior got no `loga`. `BruteForce.models_labels`
+  now holds the fields of `labels` and `params`, so both forms of
+  `StarGrid` give the same fit. `apply_agewt=True` on a grid without
+  `agewt`, such as the Bayestar grid, now raises `ValueError`; pass
+  `apply_agewt=False`.
 - **The grid-spacing correction (`apply_grad`) uses only the grid axes.**
   `BruteForce` took every field of `StarGrid.labels` as a grid axis. With
   `StarGrid(models, labels)` and the label array of `load_models`, as in
