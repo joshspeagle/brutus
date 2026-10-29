@@ -7,7 +7,7 @@ brutus infers stellar properties, distances and extinctions from photometry and 
 - `src/brutus/`: the package. `core/` holds the stellar models (`EEPTracks`, `StarGrid`, `Isochrone`, `StellarPop`) and SED generation, `analysis/` the fitting (`BruteForce`, cluster and line-of-sight fitting, photometric offsets), `priors/` the IMF, Galactic and extinction priors, `dust/` the 3D dust maps, `data/` downloading (Pooch, Harvard Dataverse) and loading, `plotting/` the figures, and `utils/` math, photometry and sampling.
 - `tests/`: the test suite, one directory per subpackage.
 - `tutorials/`: Jupyter notebooks numbered 00 to 11. They need downloaded model data. The docs build copies them into `docs/source/tutorials/`.
-- `docs/source/`: the documentation site (Sphinx with the Furo theme, Markdown pages through MyST). `_static/brutus.css` holds the brutus style; the theme colours are in `conf.py`. Read the Docs builds it at https://brutus.readthedocs.io, the address that `README.md` and `pyproject.toml` give; the docs workflow also deploys it to GitHub Pages from `master`.
+- `docs/source/`: the documentation site (Sphinx with the Furo theme, Markdown pages through MyST). `_static/brutus.css` holds the brutus style; the theme colours are in `conf.py`. Read the Docs builds it at https://brutus.readthedocs.io, the address that `README.md` and `pyproject.toml` give; the docs workflow also deploys it to GitHub Pages from `main`.
 - `bench/`: manual benchmark and verification tools for the `BruteForce` hot path, described in `bench/README.md`. Not packaged, not run in CI.
 - `.github/scripts/fetch_test_data.py`: downloads the data the CI tests use.
 - `CHANGELOG.md`: user-visible changes, in Keep a Changelog format.
@@ -19,7 +19,7 @@ brutus infers stellar properties, distances and extinctions from photometry and 
 - Coverage: `NUMBA_DISABLE_JIT=1 pytest --cov=brutus`. Without that variable, coverage cannot see inside `@jit` functions. Run plain tests with JIT on, so the compiled parallel code is what runs.
 - Lint and format: `pre-commit run --all-files` (black, isort, flake8 and file hygiene).
 - Docs: `cd docs && make html SPHINXOPTS="-W --keep-going"`. Warnings are errors, as in CI. The site builds into `docs/build/html/`.
-- CI runs the tests on Ubuntu and macOS for Python 3.10 to 3.13 and builds the docs, for every push to and pull request against `master`. CI tests with `NUMBA_DISABLE_JIT=1` for coverage, plus one Ubuntu leg (Python 3.13) with JIT on. Before pushing a change to a jitted function, still run its tests locally with JIT on.
+- CI runs the tests on Ubuntu and macOS for Python 3.10 to 3.13 and builds the docs, for every push to and pull request against `main`. CI tests with `NUMBA_DISABLE_JIT=1` for coverage, plus one Ubuntu leg (Python 3.13) with JIT on. Before pushing a change to a jitted function, still run its tests locally with JIT on.
 
 ## Plan
 
@@ -40,19 +40,19 @@ brutus infers stellar properties, distances and extinctions from photometry and 
 
 ## Git
 
-- The default branch is `master`. Every change reaches it through a pull request, except a minor change and the revert of a commit that broke CI.
-- One issue per goal, from `.github/ISSUE_TEMPLATE/task.md`. One logical change per branch, from `master`, named `<issue>-<slug>` with a lowercase hyphenated slug. If one change needs another, wait for it to merge.
+- The default branch is `main`. Every change reaches it through a pull request, except a minor change and the revert of a commit that broke CI.
+- One issue per goal, from `.github/ISSUE_TEMPLATE/task.md`. One logical change per branch, from `main`, named `<issue>-<slug>` with a lowercase hyphenated slug. If one change needs another, wait for it to merge.
 - Claude commits as `Claude <noreply@anthropic.com>`.
 - A commit makes one small change and passes every test that passed before it. Subject: `type(scope): summary` in the imperative, at most 72 characters. `type` is one of `fix`, `feat`, `perf`, `refactor`, `test`, `docs`, `build`, `ci` or `chore`; `(scope)`, the subpackage or area, is optional. An output change adds `[output-change]` before the colon. A body only for why.
 - Push a commit only after the commands under Commands pass locally.
-- Never force-push `master`. Never rebase, reset or amend a pushed commit on `master` or on a branch a human has committed to.
-- If CI fails on `master`, Claude reverts the breaking commit at once (`git revert -m 1` for a merge commit), runs the commands, links the failed run in the commit body and pushes the revert. Claude then reopens the issue that the commit closed. If the revert conflicts, does not make CI pass or cannot be pushed, or if no single commit broke CI, Claude opens an issue instead.
+- Never force-push `main`. Never rebase, reset or amend a pushed commit on `main` or on a branch a human has committed to.
+- If CI fails on `main`, Claude reverts the breaking commit at once (`git revert -m 1` for a merge commit), runs the commands, links the failed run in the commit body and pushes the revert. Claude then reopens the issue that the commit closed. If the revert conflicts, does not make CI pass or cannot be pushed, or if no single commit broke CI, Claude opens an issue instead.
 
 ### Minor changes
 
 - A minor change has at most 10 changed lines and is not part of a larger edit. It fixes a typo, a link or formatting, rewords text outside `CLAUDE.md` without changing its meaning, or records in `CLAUDE.md` a decision the lead gave, adding nothing the lead did not say.
 - It edits only prose (documentation, comments and docstrings). It changes no behaviour, public API, documented contract (including units), number, default, dependency, test, CI workflow, or tool directive in a comment (`# noqa`, `# pragma`). When unsure, it is not minor.
-- Claude commits a minor change on top of `origin/master` and pushes it with `git push origin HEAD:master`, without an issue. If the push is rejected, Claude rebases onto `origin/master` once and retries; if that fails, Claude opens an issue and a pull request instead.
+- Claude commits a minor change on top of `origin/main` and pushes it with `git push origin HEAD:main`, without an issue. If the push is rejected, Claude rebases onto `origin/main` once and retries; if that fails, Claude opens an issue and a pull request instead.
 
 ## Pull requests
 
@@ -66,7 +66,7 @@ brutus infers stellar properties, distances and extinctions from photometry and 
    | 100 to 500 lines | two reviewers: reuse with simplification, efficiency with altitude | `medium` |
    | Over 500 lines | four reviewers, one per angle | `high` |
 
-4. Before ready, if every commit on the branch is by Claude, fold each fix into the commit it corrects (`git commit --fixup=<commit>`, then `GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash origin/master`) and push with `--force-with-lease`. Otherwise fixes are new commits.
+4. Before ready, if every commit on the branch is by Claude, fold each fix into the commit it corrects (`git commit --fixup=<commit>`, then `GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash origin/main`) and push with `--force-with-lease`. Otherwise fixes are new commits.
 5. Mark it ready when its checklist is done. After that, fixes are new commits.
 6. Merge it with a merge commit when CI passes, no review thread is unresolved, each request to Claude has an answer and every required approval is given. Then add its decisions to the phase's decision log, if it belongs to a phase.
 
@@ -138,7 +138,7 @@ brutus infers stellar properties, distances and extinctions from photometry and 
 
 - State only measured figures, or figures computed from them with the computation shown.
 - A benchmark records the commit, machine, thread settings and library versions. Figures from different setups are not compared.
-- A change expected to affect speed reports a benchmark against `master` (interleaved runs, medians) in its pull request, made with the tools in `bench/` with JIT on.
+- A change expected to affect speed reports a benchmark against `main` (interleaved runs, medians) in its pull request, made with the tools in `bench/` with JIT on.
 
 ## Agents
 

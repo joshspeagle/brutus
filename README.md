@@ -3,12 +3,12 @@
 *Et tu, Brute?*
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/joshspeagle/brutus/master/docs/source/_static/brutus-logo-dark.svg">
-  <img alt="brutus logo" src="https://raw.githubusercontent.com/joshspeagle/brutus/master/docs/source/_static/brutus-logo-light.svg" width="480">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/joshspeagle/brutus/main/docs/source/_static/brutus-logo-dark.svg">
+  <img alt="brutus logo" src="https://raw.githubusercontent.com/joshspeagle/brutus/main/docs/source/_static/brutus-logo-light.svg" width="480">
 </picture>
 
 [![Tests](https://github.com/joshspeagle/brutus/workflows/Tests/badge.svg)](https://github.com/joshspeagle/brutus/actions)
-[![Coverage](https://codecov.io/gh/joshspeagle/brutus/branch/master/graph/badge.svg)](https://codecov.io/gh/joshspeagle/brutus)
+[![Coverage](https://codecov.io/gh/joshspeagle/brutus/branch/main/graph/badge.svg)](https://codecov.io/gh/joshspeagle/brutus)
 [![Documentation Status](https://readthedocs.org/projects/brutus/badge/?version=latest)](https://brutus.readthedocs.io/en/latest/?badge=latest)
 [![PyPI](https://img.shields.io/pypi/v/astro-brutus.svg)](https://pypi.org/project/astro-brutus/)
 [![arXiv](https://img.shields.io/badge/arXiv-2503.02227-b31b1b.svg)](https://arxiv.org/abs/2503.02227)
@@ -28,4 +28,4 @@ If you use brutus, please cite [Speagle et al. (2025)](https://arxiv.org/abs/250
 
 ## License
 
-MIT. See [LICENSE](https://github.com/joshspeagle/brutus/blob/master/LICENSE). Report problems at [GitHub Issues](https://github.com/joshspeagle/brutus/issues).
+MIT. See [LICENSE](https://github.com/joshspeagle/brutus/blob/main/LICENSE). Report problems at [GitHub Issues](https://github.com/joshspeagle/brutus/issues).
