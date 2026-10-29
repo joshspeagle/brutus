@@ -20,7 +20,7 @@ name: Publish to PyPI
 # Approval gate: the "pypi" environment requires a reviewer (joshspeagle), set in
 # the repository settings under Environments. The PyPI job waits until the lead
 # approves it there. The build job also fails unless the tagged commit is on
-# master.
+# main.
 
 on:
   push:
@@ -36,10 +36,10 @@ jobs:
         with:
           fetch-depth: 0 # full history for the ancestry check
 
-      - name: Verify the tagged commit is on master
+      - name: Verify the tagged commit is on main
         run: |
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/master; then
-            echo "::error::Tag $GITHUB_REF_NAME points to a commit that is not on master"
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Tag $GITHUB_REF_NAME points to a commit that is not on main"
             exit 1
           fi
 

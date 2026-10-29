@@ -43,7 +43,9 @@ try:
 except _metadata.PackageNotFoundError:  # a source tree that is not installed
     __version__ = "unknown"
 
-from . import analysis, core, data, dust, plotting, priors, utils
+# _numba_cache comes first: it must install its cache locators before any
+# kernel is decorated.
+from . import _numba_cache, analysis, core, data, dust, plotting, priors, utils
 from .analysis import BruteForce
 from .core import EEPTracks, Isochrone, StarEvolTrack, StarGrid, StellarPop
 from .data import (
@@ -89,3 +91,5 @@ __all__ = [
     "magnitude",
     "inv_magnitude",
 ]
+
+del _numba_cache

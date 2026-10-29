@@ -35,8 +35,8 @@ Basic usage with grid-based fitting:
 >>> from brutus.analysis import BruteForce
 >>>
 >>> # Load pre-computed grid
->>> models, labels, params = load_models('grid_mist_v9.h5')
->>> grid = StarGrid(models, labels, params)
+>>> models, labels, label_mask = load_models('grid_mist_v9.h5')
+>>> grid = StarGrid(models, labels)
 >>>
 >>> # Initialize fitter
 >>> fitter = BruteForce(grid)
@@ -581,7 +581,8 @@ class BruteForce:
         Magnitude coefficients from the grid.
 
     models_labels : structured numpy.ndarray
-        Labels for each model in the grid.
+        Labels for each model in the grid: the fields of
+        ``star_grid.labels`` followed by those of ``star_grid.params``.
 
     labels_mask : dict
         Mask indicating which labels are grid parameters (True)
@@ -622,8 +623,8 @@ class BruteForce:
     >>> from brutus.data import load_models
     >>>
     >>> # Load grid
-    >>> models, labels, params = load_models('grid_mist_v9.h5')
-    >>> grid = StarGrid(models, labels, params)
+    >>> models, labels, label_mask = load_models('grid_mist_v9.h5')
+    >>> grid = StarGrid(models, labels)
     >>>
     >>> # Initialize fitter
     >>> fitter = BruteForce(grid)
@@ -645,7 +646,20 @@ class BruteForce:
 
         self.star_grid = star_grid
         self.models = star_grid.models
+        # The priors read `agewt`, `feh` and `loga` from one array, whichever
+        # of `labels` or `params` holds them. A field in both comes from
+        # `labels`. Copying field by field avoids numpy's merge_arrays, which
+        # loops over the rows in Python.
         self.models_labels = star_grid.labels
+        extra = [n for n in star_grid.param_names if n not in star_grid.label_names]
+        if extra:
+            columns = [(n, star_grid.labels[n]) for n in star_grid.label_names]
+            columns += [(n, star_grid.params[n]) for n in extra]
+            self.models_labels = np.empty(
+                len(star_grid.labels), dtype=[(n, c.dtype) for n, c in columns]
+            )
+            for name, column in columns:
+                self.models_labels[name] = column
 
         # Generate labels mask automatically
         self.labels_mask = self._generate_labels_mask()
@@ -680,8 +694,9 @@ class BruteForce:
 
         Creates a dictionary mapping label names to boolean values indicating
         whether each label is a grid parameter (True) or a derived prediction
-        (False). Grid parameters are the dimensions used to construct the grid,
-        while predictions are stellar properties interpolated from the grid.
+        (False). Grid parameters are the labels in `StarGrid.grid_axes`, and
+        ``Mr`` on a grid without ``mini`` (the Bayestar grid). Every other
+        label, in ``labels`` or in ``params``, is a prediction.
 
         Returns
         -------
@@ -696,18 +711,16 @@ class BruteForce:
         (only to grid parameters) and for understanding which parameters
         define the grid structure vs. which are interpolated outputs.
         """
-        labels_mask = {}
-
-        # Grid parameters (used to compute the grid)
-        for label in self.star_grid.label_names:
-            labels_mask[label] = True
-
-        # Predictions (derived from grid)
-        if self.star_grid.param_names:
-            for param in self.star_grid.param_names:
-                labels_mask[param] = False
-
-        return labels_mask
+        # `load_models` returns the predictions in the same array as the axes.
+        # `Mr` is a prediction of the MIST grids but an input of the Bayestar
+        # grid, which has no `mini` (as for the luminosity-function prior).
+        axes = set(self.star_grid.grid_axes)
+        if "mini" not in axes:
+            axes.add("Mr")
+        names = self.star_grid.label_names + self.star_grid.param_names
+        return {
+            name: name in axes and name in self.star_grid.label_names for name in names
+        }
 
     def get_sed_grid(self, indices=None, av=None, rv=None, return_flux=False):
         r"""
@@ -864,21 +877,21 @@ class BruteForce:
 
         # Apply age weighting if requested
         if apply_agewt:
-            try:
-                lnprior += np.log(np.abs(self.models_labels["agewt"]))
-            except (KeyError, ValueError):
-                pass
+            if "agewt" not in self.models_labels.dtype.names:
+                raise ValueError(
+                    "apply_agewt=True needs an 'agewt' label in the grid; "
+                    "pass apply_agewt=False for a grid without one."
+                )
+            lnprior += np.log(np.abs(self.models_labels["agewt"]))
 
         # Reweight based on grid spacing
         if apply_grad:
-            for lbl in self.models_labels.dtype.names:
+            for lbl in (name for name, axis in self.labels_mask.items() if axis):
                 label = self.models_labels[lbl]
-                if self.labels_mask[lbl]:  # Only for grid parameters
-                    ulabel = np.unique(label)
-                    if len(ulabel) > 1:
-                        # Compute and add gradient
-                        lngrad_label = np.log(np.gradient(ulabel))
-                        lnprior += np.interp(label, ulabel, lngrad_label)
+                ulabel = np.unique(label[np.isfinite(label)])
+                if len(ulabel) > 1:
+                    lngrad_label = np.log(np.gradient(ulabel))
+                    lnprior += np.interp(label, ulabel, lngrad_label)
 
         # Initialize Galactic prior
         if lngalprior is None and data_coords is None:
@@ -1868,7 +1881,9 @@ class BruteForce:
             Number of posterior draws to save per object. Default is 250.
 
         apply_agewt : bool, optional
-            Whether to apply age weighting from MIST models. Default is True.
+            Whether to add ``ln(agewt)`` to the model prior. The grid must
+            then have an ``agewt`` label, in ``labels`` or ``params``.
+            Default is True.
 
         apply_grad : bool, optional
             Whether to apply grid spacing corrections. Default is True.
@@ -1969,7 +1984,8 @@ class BruteForce:
             or ``lnprior`` disagree, if
             only one of ``parallax`` and ``parallax_err`` is given, if
             ``logl_initthresh`` is not in (0, 1), if ``ltol`` is not positive,
-            or if ``max_models`` is neither None nor a positive integer. These
+            if ``max_models`` is neither None nor a positive integer, or if
+            ``apply_agewt`` is True and the grid has no ``agewt`` label. These
             checks run before the output file is created.
 
         Notes
@@ -2012,8 +2028,8 @@ class BruteForce:
         >>> from brutus.data import load_models
         >>>
         >>> # Load model grid
-        >>> models, labels, params = load_models('grid.h5')
-        >>> grid = StarGrid(models, labels, params)
+        >>> models, labels, label_mask = load_models('grid.h5')
+        >>> grid = StarGrid(models, labels)
         >>> fitter = BruteForce(grid)
         >>>
         >>> # Fit photometry
@@ -2052,13 +2068,6 @@ class BruteForce:
         _check_positive("ltol", ltol)
         _check_max_models(max_models)
 
-        # Load dust map from file path (str or os.PathLike) if needed
-        # (once for all objects)
-        if dustfile is not None and isinstance(dustfile, (str, os.PathLike)):
-            from ..dust import Bayestar
-
-            dustfile = Bayestar(dustfile=dustfile)
-
         # Pre-process data and initialize priors
         setup_results = self._setup(
             data,
@@ -2086,6 +2095,13 @@ class BruteForce:
             lngalprior_proc,
             lndustprior_proc,
         ) = setup_results
+
+        # Load dust map from file path (str or os.PathLike) if needed
+        # (once for all objects), after _setup has checked the inputs
+        if dustfile is not None and isinstance(dustfile, (str, os.PathLike)):
+            from ..dust import Bayestar
+
+            dustfile = Bayestar(dustfile=dustfile)
 
         # Initialize random state
         if rstate is None:

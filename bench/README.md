@@ -49,7 +49,7 @@ set `NUMBA_DISABLE_JIT=1`) so the real parallel codegen is exercised.
 
 The three A/B scripts source `_baseline.sh`, which checks out the baseline ref
 in a temporary `git worktree`: `HEAD` by default, or `$BASE_REF` (use
-`BASE_REF=origin/master` for a pull request). Both sides run the working
+`BASE_REF=origin/main` for a pull request). Both sides run the working
 tree's `bench/` tools. Each script exits with an error when `src/` has no
 changes against the baseline, and `fullfit.py cmp` and `harness.py compare`
 exit with an error on a shape or NaN mismatch. `ab.sh` alternates the two

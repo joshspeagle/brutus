@@ -140,11 +140,11 @@ def load_models(
     written by older `GridGenerator` versions) are dropped so the returned
     grid is always safe to fit with `BruteForce`.
 
-    The `label_mask` return value is a boolean structured array indicating which
-    labels are ancillary (derived from the grid) vs. those used to generate
-    the grid. For example, if luminosity is predicted from mass/age/metallicity,
-    this mask would be False for luminosity. Used internally by StarGrid to
-    determine which parameters to marginalize over during fitting.
+    The `label_mask` return value is a boolean structured array that is True
+    for the labels used to generate the grid and False for those predicted
+    from them. For example, luminosity is predicted from mass, age and
+    metallicity, so the mask is False for luminosity. `StarGrid` and
+    `BruteForce` do not read the mask; they identify the grid inputs by name.
 
     Examples
     --------
@@ -176,7 +176,7 @@ def load_models(
     >>> from brutus.core import StarGrid
     >>> from brutus.analysis import BruteForce
     >>> models, labels, mask = load_models('grid_mist_v9.h5')
-    >>> grid = StarGrid(models, labels, mask)
+    >>> grid = StarGrid(models, labels)
     >>> fitter = BruteForce(grid)
     """
     if not include_ms and not include_postms:

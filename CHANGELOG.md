@@ -22,6 +22,23 @@ each change a user must make.
 
 ### Fixed — statistical correctness *(output-changing)*
 
+- **`BruteForce` reads the predictions in `StarGrid.params`.** With
+  `StarGrid(models, labels, params)`, the fit read `agewt`, `feh` and
+  `loga` from `labels` only. It dropped the age weights without a
+  warning, and the Galactic prior got no `loga`. `BruteForce.models_labels`
+  now holds the fields of `labels` and `params`, so both forms of
+  `StarGrid` give the same fit. `apply_agewt=True` on a grid without
+  `agewt`, such as the Bayestar grid, now raises `ValueError`; pass
+  `apply_agewt=False`.
+- **The grid-spacing correction (`apply_grad`) uses only the grid axes.**
+  `BruteForce` took every field of `StarGrid.labels` as a grid axis. With
+  `StarGrid(models, labels)` and the label array of `load_models`, as in
+  tutorial 05, it also added a spacing term for each prediction (`loga`,
+  `logl`, `logt`, `logg`, `agewt`). For a mock bulge giant at 8.3 kpc these
+  terms favoured a dwarf model by 17.6 in ln over the true model, and on 200
+  mock bulge giants 88 posteriors missed the true distance entirely. Only
+  the grid inputs now get the term: `mini`, `eep`, `feh`, `afe` and `smf`,
+  and `Mr` on a grid without `mini` (the Bayestar grid).
 - **The `max_models` cap no longer biases the posterior.** Above the
   cap, `logpost_grid` kept a weighted sample of models but gave them their
   full weights, which narrowed the distance posterior by up to 31% and
@@ -365,6 +382,10 @@ each change a user must make.
 
 ### Fixed
 
+- brutus's numba caches are recompiled when any file of the package
+  changes. Numba checked a cached kernel only against its own source file,
+  so a kernel that calls jitted code in another brutus module kept returning
+  results of the old code after that module changed.
 - `StarGrid.get_seds(afe=0.4)` on `grid_mist_v9.h5` raises `ValueError`.
   `load_models` dropped the constant `afe` label, so the query ignored it
   silently and returned the [α/Fe] = 0 result. `load_models` now keeps the
