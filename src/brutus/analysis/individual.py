@@ -65,7 +65,7 @@ from scipy.special import logsumexp
 # Import StarGrid and SED utilities
 from ..core import StarGrid
 from ..core.sed_utils import _get_seds, _model_array, get_seds
-from ..priors.astrometric import logp_parallax, logp_parallax_scale
+from ..priors.astrometric import logp_parallax
 from ..priors.extinction import logp_extinction
 from ..priors.galactic import logp_galactic_structure
 
@@ -534,6 +534,115 @@ def _get_sed_mle(
         icov_sar[i][2][1] = ar_mix[i]  # Av-Rv cross-term
 
     return models, rvecs, drvecs, scale, icov_sar, resid
+
+
+#: Gauss-Hermite nodes x of the parallax selection gate, and ln(w) + x**2.
+_GATE_NODES, _GATE_WEIGHTS = np.polynomial.hermite.hermgauss(5)
+_GATE_LNWEIGHTS = np.log(_GATE_WEIGHTS) + _GATE_NODES**2
+#: Most Gauss-Newton steps of the gate's peak search.
+_GATE_MAX_STEPS = 50
+
+
+@jit(nopython=True, cache=True)
+def _gate_logf(eta, mu, inv_var_eta, parallax, inv_var_plx):
+    # ln of the gate integrand, without its normalization.
+    plx = np.exp(-eta)
+    return -0.5 * ((eta - mu) ** 2 * inv_var_eta + (plx - parallax) ** 2 * inv_var_plx)
+
+
+@jit(nopython=True, cache=True, parallel=True)
+def _lnp_parallax_gate(eta, eta_err, parallax, parallax_err):
+    r"""
+    Return, per model, the log of the parallax likelihood averaged over the
+    model's Gaussian in log-distance:
+
+    .. math::
+        \ln \int \mathcal{N}(\eta; \hat\eta, \sigma_\eta)\,
+        \mathcal{N}(\varpi; e^{-\eta}, \sigma_\varpi)\, d\eta
+
+    with :math:`\eta = \ln(d / {\rm kpc})`, so :math:`e^{-\eta}` is the
+    parallax in mas. Adaptive Gauss-Hermite quadrature centres the nodes on
+    the peak of the integrand, found by Gauss-Newton steps from
+    :math:`\hat\eta` and from :math:`-\ln \varpi`, and scales them to its
+    curvature. For :math:`\sigma_\eta \le 3` it is within 0.6 of the
+    exact value; photometric fits give :math:`\sigma_\eta \lesssim 0.03`.
+    """
+    inv_var_plx = 1.0 / parallax_err**2
+    nstart = 2 if parallax > 0 else 1
+    eta_plx = -np.log(parallax) if parallax > 0 else 0.0
+    lnnorm = np.log(2.0 * np.pi * parallax_err)
+    out = np.empty(len(eta))
+    for i in prange(len(eta)):
+        mu, inv_var_eta = eta[i], 1.0 / eta_err[i] ** 2
+        peak, gpeak = mu, -np.inf
+        for k in range(nstart):
+            e = mu if k == 0 else eta_plx
+            for _ in range(_GATE_MAX_STEPS):
+                plx = np.exp(-e)
+                step = (
+                    -(e - mu) * inv_var_eta + (plx - parallax) * plx * inv_var_plx
+                ) / (inv_var_eta + plx * plx * inv_var_plx)
+                step = min(max(step, -1.0), 1.0)
+                e += step
+                if abs(step) < 1e-10:
+                    break
+            g = _gate_logf(e, mu, inv_var_eta, parallax, inv_var_plx)
+            if g > gpeak:
+                peak, gpeak = e, g
+        # The width comes from the curvature at the peak. The Gauss-Newton
+        # curvature overstates it where the model parallax is below half the
+        # measured one, so the exact curvature is used where it is positive.
+        plx = np.exp(-peak)
+        curv = inv_var_eta + plx * (2.0 * plx - parallax) * inv_var_plx
+        if curv <= 0:
+            curv = inv_var_eta + plx * plx * inv_var_plx
+        width = np.sqrt(2.0 / curv)
+        total = 0.0
+        for k in range(len(_GATE_NODES)):
+            g = _gate_logf(
+                peak + width * _GATE_NODES[k], mu, inv_var_eta, parallax, inv_var_plx
+            )
+            total += np.exp(g - gpeak + _GATE_LNWEIGHTS[k])
+        out[i] = gpeak + np.log(total * width / eta_err[i]) - lnnorm
+    return out
+
+
+def _parallax_gate(scales, icovs_sar, parallax, parallax_err):
+    """Return the parallax term of the selection weight of each model.
+
+    It is `_lnp_parallax_gate` with the model's ln(d) mean and marginal
+    error from its (scale, A(V), R(V)) fit.
+    """
+    # The marginal scale error, not the conditional one: distance and
+    # extinction both dim a star, so the scale-A(V) correlation reaches
+    # 0.95-0.998 for reddened stars, and the conditional error is then 3-16x
+    # too small. cov[0,0] follows from the cofactor identity
+    # cov[0,0] = (i11*i22 - i12^2) / det(icov). A degenerate matrix falls
+    # back to the conditional error 1/sqrt(icov[0,0]). When icov[0,0] <= 0
+    # the error is 1e10, and the model's term is then too small to pass.
+    scales_err = np.full(len(scales), 1e10)
+    i00, i01, i02 = icovs_sar[:, 0, 0], icovs_sar[:, 0, 1], icovs_sar[:, 0, 2]
+    i11, i12, i22 = icovs_sar[:, 1, 1], icovs_sar[:, 1, 2], icovs_sar[:, 2, 2]
+    minor00 = i11 * i22 - i12 * i12
+    det = i00 * minor00 - i01 * (i01 * i22 - i02 * i12) + i02 * (i01 * i12 - i02 * i11)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        var00 = minor00 / det
+        cond_var00 = 1.0 / i00
+    marg_ok = (det > 0) & np.isfinite(var00) & (var00 > 0)
+    cond_ok = ~marg_ok & (i00 > 0)
+    scales_err[marg_ok] = np.sqrt(var00[marg_ok])
+    scales_err[cond_ok] = np.sqrt(cond_var00[cond_ok])
+
+    # eta = ln(d) = -0.5 ln(s), so sigma_eta = sigma_s / (2 s). Far nodes of
+    # a degenerate model overflow exp(-eta) to inf, which gives the right 0.
+    scales = np.maximum(scales, MIN_SCALE)
+    with np.errstate(over="ignore"):
+        return _lnp_parallax_gate(
+            -0.5 * np.log(scales),
+            scales_err / (2.0 * scales),
+            float(parallax),
+            float(parallax_err),
+        )
 
 
 def _inclusion_probabilities(weights, size):
@@ -1287,7 +1396,9 @@ class BruteForce:
             that subset.
 
         parallax, parallax_err : float, optional
-            Parallax and its error, in mas. Both or neither.
+            Parallax and its error, in mas. Both or neither. The selection
+            weight of each model includes the parallax likelihood averaged
+            over the model's Gaussian in ln(d).
 
         coord : tuple of 2 floats, optional
             Galactic (l, b) of the object, in degrees. The Galactic prior
@@ -1437,68 +1548,18 @@ class BruteForce:
         if lnprior is None:
             lnprior = np.zeros(Nmodels)
 
-        # Compute initial posterior (without parallax — parallax is applied
-        # exactly on MC samples below, not via the approximate scale-based
-        # form which would double-count the constraint).
+        # Initial posterior, without the parallax, which the MC step applies.
         lnprob_base = lnlike + lnprior
 
-        # Add parallax prior for MODEL SELECTION only.
-        # logp_parallax_scale provides a Gaussian approximation on scale
-        # to help select relevant models. This is NOT propagated to MC
-        # sample weights where the exact logp_parallax is used instead.
+        # Add the parallax to the weight that selects the models, but not to
+        # the MC weights, which apply the exact parallax likelihood below.
         lnprob_sel = lnprob_base.copy()
-        if parallax is not None and parallax_err is not None:
-            # Gate each model on "is its fitted scale consistent with the
-            # measured parallax?", treating the photometric scale as a
-            # Gaussian with std scales_err. Two stds can be read off the
-            # 3x3 (scale, A_V, R_V) precision matrix, and the choice
-            # matters:
-            #
-            # * conditional, 1/sqrt(icov[0,0]): scale uncertainty with
-            #   (A_V, R_V) HELD FIXED at their best-fit values;
-            # * marginal, sqrt(cov[0,0]): scale uncertainty after
-            #   propagating the (A_V, R_V) uncertainties and their
-            #   correlation with scale. For two correlated parameters,
-            #   marginal variance = conditional variance / (1 - rho^2).
-            #
-            # Distance and extinction both dim a star, so the scale-A(V)
-            # correlation reaches rho ~ 0.95-0.998 for reddened stars and
-            # the conditional std understates the truth by 3-16x there.
-            # Using it here scored models genuinely ~2 sigma from the
-            # parallax as ~20+ sigma away and pruned them -- irreversibly,
-            # because this gate only selects which models proceed; the
-            # exact parallax likelihood applied to the MC samples later
-            # can reweight survivors but cannot resurrect pruned models.
-            # The marginal std is therefore the correct choice, and being
-            # more permissive here costs only compute, never accuracy.
-            #
-            # cov[0,0] follows from the cofactor identity
-            # cov[0,0] = (i11*i22 - i12^2) / det(icov), so no full matrix
-            # inverse is needed. Degenerate matrices (det <= 0, or a
-            # nonfinite/nonpositive variance) fall back to the conditional
-            # estimate -- the pre-fix behavior -- rather than inventing a
-            # number; if even icov[0,0] <= 0, scales_err stays huge and
-            # the parallax simply does not prune that model.
-            scales_err = np.full(Nmodels, 1e10)  # Large error = uninformative
-            i00, i01, i02 = icovs_sar[:, 0, 0], icovs_sar[:, 0, 1], icovs_sar[:, 0, 2]
-            i11, i12, i22 = icovs_sar[:, 1, 1], icovs_sar[:, 1, 2], icovs_sar[:, 2, 2]
-            minor00 = i11 * i22 - i12 * i12
-            det = (
-                i00 * minor00
-                - i01 * (i01 * i22 - i02 * i12)
-                + i02 * (i01 * i12 - i02 * i11)
-            )
-            with np.errstate(divide="ignore", invalid="ignore"):
-                var00 = minor00 / det  # marginal scale variance
-                cond_var00 = 1.0 / i00  # conditional fallback
-            marg_ok = (det > 0) & np.isfinite(var00) & (var00 > 0)
-            cond_ok = ~marg_ok & (i00 > 0)  # degenerate matrix: old behavior
-            scales_err[marg_ok] = np.sqrt(var00[marg_ok])
-            scales_err[cond_ok] = np.sqrt(cond_var00[cond_ok])
-
-            lnprob_sel += logp_parallax_scale(
-                scales, scales_err, parallax, parallax_err
-            )
+        if _has_parallax(parallax, parallax_err):
+            # The parallax likelihood averaged over the model's Gaussian in
+            # ln(d) (#297). Its width equals that of the MC step below unless
+            # _inverse3 regularizes the matrix or precision_shrinkage > 0. A
+            # model that this gate drops cannot come back.
+            lnprob_sel += _parallax_gate(scales, icovs_sar, parallax, parallax_err)
 
         # Select models above threshold (using parallax-informed weights)
         if wt_thresh is not None:
