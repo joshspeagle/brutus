@@ -46,6 +46,8 @@ def mock_grid():
         ("logg", "f4"),
         ("Teff", "f4"),
         ("Mr", "f4"),
+        ("agewt", "f4"),
+        ("loga", "f4"),
     ]
     params = np.zeros(nmodels, dtype=params_dtype)
 
@@ -69,8 +71,10 @@ def mock_grid():
                     m**0.8 * (1 + 0.05 * j),  # radius
                     4.4 - 0.1 * j,  # logg
                     5777 * m**0.4,  # Teff
-                    5.0 - 2.5 * np.log10(m),
-                )  # Mr
+                    5.0 - 2.5 * np.log10(m),  # Mr
+                    1.0 + j,  # agewt
+                    9.0 + 0.3 * j,  # loga
+                )
                 idx += 1
 
     filters = ["g", "r", "i", "z", "y"]
@@ -2377,3 +2381,52 @@ def test_saved_band_count_and_chi2min_include_the_parallax(
     with h5py.File(path, "r") as f:
         assert f["obj_Nbands"][0] == ndim == fitter.nfilters + (parallax is not None)
         assert f["obj_chi2min"][0] == np.float32(chi2.min())
+
+
+def test_split_and_merged_grids_give_the_same_fit(mock_grid, batch, tmp_path):
+    """Regression (#300): with the predictions in `params`, the fit applied
+    no age weights and gave the Galactic prior no `loga`."""
+    from numpy.lib import recfunctions
+
+    joined = recfunctions.merge_arrays(
+        (mock_grid.labels, mock_grid.params), flatten=True
+    )
+    split = BruteForce(mock_grid, verbose=False)
+    merged = BruteForce(StarGrid(mock_grid.models, joined), verbose=False)
+    np.testing.assert_array_equal(split.models_labels, merged.models_labels)
+
+    out = {}
+    for name, fitter in (("split", split), ("merged", merged)):
+        path = str(tmp_path / f"{name}.h5")
+        fitter.fit(
+            save_file=path,
+            Ndraws=10,
+            Nmc_prior=5,
+            rstate=np.random.RandomState(3),
+            verbose=False,
+            **batch,
+        )
+        with h5py.File(path, "r") as f:
+            out[name] = {key: f[key][()] for key in ("model_idx", "obj_log_post")}
+    for key in out["split"]:
+        np.testing.assert_array_equal(out["split"][key], out["merged"][key])
+
+
+def test_age_weights_on_a_grid_without_agewt_raise(mock_grid, observation):
+    fitter = BruteForce(StarGrid(mock_grid.models, mock_grid.labels), verbose=False)
+    with pytest.raises(ValueError, match="agewt"):
+        fitter._setup(*observation, data_coords=(120.0, 45.0))
+    fitter._setup(*observation, data_coords=(120.0, 45.0), apply_agewt=False)
+
+
+def test_a_field_in_labels_and_params_is_read_from_labels(mock_grid):
+    from numpy.lib import recfunctions
+
+    params = mock_grid.params.copy()
+    params["Mr"] = np.nan
+    labels = recfunctions.merge_arrays(
+        (mock_grid.labels, mock_grid.params[["Mr"]]), flatten=True
+    )
+    fitter = BruteForce(StarGrid(mock_grid.models, labels, params), verbose=False)
+    assert fitter.models_labels.dtype.names.count("Mr") == 1
+    np.testing.assert_array_equal(fitter.models_labels["Mr"], mock_grid.params["Mr"])
