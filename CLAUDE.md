@@ -137,6 +137,7 @@ This file is the canonical repository instruction set shared across Claude Code 
 - Private code needs no docstring; give it one only when its contract is not obvious from its name and signature. A comment explains only a non-obvious why, such as a numerical subtlety or the paper equation it implements; never add `# Import X` banners or restate what the next line of code does.
 - Docs state only what the code does now. Each fact has one home: `docs/source/` explains the background, the methods and how to use the code, `docs/source/api/` exposes each public symbol once, and `README.md` is a short introduction that links to the site. Why a change was made goes in its commit, issue or pull request.
 - Keep `docs/source/` pages, landing-page cards, pipeline steps, sidebar titles, multi-column tables, and figure captions concise so they fit the Furo layout without column crushing or multi-line sidebar wrapping. When editing `docs/source/`, build the site (`make -C docs html SPHINXOPTS="-W --keep-going"`) and visually inspect rendered screenshots in light and dark mode with Playwright.
+- In `tutorials/*.ipynb`, embed every generated figure inline as a `display_data` (`image/png`) cell output, keep code cells visible (no `hide-input` tags), and keep cell text outputs concise (default `setup_tutorial` and `save_figure` to `verbose=False`, and strip sampler/fitter progress bars).
 
 ## Measurements
 
