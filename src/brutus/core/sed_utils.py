@@ -1,11 +1,9 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-SED computation utilities for brutus.
+Compute reddened spectral energy distributions (SEDs) from magnitude coefficients.
 
-This module contains functions for computing reddened spectral energy
-distributions (SEDs) from magnitude coefficients and dust parameters.
+Evaluates reddened magnitudes or linear flux densities (maggies) and their
+derivatives with respect to :math:`A(V)` and :math:`R(V)` from pre-computed
+polynomial coefficients ``(m_0, R_0, dR/dR_V)``.
 """
 
 from math import exp, log
@@ -79,9 +77,9 @@ def _get_seds(mag_coeffs, av, rv, return_flux=False):
             rvecs[i][j] = r0 + rv[i] * dr
             seds[i][j] = mags + av[i] * rvecs[i][j]
 
-            # Convert to flux. Use exp(fac * mag) instead of 10**(-0.4*mag):
-            # mathematically identical (fac = -0.4*ln10), agrees to ~3e-15, but
-            # a single exp is ~1.6x faster than a generic pow in this hot loop.
+            # Convert to flux using exp(fac * mag) instead of 10**(-0.4*mag)
+            # because a single exp is ~1.6x faster than pow in this loop while
+            # agreeing to ~3e-15 (fac = -0.4 * ln(10)).
             if return_flux:
                 seds[i][j] = exp(fac * seds[i][j])
                 rvecs[i][j] *= fac * seds[i][j]
@@ -118,7 +116,7 @@ def get_seds(
     return_rvec=False,
     return_drvec=False,
 ):
-    """
+    r"""
     Compute reddened SEDs from the provided magnitude coefficients.
 
     This is a convenience wrapper around `_get_seds` that provides parameter
@@ -127,42 +125,47 @@ def get_seds(
     Parameters
     ----------
     mag_coeffs : `~numpy.ndarray` of shape `(Nmodels, Nbands, 3)`
-        Array of `(mag, R, dR/dRv)` coefficients used to generate
-        reddened photometry in all bands. The first coefficient is the
-        unreddened photometry, the second is the A(V) reddening vector for
-        R(V)=0, and the third is the change in the reddening vector
-        as a function of R(V).
+        Polynomial coefficients ``(m_0, R_0, dR/dR_V)`` per model and band,
+        where ``m_0`` is the unreddened apparent magnitude at 1 kpc (mag),
+        ``R_0`` is the :math:`A(V)` reddening vector extrapolated to
+        :math:`R(V) = 0` (mag per mag of :math:`A(V)`), and ``dR/dR_V`` is its
+        derivative with respect to :math:`R(V)` (mag per mag of :math:`A(V)`).
 
-    av : float or `~numpy.ndarray` of shape `(Nmodels)`, optional
-        Array of A(V) dust attenuation values.
-        If not provided, defaults to `av=0.`.
+    av : float or `~numpy.ndarray` of shape `(Nmodels,)`, optional
+        V-band dust extinction :math:`A(V)` in magnitudes. Default is ``0.0``.
 
-    rv : float or `~numpy.ndarray` of shape `(Nmodels)`, optional
-        Array of R(V) dust attenuation curve "shape" values.
-        If not provided, defaults to `rv=3.3`.
+    rv : float or `~numpy.ndarray` of shape `(Nmodels,)`, optional
+        Total-to-selective extinction ratio :math:`R(V)` (dimensionless).
+        Default is ``3.3``.
 
     return_flux : bool, optional
-        Whether to return SEDs as flux densities instead of magnitudes.
-        Default is `False`.
+        If ``True``, return linear flux densities in maggies
+        (``10**(-0.4 * mag)``) instead of magnitudes. Default is ``False``.
 
     return_rvec : bool, optional
-        Whether to return the reddening vectors at the provided
-        `av` and `rv`. Default is `False`.
+        Whether to return the reddening vectors ``rvecs`` at the given ``av``
+        and ``rv``. Default is ``False``.
 
     return_drvec : bool, optional
-        Whether to return the differential reddening vectors at the provided
-        `av` and `rv`. Default is `False`.
+        Whether to return the differential reddening vectors ``drvecs`` at the
+        given ``av`` and ``rv``. Default is ``False``.
 
     Returns
     -------
     seds : `~numpy.ndarray` of shape `(Nmodels, Nbands)`
-        Reddened SEDs.
+        Reddened SEDs in magnitudes (or maggies when ``return_flux=True``).
 
     rvecs : `~numpy.ndarray` of shape `(Nmodels, Nbands)`, optional
-        Reddening vectors. Only returned if `return_rvec=True`.
+        Reddening derivatives :math:`\partial m / \partial A(V)` in mag per mag
+        of :math:`A(V)` (or :math:`\partial F / \partial A(V)` in maggies per
+        mag when ``return_flux=True``). Returned when ``return_rvec=True``.
 
     drvecs : `~numpy.ndarray` of shape `(Nmodels, Nbands)`, optional
-        Differential reddening vectors. Only returned if `return_drvec=True`.
+        Scaled differential reddening vectors
+        :math:`A(V)^{-1} \partial m / \partial R(V)` in mag per mag of
+        :math:`A(V)` (or :math:`A(V)^{-1} \partial F / \partial R(V)` in
+        maggies per mag when ``return_flux=True``). Returned when
+        ``return_drvec=True``.
 
     Raises
     ------

@@ -1,17 +1,13 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-brutus: Brute-force Bayesian inference for stellar photometry
+brutus: Brute-force Bayesian inference for stellar photometry.
 
-A Pure Python package for deriving distances, reddenings, and stellar
-properties from photometry using "brute force" Bayesian inference.
-
-The package is designed to be highly modular, with modules for:
-- Individual star modeling and fitting
-- Star cluster analysis
-- 3D dust mapping
-- Stellar evolution model management
+Package for deriving distances, reddenings, and stellar properties from
+photometry and astrometry by evaluating Bayesian posteriors over precomputed
+stellar model grids:
+- Individual star modeling and fitting (`brutus.core`, `brutus.analysis`)
+- Star cluster isochrone analysis (`brutus.core`, `brutus.analysis`)
+- 3D dust mapping (`brutus.dust`, `brutus.analysis`)
+- Stellar evolution model and grid management (`brutus.data`)
 
 Usage
 -----
@@ -43,8 +39,8 @@ try:
 except _metadata.PackageNotFoundError:  # a source tree that is not installed
     __version__ = "unknown"
 
-# _numba_cache comes first: it must install its cache locators before any
-# kernel is decorated.
+# _numba_cache comes first because it must install its cache locators before
+# any kernel is decorated.
 from . import _numba_cache, analysis, core, data, dust, plotting, priors, utils
 from .analysis import BruteForce
 from .core import EEPTracks, Isochrone, StarEvolTrack, StarGrid, StellarPop

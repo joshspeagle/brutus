@@ -1,13 +1,5 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-Galactic structure priors for Bayesian stellar parameter estimation.
-
-This module provides log-prior functions for Galactic structure modeling
-including disk and halo number densities, metallicity distributions,
-and age-metallicity relations. These priors encode our knowledge of the
-Milky Way's stellar populations and are essential for distance estimation.
+Galactic structure, metallicity, and age-metallicity log-priors.
 
 See Also
 --------
@@ -17,22 +9,15 @@ brutus.priors.astrometric : Parallax priors
 
 Notes
 -----
-These priors provide critical constraints on stellar distances by
-incorporating knowledge of Galactic structure:
-
-- **Number density priors** (disk and halo) weight distance based on
-  expected stellar distributions in the Galaxy
-
-- **Metallicity priors** provide realistic [Fe/H] distributions for
-  disk and halo populations
-
-- **Age-metallicity relations** link stellar age and composition
-
-The combined prior `logp_galactic_structure` integrates disk and halo
-models with appropriate mixing fractions.
-
-The priors use Galactocentric coordinates, which requires coordinate
-transformations from equatorial coordinates and distances.
+- **Number density priors** (:func:`logn_disk`, :func:`logn_halo`) evaluate
+  Galactocentric cylindrical stellar density profiles normalized to the solar
+  position.
+- **Metallicity and age priors** (:func:`logp_feh`, :func:`logp_age_from_feh`)
+  evaluate component-specific Gaussian metallicity distributions and logistic
+  truncated-normal age-metallicity relations.
+- **Combined prior** (:func:`logp_galactic_structure`) evaluates the
+  three-component (thin disk, thick disk, halo) mixture over distance,
+  metallicity, and age.
 
 Examples
 --------
@@ -64,7 +49,6 @@ from math import exp, log, pi, sqrt
 import numpy as np
 from numba import jit, prange
 
-# Import utility functions from brutus.utils
 from brutus.utils import truncnorm_logpdf
 from brutus.utils.math import (
     LOG_ZERO,
@@ -280,10 +264,8 @@ def _galactic_prior_fused(
         if has_loga:
             age_val = 10.0 ** loga_arr[i] / 1e9  # Gyr
             if has_feh:
-                # Metallicity-updated membership weights: the joint mixture
-                # prior is sum_c w_c(pos) p(feh|c) p(age|c), so the age term
-                # must weight components by w_c(pos) p(feh|c) / Z_feh rather
-                # than by the position-only w_c(pos).
+                # Weight components by w_c(pos) p(feh|c) / Z_feh because the
+                # joint mixture prior is sum_c w_c(pos) p(feh|c) p(age|c).
                 ln_w_thin = feh_lnp_thin - feh_lnp
                 ln_w_thick = feh_lnp_thick - feh_lnp
                 ln_w_halo = feh_lnp_halo - feh_lnp
@@ -342,9 +324,9 @@ __all__ = [
 
 def logn_disk(R, Z, R_solar=8.2, Z_solar=0.025, R_scale=2.6, Z_scale=0.3, R_smooth=2.0):
     r"""
-    Log-number density for the Galactic disk stellar population.
+    Compute the log-number density for an exponential Galactic disk.
 
-    Implements an exponential disk model with separate radial and vertical
+    Evaluates a double-exponential disk model with separate radial and vertical
     scale lengths, smoothed near the Galactic center to avoid singularities.
 
     Parameters
@@ -420,10 +402,10 @@ def logn_halo(
     r_q=6.0,
 ):
     r"""
-    Log-number density for the Galactic halo stellar population.
+    Compute the log-number density for a flattened power-law Galactic halo.
 
-    Implements a flattened power-law halo model with radius-dependent
-    oblateness following observational constraints.
+    Evaluates a flattened power-law halo profile with radius-dependent
+    oblateness.
 
     Parameters
     ----------
@@ -504,10 +486,10 @@ def logn_halo(
 
 def logp_feh(feh, feh_mean=-0.2, feh_sigma=0.3):
     r"""
-    Log-prior for stellar metallicity in Galactic components.
+    Compute the Gaussian log-prior for stellar metallicity [Fe/H].
 
-    Implements a Gaussian metallicity distribution appropriate for
-    different Galactic stellar populations (disk, thick disk, halo).
+    Evaluates a normal metallicity distribution for a Galactic stellar
+    component (thin disk, thick disk, or halo).
 
     Parameters
     ----------
@@ -561,11 +543,10 @@ def logp_age_from_feh(
     min_sigma=1.0,
 ):
     r"""
-    Log-prior for stellar age based on metallicity-age relation.
+    Compute the truncated-normal age log-prior from a logistic age-metallicity relation.
 
-    Implements the age-metallicity relation observed in the Galactic disk,
-    where older stars tend to be more metal-poor. Uses truncated normal
-    distribution bounded by physically reasonable ages.
+    Evaluates a truncated normal distribution over ``[min_age, max_age]`` whose
+    mean age follows a logistic function of mean metallicity.
 
     Parameters
     ----------
@@ -673,11 +654,11 @@ def logp_galactic_structure(
     return_components=False,
 ):
     """
-    Complete Galactic structure log-prior with thin disk, thick disk, and halo.
+    Compute the three-component Galactic structure log-prior.
 
-    Implements a sophisticated three-component Galactic model based on
-    Bland-Hawthorn & Gerhard (2016). Combines spatial number density priors
-    with optional metallicity and age priors for realistic stellar populations.
+    Combines spatial number-density profiles from Bland-Hawthorn & Gerhard
+    (2016) with volume factors and optional conditional metallicity and age
+    priors.
 
     Parameters
     ----------
@@ -790,13 +771,11 @@ def logp_galactic_structure(
     - Metallicity: Gaussian distributions with different means/dispersions
     - Age: Age-metallicity relation with truncated normal distributions
 
-    When both metallicity and age are supplied, the joint prior is the
-    proper mixture ``sum_c w_c(pos) p(feh|c) p(age|c)``: the age term
-    weights each component by its metallicity-updated membership
-    probability ``w_c(pos) p(feh|c) / sum_c' w_c'(pos) p(feh|c')``, not by
-    the position-only weight. This matters for chemically extreme stars
-    (e.g. nearby metal-poor stars are correctly weighted toward old,
-    halo-like ages).
+    When both metallicity and age are supplied, the joint prior evaluates the
+    mixture ``sum_c w_c(pos) p(feh|c) p(age|c)`` by weighting the age term of
+    each component with its metallicity-updated membership probability
+    ``w_c(pos) p(feh|c) / sum_c' w_c'(pos) p(feh|c')``. Nearby metal-poor stars
+    are therefore weighted toward old, halo-like ages.
 
     References
     ----------

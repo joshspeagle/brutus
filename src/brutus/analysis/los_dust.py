@@ -1,18 +1,13 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
+r"""
+Fit multi-cloud 3D dust extinction profiles along a line of sight.
 
-"""
-Line-of-sight dust extinction analysis for 3D dust mapping.
-
-This module provides functionality for modeling 3D dust distribution along
-lines-of-sight using stellar posterior samples from individual star fitting.
-The implementation uses multi-cloud extinction models with various smoothing
-kernels and is designed for use with nested sampling codes like dynesty.
-
-The core approach models the line-of-sight as a series of discrete "clouds"
-at different distances. Each cloud parameter pair specifies the *absolute*
-mean extinction level for stars located between that cloud and the next one.
-This allows reconstruction of 3D dust maps from stellar photometry.
+Models the distance-extinction relation along a sightline as a sequence of
+discrete dust clouds at distances :math:`d_i` (in distance modulus) with
+absolute mean extinction levels :math:`A(V)_i` (in magnitudes), using posterior
+``(distance, extinction)`` draws from individual stars. Provides a nested-sampling
+prior transform (`los_clouds_priortransform`), marginal log-likelihood over
+stellar posterior draws (`los_clouds_loglike_samples`), and truncated smoothing
+kernels (`kernel_gauss`, `kernel_lorentz`, `kernel_tophat`).
 
 Model Components
 ----------------
@@ -25,12 +20,13 @@ For n clouds, the model has 2n + 4 parameters per line-of-sight:
 - **n cloud pairs**: (distance_i, extinction_i) for each cloud, where
   extinction_i is the absolute extinction level behind cloud i
 
-The mean extinction at distance d is the absolute level ``extinction_i`` of
-the most recent cloud crossed (or the foreground level ``A_V,fore`` before
-the first cloud). Cloud values are *not* summed cumulatively: only with
-``additive_foreground=True`` is anything (the foreground) added to the cloud
-levels. The kernel (Gaussian, Lorentzian, or top-hat) defines how individual
-stellar extinction samples scatter around that mean.
+The mean extinction at distance :math:`d` equals the absolute level
+``extinction_i`` of the most recent cloud crossed (or the foreground level
+``A_V,fore`` before the first cloud). Cloud extinction values are not summed
+cumulatively across clouds; only when ``additive_foreground=True`` is the
+foreground added to the cloud levels. The smoothing kernel (Gaussian,
+Lorentzian, or top-hat) models the scatter of individual stellar extinctions
+around the segment mean.
 
 See Also
 --------
@@ -51,10 +47,12 @@ The likelihood computation accounts for:
 4. **Foreground component**: Extinction before first cloud
 
 The model is fit using nested sampling (e.g., dynesty) which requires:
+
 - Prior transform: los_clouds_priortransform
 - Log-likelihood: los_clouds_loglike_samples
 
 Typical workflow:
+
 1. Fit individual stars to get (distance, extinction) posteriors
 2. For each sightline, run nested sampling with n-cloud model
 3. Compare evidences for different n to select best model
@@ -62,18 +60,14 @@ Typical workflow:
    reddenings are absolute levels, not per-cloud increments)
 
 When comparing evidences in step 3 with ``monotonic=True`` (the default in
-`los_clouds_loglike_samples`), note that the prior transform draws the
-reddening amplitudes as independent uniforms and the monotone constraint is
-imposed by rejection in the likelihood. The surviving prior fraction — and
-hence the lnZ offset to add back before comparing models with different
-numbers of clouds — depends on the mode: in the default mode the foreground
-and the n cloud amplitudes form one ordered chain, so 1/(n+1)! survives
-(add ln((n+1)!) to lnZ); with a dust template or ``additive_foreground=True``
-the foreground is not part of the ordering, so only the n cloud amplitudes
-are ordered and 1/n! survives (add ln(n!)). (The additive-foreground mode
-also requires a non-negative first increment, but the default prior
-transform only draws non-negative amplitudes, so that cut removes no
-additional volume.)
+`los_clouds_loglike_samples`), the prior transform draws the reddening
+amplitudes as independent uniforms and the likelihood rejects non-monotonic
+draws. In the default mode, the foreground and the :math:`n` cloud amplitudes
+form a single ordered chain, retaining a fraction :math:`1/(n+1)!` of the prior
+volume (add :math:`\ln((n+1)!)` to :math:`\ln Z`). With a dust template or
+``additive_foreground=True``, only the :math:`n` cloud amplitudes are ordered
+and :math:`1/n!` of the prior volume survives (add :math:`\ln(n!)` to
+:math:`\ln Z`).
 
 Examples
 --------
@@ -129,10 +123,9 @@ def _trunc_lognorm_ppf(q, mean, std, low, high):
     Percent-point function of a log-normal whose log is a truncated normal.
 
     Equivalent to ``np.exp(truncnorm.ppf(q, (low - mean) / std,
-    (high - mean) / std, loc=mean, scale=std))`` but ~50x faster: each
-    scalar `scipy.stats` frozen-distribution call carries ~0.2 ms of
-    argument-validation overhead, and this transform sits inside the
-    nested-sampling inner loop (one call per proposed point).
+    (high - mean) / std, loc=mean, scale=std))``, but ~50x faster because it
+    avoids the ~0.2 ms per-call argument-validation overhead of `scipy.stats`
+    inside the nested-sampling inner loop.
 
     Parameters
     ----------
@@ -512,10 +505,9 @@ def los_clouds_loglike_samples(
     if not isinstance(Ndraws, (int, np.integer)) or Ndraws < 1:
         raise ValueError(f"Ndraws must be an integer >= 1, got {Ndraws}")
 
-    # Check monotonicity. Distances must always increase; with `monotonic`
-    # the EFFECTIVE extinction profile (after the template_reds /
-    # additive_foreground semantics below) must be non-decreasing -- raw
-    # theta values are only directly comparable in the default mode.
+    # Check monotonicity. Distances must always increase, and when `monotonic`
+    # is True the effective extinction profile (after applying `template_reds`
+    # or `additive_foreground`) must be non-decreasing.
     if not np.all(np.sort(dists) == dists):
         raise ValueError("Distances must be monotonically increasing")
     if monotonic:
@@ -548,11 +540,10 @@ def los_clouds_loglike_samples(
                 f"got {template_reds.shape}"
             )
 
-    # Assign every sample to its (disjoint) distance segment: index 0 is the
-    # foreground, index i >= 1 is behind cloud i. A single kernel evaluation
-    # with per-sample means/widths is exactly equivalent to evaluating each
-    # segment's kernel over all samples and masking the other segments to
-    # -inf (the previous implementation), but ~10x faster.
+    # Assign every sample to its disjoint distance segment (index 0 before the
+    # first cloud, index i >= 1 behind cloud i) so that a single kernel call
+    # with per-sample means and widths evaluates all segments at once (~10x
+    # faster than evaluating every segment over all samples).
     idx = np.searchsorted(dists, ds, side="right")
 
     # Kernel mean (absolute extinction level) and width per segment, then
@@ -617,17 +608,17 @@ def kernel_tophat(reds, kp, rlims=None):
     """
     Compute weighted log-probabilities using a Top-Hat kernel.
 
-    The kernel defines uniform dispersion of extinction values around the
-    cloud mean: samples within ``mean +/- half_bin_width`` are equally
-    likely, and samples outside are assigned zero probability.
+    Assigns uniform probability density to extinction samples within
+    ``mean +/- half_bin_width`` and ``LOG_ZERO`` outside.
 
     Parameters
     ----------
-    reds : array_like, shape (Nsamps,)
-        Reddening samples for each object.
+    reds : array_like of shape (Nsamps,) or (Nobj, Nsamps)
+        Reddening samples in magnitudes (:math:`A(V)`).
 
-    kp : tuple of float
-        The kernel parameters `(mean, half_bin_width)`.
+    kp : 2-tuple of float or ndarray
+        Kernel parameters ``(mean, half_bin_width)`` in magnitudes,
+        broadcastable against ``reds``.
 
     rlims : tuple of float, optional
         If provided, the kernel support is clipped to
@@ -685,17 +676,17 @@ def kernel_gauss(reds, kp, rlims=None):
     """
     Compute weighted log-probabilities using a Gaussian kernel.
 
-    The kernel defines Gaussian dispersion of extinction values around the
-    cloud mean: samples are weighted by a normal distribution centered on
-    the mean extinction with the given standard deviation.
+    Evaluates the log-density of a normal distribution centered on ``mean``
+    with standard deviation ``standard_deviation`` at each reddening sample.
 
     Parameters
     ----------
-    reds : array_like, shape (Nsamps,)
-        Reddening samples for each object.
+    reds : array_like of shape (Nsamps,) or (Nobj, Nsamps)
+        Reddening samples in magnitudes (:math:`A(V)`).
 
-    kp : tuple of float
-        The kernel parameters `(mean, standard_deviation)`.
+    kp : 2-tuple of float or ndarray
+        Kernel parameters ``(mean, standard_deviation)`` in magnitudes,
+        broadcastable against ``reds``.
 
     rlims : tuple of float, optional
         If provided, the kernel is renormalized for truncation to
@@ -770,19 +761,17 @@ def kernel_lorentz(reds, kp, rlims=None):
     """
     Compute weighted log-probabilities using a Lorentzian kernel.
 
-    The kernel defines heavy-tailed dispersion of extinction values around
-    the cloud mean: samples are weighted by a Cauchy/Lorentzian distribution
-    centered on the mean extinction, allowing larger deviations from the
-    mean than a Gaussian kernel.
+    Evaluates the log-density of a Cauchy (Lorentzian) distribution centered on
+    ``mean`` with half-width at half-maximum ``HWHM`` at each reddening sample.
 
     Parameters
     ----------
-    reds : array_like, shape (Nsamps,)
-        Reddening samples for each object.
+    reds : array_like of shape (Nsamps,) or (Nobj, Nsamps)
+        Reddening samples in magnitudes (:math:`A(V)`).
 
-    kp : tuple of float
-        The kernel parameters `(mean, HWHM)` where HWHM is the
-        half-width at half-maximum.
+    kp : 2-tuple of float or ndarray
+        Kernel parameters ``(mean, HWHM)`` in magnitudes, broadcastable against
+        ``reds``.
 
     rlims : tuple of float, optional
         If provided, the kernel is renormalized for truncation to

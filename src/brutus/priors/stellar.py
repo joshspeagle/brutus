@@ -1,13 +1,5 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-Stellar priors for Bayesian parameter estimation.
-
-This module provides log-prior functions for stellar properties including
-the initial mass function (IMF) and luminosity functions. These priors
-are used in Bayesian inference of stellar parameters to incorporate
-physical constraints from stellar populations.
+Stellar initial mass function (IMF) and luminosity function priors.
 
 See Also
 --------
@@ -17,18 +9,11 @@ brutus.priors.extinction : Extinction priors
 
 Notes
 -----
-These priors provide physically-motivated probability distributions for
-stellar parameters:
-
-- **IMF priors** weight stellar masses according to population statistics,
-  ensuring realistic mass distributions in Bayesian fits
-
-- **Luminosity function priors** weight absolute magnitudes according to
-  observed stellar populations, useful when fitting distance and extinction
-
-The IMF prior is normalized; the luminosity function prior is not. Both
-return log-probabilities suitable for direct use in MCMC or nested sampling
-codes.
+- **IMF priors** (:func:`logp_imf`) return a normalized log-density over initial
+  stellar mass (and optional secondary mass for binary systems).
+- **Luminosity function priors** (:func:`logp_ps1_luminosity_function`) return
+  an unnormalized log-density over Pan-STARRS 1 absolute :math:`r`-band
+  magnitude :math:`M_r`.
 
 Examples
 --------
@@ -101,40 +86,37 @@ def logp_imf(
     mass_max=100.0,
 ):
     r"""
-    Log-prior for a Kroupa-like broken initial mass function.
+    Compute the log-prior for a Kroupa-like broken power-law initial mass function.
 
-    Implements a broken power-law IMF with separate slopes for low and high
-    stellar masses, following Kroupa (2001). Supports binary systems with
-    a secondary mass component.
+    Evaluates a two-part power-law IMF following Kroupa (2001), with optional
+    independent draws for a binary companion.
 
     Parameters
     ----------
     mgrid : array_like
-        Grid of initial stellar masses in solar units. Must be > 0.
+        Initial stellar masses in solar masses (:math:`M_\odot`).
     alpha_low : float, optional
-        Power-law slope for low-mass stars (M ≤ mass_break).
-        Default is 1.3 (Kroupa 2001).
+        Power-law slope for ``mgrid <= mass_break``. Default is 1.3.
     alpha_high : float, optional
-        Power-law slope for high-mass stars (M > mass_break).
-        Default is 2.3 (Kroupa 2001).
+        Power-law slope for ``mgrid > mass_break``. Default is 2.3.
     mass_break : float, optional
-        Transition mass between low and high mass regimes in solar units.
-        Default is 0.5.
+        Transition mass between the low- and high-mass regimes in
+        :math:`M_\odot`. Default is 0.5.
     mgrid2 : array_like, optional
-        Grid of secondary stellar masses for binary systems in solar units.
-        If provided, computes joint prior for binary system.
+        Secondary stellar masses for binary systems in :math:`M_\odot`,
+        broadcastable with ``mgrid``.
     mass_min : float, optional
-        Minimum mass for normalization (hydrogen burning limit).
-        Default is 0.08 solar masses.
+        Minimum mass for normalization in :math:`M_\odot`. Default is 0.08.
     mass_max : float, optional
-        Maximum mass for normalization. It may be ``np.inf`` when
-        ``alpha_high > 1``. Default is 100.0 solar masses.
+        Maximum mass for normalization in :math:`M_\odot`. May be ``np.inf``
+        when ``alpha_high > 1``. Default is 100.0.
 
     Returns
     -------
-    logp : array_like
-        Normalized log-prior probability density for the input mass grid(s).
-        Masses below mass_min or above mass_max get `LOG_ZERO` (-1e300).
+    logp : numpy.ndarray
+        Normalized log-prior density (per :math:`M_\odot`, or per
+        :math:`M_\odot^2` when ``mgrid2`` is given) with the shape of ``mgrid``.
+        Masses outside ``[mass_min, mass_max]`` receive ``LOG_ZERO`` (-1e300).
 
     Raises
     ------
@@ -210,16 +192,12 @@ def logp_imf(
             f"check mass_min/mass_max/mass_break and the power-law slopes."
         )
 
-    # Handle binary component if provided
     if mgrid2 is not None:
         logp = logp + _log_imf_unnormalized(
             mgrid2, alpha_low, alpha_high, mass_min, mass_break, mass_max
         )
-
-        # Updated normalization for binary (independent sampling)
         norm = norm**2
 
-    # Apply normalization
     return logp - np.log(norm)
 
 
@@ -229,66 +207,45 @@ _ps1_lf_interpolator = None
 
 def logp_ps1_luminosity_function(Mr):
     """
-    Pan-STARRS 1 r-band luminosity function log-prior.
+    Evaluate the Pan-STARRS 1 r-band luminosity function log-prior.
 
-    Implements the stellar luminosity function derived from Pan-STARRS 1
-    observations, specifically calibrated for use with Bayestar stellar
-    evolutionary models and dust maps.
+    Interpolates the empirical stellar luminosity function tabulated for
+    Pan-STARRS 1 :math:`M_r` in ``[-1, 20]`` mag (Green et al. 2015, 2018) and
+    extrapolates linearly outside that interval.
 
     Parameters
     ----------
     Mr : array_like
-        Absolute r-band magnitudes in the Pan-STARRS 1 photometric system.
+        Absolute :math:`r`-band magnitudes in the Pan-STARRS 1 system (mag).
 
     Returns
     -------
-    logp : array_like
-        Unnormalized log-prior for the given absolute magnitudes:
-        ``exp(logp)`` integrates to about 0.086. It interpolates the
-        luminosity function tabulated for Mr in [-1, 20] and extrapolates
-        linearly outside that range.
+    logp : numpy.ndarray
+        Unnormalized log-prior values with the shape of ``Mr`` (``exp(logp)``
+        integrates to approximately 0.086 over the tabulated range).
 
     See Also
     --------
-    logp_imf : Alternative mass-based IMF prior
+    logp_imf : Mass-based IMF prior
     brutus.analysis.individual.BruteForce : Uses luminosity priors for fitting
-
-    Notes
-    -----
-    This prior is designed for integration with:
-
-    - Bayestar stellar evolutionary tracks
-    - Bayestar 3D dust extinction maps
-    - Pan-STARRS 1 photometric system
-
-    The luminosity function is based on empirical measurements from the
-    Pan-STARRS 1 survey and provides realistic stellar population weights
-    for Bayesian inference.
 
     References
     ----------
-    Green et al. (2015) - 3D Dust Mapping with Pan-STARRS 1
-    Green et al. (2018) - Bayestar dust maps
+    Green, G. M., et al. (2015), ApJ, 810, 25
+    Green, G. M., et al. (2018), MNRAS, 478, 651
     """
     global _ps1_lf_interpolator
 
-    # Load data file on first use
     if _ps1_lf_interpolator is None:
         import os
 
         from scipy.interpolate import interp1d
 
-        # Get path to data file
         module_dir = os.path.dirname(os.path.abspath(__file__))
         data_path = os.path.join(module_dir, "PSMrLF_lnprior.dat")
-
-        # Load PS1 luminosity function data
         grid_Mr, grid_lnp = np.loadtxt(data_path).T
-
-        # Create interpolator with extrapolation
         _ps1_lf_interpolator = interp1d(
             grid_Mr, grid_lnp, fill_value="extrapolate", kind="linear"
         )
 
-    # Evaluate log-prior
     return _ps1_lf_interpolator(Mr)

@@ -1,12 +1,5 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-Extinction priors for Bayesian stellar parameter estimation.
-
-This module provides log-prior functions for dust extinction modeling
-using 3D dust maps. These priors incorporate spatial dust distribution
-information to constrain extinction in stellar fitting.
+Dust extinction priors from 2D and 3D dust maps.
 
 See Also
 --------
@@ -16,23 +9,20 @@ brutus.analysis.individual.BruteForce : Uses extinction priors for fitting
 
 Notes
 -----
-The extinction prior uses 3D dust maps (e.g., Bayestar from Green et al.
-2015, 2018) which provide distance-dependent extinction estimates across
-the sky.
-
-The prior is Gaussian when dust map data is available, and uniform when
-coverage is unavailable. This gracefully handles regions outside the
-mapped volume.
+:func:`logp_extinction` evaluates a Gaussian density truncated and normalized
+over ``avlim`` (default ``(0.0, 20.0)`` mag), with a systematic floor
+``scatter`` (default ``0.2`` mag) added in quadrature to the map spread. Where
+the dust map has no coverage or a distance bin is masked as unreliable, it
+returns the normalized uniform density ``-ln(avlim[1] - avlim[0])``.
 
 Examples
 --------
->>> from brutus.priors.extinction import logp_extinction
->>> from brutus.dust import Bayestar
 >>> import numpy as np
->>>
->>> # Load 3D dust map and evaluate extinction prior at a distance
->>> # dustmap = Bayestar('bayestar2019_v1.h5')
->>> # logp = logp_extinction([0.1, 0.5], dustmap, [180.0, 30.0], distance=1.0)
+>>> from brutus.priors.extinction import logp_extinction
+>>> # dustmap = Bayestar("bayestar2019_v1.h5")
+>>> # logp = logp_extinction(
+>>> #     np.array([0.1, 0.5]), dustmap, [180.0, 30.0], distance=np.array([1.0, 1.0])
+>>> # )
 """
 
 import warnings
@@ -240,12 +230,12 @@ def logp_extinction(
     added in quadrature.
 
     For regions without dust map coverage (NaN values, including distance
-    bins masked by ``Bayestar``'s reliability mask), a uniform
-    (uninformative) prior over ``avlim`` is returned. It is normalized like
-    the Gaussian: an unnormalized ``ln p = 0`` would act as a density of
-    1 per mag and up-weight masked distances relative to reliable ones by a
-    unit-dependent factor. If the dust map ``query`` call itself fails, the
-    uniform prior is returned with a RuntimeWarning.
+    bins masked by ``Bayestar``'s reliability mask), a uniform prior
+    normalized over ``avlim`` is returned because an unnormalized ``ln p = 0``
+    would act as a density of 1 per mag and up-weight masked distances
+    relative to reliable ones by a unit-dependent factor. If the dust map
+    ``query`` call itself fails, the uniform prior is returned with a
+    ``RuntimeWarning``.
 
     Examples
     --------

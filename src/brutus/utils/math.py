@@ -1,27 +1,10 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-Mathematical utility functions for brutus.
-
-This module contains mathematical utility functions including matrix operations,
-statistical distributions, and numerical utilities. Many functions are JIT-compiled
-with numba for performance.
+Matrix inversion, truncated-normal and chi-square densities, and coordinate transforms.
 
 See Also
 --------
 brutus.utils.sampling : Sampling utilities
-brutus.priors.galactic : Uses truncated normal distributions
-
-Notes
------
-The numba-compiled functions provide significant speedups for tight loops
-in Bayesian inference. The `inverse3` function is specifically optimized
-for the (scale, A_V, R_V) covariance matrices used throughout brutus.
-
-Matrix regularization in `inverse3` prevents numerical issues when matrices
-are near-singular by adding a small value to the diagonal when eigenvalues
-are too small.
+brutus.priors.galactic : Uses truncated normal distributions and coordinate transforms
 
 Examples
 --------
@@ -356,14 +339,14 @@ def _batch_invert_3x3_preconditioned(P_batch, min_eigenval_threshold=1e-12):
 
 def inverse3(A, regularize=False, min_eigenval_threshold=1e-12):
     """
-    Compute the inverse of a series of 3x3 matrices.
+    Compute the inverse of one or more 3x3 matrices.
 
-    When ``regularize=True``, uses diagonal preconditioning: the precision
-    matrix is normalized to a correlation-like matrix (1s on diagonal)
-    before inversion, then transformed back. This reduces condition
-    numbers from O(max_diag/min_diag) to O(1/(1-rho_max)), making the
-    inversion numerically stable even when parameters have very different
-    scales (e.g. scale ~ 10^5 vs R(V) precision ~ 30).
+    When ``regularize=True``, diagonal preconditioning normalizes the input
+    precision matrix to unit diagonal before analytical inversion and scales
+    the inverse back afterward. Preconditioning reduces the condition number
+    from ``O(max_diag / min_diag)`` to ``O(1 / (1 - rho_max))`` so the
+    inversion remains stable when parameters span very different scales (such
+    as flux scale ~ 10^5 versus :math:`R(V)` precision ~ 30).
 
     Parameters
     ----------

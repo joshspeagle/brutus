@@ -1,13 +1,10 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-Grid generation utilities for pre-computed stellar model grids.
+Generate pre-computed HDF5 stellar model grids with reddening coefficients.
 
-This module provides functionality to generate the HDF5 model grid files
-used by StarGrid for fast photometric predictions. Grids store pre-computed
-photometry at a reference distance (1 kpc) along with polynomial coefficients
-for reddening corrections as a function of A_V and R_V.
+`GridGenerator` evaluates `StarEvolTrack` across a 5-D grid of stellar labels
+``(mini, eep, feh, afe, smf)`` at a reference distance of 1 kpc (1000 pc) and
+fits bilinear reddening coefficients in :math:`A(V)` and :math:`R(V)` for use
+with `StarGrid` and `BruteForce`.
 
 The grid generation process:
 1. Creates a 5D grid in (mini, eep, feh, afe, smf) parameter space
@@ -52,20 +49,18 @@ reference distance. This choice provides consistency with Gaia parallax
 measurements (1 mas = 1 kpc) and is documented in the grid attributes.
 
 **Reddening Parameterization**: Photometry is parameterized as:
-    m(A_V, R_V) = m_0 + A_V · (a + b · R_V)
+    m(A_V, R_V) = m_0 + A_V * (a + b * R_V)
 
-where m_0 is the unreddened magnitude and (a, b) are fitted coefficients:
-`a` is the A_V reddening vector extrapolated to R_V=0 (the linear-fit
-intercept) and `b` is its change per unit R_V. This matches how the
-coefficients are consumed in `brutus.core.sed_utils._get_seds`
-(`rvec = a + b * R_V`) and allows fast computation of reddened photometry
-for arbitrary (A_V, R_V).
+where ``m_0`` is the unreddened magnitude at 1 kpc, ``a`` is the :math:`A(V)`
+reddening vector extrapolated to :math:`R(V) = 0`, and ``b`` is its slope with
+respect to :math:`R(V)`, matching `brutus.core.sed_utils._get_seds`
+(``rvec = a + b * R_V``).
 
-**Grid Format**: HDF5 files follow the format established in Speagle et al. (2025)
-and contain three datasets:
-- `mag_coeffs`: Structured array (Nmodel, Nfilter, 3) with coefficients
-- `labels`: Structured array (Nmodel,) with input parameters
-- `parameters`: Structured array (Nmodel,) with predicted stellar parameters
+**Grid Format**: Output HDF5 files follow Speagle et al. (2025) and store
+``mag_coeffs`` (structured array of shape ``(Nmodel,)`` with 3-element filter
+fields), ``labels`` (structured array of shape ``(Nmodel,)`` with grid axes),
+and ``parameters`` (structured array of shape ``(Nmodel,)`` with predicted
+stellar parameters).
 
 **Grid Size**: The default axes give 61 mini x 220 eep x 61 feh x 5 afe x
 1 smf = 4,093,100 labels before masking. Use sparse grids for testing or
@@ -86,7 +81,6 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-# Import brutus components
 from ..data.filters import FILTERS
 from ..utils.photometry import add_mag
 from .individual import StarEvolTrack
@@ -163,12 +157,9 @@ class GridGenerator:
 
     Notes
     -----
-    The GridGenerator uses dependency injection rather than inheritance,
-    accepting an EEPTracks instance. This design:
-    - Maintains consistency with StarEvolTrack architecture
-    - Allows flexibility in track implementations
-    - Enables easier testing with mock tracks
-    - Separates grid generation from track interpolation logic
+    `GridGenerator` wraps `StarEvolTrack` to evaluate base photometry at 1 kpc
+    and batches the neural network reddening evaluations across the
+    :math:`(A(V), R(V))` lattice for each grid point.
 
     See Also
     --------
@@ -193,10 +184,7 @@ class GridGenerator:
                 "not supported by GridGenerator."
             )
 
-        # Store tracks
         self.tracks = tracks
-
-        # Initialize filters
         if filters is None:
             filters = FILTERS
         self.filters = np.array(filters)
@@ -204,12 +192,9 @@ class GridGenerator:
         if verbose:
             sys.stderr.write(f"Grid filters: {list(self.filters)}\n")
 
-        # Create StarEvolTrack for SED generation
         self.star_track = StarEvolTrack(
             tracks=tracks, filters=filters, nnfile=nnfile, verbose=verbose
         )
-
-        # Store neural network predictor
         self.predictor = self.star_track.predictor
 
     def make_grid(
@@ -532,12 +517,11 @@ class GridGenerator:
             self._save_grid(output_file, verbose=verbose)
 
     def _model_row(self, labels, track_kwargs, lattice):
-        """Return the primary's parameters and the fitted reddening
-        coefficients of one grid model.
+        """
+        Return the primary parameters and fitted reddening coefficients of one model.
 
-        Either is None when the model is invalid: a primary below
-        `mini_bound` has neither, and a model whose SED or reddening fit has
-        NaN has no coefficients.
+        Returns ``(None, None)`` when ``mini < mini_bound``, and ``(params, None)``
+        when the base SED or reddening fit contains NaN.
         """
         mini, eep, feh, afe, smf = labels
         if mini < track_kwargs["mini_bound"]:
@@ -653,10 +637,9 @@ class GridGenerator:
         Evaluate NN photometry on an (A_V, R_V) lattice at fixed stellar
         parameters.
 
-        Batched equivalent of ``FastNNPredictor.sed`` for one star and many
-        reddening points: the stellar inputs are constant across columns and
-        only the (av, rv) columns vary. Out-of-bounds points return NaN rows,
-        mirroring the scalar path.
+        Batched equivalent of ``FastNNPredictor.sed`` for one star across many
+        reddening points, holding the stellar parameters constant across columns
+        while varying ``(av, rv)``. Out-of-bounds points return NaN rows.
 
         Parameters
         ----------
@@ -702,10 +685,9 @@ class GridGenerator:
         """
         Save grid to HDF5 file in StarGrid-compatible format.
 
-        Only valid models (``grid_sel == True``) are written: invalid grid
-        points carry all-NaN coefficients/parameters that would otherwise
-        poison every downstream likelihood evaluation in BruteForce. This
-        matches the published grid files, which contain only valid models.
+        Writes only valid models (``grid_sel == True``) because invalid grid
+        points carry all-NaN coefficients and parameters that would poison
+        downstream likelihood evaluations in `BruteForce`.
 
         Parameters
         ----------
