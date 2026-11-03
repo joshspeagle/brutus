@@ -5,6 +5,7 @@ Shared plotting, data-loading, and verification utilities for the brutus tutoria
 """
 
 import os
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -100,7 +101,7 @@ def get_plot_dir(tutorial_num):
     return plot_dir
 
 
-def save_figure(fig, tutorial_num, fig_name, tight=True, **kwargs):
+def save_figure(fig, tutorial_num, fig_name, tight=True, verbose=False, **kwargs):
     """
     Save a figure to the tutorial plot directory.
 
@@ -114,6 +115,8 @@ def save_figure(fig, tutorial_num, fig_name, tight=True, **kwargs):
         Base name for the figure file (without extension).
     tight : bool, optional
         Whether to call ``fig.tight_layout()`` before saving. Default is True.
+    verbose : bool, optional
+        Whether to print the saved file path. Default is False.
     **kwargs : dict
         Additional keyword arguments passed to ``fig.savefig()``.
 
@@ -136,7 +139,8 @@ def save_figure(fig, tutorial_num, fig_name, tight=True, **kwargs):
 
     fig.savefig(save_path, **save_kwargs)
     record_file(save_path)
-    print(f"  Saved: {os.path.relpath(save_path, TUTORIALS_DIR)}")
+    if verbose:
+        print(f"  Saved: {os.path.relpath(save_path, TUTORIALS_DIR)}")
 
     return save_path
 
@@ -424,7 +428,7 @@ def load_m67_data(**kwargs):
     return load_tutorial_data("m67", **kwargs)
 
 
-def setup_tutorial(tutorial_num, title=None):
+def setup_tutorial(tutorial_num, title=None, verbose=False):
     """
     Configure plot style, output directory, and data checks for a tutorial.
 
@@ -434,6 +438,9 @@ def setup_tutorial(tutorial_num, title=None):
         Tutorial number (0-11).
     title : str, optional
         Tutorial title for the header. If None, uses a generic title.
+    verbose : bool, optional
+        Whether to print the tutorial banner and data check table.
+        Default is False (prints only if required data files are missing).
 
     Returns
     -------
@@ -445,19 +452,23 @@ def setup_tutorial(tutorial_num, title=None):
     """
     import matplotlib
 
-    # Set headless backend if not interactive
-    if "MPLBACKEND" in os.environ:
+    # Set headless backend only outside IPython kernels so inline notebook
+    # figure rendering (image/png display_data) is preserved.
+    if "MPLBACKEND" in os.environ and "ipykernel" not in sys.modules:
         matplotlib.use(os.environ["MPLBACKEND"])
 
     set_plot_style()
 
     plot_dir = get_plot_dir(tutorial_num)
 
-    if title is None:
-        title = f"Tutorial {tutorial_num:02d}"
-    print_section(title)
+    if verbose:
+        if title is None:
+            title = f"Tutorial {tutorial_num:02d}"
+        print_section(title)
 
-    data_ok, missing = check_data_requirements(tutorial_num, verbose=True)
+    data_ok, missing = check_data_requirements(tutorial_num, verbose=verbose)
+    if not data_ok and not verbose:
+        print(f"Missing required files for Tutorial {tutorial_num}: {missing}")
 
     return {
         "plot_dir": plot_dir,
