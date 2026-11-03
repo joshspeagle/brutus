@@ -116,6 +116,7 @@ samples = sampler.get_chain(discard=1000, thin=10, flat=True)
 - {doc}`/understanding_results` - Interpreting posterior distributions
 
 ```{eval-rst}
+.. py:module:: brutus.analysis
 .. currentmodule:: brutus.analysis
 ```
 

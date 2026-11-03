@@ -1,10 +1,10 @@
 # Contributing
 
-Contributions to `brutus` are welcome. `CLAUDE.md` (symlinked as `AGENTS.md`) at the repository root defines the full engineering, numerical, testing, and documentation standards.
+Contributions are welcome. This page covers the setup, the checks and how to submit a change. `CLAUDE.md` at the repository root holds the full rules.
 
 ## Development Setup
 
-1. Fork the repository on GitHub.
+1. Fork the repository on GitHub
 
 2. Clone your fork locally:
 
@@ -13,14 +13,15 @@ Contributions to `brutus` are welcome. `CLAUDE.md` (symlinked as `AGENTS.md`) at
    cd brutus
    ```
 
-3. Install the package in editable mode with development and documentation dependencies:
+3. Install in development mode:
 
    ```bash
    pip install -e ".[dev,docs]" pre-commit
    pre-commit install
    ```
 
-4. Open an issue that states a single goal, then create a branch named `<issue-number>-<short-slug>`:
+4. Open an issue that states one goal, then create a branch for it named
+   `<issue number>-<short-slug>`:
 
    ```bash
    git checkout -b 42-fix-parallax-units
@@ -28,27 +29,29 @@ Contributions to `brutus` are welcome. `CLAUDE.md` (symlinked as `AGENTS.md`) at
 
 ## Running Tests
 
-Run the test suite with `pytest`:
+We use pytest for testing. Run tests with:
 
 ```bash
-# Download the model data used by CI; without it, data-dependent tests skip
+# Download the data that CI uses; without it, tests that need it skip
 python .github/scripts/fetch_test_data.py
 
 pytest
 
-# Skip slow tests that load full model grids
+# Skip slow tests (marked with the "slow" marker; they load large
+# model data files and skip automatically if the data are absent)
 pytest -m "not slow"
 
-# Measure test coverage (NUMBA_DISABLE_JIT=1 is required so coverage can
-# trace lines inside @jit functions)
+# With coverage (NUMBA_DISABLE_JIT=1 is required: numba-compiled
+# functions otherwise report 0% coverage even when exercised)
 NUMBA_DISABLE_JIT=1 pytest --cov=brutus
 ```
 
-CI runs the test suite with `NUMBA_DISABLE_JIT=1` for coverage across Python 3.10 to 3.13, plus an Ubuntu Python 3.13 leg with Numba JIT enabled. When modifying a `@jit` function, always run its tests locally with JIT enabled before pushing.
+CI runs the tests with `NUMBA_DISABLE_JIT=1` for coverage, plus one Ubuntu leg (Python 3.13) with JIT on. Before you push a change to a jitted function, still run its tests locally with JIT on.
 
 ## Code Style
 
-Pre-commit hooks run **black** (formatting), **isort** (import sorting), and **flake8** (linting) on each commit:
+The pre-commit hooks run **black** (formatting), **isort** (import order)
+and **flake8** (linting) on each commit. To run them on every file:
 
 ```bash
 pre-commit run --all-files
@@ -56,7 +59,7 @@ pre-commit run --all-files
 
 ## Documentation
 
-Every public module, class, and function requires a NumPy-style docstring documenting parameter and return types, array shapes, and physical units. Any symbol added to a subpackage's `__all__` must also be listed on its corresponding page in `docs/source/api/` (verified by `tests/test_init.py`). Build the Sphinx documentation with warnings treated as errors, matching CI:
+Every public module, class and function has a NumPy-style docstring. A name you add to a package's `__all__` also needs an entry on its page in `docs/source/api/`; `tests/test_init.py` checks this. The site is Sphinx with MyST Markdown pages in `docs/source/`. Build it as CI does, with warnings as errors:
 
 ```bash
 cd docs
@@ -65,21 +68,37 @@ make html SPHINXOPTS="-W --keep-going"
 
 ## Submitting Changes
 
-1. Make small, self-contained commits with imperative subjects (`type(scope): summary`, such as `fix(priors): normalize the masked-bin dust prior`). Add `[output-change]` before the colon when a change alters numerical outputs for the same inputs and seed.
-2. Push the branch to your fork on GitHub.
-3. Open a pull request using the repository template and link the issue with `Closes #<issue-number>`.
-4. Include unit tests covering new or fixed behaviour and add an entry under `Unreleased` in `CHANGELOG.md` for user-visible changes.
+1. Make small commits, one change each. Write the subject as
+   `type(scope): summary` in the imperative, for example
+   `fix(priors): normalize the masked-bin dust prior`. Add
+   `[output-change]` before the colon when the change alters results.
+2. Push to your fork on GitHub.
+3. Open one pull request per goal. Fill in the template, and close the issue
+   with `Closes #<issue number>`.
+4. Include tests for new behaviour and a line under "Unreleased" in
+   `CHANGELOG.md` for each user-visible change.
 
-## Reporting Bugs and Requesting Features
+## Issue Reporting
 
-- **Bug reports:** Include the `brutus` version, Python and dependency versions, a minimal reproducible example, and the full traceback on [GitHub Issues](https://github.com/joshspeagle/brutus/issues).
-- **Feature requests:** Open an issue describing the scientific use case, input/output contracts, and how the feature fits into `brutus`'s architecture.
+When reporting bugs:
+
+- Include brutus version and Python environment details
+- Provide a minimal example that reproduces the issue
+- Include full error tracebacks
+
+## Feature Requests
+
+For feature requests:
+
+- Describe the use case and motivation
+- Consider if it fits the scope of brutus
+- Be willing to help implement or test
 
 ## Releases
 
-Releases follow Semantic Versioning (`MAJOR.MINOR.PATCH`). The lead maintainer approves each release and publishes distributions to PyPI.
+Releases follow semantic versioning (MAJOR.MINOR.PATCH). The lead maintainer approves each release and uploads it to PyPI.
 
 ## Contact
 
-- **GitHub Issues:** <https://github.com/joshspeagle/brutus/issues>
-- **Email:** <mailto:j.speagle@utoronto.ca>
+- GitHub Issues: <https://github.com/joshspeagle/brutus/issues>
+- Email: <mailto:j.speagle@utoronto.ca>

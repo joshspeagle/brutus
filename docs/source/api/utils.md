@@ -71,6 +71,7 @@ q16, q50, q84 = quantile(data, [0.16, 0.5, 0.84], weights=weights)
 - {doc}`/understanding_results` - Sampling and quantile calculations
 
 ```{eval-rst}
+.. py:module:: brutus.utils
 .. currentmodule:: brutus.utils
 ```
 
@@ -154,21 +155,4 @@ q16, q50, q84 = quantile(data, [0.16, 0.5, 0.84], weights=weights)
 
 ```{eval-rst}
 .. autofunction:: draw_sar
-```
-
-## Submodules
-
-```{eval-rst}
-.. automodule:: brutus.utils.math
-   :no-members:
-```
-
-```{eval-rst}
-.. automodule:: brutus.utils.photometry
-   :no-members:
-```
-
-```{eval-rst}
-.. automodule:: brutus.utils.sampling
-   :no-members:
 ```

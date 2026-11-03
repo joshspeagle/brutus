@@ -61,6 +61,7 @@ models, labels, label_mask = load_models('/path/to/my_custom_grid.h5')
 - {doc}`/quickstart` - Basic data loading examples
 
 ```{eval-rst}
+.. py:module:: brutus.data
 .. currentmodule:: brutus.data
 ```
 
@@ -102,16 +103,4 @@ models, labels, label_mask = load_models('/path/to/my_custom_grid.h5')
 
 ```{eval-rst}
 .. autofunction:: find_nn_file
-```
-
-## Submodules
-
-```{eval-rst}
-.. automodule:: brutus.data.download
-   :no-members:
-```
-
-```{eval-rst}
-.. automodule:: brutus.data.loader
-   :no-members:
 ```

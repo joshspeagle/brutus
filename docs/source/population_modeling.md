@@ -1,6 +1,6 @@
-# Star Clusters and Coeval Populations
+# Star clusters
 
-Stars in a coeval open or globular cluster share a common age, chemical composition, heliocentric distance, and approximate foreground dust extinction. `brutus` models all stars in a cluster jointly along a single {term}`isochrone` {cite:p}`speagle2025` via {func}`~brutus.analysis.isochrone_population_loglike`, which evaluates the marginal log-likelihood of six population-level parameters so that it can be paired directly with an external optimizer, Markov chain Monte Carlo (MCMC) sampler, or nested sampler.
+The stars of a cluster share one age, one metallicity, one distance and, nearly, one extinction. brutus fits them together with one {term}`isochrone` {cite:p}`speagle2025`. It does not run a sampler for this: {func}`~brutus.analysis.isochrone_population_loglike` returns the log-likelihood of six cluster parameters, and you pass it to an optimizer or a sampler of your choice.
 
 ```{raw} html
 :file: figures/cluster-cmd.svg
@@ -8,43 +8,41 @@ Stars in a coeval open or globular cluster share a common age, chemical composit
 ```
 
 :::{div} figure-caption
-This simulated Gaia color-magnitude diagram ($G$ vs. $G_{\rm BP} - G_{\rm RP}$) shows a $4\,{\rm Gyr}$, solar-metallicity (${\rm [Fe/H]} = 0.00$) cluster at $d = 1\,{\rm kpc}$ with zero extinction ($A_V = 0$), drawn from the `grid_mist_v9` stellar grid. Cluster members (amber filled circles) include single stars along the solid black isochrone and unresolved main-sequence binaries lying up to $2.5\log_{10} 2 \approx 0.75\,{\rm mag}$ brighter (bounded by the dashed copper equal-mass binary sequence), while unassociated field stars (open red circles) are distributed across the color-magnitude plane.
+A simulated cluster, drawn from the `BruteForce` model grid (`grid_mist_v9`) rather than the isochrones that the likelihood uses. Unresolved binaries lie up to 0.75 mag above the single-star isochrone; field stars lie anywhere. The likelihood models all three.
 :::
 
-## Population Parameter Vector
+## The cluster parameters
 
-{func}`~brutus.analysis.isochrone_population_loglike` takes a 6-element parameter vector `theta`:
-
-| Index | Parameter | Units and Domain |
+| Index | Parameter | Unit |
 |---|---|---|
-| `0` | Metallicity ${\rm [Fe/H]}$ | dex relative to solar |
-| `1` | Log age $\log_{10}(t / {\rm yr})$ | dex ($t$ in years) |
-| `2` | Visual extinction $A_V$ | magnitudes |
-| `3` | Extinction curve shape $R_V$ | dimensionless |
-| `4` | Heliocentric distance $d$ | **parsecs (pc)** |
-| `5` | Field contamination fraction $f_{\rm field}$ | dimensionless in $[0, 1]$ |
+| 0 | [Fe/H] | dex |
+| 1 | $\log_{10}$ age | age in years |
+| 2 | $A_V$ | mag |
+| 3 | $R_V$ | |
+| 4 | distance $d$ | **pc** |
+| 5 | field fraction $f_{\rm field}$ | 0 to 1 |
 
-In `isochrone_population_loglike`, distance $d$ is parameterized in **parsecs (pc)**, whereas `BruteForce` outputs individual stellar distances in kiloparsecs (kpc).
+The distance is in parsecs here, while `BruteForce` uses kiloparsecs.
 
-## Marginal Cluster Likelihood
+## The likelihood
 
-Given population parameters $\boldsymbol\theta = ({\rm [Fe/H]}, \log_{10} t, A_V, R_V, d, f_{\rm field})$, `brutus` interpolates the MIST isochrone across a 2D grid of primary initial mass $m$ (indexed by EEP) and secondary binary mass ratio $q = M_2 / M_1$. Each grid node $(m, q)$ predicts broadband fluxes $F_b(m, q, \boldsymbol\theta)$ and the cluster parallax $\varpi = 1000 / d\,{\rm mas}$.
+For given cluster parameters $\boldsymbol\theta$, brutus builds an isochrone on a grid of initial mass $m$ and secondary mass fraction $q$ (the mass ratio of a binary). Each grid point predicts fluxes $F_b(m, q, \boldsymbol\theta)$ and the parallax $1000/d$ mas.
 
-**Cluster member likelihood.** For star $i$ with observed fluxes $\hat F_{i,b} \pm \sigma_{i,b}$ and optional parallax $\hat\varpi_i \pm \sigma_{\varpi,i}$, the goodness-of-fit statistic at grid node $(m, q)$ is
+**Cluster member.** For star $i$ with fluxes $\hat F_{i,b} \pm \sigma_{i,b}$ and parallax $\hat\varpi_i \pm \sigma_{\varpi,i}$,
 
 $$
-\chi^2_i(m, q) = \sum_b \frac{\left( \hat F_{i,b} - F_b(m, q) \right)^2}{\sigma_{i,b}^2} + \frac{\left( \hat\varpi_i - 1000/d \right)^2}{\sigma_{\varpi,i}^2}.
+\chi^2_i(m, q) = \sum_b \frac{\left( \hat F_{i,b} - F_b(m, q) \right)^2}{\sigma_{i,b}^2} + \frac{\left( \hat\varpi_i - 1000/d \right)^2}{\sigma_{\varpi,i}^2},
 $$
 
-By default (`dim_prior=True`), the cluster member likelihood is evaluated using the $\chi^2$ probability density with $k_i$ degrees of freedom (where $k_i$ equals the number of valid photometric bands plus $1$ when a valid parallax is present):
+and the cluster likelihood is the $\chi^2$ density with $k_i$ degrees of freedom, where $k_i$ counts the valid bands plus 1 for a parallax:
 
 $$
 P_c(\hat F_i \mid m, q, \boldsymbol\theta) = p_{\chi^2}\!\left( \chi^2_i(m, q);\, k_i \right).
 $$
 
-When `dim_prior=False`, $P_c$ is evaluated instead as the product of independent Gaussian densities across the valid bands and parallax.
+With `dim_prior=False`, the likelihood is instead the product of Gaussian densities in each band and in the parallax.
 
-**Field-star outlier model.** Because foreground and background field stars do not lie on the cluster isochrone, `brutus` models field contamination with an outlier density $P_o(\hat F_i)$. Under `dim_prior=True`, $P_o(\hat F_i)$ is set to the $\chi^2$ density evaluated at the critical threshold $\chi^2_{\max}(k_i)$ that a true cluster member exceeds with tail probability `p_value_cut` ($10^{-5}$ by default):
+**Field star.** A field star is not on the isochrone. Its likelihood is the $\chi^2$ density at the value that a cluster member exceeds with probability $10^{-5}$ (`p_value_cut`):
 
 $$
 P_o(\hat F_i) = p_{\chi^2}\!\left( \chi^2_{\max}(k_i);\, k_i \right),
@@ -52,21 +50,23 @@ P_o(\hat F_i) = p_{\chi^2}\!\left( \chi^2_{\max}(k_i);\, k_i \right),
 \int_{\chi^2_{\max}}^\infty p_{\chi^2}(x; k_i)\, dx = 10^{-5}.
 $$
 
-Any isochrone point whose $\chi^2_i(m, q)$ substantially exceeds $\chi^2_{\max}(k_i)$ contributes less likelihood than the background field model. Under `dim_prior=False`, the default outlier model is a uniform density over the observed flux range in each band (padded by `sigma_clip = 3` measurement errors) and over the observed parallax range. You can also supply a custom outlier log-likelihood callable via `outlier_model_func(flux, flux_err, stellar_params=..., parallax=..., parallax_err=..., mask=...)` returning an array of shape `(Nstars,)` or `(Ngrid, Nstars)`.
+A grid point whose $\chi^2$ is well above $\chi^2_{\max}$ describes the star worse than the field model does. With `dim_prior=False`, the field model is uniform over the observed range of fluxes in each band, widened by 3 errors (`sigma_clip`), and over the range of parallaxes. `outlier_model_func` replaces it with your own: it is called as `outlier_model_func(flux, flux_err, stellar_params=..., parallax=..., parallax_err=..., mask=...)` and returns the log-likelihood with shape `(Nstars,)` or `(Ngrid, Nstars)`.
 
-**Pointwise cluster-field mixture.** Each star $i$ has an effective prior cluster membership probability
+**Mixture.** Each star is a member with prior probability
 
 $$
 w_c = p_{{\rm mem},i}\,(1 - f_{\rm field}),
 $$
 
-where $p_{{\rm mem},i}$ is the external membership prior `cluster_prob` ($0.95$ by default, passed either as a scalar or as a per-star array derived from proper-motion or radial-velocity kinematics) and $f_{\rm field} = \theta_5$ is the fitted field contamination fraction. Combining the member and outlier likelihoods at each grid node $(m, q)$ before integration yields
+where $p_{{\rm mem},i}$ is `cluster_prob` (0.95 by default) and $f_{\rm field}$ is fitted. At each grid point,
 
 $$
 P(\hat F_i \mid m, q, \boldsymbol\theta) = w_c\, P_c(\hat F_i \mid m, q, \boldsymbol\theta) + (1 - w_c)\, P_o(\hat F_i).
 $$
 
-**Marginalization over mass and binary mass ratio.** Finally, `brutus` marginalizes over $(m, q)$ for each star using trapezoidal quadrature weights $\Delta m_j\,\Delta q_j$ normalized over the valid isochrone grid nodes, and sums the marginal log-likelihoods across all $N_{\rm stars}$ stars:
+`cluster_prob` can be one number or one value per star, for example a membership probability from proper motions.
+
+**Marginalization.** brutus integrates each star over the grid with a prior uniform in $m$ and $q$, normalized over the valid grid points:
 
 $$
 P(\hat F_i \mid \boldsymbol\theta) = \frac{\sum_{j} P(\hat F_i \mid m_j, q_j, \boldsymbol\theta)\, \Delta m_j\, \Delta q_j}{\sum_{j} \Delta m_j\, \Delta q_j},
@@ -74,15 +74,15 @@ P(\hat F_i \mid \boldsymbol\theta) = \frac{\sum_{j} P(\hat F_i \mid m_j, q_j, \b
 \ln \mathcal{L}(\boldsymbol\theta) = \sum_i \ln P(\hat F_i \mid \boldsymbol\theta).
 $$
 
-Normalizing by the total valid grid volume $\sum_j \Delta m_j\,\Delta q_j$ at every evaluation of $\boldsymbol\theta$ ensures that changes in the number of valid isochrone nodes with age or metallicity do not bias the inferred population parameters or field fraction.
+The prior on mass is uniform, not an initial mass function. The normalization keeps the grid volume, which changes with $\boldsymbol\theta$, from biasing the parameters and the field fraction.
 
-## Modeling Unresolved Binaries
+## Binaries
 
-An unresolved binary system combines the broadband fluxes of a primary star of mass $m$ and a coeval secondary star of mass $q\,m$, making an equal-mass binary ($q = 1$) brighter than a single star of the same color by $2.5 \log_{10} 2 \approx 0.75\,{\rm mag}$. By default, `isochrone_population_loglike` evaluates 21 secondary mass ratios from $q = 0$ to $q = 1$ (`smf_grid`) across 1,000 EEP nodes from $202$ to $808$ (`eep_grid`). Unresolved companions are added only for main-sequence and turnoff primaries up to ${\rm EEP} = 480$ (`eep_binary_max`); evolved post-turnoff stars (${\rm EEP} > 480$) are evaluated once as single stars and assigned the full marginal quadrature weight across $q$.
+A binary's flux is the sum of the fluxes of its two stars. An equal-mass binary ($q = 1$) is therefore $2.5 \log_{10} 2 = 0.75$ mag brighter than a single star of the same colour. The default grid has 21 values of $q$ from 0 to 1 (`smf_grid`) and 1000 EEPs from 202 to 808 (`eep_grid`). Only primaries up to EEP 480 (`eep_binary_max`) get a companion. Later phases are stored once, with the full weight of all $q$ values.
 
-## Fitting a Cluster with MCMC or Nested Sampling
+## Fitting a cluster
 
-Download the MIST isochrone library (`fetch_isos()`) and bolometric-correction neural network (`fetch_nns()`) to construct a {class}`~brutus.core.StellarPop` instance ({doc}`stellar_models`):
+`fetch_isos()` downloads the MIST isochrones and `fetch_nns()` the neural network ({doc}`stellar_models`):
 
 ```python
 import numpy as np
@@ -105,9 +105,9 @@ lnl = isochrone_population_loglike(
 )
 ```
 
-The input arrays `flux` and `flux_err` have shape `(Nstars, Nbands)` in linear {term}`maggies <maggie>` ordered to match `filters`. Non-finite fluxes and entries masked via `mask` are excluded band-by-band, while malformed input shapes raise `ValueError`. If `theta` falls outside the valid domain of the isochrone library so that no valid grid models exist, `isochrone_population_loglike` issues a warning and returns `LOG_ZERO` (`-1e300`).
+`flux` and `flux_err` have shape `(Nstars, Nbands)` in {term}`maggies <maggie>`, in the order of `filters`. Masked or non-finite fluxes are skipped band by band; `mask` sets more. Malformed inputs raise `ValueError`. If no isochrone model is valid at `theta`, for example outside the isochrone grid, the function warns and returns `LOG_ZERO` (-1e300).
 
-To sample the posterior distribution of $\boldsymbol\theta$ with [emcee](https://emcee.readthedocs.io), combine `isochrone_population_loglike` with a prior over `theta`:
+To sample the posterior, add a prior. With [emcee](https://emcee.readthedocs.io):
 
 ```python
 import emcee
@@ -129,28 +129,28 @@ sampler.run_mcmc(start, 5000)
 samples = sampler.get_chain(discard=1000, flat=True)
 ```
 
-For nested sampling with [dynesty](https://dynesty.readthedocs.io), pass `isochrone_population_loglike` as `loglikelihood` alongside a `prior_transform` mapping the unit hypercube $[0, 1]^6$ to `bounds`.
+A nested sampler such as [dynesty](https://dynesty.readthedocs.io) takes the same likelihood with a prior transform that maps the unit cube to `bounds`.
 
-## Diagnostic Component Outputs
+## Diagnostics
 
-Passing `return_components=True` returns a `(lnl_total, components)` tuple where `components` is a dictionary containing intermediate likelihood arrays:
+`return_components=True` also returns a dictionary:
 
-| Key | Description | Array Shape |
+| Key | Content | Shape |
 |---|---|---|
-| `lnl_total` | Total marginal log-likelihood $\ln \mathcal{L}(\boldsymbol\theta)$ across the catalog | scalar `float` |
-| `lnl_per_object` | Marginal log-likelihood $\ln P(\hat F_i \mid \boldsymbol\theta)$ for each star | `(Nstars,)` |
-| `lnl_cluster`, `lnl_outlier`, `lnl_mixture` | Unmarginalized cluster, outlier, and mixture log-likelihoods at each grid node | `(Ngrid, Nstars)` |
-| `isochrone_grid` | Dictionary containing generated model photometry, masses, $q$ values, and quadrature weights $\Delta m$, $\Delta q$ | `dict` |
+| `lnl_total` | the same total $\ln \mathcal{L}$ | scalar |
+| `lnl_per_object` | $\ln P(\hat F_i \mid \boldsymbol\theta)$ per star | `(Nstars,)` |
+| `lnl_cluster`, `lnl_outlier`, `lnl_mixture` | the three terms at each grid point | `(Ngrid, Nstars)` |
+| `isochrone_grid` | the grid: photometry, masses, $q$ and the weights $\Delta m$, $\Delta q$ | |
 
-Inspecting `lnl_per_object` identifies individual stars that are poorly described by the cluster isochrone.
+The stars with the lowest `lnl_per_object` fit the cluster worst.
 
-## Computational Cost and Parallelization
+## Cost
 
-Each likelihood evaluation interpolates the isochrone and evaluates all $N_{\rm stars}$ stars across up to $21,000$ `(EEP, q)` grid points ($1,000$ EEPs $\times$ $21$ binary mass ratios prior to mass and evolutionary phase cuts), so runtime scales linearly with $N_{\rm grid} \times N_{\rm stars}$. Passing coarser `eep_grid` or `smf_grid` arrays reduces per-call latency, though you should verify that coarser quadrature does not shift the posterior on your dataset (`bench/bench_populations.py` benchmarks runtime and quadrature convergence as a function of grid resolution). Because the internal matrix operations use multi-threaded BLAS routines, set `OMP_NUM_THREADS=1` whenever parallelizing across walker or live-point evaluations at the sampler level (such as `emcee.EnsembleSampler(..., pool=pool)`).
+Each call builds the isochrone grid and evaluates every star at every grid point, so the cost grows with the number of grid points times the number of stars. The default grid has at most 21,000 points (1000 EEPs × 21 values of $q$), fewer after the binary and mass cuts. A coarser grid (`eep_grid`, `smf_grid`) is faster but less accurate; check that the result does not change before you use one. The matrix products inside can use several threads through BLAS. If you parallelize at the level of the sampler, for example with `emcee.EnsembleSampler(..., pool=pool)`, set `OMP_NUM_THREADS=1` so the two do not compete. `bench/bench_populations.py` measures the cost and the convergence with grid size on your machine.
 
-## Scope and Limitations
+## Limitations
 
-- **Single coeval population:** The built-in likelihood models one coeval cluster plus a field population; fitting multiple overlapping stellar populations requires a custom mixture wrapper.
-- **Uniform foreground extinction:** All cluster members share a single $(A_V, R_V)$ pair without star-to-star differential reddening.
-- **External kinematic priors:** Proper motions and radial velocities enter only through the per-star prior membership probabilities `cluster_prob`.
-- **Detached, non-interacting binaries:** Binary companions contribute additive broadband flux without mass transfer or binary stellar evolution.
+- **One population.** The model has one cluster and a field; two populations need your own likelihood.
+- **One extinction.** All members share $A_V$ and $R_V$; differential reddening is not modelled.
+- **No kinematics.** Proper motions and radial velocities enter only through `cluster_prob`.
+- **Unresolved binaries only.** Companions add flux; there is no mass transfer or orbital information.

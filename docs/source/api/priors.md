@@ -63,6 +63,7 @@ fitter.fit(
 - {doc}`/scientific_background` - How priors fit into the Bayesian framework
 
 ```{eval-rst}
+.. py:module:: brutus.priors
 .. currentmodule:: brutus.priors
 ```
 
@@ -116,26 +117,4 @@ fitter.fit(
 
 ```{eval-rst}
 .. autofunction:: logp_extinction
-```
-
-## Submodules
-
-```{eval-rst}
-.. automodule:: brutus.priors.stellar
-   :no-members:
-```
-
-```{eval-rst}
-.. automodule:: brutus.priors.astrometric
-   :no-members:
-```
-
-```{eval-rst}
-.. automodule:: brutus.priors.galactic
-   :no-members:
-```
-
-```{eval-rst}
-.. automodule:: brutus.priors.extinction
-   :no-members:
 ```

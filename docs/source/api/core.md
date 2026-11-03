@@ -68,6 +68,7 @@ seds, params1, params2 = pop.get_seds(
 - {doc}`/population_modeling` - Population-based cluster fitting
 
 ```{eval-rst}
+.. py:module:: brutus.core
 .. currentmodule:: brutus.core
 ```
 
@@ -143,31 +144,4 @@ seds, params1, params2 = pop.get_seds(
 
 ```{eval-rst}
 .. autofunction:: brutus.core.sed_utils._get_seds
-```
-
-## Submodules
-
-```{eval-rst}
-.. automodule:: brutus.core.individual
-   :no-members:
-```
-
-```{eval-rst}
-.. automodule:: brutus.core.populations
-   :no-members:
-```
-
-```{eval-rst}
-.. automodule:: brutus.core.neural_nets
-   :no-members:
-```
-
-```{eval-rst}
-.. automodule:: brutus.core.sed_utils
-   :no-members:
-```
-
-```{eval-rst}
-.. automodule:: brutus.core.grid_generation
-   :no-members:
 ```
