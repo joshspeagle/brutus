@@ -1,22 +1,18 @@
 # Core Module (`brutus.core`)
 
-The core module provides the fundamental stellar modeling infrastructure for brutus. It contains classes and functions for generating synthetic photometry from stellar evolution models, both for individual stars and stellar populations.
+`brutus.core` provides the stellar modeling and synthetic photometry infrastructure for individual stars and coeval stellar populations.
 
 **Key Components:**
 
-- **Individual Stars**: `EEPTracks` predicts stellar parameters along evolutionary tracks, `StarGrid` provides fast grid-based photometry
-- **Populations**: `Isochrone` models coeval stellar populations, `StellarPop` generates population photometry
-- **Neural Networks**: `FastNN` and `FastNNPredictor` compute bolometric corrections efficiently
-- **Grid Generation**: `GridGenerator` creates pre-computed model grids for large-scale fitting
+- **Individual Stars:** `EEPTracks` predicts physical stellar parameters along evolutionary tracks, `StarEvolTrack` generates synthetic SEDs along tracks on the fly, and `StarGrid` evaluates pre-computed SED grids.
+- **Populations:** `Isochrone` interpolates coeval stellar populations, and `StellarPop` synthesizes single and binary population photometry.
+- **Neural Networks:** `FastNN` and `FastNNPredictor` evaluate neural network bolometric corrections across photometric passbands.
+- **Grid Generation:** `GridGenerator` builds pre-computed HDF5 model grids with linear reddening vectors for `BruteForce`.
 
-**Design Philosophy:**
+**Architecture:**
 
-The module follows a clean separation of concerns:
-
-- **Parameter Prediction** (`EEPTracks`, `Isochrone`): Maps intrinsic stellar parameters (mass, age, metallicity) to observable parameters (temperature, luminosity, radius, surface gravity)
-- **Photometry Generation** (`StarEvolTrack`, `StellarPop`): Converts stellar parameters to synthetic photometry using neural network bolometric corrections and extinction modeling
-
-This separation allows flexible combinations: you can use different photometry generators with the same parameter predictors, or vice versa.
+- **Parameter Prediction (`EEPTracks`, `Isochrone`):** Maps intrinsic stellar labels (initial mass, evolutionary phase or age, metallicity, alpha enhancement) to physical observables (effective temperature, luminosity, radius, surface gravity).
+- **Photometry Synthesis (`StarEvolTrack`, `StellarPop`):** Converts predicted physical observables into reddened broadband magnitudes and fluxes via `FastNNPredictor`.
 
 **Typical Usage Patterns:**
 
@@ -151,44 +147,27 @@ seds, params1, params2 = pop.get_seds(
 
 ## Submodules
 
-For advanced users who need access to internal implementations:
-
 ```{eval-rst}
 .. automodule:: brutus.core.individual
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
+   :no-members:
 ```
 
 ```{eval-rst}
 .. automodule:: brutus.core.populations
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
+   :no-members:
 ```
 
 ```{eval-rst}
 .. automodule:: brutus.core.neural_nets
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
+   :no-members:
 ```
 
 ```{eval-rst}
 .. automodule:: brutus.core.sed_utils
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
+   :no-members:
 ```
 
 ```{eval-rst}
 .. automodule:: brutus.core.grid_generation
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
+   :no-members:
 ```

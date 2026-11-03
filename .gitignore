@@ -64,7 +64,7 @@ speed/*
 *.npy
 */calib/*
 
-# Claude Code files: track the shared rules, skills and settings only
+# Claude Code & Antigravity files: track the shared rules, skills and settings only
 .claude/*
 !.claude/rules/
 !.claude/skills/
@@ -72,6 +72,10 @@ speed/*
 .claude_code/
 claude_*.md
 claude_*.txt
+.agents/*
+!.agents/rules/
+!.agents/skills/
+!.agents/skills.json
 
 # Coverage reports
 coverage.xml

@@ -1,10 +1,10 @@
 # Understanding results
 
-`BruteForce.fit` writes one HDF5 file. This page describes each field, how to turn the draws into stellar properties, and how to check each fit.
+`BruteForce.fit` writes its posterior draws, maximum-likelihood parameters, and fit diagnostics to a single HDF5 file.
 
 ## The output file
 
-Each row is one star, in the order of the input. $N_d$ is the number of draws (`Ndraws`, 250 by default).
+Each row corresponds to one star in the order of the input catalog, where $N_d$ is the number of posterior draws (`Ndraws`, 250 by default):
 
 | Field | Shape | Content |
 |---|---|---|
@@ -17,14 +17,14 @@ Each row is one star, in the order of the input. $N_d$ is the number of draws (`
 | `ml_scale`, `ml_av`, `ml_rv` | $(N, N_d)$ | best-fit scale factor, $A_V$ and $R_V$ of each draw's model |
 | `ml_cov_sar` | $(N, N_d, 3, 3)$ | covariance of (scale, $A_V$, $R_V$) of each draw's model |
 | `obj_log_post` | $(N, N_d)$ | log posterior weight of each draw's model |
-| `obj_log_evid` | $(N,)$ | log-{term}`evidence`: the log of the sum of the weights of the models kept by the selection, each divided by its probability of being kept under `max_models` |
+| `obj_log_evid` | $(N,)$ | log-{term}`evidence` (log of the sum of the weights of the models kept by the selection, each divided by its inclusion probability under `max_models`) |
 | `obj_chi2min` | $(N,)$ | smallest $\chi^2$ over all models, with the parallax term if given |
 | `obj_Nbands` | $(N,)$ | bands used, plus 1 if a parallax was given |
 | `mc_ess` | $(N, N_d)$ | concentration of the Monte Carlo weights of each draw's model |
 
 The `samps_*` fields are written only with `save_dar_draws=True` (the default). {doc}`scientific_background` describes how the draws are made.
 
-The draws are already drawn from the posterior: give each one equal weight. Do not reweight them by `samps_logp` or `obj_log_post`. When more than `max_models` models pass the selection, `obj_log_post` is still each model's own log-posterior; the draws and `obj_log_evid` already include the correction for the models that were left out.
+Because the saved samples are already drawn in proportion to their posterior weights, treat them as equally weighted posterior draws without reweighting by `samps_logp` or `obj_log_post`. When more than `max_models` models pass the selection, `obj_log_post` still records each model's own log-posterior, while the resampled draws and `obj_log_evid` already include the inverse-probability correction for subsampling.
 
 With `running_io=True` (the default), each star is written as soon as it is fitted; rows not yet fitted hold `model_idx = -99`.
 
@@ -47,7 +47,7 @@ d16, d50, d84 = quantile(dist[0], [0.16, 0.5, 0.84])
 
 ## Stellar properties
 
-`model_idx` points into the grid. The labels of the drawn models give the posterior of each stellar property:
+Each entry in `model_idx` indexes a model in the grid, so indexing `labels` with `model_idx` yields the posterior draws of any stellar property:
 
 ```python
 from brutus.data import load_models
@@ -68,7 +68,7 @@ Load the grid with the same arguments as for the fit, so that the indices refer 
 
 ### Goodness of fit
 
-Do not use $\chi^2 / N_{\rm bands}$. Use the p-value of `obj_chi2min` with $N_{\rm bands} - 3$ degrees of freedom, since each fit has 3 free parameters (scale, $A_V$, $R_V$):
+Evaluate goodness of fit using the $\chi^2$ survival-function p-value of `obj_chi2min` with $N_{\rm bands} - 3$ degrees of freedom rather than $\chi^2 / N_{\rm bands}$, because each model fits 3 free parameters (scale, $A_V$, and $R_V$):
 
 ```python
 from scipy.stats import chi2
@@ -111,14 +111,14 @@ Here `models` must come from the grid loaded with the bands of the fit, in the s
 ```
 
 :::{div} figure-caption
-One star of the Orion example in {doc}`scientific_background`. Left: the draws of distance and extinction; about three quarters lie inside the range its parallax allows, with a tail to larger distance and less extinction. Right: model minus data in each band. The draws spread over about 0.1 mag, two to three times the data errors in some bands, so the photometry constrains this star's parameters only loosely.
+Posterior summary for one star from the Orion sightline in {doc}`scientific_background`. The left panel shows the posterior draws of distance and extinction, where about three quarters of the draws fall within the $1\sigma$ parallax interval and a secondary tail extends toward larger distances and lower extinction. The right panel shows the band-by-band residuals between predicted and observed magnitudes, spanning about 0.1 mag (two to three times the measurement errors in several bands).
 :::
 
 {func}`~brutus.plotting.posterior_predictive` plots the same comparison.
 
 ### Monte Carlo weights
 
-`mc_ess` is $1 / \sum_j w_j^2$ over the normalized Monte Carlo weights of a model. It is at most the number of Monte Carlo draws per model: `Nmc_prior` (50), or fewer when `mem_lim` reduces it. A value of 0 means no Monte Carlo draw of the model has nonzero weight, for example when every draw falls outside `avlim`, `rvlim` or the distance range. A value near 1 means one point carries the whole weight: the Gaussian around the best fit and the priors overlap poorly, and the weight of that model is noisy. The draws come in antithetic pairs, so `mc_ess` measures how concentrated the weights are, not a count of independent draws.
+`mc_ess` is $1 / \sum_j w_j^2$ over the normalized Monte Carlo weights of a model. It is at most the number of Monte Carlo draws per model (`Nmc_prior`, 50 by default, or fewer when `mem_lim` reduces it). A value of 0 means no Monte Carlo draw of the model has nonzero weight, for example when every draw falls outside `avlim`, `rvlim`, or the distance range. A value near 1 indicates that a single draw carries nearly all the weight because the local Gaussian approximation around the best fit and the position-dependent priors overlap poorly. Because the Monte Carlo draws come in antithetic pairs, `mc_ess` measures weight concentration rather than a count of independent draws.
 
 ### Parallax and prior
 

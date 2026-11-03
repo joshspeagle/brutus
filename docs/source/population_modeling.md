@@ -1,6 +1,6 @@
 # Star clusters
 
-The stars of a cluster share one age, one metallicity, one distance and, nearly, one extinction. brutus fits them together with one {term}`isochrone` {cite:p}`speagle2025`. It does not run a sampler for this: {func}`~brutus.analysis.isochrone_population_loglike` returns the log-likelihood of six cluster parameters, and you pass it to an optimizer or a sampler of your choice.
+Stars in a coeval cluster share a common age, metallicity, distance, and approximate foreground extinction. brutus models an entire cluster jointly along a single {term}`isochrone` {cite:p}`speagle2025` via {func}`~brutus.analysis.isochrone_population_loglike`, which evaluates the marginal log-likelihood of six population parameters so that you can pair it with an external optimizer or sampler.
 
 ```{raw} html
 :file: figures/cluster-cmd.svg
@@ -50,7 +50,7 @@ P_o(\hat F_i) = p_{\chi^2}\!\left( \chi^2_{\max}(k_i);\, k_i \right),
 \int_{\chi^2_{\max}}^\infty p_{\chi^2}(x; k_i)\, dx = 10^{-5}.
 $$
 
-A grid point whose $\chi^2$ is well above $\chi^2_{\max}$ describes the star worse than the field model does. With `dim_prior=False`, the field model is uniform over the observed range of fluxes in each band, widened by 3 errors (`sigma_clip`), and over the range of parallaxes. `outlier_model_func` replaces it with your own: it is called as `outlier_model_func(flux, flux_err, stellar_params=..., parallax=..., parallax_err=..., mask=...)` and returns the log-likelihood with shape `(Nstars,)` or `(Ngrid, Nstars)`.
+A grid point whose $\chi^2$ is well above $\chi^2_{\max}$ describes the star worse than the field model does. With `dim_prior=False`, the field model is uniform over the observed range of fluxes in each band, widened by 3 errors (`sigma_clip`), and over the range of parallaxes. To supply a custom field-star model, pass `outlier_model_func`, which is called as `outlier_model_func(flux, flux_err, stellar_params=..., parallax=..., parallax_err=..., mask=...)` and returns the log-likelihood with shape `(Nstars,)` or `(Ngrid, Nstars)`.
 
 **Mixture.** Each star is a member with prior probability
 
@@ -74,7 +74,7 @@ P(\hat F_i \mid \boldsymbol\theta) = \frac{\sum_{j} P(\hat F_i \mid m_j, q_j, \b
 \ln \mathcal{L}(\boldsymbol\theta) = \sum_i \ln P(\hat F_i \mid \boldsymbol\theta).
 $$
 
-The prior on mass is uniform, not an initial mass function. The normalization keeps the grid volume, which changes with $\boldsymbol\theta$, from biasing the parameters and the field fraction.
+The grid integration uses a flat prior in initial mass $m$ and secondary mass fraction $q$. The normalization keeps the grid volume, which changes with $\boldsymbol\theta$, from biasing the parameters and the field fraction.
 
 ## Binaries
 
@@ -140,7 +140,7 @@ A nested sampler such as [dynesty](https://dynesty.readthedocs.io) takes the sam
 | `lnl_total` | the same total $\ln \mathcal{L}$ | scalar |
 | `lnl_per_object` | $\ln P(\hat F_i \mid \boldsymbol\theta)$ per star | `(Nstars,)` |
 | `lnl_cluster`, `lnl_outlier`, `lnl_mixture` | the three terms at each grid point | `(Ngrid, Nstars)` |
-| `isochrone_grid` | the grid: photometry, masses, $q$ and the weights $\Delta m$, $\Delta q$ | |
+| `isochrone_grid` | dictionary containing model photometry, masses, $q$, and quadrature weights $\Delta m$, $\Delta q$ | |
 
 The stars with the lowest `lnl_per_object` fit the cluster worst.
 

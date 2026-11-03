@@ -1,10 +1,10 @@
 # Stellar models
 
-brutus turns the intrinsic parameters of a star into its stellar properties with the MIST v1.2 models {cite:p}`choi2016,dotter2016`, and its properties into photometry with a neural network. This page describes both steps. {doc}`grid_generation` describes the pre-computed grids built from them.
+brutus maps the intrinsic parameters of a star to its physical properties using the MIST v1.2 stellar evolution models {cite:p}`choi2016,dotter2016`, and maps those physical properties to broadband photometry using a neural network bolometric-correction emulator ({doc}`grid_generation` covers the pre-computed grids built from these components).
 
 ## Evolutionary tracks and EEP
 
-A MIST track follows one star of fixed initial mass and composition through its life. brutus indexes each track by the {term}`equivalent evolutionary point <EEP>`, not by age. Points with the same EEP are at the same phase on every track, so tracks of different masses can be interpolated at fixed EEP. Age follows from (initial mass, EEP, [Fe/H]). Along a track, age changes by very different amounts per step: a star spends most of its life on the main sequence, so the prior includes the time per unit of EEP ({doc}`scientific_background`).
+A MIST track follows a star of fixed initial mass and chemical composition through its evolution. brutus indexes each track by its {term}`equivalent evolutionary point <EEP>` because equal EEP values mark the same physical evolutionary stage across tracks of different masses, allowing smooth multi-dimensional interpolation at fixed EEP. Stellar age follows uniquely from $(M_{\rm init}, {\rm EEP}, {\rm [Fe/H]})$. Because a star spends most of its lifetime on the main sequence, physical age advances at very different rates per unit of EEP along a track, and the model prior weights each EEP step by $dt / d\,{\rm EEP}$ ({doc}`scientific_background`).
 
 The primary EEPs mark the same physical transition on every track {cite:p}`dotter2016`:
 
@@ -12,14 +12,14 @@ The primary EEPs mark the same physical transition on every track {cite:p}`dotte
 |---|---|
 | 1 | start of the pre-main sequence |
 | 202 | {term}`zero-age main sequence <ZAMS>` (ZAMS) |
-| 353 | intermediate-age main sequence: central hydrogen fraction 0.3 |
-| 454 | {term}`terminal-age main sequence <TAMS>` (TAMS): central hydrogen exhausted |
+| 353 | intermediate-age main sequence (central hydrogen fraction 0.3) |
+| 454 | {term}`terminal-age main sequence <TAMS>` (TAMS, central hydrogen exhausted) |
 | 605 | tip of the red giant branch |
 | 631 | zero-age core helium burning |
 | 707 | end of core helium burning |
 | 808 | start of the thermally pulsing asymptotic giant branch |
 
-The default grid spans EEP 202 to 808: from the ZAMS to the thermally pulsing AGB.
+The default grid spans EEP 202 to 808 (from the ZAMS to the thermally pulsing AGB).
 
 ```{raw} html
 :file: figures/hr-tracks.svg
@@ -43,7 +43,7 @@ brutus reads the MIST models in two forms:
 | Used for | individual stars and the model grids | star clusters ({doc}`population_modeling`) |
 | Data file | `fetch_tracks()` | `fetch_isos()` |
 
-`EEPTracks.get_predictions` takes `[mini, eep, feh, afe]` and returns the columns named in `tracks.predictions`: by default log age, log luminosity, log effective temperature, log surface gravity, the surface [Fe/H] and [α/Fe], and the age weight `agewt`.
+`EEPTracks.get_predictions` takes `[mini, eep, feh, afe]` and returns the columns named in `tracks.predictions` (by default log age, log luminosity, log effective temperature, log surface gravity, surface [Fe/H] and [α/Fe], and the age weight `agewt`).
 
 ### Empirical corrections
 

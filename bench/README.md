@@ -1,20 +1,19 @@
-# `bench/` — internal developer tooling (not part of the package)
+# `bench/`: internal developer tooling (not part of the package)
 
-> **This directory is for brutus developers, not users.** It is **not** part of
-> the installed `astro-brutus` package (excluded from both the wheel and the
-> sdist — see `MANIFEST.in`), is **not** imported by `brutus`, and is **not** run
-> in CI. Nothing here is a supported public API. End users should ignore it; the
+> **This directory is for brutus developers.** It is excluded from the
+> installed `astro-brutus` package (`MANIFEST.in`), is not imported by
+> `brutus`, and is not run in CI. Nothing here is a supported public API; the
 > user-facing summary of the performance work lives in `CHANGELOG.md`.
 
-## What this is
+## Purpose
 
-A benchmark + correctness-verification harness built for the `BruteForce`
-individual-star fitter performance pass (v1.1.1). Its job is to prove that
-performance changes to `loglike_grid` / `logpost_grid` / `_fit` either leave the
-saved results **bitwise-identical** or are **provably more accurate**, and to
-measure the speedups — all on the **real** MIST grid and **real** Orion data
-rather than toy inputs. `bench_populations.py` separately measures the
-isochrone population-fitting pipeline.
+This directory contains the benchmark and correctness-verification harness built
+for the `BruteForce` individual-star fitter performance pass (v1.1.1). It
+verifies that performance changes to `loglike_grid`, `logpost_grid`, and `_fit`
+either leave saved results **bitwise-identical** or are **provably more
+accurate**, and measures speedups on the full MIST grid and real Orion sightline
+data. `bench_populations.py` separately benchmarks the isochrone
+population-fitting pipeline.
 
 ## Prerequisites (why it's not in CI)
 
@@ -35,7 +34,7 @@ set `NUMBA_DISABLE_JIT=1`) so the real parallel codegen is exercised.
 | file | purpose |
 |------|---------|
 | `harness.py` | shared setup (loads grid + Orion data); per-object stage timings (`bench`); freeze/compare deterministic loglike outputs + posterior draws (`capture`/`compare`) |
-| `disteq.py` | distributional-equivalence tester — multi-seed posterior summaries vs the procedure's own Monte-Carlo scatter; defines the `COHORT` (Nsel = 4 … 50000-cap) |
+| `disteq.py` | distributional-equivalence tester: multi-seed posterior summaries vs the procedure's own Monte-Carlo scatter; defines the `COHORT` (Nsel = 4 … 50000-cap) |
 | `fullfit.py` | end-to-end `fit()` → HDF5, then bitwise-compare two runs (the strongest regression check; threads one RNG across objects) |
 | `mcvar.py` | direct measurement of MC-integration variance, antithetic vs plain |
 | `mcgold.py` | accuracy of antithetic vs plain against a high-`Nmc` gold standard |

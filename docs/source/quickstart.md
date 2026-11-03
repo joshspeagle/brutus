@@ -1,6 +1,6 @@
 # Quickstart
 
-This page fits stars from their photometry and parallaxes, then reads the distance, extinction, mass and fit quality from the results. It assumes you have {doc}`installed brutus <installation>` and downloaded the grid and the offsets.
+Fitting a catalog of stars with `brutus` takes four steps: loading a pre-computed model grid, converting observed magnitudes into linear flux densities, running {class}`~brutus.analysis.BruteForce` to evaluate the posterior across the grid, and reading the posterior draws and fit diagnostics from the output HDF5 file. Before running the code below, {doc}`install brutus and download the default grid and photometric offsets <installation>`.
 
 ## 1. Load the models
 
@@ -33,7 +33,7 @@ mask = np.isfinite(mag) & np.isfinite(mag_err)
 flux, flux_err = inv_magnitude(np.nan_to_num(mag), np.nan_to_num(mag_err, nan=1.0))
 ```
 
-brutus drops any band with an error above 0.25 mag (`merr_max`). The models and the data also differ by about 0.02 mag in optical bands and 0.03 mag in near-infrared bands ({doc}`photometric_offsets`). Add this systematic error in quadrature; without it, good fits of bright stars look poor:
+brutus drops any band with an error above 0.25 mag (`merr_max`). Because stellar models and survey calibrations still differ by about 0.02 mag in optical bands and 0.03 mag in near-infrared bands ({doc}`photometric_offsets`), add this systematic uncertainty in quadrature so that bright stars with small measurement errors do not receive artificially large $\chi^2$ values:
 
 ```python
 sys_mag = np.array([0.02] * 8 + [0.03] * 3)  # Gaia + Pan-STARRS, then 2MASS
@@ -44,11 +44,11 @@ You also need, per star:
 
 | Input | Shape | Units |
 |---|---|---|
-| `parallax`, `parallax_err` | `(Nstars,)` | mas (optional, but they break the distance-extinction degeneracy) |
+| `parallax`, `parallax_err` | `(Nstars,)` | mas (optional, breaks the distance-extinction degeneracy) |
 | `coords` | `(Nstars, 2)` | Galactic longitude and latitude, degrees |
-| `ids` | `(Nstars,)` | an integer or byte-string label for each star (h5py cannot save unicode strings) |
+| `ids` | `(Nstars,)` | integer or byte-string identifier per star (h5py does not store fixed-width Unicode strings) |
 
-A star needs at least 4 valid bands: the fit has 3 free parameters per model (distance, $A_V$ and $R_V$). With fewer, brutus warns; with none, it skips the star and writes it with `model_idx = -99`. Keep only the stars with enough bands:
+A star requires at least 4 valid bands because each model fits 3 free parameters (distance, $A_V$, and $R_V$) and needs at least 1 degree of freedom. When a star has between 1 and 3 valid bands, `brutus` issues a warning and fits it anyway; when a star has no valid bands, `brutus` skips the fit and records `model_idx = -99`. Filter the catalog to stars with at least 4 valid bands before fitting:
 
 ```python
 keep = (mask & (mag_err < 0.25)).sum(axis=1) >= 4
@@ -96,16 +96,16 @@ print(f"A_V = {np.median(av[0]):.2f} mag")
 print(f"initial mass = {np.median(labels['mini'][idx[0]]):.2f} Msun")
 ```
 
-Stellar properties come from the grid: index `labels` with the model of each draw.
+To obtain posterior draws of intrinsic stellar properties, index the grid's `labels` array with `model_idx` for each draw.
 
-Check the fit quality with the p-value of the best fit, not with `chi2 / nbands`:
+Evaluate goodness of fit using the $\chi^2$ survival-function p-value for $N_{\rm bands} - 3$ degrees of freedom rather than $\chi^2 / N_{\rm bands}$, because each model optimizes 3 free parameters:
 
 ```python
 pvalue = stats.chi2.sf(chi2, np.maximum(nbands - 3, 1))
 good = pvalue > 1e-3
 ```
 
-A p-value below $10^{-6}$ means no model matches the star: it may be a binary, a young star or a bad measurement. {doc}`understanding_results` describes every output and check.
+A p-value below $10^{-6}$ indicates that no single-star model in the grid matches the observations, which typically occurs for unresolved binaries, pre-main-sequence stars, or corrupted photometry. {doc}`understanding_results` describes every output field and diagnostic check.
 
 ## Next steps
 

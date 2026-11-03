@@ -1,6 +1,12 @@
 # Dust Module (`brutus.dust`)
 
-The dust module provides tools for working with 3D dust maps, including coordinate transformations and dust extinction queries.
+`brutus.dust` queries three-dimensional interstellar dust maps on multi-resolution HEALPix grids and maps sky coordinates to HEALPix pixels.
+
+**Key Components:**
+
+- **Dust Map Interface (`DustMap`):** Abstract base class supporting queries by `astropy.coordinates.SkyCoord` (`query`), Galactic coordinates (`query_gal`), or equatorial coordinates (`query_equ`).
+- **Bayestar 3D Dust Map (`Bayestar`):** Queries the {cite:t}`green2019` Bayestar19 dust map (`bayestar2019_v1.h5`) across the Pan-STARRS 1 footprint ($\delta > -30^\circ$), returning the distance grid (in kpc) and the mean and standard deviation of $A_V$ (in mag) along each sightline while applying per-pixel convergence and distance-reliability masks by default.
+- **Coordinate Lookup (`lb2pix`):** Converts Galactic $(\ell, b)$ coordinates in degrees to nested or ring HEALPix pixel indices.
 
 ```{eval-rst}
 .. currentmodule:: brutus.dust
@@ -30,20 +36,12 @@ The dust module provides tools for working with 3D dust maps, including coordina
 
 ## Submodules
 
-For advanced users who need access to internal implementations:
-
 ```{eval-rst}
 .. automodule:: brutus.dust.maps
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
+   :no-members:
 ```
 
 ```{eval-rst}
 .. automodule:: brutus.dust.extinction
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
+   :no-members:
 ```
