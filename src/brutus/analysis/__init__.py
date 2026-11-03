@@ -1,12 +1,11 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-brutus analysis module: Advanced analysis workflows and statistical methods.
+Fit individual stars, coeval star clusters, 3D line-of-sight dust, and offsets.
 
-This module contains functionality for complex analysis workflows including
-photometric offset computation, stellar parameter optimization, and
-statistical analysis tools.
+Provides grid-based Bayesian inference for individual stars (`BruteForce`),
+isochrone mixture-model likelihoods for stellar populations
+(`isochrone_population_loglike`), multi-cloud line-of-sight dust extinction
+models (`los_clouds_loglike_samples`, `los_clouds_priortransform`), and
+leave-one-out photometric offset calibration (`photometric_offsets`).
 """
 
 from .individual import BruteForce
@@ -17,8 +16,6 @@ from .los_dust import (
     los_clouds_loglike_samples,
     los_clouds_priortransform,
 )
-
-# Import analysis utilities
 from .offsets import PhotometricOffsetsConfig, photometric_offsets
 from .populations import (
     apply_isochrone_mixture_model,

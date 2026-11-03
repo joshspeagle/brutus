@@ -1,13 +1,11 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-Individual star analysis using grid-based Bayesian inference.
+Infer individual-star parameters, distances, and extinctions over a model grid.
 
-This module provides the BruteForce class for fitting stellar parameters,
-distances, and extinction using pre-computed model grids. It performs
-brute-force Bayesian inference over the entire grid to derive posterior
-distributions for stellar properties.
+`BruteForce` evaluates Bayesian posteriors over a `StarGrid` of pre-computed
+stellar models. For each model, it optimizes distance scale, :math:`A(V)`, and
+:math:`R(V)` by damped Gauss-Newton steps and integrates over the 3-D Gaussian
+uncertainty in ``(ln d, A(V), R(V))`` via antithetic Monte Carlo draws under
+Galactic structure, 3D dust-map, and parallax priors.
 
 The fitting procedure uses gradient-based optimization to find the maximum
 likelihood extinction and distance for each grid point, then computes
@@ -41,8 +39,8 @@ Basic usage with grid-based fitting:
 >>> # Initialize fitter
 >>> fitter = BruteForce(grid)
 >>>
->>> # Fit photometry with parallax
->>> results = fitter.fit(
+>>> # Fit photometry with parallax (saves results to 'results.h5')
+>>> results_file = fitter.fit(
 ...     phot_data, phot_err, phot_mask,
 ...     data_labels, save_file='results.h5',
 ...     parallax=parallax, parallax_err=parallax_err,
@@ -62,17 +60,12 @@ import numpy as np
 from numba import jit, prange
 from scipy.special import logsumexp
 
-# Import StarGrid and SED utilities
 from ..core import StarGrid
 from ..core.sed_utils import _get_seds, _model_array, get_seds
 from ..priors.astrometric import logp_parallax
 from ..priors.extinction import logp_extinction
 from ..priors.galactic import logp_galactic_structure
-
-# Import refactored prior functions
 from ..priors.stellar import logp_imf, logp_ps1_luminosity_function
-
-# Import utility functions
 from ..utils.math import AVLIM, LOG_ZERO, RVLIM
 from ..utils.math import inverse3 as _inverse3
 from ..utils.photometry import magnitude
@@ -250,9 +243,10 @@ def _optimize_fit_mag(
     In magnitudes a model is ``m0 + Av * (r0 + Rv * dr)`` plus a distance
     offset, so the fit is nearly linear. Each model takes Gauss-Newton steps
     in `(Av, Rv)` with the offset profiled out (`_bounded_step`). A step
-    that raises chi2 plus the prior penalties is retried with more
-    Levenberg-Marquardt damping: 1e-3 first, then ten times more each time. A
-    model stops when the predicted gain in log-posterior falls below `tol`,
+    that raises chi2 plus the prior penalties is retried with
+    Levenberg-Marquardt damping starting at 1e-3 and increasing by a factor of
+    10 on each rejection. A model stops when the predicted gain in log-posterior
+    falls below `tol`,
     when a step no longer moves it, when the damping exceeds `_MAX_DAMPING`,
     or after `_MAX_STEPS` steps.
 
@@ -613,10 +607,10 @@ def _parallax_gate(scales, icovs_sar, parallax, parallax_err):
     It is `_lnp_parallax_gate` with the model's ln(d) mean and marginal
     error from its (scale, A(V), R(V)) fit.
     """
-    # The marginal scale error, not the conditional one: distance and
-    # extinction both dim a star, so the scale-A(V) correlation reaches
-    # 0.95-0.998 for reddened stars, and the conditional error is then 3-16x
-    # too small. cov[0,0] follows from the cofactor identity
+    # Use the marginal scale error because distance and extinction both dim a
+    # star, driving the scale-A(V) correlation to 0.95-0.998 for reddened stars
+    # and making the conditional error 3-16x too small. cov[0,0] follows from
+    # the cofactor identity
     # cov[0,0] = (i11*i22 - i12^2) / det(icov). A degenerate matrix falls
     # back to the conditional error 1/sqrt(icov[0,0]). When icov[0,0] <= 0
     # the error is 1e10, and the model's term is then too small to pass.
@@ -666,12 +660,11 @@ def _inclusion_probabilities(weights, size):
 
 class BruteForce:
     """
-    Bayesian parameter estimation for individual stars using grid-based models.
+    Estimate stellar parameters, distances, and extinctions over a `StarGrid`.
 
-    This class performs brute-force fitting over a pre-computed stellar model
-    grid to estimate stellar parameters, distances, and extinction. It uses
-    the StarGrid infrastructure for model management and applies Bayesian
-    priors for robust inference.
+    Evaluates the likelihood of every model in ``star_grid`` by optimizing
+    ``(scale, A(V), R(V))`` per grid point and integrates the posterior over
+    distance and extinction uncertainty via Monte Carlo sampling.
 
     Parameters
     ----------
@@ -738,11 +731,11 @@ class BruteForce:
     >>> # Initialize fitter
     >>> fitter = BruteForce(grid)
     >>>
-    >>> # Fit data
-    >>> results = fitter.fit(
+    >>> # Fit data (writes posterior draws and summary metrics to 'results.h5')
+    >>> results_file = fitter.fit(
     ...     data, data_err, data_mask,
     ...     data_labels, save_file='results.h5',
-    ...     parallax=parallax_data,
+    ...     parallax=parallax_data, parallax_err=parallax_err,
     ...     data_coords=coordinates
     ... )
 
@@ -855,13 +848,19 @@ class BruteForce:
         Returns
         -------
         seds : numpy.ndarray of shape (Nmodels, Nbands)
-            Computed SEDs.
+            Computed SEDs at 1 kpc in apparent magnitudes (or maggies when
+            ``return_flux=True``).
 
         rvecs : numpy.ndarray of shape (Nmodels, Nbands)
-            Reddening vectors.
+            Reddening derivatives :math:`\partial m / \partial A(V)` in mag per
+            mag of :math:`A(V)` (or :math:`\partial F / \partial A(V)` in
+            maggies per mag when ``return_flux=True``).
 
         drvecs : numpy.ndarray of shape (Nmodels, Nbands)
-            Differential reddening vectors with respect to Rv.
+            Scaled differential reddening vectors
+            :math:`A(V)^{-1} \partial m / \partial R(V)` in mag per mag of
+            :math:`A(V)` (or :math:`A(V)^{-1} \partial F / \partial R(V)` in
+            maggies per mag when ``return_flux=True``).
 
         Raises
         ------
@@ -1052,13 +1051,13 @@ class BruteForce:
 
         Parameters
         ----------
-        data : `~numpy.ndarray` of shape `(Nfilt)`
-            Measured flux densities.
+        data : `~numpy.ndarray` of shape `(Nfilt,)`
+            Observed linear flux densities in maggies (``10**(-0.4 * mag)``).
 
-        data_err : `~numpy.ndarray` of shape `(Nfilt)`
-            Measurement errors.
+        data_err : `~numpy.ndarray` of shape `(Nfilt,)`
+            Flux density measurement errors in maggies.
 
-        data_mask : `~numpy.ndarray` of shape `(Nfilt)`
+        data_mask : `~numpy.ndarray` of shape `(Nfilt,)`
             Boolean mask of valid bands (or 0/1 values, converted to bool).
 
         indices : array-like, optional
@@ -1652,10 +1651,10 @@ class BruteForce:
         # BATCH SAMPLING in (ln d, Av, Rv) space.
         # Antithetic pairs (z, -z) reduce the variance of the MC prior integral
         # (and halve the Gaussian draws) while keeping the estimator unbiased.
-        # The brutus integrand is dominated along ln(d) by the galactic-density
-        # falloff and the +log(d) volume Jacobian, both monotone (odd) in the
-        # sampling direction -- exactly the regime where antithetic variates cut
-        # variance. Empirically this gives ~3-5x lower MC-integration std and
+        # The brutus integrand is dominated along ln(d) by the Galactic-density
+        # falloff and the +log(d) volume Jacobian, both monotone in the sampling
+        # direction where antithetic variates reduce variance. Empirically this
+        # gives ~3-5x lower MC-integration std and
         # lower finite-Nmc (Jensen) bias vs a high-Nmc reference. The only regime
         # where antithetic can slightly *increase* variance (never bias) is a
         # very precise parallax centered almost exactly on the photometric
@@ -1713,9 +1712,9 @@ class BruteForce:
 
             # Detect the default galactic-structure prior (bare or partial). For
             # it we pass the per-point feh/loga as plain float64 arrays, which
-            # is bitwise-identical to passing a structured `labels` array but
-            # avoids a numpy structured-dtype np.tile -- pathologically slow
-            # (~100x a float tile, ~200 ms at Nsel=50000). Casting before the
+            # is bitwise-identical to passing a structured `labels` array while
+            # avoiding a structured-dtype np.tile (~100x slower than a float64
+            # tile, ~200 ms at Nsel=50000). Casting before the
             # tile spares the prior a second full-size copy.
             gal_is_default = lngalprior is logp_galactic_structure or (
                 getattr(lngalprior, "func", None) is logp_galactic_structure
@@ -1879,30 +1878,33 @@ class BruteForce:
         Parameters
         ----------
         data : numpy.ndarray of shape (Ndata, Nfilt)
-            Observed flux densities for each object.
+            Observed linear flux densities in maggies (``10**(-0.4 * mag)``) for
+            each object.
 
         data_err : numpy.ndarray of shape (Ndata, Nfilt)
-            Associated errors on the flux densities.
+            Associated flux density errors in maggies.
 
         data_mask : numpy.ndarray of shape (Ndata, Nfilt)
             Boolean mask of valid measurements (or 0/1 values, converted to
             bool).
 
-        data_labels : numpy.ndarray of shape (Ndata, Nlabels)
-            Labels for each object to be stored in the output file.
+        data_labels : numpy.ndarray of shape (Ndata,) or (Ndata, Nlabels)
+            Identifier labels for each object stored in the ``labels`` dataset
+            of the output file.
 
         save_file : str
-            Path to the output HDF5 file. The '.h5' extension will be added
-            if not present.
+            Path to the output HDF5 file (``.h5`` is appended if absent).
 
         phot_offsets : numpy.ndarray of shape (Nfilt,), optional
-            Multiplicative photometric offsets applied to data and errors.
+            Dimensionless multiplicative photometric offsets applied to ``data``
+            and ``data_err``.
 
         parallax : numpy.ndarray of shape (Ndata,), optional
-            Parallax measurements in mas for each object.
+            Parallax measurements in milliarcseconds (mas) for each object.
 
         parallax_err : numpy.ndarray of shape (Ndata,), optional
-            Errors on parallax measurements. Required if parallax is provided.
+            Parallax measurement errors in mas. Required when ``parallax`` is
+            provided.
 
         Nmc_prior : int, optional
             Number of Monte Carlo samples for prior integration. Default is 50.
@@ -2524,10 +2526,9 @@ class BruteForce:
             dreds = np.zeros(Ndraws, dtype="float32")
             logwts = np.zeros(Ndraws, dtype="float32")
 
-            # Vectorized MC sample drawing using Gumbel-max trick.
-            # For each posterior draw, select one MC sample proportional
-            # to its weight — equivalent to rstate.choice(p=weights)
-            # but fully vectorized across all Ndraws at once.
+            # Vectorized MC sample drawing using the Gumbel-max trick. For each
+            # posterior draw, select one MC sample proportional to its weight,
+            # equivalent to rstate.choice(p=weights) vectorized across Ndraws.
             all_mc_logwts = lnp_mc[idxs_local]  # (Ndraws, Nmc)
             Nmc_actual = all_mc_logwts.shape[1]
             gumbel_noise = -np.log(

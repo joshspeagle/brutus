@@ -1,43 +1,34 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 r"""
-Photometric offset analysis for systematic calibration corrections.
+Compute multiplicative photometric zero-point offsets from posterior draws.
 
-This module provides robust photometric offset computation for correcting
-systematic differences between observed photometry and model predictions.
-The implementation uses bootstrap resampling for uncertainty estimation
-and supports optional Bayesian prior constraints.
-
-Photometric offsets are multiplicative corrections applied to observed fluxes
-to account for systematic calibration differences, photometric system
-transformations, or model systematics. The offsets are computed by analyzing
-model/data flux ratios across a sample of well-fit objects.
+`photometric_offsets` estimates per-band multiplicative flux corrections
+(model-to-observed flux ratios) across a sample of fitted stars using
+leave-one-out importance reweighting and bootstrap resampling, with optional
+Gaussian priors (`PhotometricOffsetsConfig`).
 
 See Also
 --------
-brutus.analysis.individual.BruteForce : Provides fitted parameters for offset computation
-brutus.utils.photometry.phot_loglike : Likelihood convention used for reweighting
-brutus.core.sed_utils.get_seds : Model SED generation
+brutus.analysis.individual.BruteForce : Fit individual stars to obtain posterior draws.
+brutus.utils.photometry.phot_loglike : Photometric likelihood convention.
+brutus.core.sed_utils.get_seds : Model SED evaluation.
 
 Notes
 -----
-The offset computation workflow:
+The offset computation proceeds in six steps:
 
-1. **Generate model SEDs** for all fitted objects and posterior samples
-2. **Scale by distance**: Apply inverse square law
-3. **Compute flux ratios**: model_flux / observed_flux for each band
-4. **Reweight samples**: For bands used in fitting, importance-reweight the
-   full-posterior draws to the leave-one-out posterior :math:`P(M|D_{-i})`
-   using :math:`w \propto L_{-i}/L_{\rm full}` to avoid circularity
-5. **Bootstrap sampling**: Resample objects and models to estimate median
-   offset and uncertainty
-6. **Apply priors** (optional): Incorporate Bayesian prior constraints
-
-The key innovation is reweighting step 4: the posterior draws provided as
-input target the full-data posterior, so weighting each draw by the
-likelihood ratio between the leave-one-out and full-data likelihoods yields
-unbiased offset estimates for bands that were used in the original fitting.
+1. **Generate model SEDs**: Evaluate reddened model fluxes for all fitted
+   objects and posterior draws.
+2. **Scale by distance**: Divide model fluxes at 1 kpc by :math:`d^2`.
+3. **Compute flux ratios**: Form :math:`F_{\rm model} / F_{\rm obs}` in each band.
+4. **Reweight draws**: For bands included in the fit, importance-reweight the
+   full-posterior draws :math:`P(M \mid D)` to the leave-one-out posterior
+   :math:`P(M \mid D_{-i})` using the likelihood ratio
+   :math:`w \propto L_{-i} / L_{\rm full}` so that the band being calibrated
+   does not pull its own offset toward unity.
+5. **Bootstrap medians**: Resample objects and draws to estimate the median
+   flux ratio and its uncertainty.
+6. **Combine with priors**: Optionally combine the bootstrap estimate with an
+   independent Gaussian prior in each band.
 
 Examples
 --------
@@ -48,9 +39,9 @@ Basic offset computation from BruteForce results:
 >>> from brutus.core import StarGrid
 >>> from brutus.analysis import BruteForce
 >>>
->>> # Fit photometry (assuming this has been done)
+>>> # Fit photometry (writes results to 'results.h5')
 >>> # fitter = BruteForce(grid)
->>> # results = fitter.fit(phot, err, mask, ...)
+>>> # results_file = fitter.fit(phot, err, mask, labels, save_file='results.h5', ...)
 >>>
 >>> # Extract fitted parameters
 >>> # models, idxs, avs, rvs, dists = extract_from_results(results)
@@ -97,10 +88,7 @@ _SED_CHUNK_ROWS = 500_000
 
 class PhotometricOffsetsConfig:
     """
-    Configuration class for photometric offsets computation.
-
-    This class encapsulates all configuration parameters and provides
-    sensible defaults with the ability to customize behavior.
+    Configure band-count thresholds and bootstrap settings for `photometric_offsets`.
 
     Parameters
     ----------
@@ -190,11 +178,11 @@ def _validate_inputs(
     dreds: np.ndarray,
     dists: np.ndarray,
 ) -> None:
-    """Validate input arrays for photometric_offsets.
+    """Validate input arrays for `photometric_offsets`.
 
-    Value checks apply only to observed (mask > 0) entries: the canonical
-    BruteForce input format uses NaN flux and zero/NaN error as placeholders
-    in unobserved bands, and those entries never enter the computation.
+    Value checks apply only to observed (``mask > 0``) entries because the
+    `BruteForce` input convention uses NaN flux and zero or NaN error as
+    placeholders in unobserved bands.
     """
     # Check basic types
     arrays = [phot, err, mask, models, idxs, reds, dreds, dists]
@@ -350,10 +338,10 @@ def _vectorized_bootstrap_median(
     """
     Bootstrap the weighted median ratio over objects and draws.
 
-    Each replicate resamples the objects with `obj_weights` and then one
-    draw per object by inverted-CDF sampling: the weight CDFs are computed
-    once, and each draw is a per-row ``np.searchsorted(cdf_row, u)``, at
-    O(n_objects * log n_samples) per replicate. This samples the same
+    Each replicate resamples the objects with ``obj_weights`` and draws one
+    sample per object via inverse-CDF lookup (`_inverse_cdf_draws`). Precomputing
+    the per-row weight CDFs once reduces each replicate to
+    ``O(n_objects * log n_samples)``. This samples the same
     distribution as per-object ``rng.choice(n_samples, p=w)`` calls, with a
     different random stream. A zero-weight sample is drawn only when ``u``
     is exactly 0 and the sample precedes every positive weight.
@@ -426,32 +414,34 @@ def photometric_offsets(
     Parameters
     ----------
     phot : np.ndarray of shape (n_objects, n_filters)
-        Observed flux densities for all objects. Entries in masked bands
-        may be non-finite placeholders; observed entries must be finite,
-        and non-positive observed fluxes are excluded per band.
+        Observed linear flux densities in maggies (``10**(-0.4 * mag)``) for all
+        objects. Entries in masked bands may be non-finite placeholders;
+        observed entries must be finite, and non-positive observed fluxes are
+        excluded per band.
 
     err : np.ndarray of shape (n_objects, n_filters)
-        Associated flux errors for all objects. Must be positive in
-        observed bands; masked entries are ignored.
+        Associated flux density errors in maggies for all objects. Must be
+        positive in observed bands; masked entries are ignored.
 
     mask : np.ndarray of shape (n_objects, n_filters)
         Binary mask (0/1, bool or numeric) indicating observed bands for
         each object.
 
-    models : np.ndarray of shape (n_models, n_filters, n_coeffs)
-        Magnitude polynomial coefficients for generating reddened photometry.
+    models : np.ndarray of shape (n_models, n_filters, 3)
+        Magnitude polynomial coefficients ``(m_0, R_0, dR/dR_V)`` at 1 kpc.
 
     idxs : np.ndarray of shape (n_objects, n_samples)
-        Model indices fit to each object.
+        Posterior-resampled grid model indices for each object.
 
     reds : np.ndarray of shape (n_objects, n_samples)
-        A(V) reddening values for each object and sample.
+        Posterior :math:`A(V)` extinction draws in magnitudes for each object.
 
     dreds : np.ndarray of shape (n_objects, n_samples)
-        R(V) reddening curve shape values for each object and sample.
+        Posterior :math:`R(V)` reddening parameter draws (dimensionless) for
+        each object.
 
     dists : np.ndarray of shape (n_objects, n_samples)
-        Distance values (kpc) for each object and sample.
+        Posterior distance draws in kiloparsecs (kpc) for each object.
 
     sel : np.ndarray of bool or 0/1, shape (n_objects), optional
         Selection of objects to use. Default uses all objects.
@@ -555,12 +545,13 @@ def photometric_offsets(
     6. **Uncertainty**: From bootstrap distribution (IQR or std)
     7. **Apply priors** (optional): Bayesian combination with prior
 
-    The reweighting in step 4 is critical: if a band was used in the original
-    fit, including it in offset computation would create a circular dependency.
-    The input draws target the full posterior :math:`P(M|D)`, so each draw is
-    weighted by the likelihood ratio :math:`L_{-i}/L_{\rm full}` (band i's
-    inverse likelihood, up to normalization); weighting by :math:`L_{-i}`
-    alone would only partially remove the circularity. With Gaussian
+    Reweighting in step 4 prevents circularity when calibrating a band that was
+    included in the original fit. Because the input draws target the full
+    posterior :math:`P(M \mid D)`, weighting each draw by the likelihood ratio
+    :math:`L_{-i} / L_{\rm full}` (the reciprocal of band :math:`i`'s
+    likelihood up to normalization) targets the leave-one-out posterior
+    :math:`P(M \mid D_{-i})`, whereas weighting by :math:`L_{-i}` alone would
+    only partially remove the dependence on band :math:`i`. With Gaussian
     likelihoods, :math:`\ln w = \chi^2_i / 2` up to a per-object
     constant, where :math:`\chi^2_i` is band i's chi-square. This holds
     for fits with and without `logl_dim_prior`, whose term is constant for
