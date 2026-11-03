@@ -1,11 +1,5 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-3D dust map implementations.
-
-This module provides classes for querying 3D dust maps, particularly the
-Bayestar maps from Green et al. (2019).
+Base class and Bayestar implementation for querying 3D dust extinction maps.
 """
 
 import warnings
@@ -112,14 +106,14 @@ class DustMap:
         dec : float or astropy.units.Quantity
             Declination in degrees.
         d : float or astropy.units.Quantity, optional
-            Distance from the Solar System in kpc. Not used: the query
-            returns the full distance profile. Accepted for API
-            compatibility.
+            Distance from the Solar System in kpc. Accepted for API
+            compatibility because the query always returns the full distance
+            profile.
         frame : str, optional
-            Coordinate frame. Options: 'icrs', 'fk4', 'fk5', 'fk4noeterms'.
-            Default is 'icrs'.
+            Coordinate frame (``'icrs'``, ``'fk4'``, ``'fk5'``, or
+            ``'fk4noeterms'``). Default is ``'icrs'``.
         **kwargs
-            Additional keyword arguments passed to query.
+            Additional keyword arguments passed to :meth:`query`.
 
         Returns
         -------
@@ -128,7 +122,7 @@ class DustMap:
         Raises
         ------
         ValueError
-            If frame is not one of the supported coordinate frames.
+            If ``frame`` is not one of the supported coordinate frames.
         """
         valid_frames = ["icrs", "fk4", "fk5", "fk4noeterms"]
 
@@ -137,13 +131,11 @@ class DustMap:
                 f"Frame '{frame}' not supported. Must be one of {valid_frames}."
             )
 
-        # Handle units
         if not isinstance(ra, units.Quantity):
             ra = ra * units.deg
         if not isinstance(dec, units.Quantity):
             dec = dec * units.deg
 
-        # Create coordinate object
         if d is None:
             coords = coordinates.SkyCoord(ra, dec, frame=frame)
         else:
@@ -242,15 +234,13 @@ class Bayestar(DustMap):
         names = set(self._pixel_info.dtype.names or ())
 
         if required <= names:
-            # DM -> distance (kpc): d = 10**(DM/5 - 2). A DM bound of -inf
-            # (min) or +inf (max) is a legitimate limiting value meaning "no
-            # cut on that side" and passes through 10** naturally (0 / inf).
-            # A NaN bound means the pixel has NO determined reliable range;
-            # it must mask the entire profile. NaN cannot be left in place:
-            # comparisons against NaN are always False, which would UNmask
-            # the pixel completely — the opposite of the conservative
-            # intent — so NaN mins become +inf and NaN maxes become -inf
-            # (every distance bin then fails the range test).
+            # Convert distance modulus to distance in kpc via d = 10**(DM/5 - 2).
+            # A DM bound of -inf (min) or +inf (max) means no cut on that side
+            # and maps to 0 or +inf. A NaN bound means the pixel has no
+            # determined reliable range and must mask the entire profile.
+            # Because comparisons against NaN evaluate to False and would leave
+            # the pixel unmasked, NaN minimums are mapped to +inf and NaN
+            # maximums to -inf so every distance bin fails the range test.
             with np.errstate(over="ignore"):
                 d_min = 10.0 ** (
                     self._pixel_info["DM_reliable_min"].astype(np.float64) / 5.0 - 2.0
@@ -357,46 +347,47 @@ class Bayestar(DustMap):
         Parameters
         ----------
         coords : astropy.coordinates.SkyCoord or array_like
-            Coordinates to query. Can be a (scalar or array) SkyCoord, a
-            single ``[l, b]`` pair in degrees, or an ``(Ncoords, 2)``
-            array of ``[l, b]`` pairs in degrees. A distance in a SkyCoord
-            is ignored: the full distance profile is returned.
+            Coordinates to query as a scalar or array ``SkyCoord``, a single
+            ``[l, b]`` pair in degrees of shape ``(2,)``, or an array of
+            ``[l, b]`` pairs in degrees of shape ``(Ncoords, 2)``. Any distance
+            attached to ``coords`` is ignored because the full distance profile
+            is returned.
         apply_reliability_mask : bool, optional
-            Whether to set extinction values flagged as unreliable by the
-            map (distance bins outside a pixel's reliable range, and
-            non-converged pixels) to NaN. If None (default), uses the
-            value set at construction (which defaults to True).
+            Whether to set extinction values in unreliable distance bins and
+            non-converged pixels to NaN. If None (default), uses the value set
+            at construction (default True).
 
         Returns
         -------
-        distances : ndarray
-            Distance grid points (kpc).
-        av_mean : ndarray
-            Mean A(V) extinction values along each line of sight. Shape is
-            ``(n_dist,)`` for a scalar SkyCoord or a single ``[l, b]``
-            pair, and ``(Ncoords, n_dist)`` for array input. The dtype is
-            the storage dtype of the file: float16 for
-            ``bayestar2019_v1.h5``, so cast to float64 before arithmetic
-            that needs more than about 3 significant digits.
-        av_std : ndarray
-            Standard deviation of A(V) extinction values (same shape and
-            dtype as ``av_mean``).
+        distances : numpy.ndarray
+            Distance grid points in kpc of shape ``(n_dist,)``.
+        av_mean : numpy.ndarray
+            Mean :math:`A(V)` extinction in magnitudes along each sightline,
+            with shape ``(n_dist,)`` for a single sightline or
+            ``(Ncoords, n_dist)`` for array input. Preserves the storage dtype
+            of the file (``float16`` for ``bayestar2019_v1.h5``), so cast to
+            ``float64`` before arithmetic requiring more than 3 significant
+            digits.
+        av_std : numpy.ndarray
+            Standard deviation of :math:`A(V)` in magnitudes, with the same
+            shape and dtype as ``av_mean``.
 
         Raises
         ------
         ValueError
-            If array `coords` does not have shape ``(2,)`` or
-            ``(Ncoords, 2)``. A ``(2, 2)`` array is read as two ``[l, b]``
-            pairs; pass separate longitudes and latitudes to `query_gal`.
+            If an array ``coords`` does not have shape ``(2,)`` or
+            ``(Ncoords, 2)``. A ``(2, 2)`` array is interpreted as two
+            ``[l, b]`` pairs; pass separate longitude and latitude arrays to
+            :meth:`query_gal`.
 
         Notes
         -----
-        For coordinates outside the map coverage, NaN values are returned.
-        With reliability masking active (the default), NaN is also
-        returned for distance bins outside a pixel's reliable
-        distance-modulus range and for pixels whose fits did not converge;
-        `~brutus.priors.extinction.logp_extinction` treats NaN as "no
-        coverage" and falls back to a uniform prior there.
+        Coordinates outside the map footprint return NaN. When reliability
+        masking is active (the default), distance bins outside a pixel's
+        reliable distance-modulus range and pixels whose fits did not converge
+        also return NaN. :func:`~brutus.priors.extinction.logp_extinction`
+        treats NaN bins as uninformative and falls back to the normalized
+        uniform prior over ``avlim``.
         """
         if apply_reliability_mask is None:
             apply_reliability_mask = self._apply_reliability_mask
@@ -426,18 +417,14 @@ class Bayestar(DustMap):
         # The indices are at least 1-D, so the indexing below copies the map.
         pix_idx = self._find_data_idx(l_deg, b_deg)
 
-        # Extract extinction data
         in_bounds = pix_idx != -1
         safe_idx = np.clip(pix_idx, 0, None)
         av_mean = self._av_mean[safe_idx]
         av_std = self._av_std[safe_idx]
 
-        # Set out-of-bounds values to NaN
         av_mean[~in_bounds] = np.nan
         av_std[~in_bounds] = np.nan
 
-        # Mask distance bins the map flags as unreliable: outside the
-        # per-pixel reliable distance range or in non-converged pixels.
         if apply_reliability_mask and self._converged is not None:
             dists = self._distances
             unreliable = (
@@ -459,6 +446,6 @@ class Bayestar(DustMap):
             av_mean = av_mean[0]
             av_std = av_std[0]
 
-        # Return a copy of the distance grid: handing out the live
-        # internal array would let caller mutation corrupt later queries.
+        # Return a copy of the distance grid because mutating the internal
+        # array would corrupt subsequent queries.
         return self._distances.copy(), av_mean, av_std

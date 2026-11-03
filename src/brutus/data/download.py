@@ -1,12 +1,5 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-Data downloading utilities for brutus.
-
-This module contains functions for downloading stellar evolution models,
-isochrones, dust maps, and other data files required by brutus.
-All downloads use the Pooch library for robust data management.
+Harvard Dataverse download utilities managed by Pooch.
 """
 
 import pathlib
@@ -138,40 +131,32 @@ def _fetch(name, symlink_dir):
     import os
     import shutil
 
-    # Hash verification can be skipped ONLY via an explicit brutus-specific
-    # opt-in. (Keying this off the generic `CI` variable — exported by GitHub
-    # Actions, GitLab, Travis, etc., including for downstream packages that
-    # merely depend on brutus — silently disabled integrity checking and kept
-    # corrupt cached files forever.)
+    # Skip SHA256 verification only when BRUTUS_SKIP_HASH_CHECK=1 is set
+    # explicitly, because keying off a generic CI variable would disable
+    # integrity checks for downstream packages running in CI.
     if os.environ.get("BRUTUS_SKIP_HASH_CHECK") == "1":
         cache_path = pathlib.Path(strato.path) / name
         if cache_path.exists():
-            # File exists in cache, use it directly without SHA verification
             size_mb = cache_path.stat().st_size / (1024 * 1024)
             print(
                 f"    Using cached {name} ({size_mb:.1f} MB) - skipping SHA verification"
             )
             fpath = cache_path
         else:
-            # File doesn't exist, download it
             print(f"    {name} not in cache - downloading...")
-            fpath = strato.fetch(name, progressbar=True)
-            fpath = pathlib.Path(fpath)
+            fpath = pathlib.Path(strato.fetch(name, progressbar=True))
     else:
-        # Normal behavior with SHA256 verification
-        fpath = strato.fetch(name, progressbar=True)
-        fpath = pathlib.Path(fpath)
+        fpath = pathlib.Path(strato.fetch(name, progressbar=True))
 
     target_path = pathlib.Path(symlink_dir).resolve() / name
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    # Remove a stale/broken symlink first: Path.exists() follows links and
-    # reports False for a dangling link, so a leftover broken link would make
-    # symlink_to() raise FileExistsError.
+    # Remove a dangling symlink first because Path.exists() returns False for
+    # broken links and symlink_to() would otherwise raise FileExistsError.
     if target_path.is_symlink() and not target_path.exists():
         target_path.unlink()
-    # A pre-existing regular file may be a truncated leftover from an
-    # interrupted copy: compare its size against the (hash-verified) cache
-    # copy and replace it on mismatch instead of returning it forever.
+    # Replace any pre-existing regular file whose size differs from the
+    # hash-verified cache copy (such as a truncated leftover from an
+    # interrupted copy).
     if target_path.exists() and not target_path.is_symlink():
         try:
             same_file = target_path.samefile(fpath)
@@ -183,11 +168,8 @@ def _fetch(name, symlink_dir):
         try:
             target_path.symlink_to(fpath)
         except OSError:
-            # Filesystems without symlink support (some Windows/network/
-            # container mounts) or insufficient privilege: fall back to a
-            # copy. Copy to a temp name and atomically rename so an
-            # interrupted copy can never leave a truncated file at the
-            # final path.
+            # Fall back to an atomic temp-file copy when the filesystem or
+            # privilege level does not support symlinks.
             tmp_path = target_path.with_name(f"{target_path.name}.tmp{os.getpid()}")
             try:
                 shutil.copy2(fpath, tmp_path)
@@ -313,8 +295,7 @@ def fetch_dustmaps(dustmap="bayestar19", *, target_dir="."):
 
 def fetch_grids(grid="mist_v9", *, target_dir="."):
     """
-    Downloads pre-computed stellar model grids (used for fast stellar
-    parameter inference and photometric fitting) to target directory.
+    Download pre-computed stellar model grids to the target directory.
 
     Parameters
     ----------
@@ -355,8 +336,7 @@ def fetch_grids(grid="mist_v9", *, target_dir="."):
 
 def fetch_offsets(grid="mist_v9", *, target_dir="."):
     """
-    Downloads photometric offset files (used to calibrate systematic
-    differences between observed and model photometry) to target directory.
+    Download empirical photometric offset files to the target directory.
 
     Parameters
     ----------
