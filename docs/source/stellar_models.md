@@ -1,25 +1,25 @@
-# Stellar models
+# Stellar Models
 
-brutus maps the intrinsic parameters of a star to its physical properties using the MIST v1.2 stellar evolution models {cite:p}`choi2016,dotter2016`, and maps those physical properties to broadband photometry using a neural network bolometric-correction emulator ({doc}`grid_generation` covers the pre-computed grids built from these components).
+`brutus` maps intrinsic stellar labels to physical stellar parameters using the MIST v1.2 stellar evolution library {cite:p}`choi2016,dotter2016`, and converts those physical parameters into reddened broadband photometry using a neural network bolometric-correction emulator ({doc}`grid_generation` describes how these components are pre-tabulated into model grids).
 
-## Evolutionary tracks and EEP
+## Evolutionary Tracks and Equivalent Evolutionary Points (EEP)
 
-A MIST track follows a star of fixed initial mass and chemical composition through its evolution. brutus indexes each track by its {term}`equivalent evolutionary point <EEP>` because equal EEP values mark the same physical evolutionary stage across tracks of different masses, allowing smooth multi-dimensional interpolation at fixed EEP. Stellar age follows uniquely from $(M_{\rm init}, {\rm EEP}, {\rm [Fe/H]})$. Because a star spends most of its lifetime on the main sequence, physical age advances at very different rates per unit of EEP along a track, and the model prior weights each EEP step by $dt / d\,{\rm EEP}$ ({doc}`scientific_background`).
+A stellar evolutionary track follows a star of fixed initial mass and chemical composition as it ages. Rather than indexing tracks directly by physical age, `brutus` parameterizes each track by its {term}`equivalent evolutionary point <EEP>` because equal EEP values correspond to the same physical evolutionary stage across stars of widely different masses, enabling smooth multi-dimensional interpolation at fixed EEP. Physical stellar age is then predicted uniquely as a function of $(M_{\rm init}, {\rm EEP}, {\rm [Fe/H]})$. Since a star spends the vast majority of its lifetime on the main sequence and traverses post-main-sequence phases rapidly, physical age advances at highly non-uniform rates per unit EEP, and the intrinsic model prior weights each EEP step by the evolutionary lifetime derivative $dt / d\,{\rm EEP}$ ({doc}`scientific_background`).
 
-The primary EEPs mark the same physical transition on every track {cite:p}`dotter2016`:
+Primary EEP values mark equivalent physical transitions across every evolutionary track {cite:p}`dotter2016`:
 
-| EEP | Phase |
+| EEP | Evolutionary Phase |
 |---|---|
-| 1 | start of the pre-main sequence |
-| 202 | {term}`zero-age main sequence <ZAMS>` (ZAMS) |
-| 353 | intermediate-age main sequence (central hydrogen fraction 0.3) |
-| 454 | {term}`terminal-age main sequence <TAMS>` (TAMS, central hydrogen exhausted) |
-| 605 | tip of the red giant branch |
-| 631 | zero-age core helium burning |
-| 707 | end of core helium burning |
-| 808 | start of the thermally pulsing asymptotic giant branch |
+| 1 | Pre-main-sequence birthline |
+| 202 | {term}`Zero-age main sequence <ZAMS>` (ZAMS; onset of stable core hydrogen burning) |
+| 353 | Intermediate-age main sequence (central hydrogen mass fraction $X_c = 0.3$) |
+| 454 | {term}`Terminal-age main sequence <TAMS>` (TAMS; core hydrogen exhaustion) |
+| 605 | Tip of the red giant branch (RGB tip; helium flash or ignition) |
+| 631 | Zero-age core helium burning (horizontal branch or red clump) |
+| 707 | Terminal-age core helium burning (core helium exhaustion) |
+| 808 | Onset of the thermally pulsing asymptotic giant branch (TP-AGB) |
 
-The default grid spans EEP 202 to 808 (from the ZAMS to the thermally pulsing AGB).
+The default `mist_v9` grid spans EEP 202 to 808, covering evolution from the zero-age main sequence through the onset of the thermally pulsing asymptotic giant branch.
 
 ```{raw} html
 :file: figures/hr-tracks.svg
@@ -27,27 +27,27 @@ The default grid spans EEP 202 to 808 (from the ZAMS to the thermally pulsing AG
 ```
 
 :::{div} figure-caption
-Tracks of the default grid at solar metallicity. The dots mark the primary EEPs from the ZAMS to the TP-AGB; on the 1 M☉ track they are labelled.
+This Hertzsprung-Russell diagram shows the MIST v1.2 evolutionary tracks in the default `brutus` grid at solar metallicity (${\rm [Fe/H]} = 0.00$) for initial masses between $0.6\,M_\odot$ and $2.0\,M_\odot$. Filled circles mark the primary EEP transitions from the ZAMS (EEP 202) to the TP-AGB (EEP 808), with phase labels shown along the $1.0\,M_\odot$ track.
 :::
 
-## Tracks and isochrones
+## Evolutionary Tracks vs. Isochrones
 
-brutus reads the MIST models in two forms:
+`brutus` provides interpolators for the MIST library in two complementary representations:
 
-| | Evolutionary tracks | Isochrones |
+| Property | Evolutionary Tracks | Isochrones |
 |---|---|---|
-| Fixed | initial mass, composition | age, composition |
-| Varies along it | EEP | initial mass |
-| Parameter classes | {class}`~brutus.core.EEPTracks` | {class}`~brutus.core.Isochrone` |
-| Photometry classes | {class}`~brutus.core.StarEvolTrack`, {class}`~brutus.core.GridGenerator` | {class}`~brutus.core.StellarPop` |
-| Used for | individual stars and the model grids | star clusters ({doc}`population_modeling`) |
-| Data file | `fetch_tracks()` | `fetch_isos()` |
+| Held fixed along curve | Initial mass, chemical composition | Stellar age, chemical composition |
+| Varies along curve | {term}`EEP` | Initial mass (parameterized by EEP) |
+| Parameter interpolator | {class}`~brutus.core.EEPTracks` | {class}`~brutus.core.Isochrone` |
+| Photometry generator | {class}`~brutus.core.StarEvolTrack`, {class}`~brutus.core.GridGenerator` | {class}`~brutus.core.StellarPop` |
+| Primary application | Individual field stars and pre-computed grids | Coeval star clusters ({doc}`population_modeling`) |
+| Data fetcher | `fetch_tracks()` | `fetch_isos()` |
 
-`EEPTracks.get_predictions` takes `[mini, eep, feh, afe]` and returns the columns named in `tracks.predictions` (by default log age, log luminosity, log effective temperature, log surface gravity, surface [Fe/H] and [α/Fe], and the age weight `agewt`).
+Calling `EEPTracks.get_predictions([mini, eep, feh, afe])` interpolates the track grid and returns the physical quantities listed in `tracks.predictions` (by default `loga`, `logl`, `logt`, `logg`, `feh_surf`, `afe_surf`, and the evolutionary lifetime weight `agewt`).
 
-### Empirical corrections
+### Empirical Low-Mass Radius and Temperature Corrections
 
-By default (`apply_corr=True`), brutus corrects the MIST temperatures and radii of main-sequence stars below 1 M☉, where the models are systematically offset from observations:
+Because standard 1D convective stellar models systematically overpredict effective temperatures and underpredict radii for low-mass main-sequence dwarfs ($M_{\rm init} < 1\,M_\odot$), `brutus` applies an empirical main-sequence calibration by default (`apply_corr=True`):
 
 $$
 \Delta \log_{10} T_{\rm eff} = f\, \log_{10}\!\left(1 + 0.09\,\Delta M\right),
@@ -57,36 +57,36 @@ $$
 f = \frac{e^{0.5\,{\rm [Fe/H]}}}{1 + e^{({\rm EEP} - 454)/30}},
 $$
 
-with $\Delta M = M_{\rm init} / M_\odot - 1$. The factor $f$ falls from about $e^{0.5\,{\rm [Fe/H]}}$ on the main sequence to 0 after the turnoff (EEP 454). `corr_params` sets the four coefficients (0.09, −0.09, 30, 0.5).
+where $\Delta M = M_{\rm init} / M_\odot - 1$. The logistic taper $f$ scales with metallicity as $e^{0.5\,{\rm [Fe/H]}}$ on the main sequence and decays smoothly to zero past the main-sequence turnoff (${\rm EEP} = 454$). The four calibration coefficients $(0.09, -0.09, 30, 0.5)$ can be customized via `corr_params`.
 
-## From stellar parameters to photometry
+## From Stellar Parameters to Broadband Photometry
 
-A neural network ({class}`~brutus.core.neural_nets.FastNNPredictor`, file `nn_c3k.h5` from `fetch_nns()`) predicts the bolometric correction ${\rm BC}_b$ in each band $b$ from the effective temperature, surface gravity, surface [Fe/H], [α/Fe], $A_V$ and $R_V$. The extinction is part of the network's input, so the reddened magnitude comes out directly:
+A three-layer neural network ({class}`~brutus.core.neural_nets.FastNNPredictor`, loaded from `nn_c3k.h5` via `fetch_nns()`) emulates the C3K stellar atmosphere grid to predict the reddened bolometric correction ${\rm BC}_b$ in each photometric band $b$ as a function of effective temperature, surface gravity, surface iron abundance, alpha enhancement, $A_V$, and $R_V$. Because interstellar extinction is evaluated directly inside the bolometric-correction network, the apparent magnitude at distance $d$ is
 
 $$
 m_b = -2.5 \log_{10} \frac{L}{L_\odot} + 4.74 - {\rm BC}_b\left(T_{\rm eff}, \log g, {\rm [Fe/H]}_{\rm surf}, {\rm [\alpha/Fe]}, A_V, R_V\right) + \mu(d),
 $$
 
-where 4.74 is the bolometric magnitude of the Sun and $\mu(d) = 5 \log_{10}(d / 10\,{\rm pc})$ is the {term}`distance modulus`. The network returns NaN outside the range it was trained on: $T_{\rm eff}$ from 2,500 to 50,000 K, $\log g$ from −1 to 5.5, [Fe/H] from −4 to +0.5, [α/Fe] from −0.2 to +0.6, $A_V$ from 0 to 6 and $R_V$ from 2 to 5.
+where $4.74$ is the solar bolometric magnitude and $\mu(d) = 5 \log_{10}(d / 10\,{\rm pc})$ is the {term}`distance modulus`. The emulator returns `NaN` for inputs outside its training domain: $T_{\rm eff} \in [2500, 50000]\,{\rm K}$, $\log g \in [-1.0, 5.5]$, ${\rm [Fe/H]} \in [-4.0, +0.5]$, ${\rm [\alpha/Fe]} \in [-0.2, +0.6]$, $A_V \in [0, 6]$, and $R_V \in [2, 5]$.
 
-A model grid does not call the network during a fit. It stores each model's magnitudes at 1 kpc and two {term}`reddening vectors <reddening vector>` fitted to the network's output ({doc}`grid_generation`).
+Pre-computed model grids (`StarGrid`) do not evaluate the neural network at fit time; instead, they store each model's unreddened magnitudes at $1\,{\rm kpc}$ together with two linear {term}`reddening vectors <reddening vector>` fitted to the network's predictions across $(A_V, R_V)$ ({doc}`grid_generation`).
 
-## Binaries
+## Unresolved Binary Systems
 
-`StarEvolTrack.get_seds` and `StellarPop.get_seds` can add an unresolved companion, whose flux is added to the primary's:
+Both `StarEvolTrack.get_seds` and `StellarPop.get_seds` can model an unresolved binary companion by summing the linear fluxes of a primary star of mass $M_1$ and a coeval secondary star of mass $M_2 = q\,M_1$ at the same metallicity and distance:
 
-- `StarEvolTrack.get_seds(smf=...)` sets the secondary mass fraction of one star.
-- `StellarPop.get_seds(binary_fraction=...)` sets the same mass ratio for every star of a population. Despite its name, it is a mass ratio, not a fraction of stars that are binaries.
+- `StarEvolTrack.get_seds(smf=q)` specifies the secondary mass fraction $q = M_2 / M_1 \in [0, 1]$ for an individual star.
+- `StellarPop.get_seds(binary_fraction=q)` evaluates the isochrone at a fixed secondary mass ratio $q$ across the population (note that in `StellarPop.get_seds`, `binary_fraction` denotes the mass ratio $q = M_2 / M_1$ rather than the fraction of cluster stars in binary systems).
 
-Companions are added only to primaries with EEP up to `eep_binary_max` (480 by default). The default grid has no binaries ({doc}`grid_generation`).
+Secondary companions are added only for primaries with EEP up to `eep_binary_max` ($480$ by default, just past the main-sequence turnoff). The default `mist_v9` grid contains only single stars ($q = 0$; see {doc}`grid_generation`).
 
 (available-filters)=
 
-## Available filters
+## Supported Photometric Passbands
 
-The network and the default grid cover 49 bands. `brutus.data.filters` holds each survey's list (for example `filters.gaia` or `filters.tmass`), and `filters.FILTERS` holds all of them.
+The bolometric-correction neural network and the default `mist_v9` grid include 49 photometric passbands across 13 optical and infrared surveys. Survey-specific filter lists are available in `brutus.data.filters` (for example, `filters.gaia` or `filters.tmass`), and `filters.FILTERS` contains the full list of 49 passbands:
 
-| Survey | List | Bands |
+| Survey | Filter List | Passbands |
 |---|---|---|
 | Gaia | `gaia` | `Gaia_G_MAW`, `Gaia_BP_MAWf`, `Gaia_RP_MAW` |
 | SDSS | `sdss` | `SDSS_u`, `SDSS_g`, `SDSS_r`, `SDSS_i`, `SDSS_z` |
@@ -102,9 +102,9 @@ The network and the default grid cover 49 bands. `brutus.data.filters` holds eac
 | Kepler | `kepler` | `Kepler_D51`, `Kepler_Kp` |
 | TESS | `tess` | `TESS` |
 
-## Limitations
+## Model Scope and Limitations
 
-- **Rotation**: the default models and grid do not rotate. `fetch_isos(iso="MIST_1.2_vvcrit0.4")` gives isochrones with rotation for population work.
-- **Composition**: the default grid is solar-scaled ([α/Fe] = 0).
-- **Stellar types**: the models do not include white dwarfs, brown dwarfs or binary evolution (mass transfer, mergers).
-- **Model systematics**: the empirical corrections reduce, but do not remove, the offsets of low-mass stars. {doc}`photometric_offsets` describes the per-band corrections that remain.
+- **Stellar rotation:** The default evolutionary tracks and pre-computed grids use non-rotating MIST v1.2 models ($v / v_{\rm crit} = 0.0$). Rotating isochrones ($v / v_{\rm crit} = 0.4$) can be downloaded for population modeling via `fetch_isos(iso="MIST_1.2_vvcrit0.4")`.
+- **Alpha-element abundances:** The shipped MIST model files are solar-scaled (${\rm [\alpha/Fe]} = 0.0$).
+- **Exotic and compact objects:** White dwarfs, brown dwarfs ($M_{\rm init} < 0.08\,M_\odot$), and interacting binaries undergoing mass transfer or common-envelope evolution are not included in the MIST grid.
+- **Residual photometric systematics:** While the empirical low-mass radius and temperature corrections reduce color-magnitude offsets on the lower main sequence, per-band zero-point residuals of a few hundredths of a magnitude remain and are calibrated via {doc}`photometric_offsets`.

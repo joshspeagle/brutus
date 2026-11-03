@@ -1,6 +1,6 @@
-# How brutus works
+# Scientific Background
 
-brutus infers the distance, extinction, and intrinsic properties of a star from its photometry and optional parallax {cite:p}`speagle2025` by evaluating every model in a pre-computed stellar grid, integrating the continuous priors over distance and reddening for each model, and assembling the posterior as a weighted mixture across the grid.
+`brutus` infers the distance, dust extinction, and intrinsic physical properties of a star from its broadband photometry and optional astrometric parallax {cite:p}`speagle2025`. Rather than exploring the multimodal stellar parameter space with iterative Markov chain Monte Carlo (MCMC) chains, `brutus` evaluates every template in a pre-computed stellar grid, integrates the continuous priors over distance and reddening for each viable model via importance sampling, and assembles the joint posterior as a weighted mixture across the grid.
 
 ```{raw} html
 :file: figures/pipeline.svg
@@ -8,41 +8,41 @@ brutus infers the distance, extinction, and intrinsic properties of a star from 
 ```
 
 :::{div} figure-caption
-The four stages of a `BruteForce` fit, detailed in [The fit in four steps](#the-fit-in-four-steps).
+The four stages of a `BruteForce` fit proceed from optimizing distance scale and dust extinction across every model in the stellar grid (Stage 1) to pruning low-weight templates (Stage 2), integrating Galactic structure, dust-map, and parallax priors via antithetic Monte Carlo sampling in $(\ln d, A_V, R_V)$ (Stage 3), and resampling equally weighted draws from the combined posterior mixture (Stage 4).
 :::
 
-## The forward model
+## The Forward Model
 
-A model star has intrinsic parameters $\theta$ that determine its spectral energy distribution ({term}`SED`), and extrinsic parameters $\phi$ that determine how its flux is attenuated and scaled along the line of sight:
+A model star is parameterized by intrinsic stellar labels $\theta$ that determine its unreddened spectral energy distribution ({term}`SED`), together with extrinsic parameters $\phi$ that govern how its flux is attenuated by interstellar dust and diluted by distance along the line of sight:
 
-| | Parameter | Meaning |
+| Group | Parameter | Physical Meaning |
 |---|---|---|
-| $\theta$ | $M_{\rm init}$ | {term}`initial mass`, in $M_\odot$ |
-| | EEP | {term}`equivalent evolutionary point <EEP>` (position along the evolutionary track) |
-| | [Fe/H] | {term}`metallicity` |
-| $\phi$ | $d$ | distance |
-| | $A_V$ | {term}`extinction` in the V band, in mag |
-| | $R_V$ | shape of the extinction curve |
+| $\theta$ | $M_{\rm init}$ | {term}`Initial mass <initial mass>` at birth, in $M_\odot$ |
+| | EEP | {term}`Equivalent evolutionary point <EEP>` along the stellar evolutionary track |
+| | [Fe/H] | Initial {term}`metallicity` in dex relative to solar |
+| $\phi$ | $d$ | Heliocentric distance in kpc |
+| | $A_V$ | Visual {term}`extinction` in the $V$ band, in magnitudes |
+| | $R_V$ | Total-to-selective extinction ratio characterizing the shape of the dust curve |
 
-Stellar age is determined uniquely by $(M_{\rm init}, {\rm EEP}, {\rm [Fe/H]})$ rather than varied as an independent grid axis ({doc}`stellar_models`).
+Stellar age is determined uniquely by the triplet $(M_{\rm init}, {\rm EEP}, {\rm [Fe/H]})$ rather than varied as an independent grid axis ({doc}`stellar_models`).
 
-Each grid model stores its magnitudes $M_b(\theta)$ in every band $b$ at a distance of 1 kpc, and two {term}`reddening vectors <reddening vector>` $R_b(\theta)$ and $R'_b(\theta)$. The predicted flux in band $b$ is
+Each grid model stores its unreddened magnitudes $M_b(\theta)$ in every photometric passband $b$ at a reference distance of $1\,{\rm kpc}$, alongside two linear {term}`reddening vectors <reddening vector>` $R_b(\theta)$ and $R'_b(\theta)$. The predicted linear flux density in band $b$ is
 
 $$
 F_b(\theta, \phi) = s \; 10^{-0.4\,\left[ M_b(\theta) + A_V \left( R_b(\theta) + R_V\, R'_b(\theta) \right) \right]},
 \qquad s = \left( \frac{1\,{\rm kpc}}{d} \right)^2 ,
 $$
 
-where $s$ is the {term}`scale factor`. Distance dims all bands by the same factor; dust dims blue bands more than red ones. The extinction curve follows {cite:t}`fitzpatrick2009`, with $R_V$ as its shape parameter.
+where $s$ is the inverse-square {term}`scale factor`. Increasing the distance $d$ dims all passbands uniformly through $s$, whereas interstellar dust ($A_V > 0$) attenuates shorter wavelengths more strongly than longer wavelengths following the {cite:t}`fitzpatrick2009` extinction curve parameterized by $R_V$.
 
 ```{raw} html
 :file: figures/forward-model.svg
 :class: figure-svg
 ```
 
-## The likelihood
+## The Photometric and Astrometric Likelihood
 
-brutus compares fluxes, not magnitudes, because flux errors are close to Gaussian and magnitude errors are not. For the observed fluxes $\hat F_b$ with errors $\sigma_b$, over the $N_b$ valid bands,
+Because photon-counting and background-subtraction uncertainties are approximately Gaussian in linear flux density whereas magnitude uncertainties become skewed at low signal-to-noise ratios, `brutus` evaluates the photometric likelihood directly in flux space. Given observed fluxes $\hat F_b$ with measurement uncertainties $\sigma_b$ across $N_b$ valid bands, the photometric log-likelihood is
 
 $$
 \chi^2(\theta, \phi) = \sum_{b=1}^{N_b} \frac{\left( \hat F_b - F_b(\theta, \phi) \right)^2}{\sigma_b^2},
@@ -50,69 +50,65 @@ $$
 \ln \mathcal{L}_{\rm phot} = -\tfrac{1}{2}\,\chi^2 + \text{normalization}.
 $$
 
-The normalization holds the Gaussian terms in $\sigma_b$ and, by default, a term in the number of bands (`logl_dim_prior`), so that stars with different numbers of bands are weighted consistently.
+The normalization constant includes the Gaussian prefactors $-\frac{1}{2}\sum_b \ln(2\pi\sigma_b^2)$ and, by default (`logl_dim_prior=True`), a dimensional degrees-of-freedom penalty so that objects observed in different numbers of bands are weighted consistently.
 
-A parallax $\hat\varpi \pm \sigma_\varpi$, in mas, adds a Gaussian term in $\varpi = 1/d$ with $d$ in kpc:
+When an astrometric parallax measurement $\hat\varpi \pm \sigma_\varpi$ (in mas) is available, it contributes an independent Gaussian likelihood term in $\varpi = 1/d$ (with $d$ in kpc):
 
 $$
 -2 \ln \mathcal{L}_\varpi(d) = \frac{\left( \hat\varpi - 1/d \right)^2}{\sigma_\varpi^2} + {\rm const}.
 $$
 
-A fit requires at least 4 valid bands because each model optimizes 3 free parameters ($s$, $A_V$, and $R_V$).
+Constrained optimization requires at least 4 valid photometric bands because each grid model fits 3 continuous extrinsic parameters ($s$, $A_V$, and $R_V$).
 
-## The priors
+## Astrophysical Priors
 
-The model prior depends only on the grid model; the position-dependent priors depend on where the star is; the $R_V$ prior is the same for all stars.
+The joint prior $\pi(\theta, \phi)$ factors into an intrinsic model prior that depends only on the grid node $\theta$, a position-dependent prior over distance and extinction along sightline $(\ell, b)$, and an extinction-curve prior on $R_V$ ({doc}`priors`):
 
 $$
 \pi(\theta, \phi) = \underbrace{\pi_{\rm IMF}(M_{\rm init}) \; \frac{dt}{d\,{\rm EEP}} \; \Delta V(\theta)}_{\text{model prior}} \;\times\; \underbrace{\pi_{\rm gal}(d, \theta \mid \ell, b) \; \pi_{\rm dust}(A_V \mid d, \ell, b)}_{\text{position-dependent priors}} \;\times\; \pi(R_V)
 $$
 
-- **Initial mass function**: the {cite:t}`kroupa2001` {term}`IMF`.
-- **Age weight** $dt/d\,{\rm EEP}$: the time a star spends per unit of EEP. It turns a prior uniform in EEP into one uniform in age.
-- **Grid volume** $\Delta V$: the spacing of the grid in each parameter, so that a sum over models approximates an integral. The default grid steps EEP by 6 on the main sequence and by 2 after it.
-- **Galactic structure** $\pi_{\rm gal}$: the density of a thin disk, a thick disk and a halo along the sightline $(\ell, b)$, each with its own metallicity distribution and an age distribution set by that metallicity.
-- **Dust map** $\pi_{\rm dust}$: the {term}`Bayestar` 3D dust map {cite:p}`green2019`, if given, with 0.2 mag of scatter added to the map's own spread. Where the map has no reliable value, this prior is uniform in $A_V$.
-- **Extinction curve** $\pi(R_V)$: Gaussian with mean 3.32 and standard deviation 0.18 {cite:p}`schlafly2016`. It enters the fit of each model in step 1, and so the Gaussian that step 3 draws from.
+- **Initial mass function ($\pi_{\rm IMF}$):** Weights initial stellar masses according to the {cite:t}`kroupa2001` broken power-law {term}`IMF`.
+- **Evolutionary lifetime weight ($dt/d\,{\rm EEP}$):** Weights each model by the physical time a star spends per unit of EEP, transforming a grid uniform in EEP into a prior uniform in stellar age.
+- **Grid volume element ($\Delta V$):** Multiplies by the local coordinate spacing of the grid axes so that summing over discrete grid nodes approximates a continuous integral over stellar parameters (the default grid steps EEP by 6 on the main sequence and by 2 in post-main-sequence phases).
+- **Galactic structure ($\pi_{\rm gal}$):** Models the 3D stellar number density, metallicity distribution, and age distribution along sightline $(\ell, b)$ as a superposition of a thin disk, a thick disk, and a stellar halo.
+- **3D dust map ($\pi_{\rm dust}$):** Evaluates a truncated Gaussian prior on $A_V$ at distance $d$ from the {term}`Bayestar` 3D dust map {cite:p}`green2019` (when provided), adding a $0.2\,{\rm mag}$ systematic scatter floor in quadrature to the map's statistical uncertainty and falling back to a normalized uniform prior over `avlim` where the map is masked.
+- **Extinction curve shape ($\pi(R_V)$):** Applies a truncated Gaussian prior with mean $3.32$ and standard deviation $0.18$ {cite:p}`schlafly2016` during the per-model Gauss-Newton optimization in Step 1, which shapes the local Gaussian proposal distribution sampled in Step 3.
 
-{doc}`priors` gives each prior's equation, defaults and function.
+## The Inference Pipeline in Four Steps
 
-## The fit in four steps
+**1. Optimize extrinsic parameters across the grid.** For every grid model, `brutus` solves for the extrinsic parameters $(s, A_V, R_V)$ that maximize $\mathcal{L}_{\rm phot}\,\pi(R_V)$ via two-stage Gauss-Newton iteration. It first solves the linear least-squares problem in magnitudes across all grid models, and then refines the fit in linear flux space for models whose magnitude-space likelihood (including the parallax likelihood evaluated at the magnitude-space best-fit scale $s$) lies within `logl_initthresh` ($10^{-6}$ by default) of the global maximum, while models below that threshold retain their magnitude-space fit without refinement. At convergence, `brutus` records the best-fit parameters and their $3 \times 3$ Fisher information matrix, which defines a local Gaussian proposal distribution around the maximum-likelihood point.
 
-**1. Fit every model.** For each grid model, brutus finds the $(s, A_V, R_V)$ that maximize $\mathcal{L}_{\rm phot}\,\pi(R_V)$ by Gauss-Newton iteration, first in magnitudes across the full grid and then in fluxes for the models whose magnitude-space fit lies near the best. It also computes their 3×3 Fisher matrix, which defines a local Gaussian approximation around the maximum-likelihood point.
+**2. Prune low-weight models.** Each model receives an initial selection weight proportional to $\mathcal{L}_{\rm phot}\,\pi_{\rm model}$. When a parallax measurement is provided, this weight is multiplied by the parallax likelihood marginalized over the model's local Gaussian distribution in $\ln d$, $\int \mathcal{N}(\ln d)\,\mathcal{N}(\varpi \mid 1/d,\,\sigma_\varpi)\,d\ln d$ (where the variance in $\ln d$ accounts for marginalization over $A_V$ and $R_V$), evaluated via five-node adaptive Gauss-Hermite quadrature centered on the integrand peak. `brutus` retains models whose selection weight lies within `wt_thresh` ($10^{-3}$ by default) of the maximum. If more than `max_models` (50,000 by default) survive, `brutus` subsamples approximately 50,000 models using systematic random sampling with inclusion probability $p_i = \min(1, c\,w_i)$ proportional to weight $w_i$, and divides the surviving models' final posterior weights in Step 4 by $p_i$ so that the marginal likelihood and posterior draws remain statistically unbiased.
 
-**2. Keep the good fits.** Each model receives the weight $\mathcal{L}_{\rm phot}\,\pi_{\rm model}$. When a parallax is provided, the weight is multiplied by the parallax likelihood averaged over the model's Gaussian in $\ln d$, $\int \mathcal{N}(\ln d)\,\mathcal{N}(\varpi \mid 1/d,\,\sigma_\varpi)\,d\ln d$, whose width is the uncertainty of $\ln d$ after marginalizing over $A_V$ and $R_V$. A five-node adaptive Gauss-Hermite rule, centred on the peak of the integrand, evaluates this integral for every model. brutus retains models whose weight is within a factor $10^{-3}$ of the best (`wt_thresh`). If more than 50,000 remain (`max_models`), it subsamples about 50,000 models using systematic random sampling where model $i$ is kept with probability $p_i = \min(1, c\,w_i)$ proportional to $w_i$, and divides its posterior weight in step 4 by $p_i$ so that the evidence and posterior draws remain unbiased.
-
-**3. Integrate the priors.** For each kept model $i$, brutus draws $N_{\rm mc} = 50$ points from its Gaussian in $(\ln d, A_V, R_V)$, in antithetic pairs $(z, -z)$. Each point $j$ is weighted by the priors that depend on position and by the exact parallax likelihood. The model's posterior weight is the average:
+**3. Integrate position-dependent priors via importance sampling.** For each retained model $i$, `brutus` draws $N_{\rm mc} = 50$ samples from its local Gaussian proposal in $(\ln d, A_V, R_V)$ using antithetic pairs $(z, -z)$ to reduce variance. Evaluating the 3D Galactic structure prior, the 3D dust prior, and the exact parallax likelihood at each sample $j$ yields the marginalized posterior weight of model $i$:
 
 $$
 w_i \;\propto\; \mathcal{L}_{{\rm phot},i}\, \pi_{{\rm model},i} \; \frac{1}{N_{\rm mc}} \sum_{j=1}^{N_{\rm mc}} \pi_{\rm gal}(d_{ij}, \theta_i)\; \pi_{\rm dust}(A_{V,ij} \mid d_{ij})\; \mathcal{L}_\varpi(d_{ij})\; d_{ij}.
 $$
 
-The factor $d_{ij}$ is the Jacobian of sampling in $\ln d$. Sampling in $s$ instead would bias distances by a factor $d^{-3}$.
+The Jacobian factor $d_{ij}$ arises because the local Gaussian proposal is sampled in $\ln d$ while the astrophysical priors are defined per unit physical distance $d$ (sampling directly in scale $s$ without this transformation would bias distances by $d^{-3}$). Across the pipeline, the parallax measurement screens models during the magnitude-space pre-filter in Step 1 (`logl_initthresh`), guides model pruning via the Gauss-Hermite marginalized integral in Step 2, and sets the final posterior weights through the exact point-by-point evaluation $\mathcal{L}_\varpi(d_{ij})$ in Step 3.
 
-The parallax is used three times. During step 1, models whose magnitude-space fit, with the parallax added at the best-fit $s$, is more than a factor $10^6$ worse than the best (`logl_initthresh`) keep that fit and are not refined. The averaged term in step 2 then decides which models are kept. Only the exact term here sets the weights.
+**4. Resample the joint posterior.** Finally, `brutus` draws `Ndraws` (250 by default) grid models in proportion to their inverse-probability-corrected posterior weights $w_i / p_i$, and for each selected model draws a continuous sample $(d, A_V, R_V)$ in proportion to its internal Monte Carlo importance weights.
 
-**4. Draw the posterior.** brutus draws 250 models (`Ndraws`) in proportion to the posterior weight $w_i$ of step 3, divided by $p_i$ for the models kept by `max_models`, and for each one draws a point $(d, A_V, R_V)$ from its weighted Monte Carlo points. These are the saved posterior draws.
+## Breaking the Distance-Extinction Degeneracy with Parallax
 
-## Why the parallax matters
-
-Dust reddens a star as well as dimming it, so the colours measure the dust, but only as well as they measure the star's temperature. A hotter star behind more dust has nearly the same colours as a cooler star behind less. On the main sequence the hotter star is also more luminous, so it lies farther away. Photometry alone therefore allows a nearer, less reddened star or a farther, more reddened one. A parallax limits the distance directly, and the posterior is where the two agree.
+Because interstellar dust both dims and reddens starlight, broadband colors constrain dust extinction only to the extent that the star's intrinsic effective temperature is known. Photometrically, a hotter main-sequence star behind a thicker dust column produces nearly the same broadband colors as a cooler, less luminous main-sequence star behind less dust located at a smaller distance. Broadband photometry alone therefore leaves a banana-shaped degeneracy between nearer, weakly reddened solutions and farther, heavily reddened solutions. An astrometric parallax constrains the distance directly, isolating the intersection of the photometric locus and the parallax band.
 
 ```{raw} html
 :file: figures/degeneracy.svg
 :class: figure-svg
 ```
 
-Without a parallax, the Galactic and dust priors set where along this degeneracy the posterior lies.
+When no parallax measurement is available (or when its signal-to-noise ratio is low), the 3D Galactic structure and dust-map priors determine how probability mass is distributed along this photometric degeneracy.
 
-## What brutus returns
+## Posterior Outputs
 
-For each star, the output file holds the posterior draws of distance, $A_V$ and $R_V$, the grid model of each draw (from which mass, age, temperature and the other properties follow), and fit diagnostics: the best $\chi^2$, the number of bands, and the log-{term}`evidence`. {doc}`understanding_results` describes each field.
+For every fitted star, the output HDF5 file stores the resampled posterior draws of distance, $A_V$, and $R_V$, the corresponding grid model indices `model_idx` (from which mass, age, effective temperature, and surface gravity follow immediately), and fit diagnostics including the minimum $\chi^2$, the number of valid bands, the effective Monte Carlo sample size, and the log-{term}`evidence` ({doc}`understanding_results`).
 
-## An example: a sightline towards Orion
+## Example Sightline Toward Orion
 
-The tutorials include 207 stars in a small field towards Orion ($\ell = 209.1°$, $b = -19.9°$) with Pan-STARRS and 2MASS photometry and Gaia parallaxes. Fitted with the default grid and priors, the well-fitting stars trace the dust column along the sightline. Extinction remains low out to about 0.4 kpc and rises to 2 to 5 mag beyond 0.5 kpc behind the Orion molecular cloud.
+The tutorial dataset includes 207 stars in a field toward the Orion molecular cloud ($\ell = 209.1^\circ$, $b = -19.9^\circ$) observed with Pan-STARRS optical photometry, 2MASS near-infrared photometry, and Gaia parallaxes. Even when fitted without an external 3D dust-map prior, the individual stellar posteriors trace the dust column along the sightline, where extinction remains low out to roughly $0.4\,{\rm kpc}$ and rises to $2\text{--}5\,{\rm mag}$ beyond $0.5\,{\rm kpc}$ behind the Orion molecular cloud wall.
 
 ```{raw} html
 :file: figures/orion-sightline.svg
@@ -120,16 +116,16 @@ The tutorials include 207 stars in a small field towards Orion ($\ell = 209.1°$
 ```
 
 :::{div} figure-caption
-Distance and extinction of the stars with p-value above $10^{-3}$ ({doc}`understanding_results`) and median distance below 2.5 kpc, without a dust-map prior. Each star contributes 25 posterior draws and its median.
+This figure shows the posterior distance and $V$-band extinction ($A_V$) estimates for the 92 well-fitted stars ($\chi^2$ p-value $> 10^{-3}$ and median distance $< 2.5\,{\rm kpc}$; {doc}`understanding_results`) toward Orion ($\ell = 209.1^\circ, b = -19.9^\circ$) fitted without a 3D dust-map prior, plotting 25 posterior draws (amber points) and the posterior median (red circles) for each star.
 :::
 
-Fitting a dust profile to many such posteriors is how brutus maps dust in 3D; tutorial 7 shows it.
+Combining these individual stellar $(d, A_V)$ posteriors along a line of sight allows `brutus` to fit parametric 3D dust-cloud profiles via {func}`~brutus.analysis.los_clouds_loglike_samples` ({doc}`Tutorial 7 <tutorials/tutorial_07_dust_mapping>`).
 
-## Assumptions
+## Model Assumptions and Caveats
 
-- **Single stars.** The default grid has no unresolved binaries. A binary looks too bright, so its distance comes out too small.
-- **Non-rotating, solar-scaled MIST models** {cite:p}`choi2016,dotter2016`. Fast rotators and chemically peculiar stars are not modelled.
-- **One extinction curve family**, with $R_V$ free within its prior.
-- **Systematic differences between models and data** remain at the level of a few hundredths of a magnitude per band. {doc}`photometric_offsets` describes the corrections and how to add their uncertainties to the errors.
+- **Single-star templates:** Because the default `mist_v9` grid contains only single stars, an unresolved binary has higher apparent flux than a single star of the same color and is placed at a systematically smaller photometric distance.
+- **Non-rotating, solar-scaled MIST tracks:** The default grid is built from non-rotating MIST v1.2 models {cite:p}`choi2016,dotter2016` with solar-scaled alpha abundances (${\rm [\alpha/Fe]} = 0$), and therefore does not capture rapid rotation or chemically peculiar atmospheres.
+- **Single-family extinction law:** Dust attenuation is modeled by a single {cite:t}`fitzpatrick2009` extinction curve family parameterized by $R_V$.
+- **Residual calibration systematics:** Synthetic bolometric corrections and survey zero points retain systematic offsets at the level of $0.02\text{--}0.03\,{\rm mag}$ per band ({doc}`photometric_offsets` details the empirical zero-point corrections and quadrature error floors).
 
-For faint stars without a parallax, the result depends on the priors. Check how the result changes with them for your science case.
+For faint stars lacking precise parallaxes, posterior inferences can depend sensitively on the adopted Galactic and dust priors; comparing fits under default and flat priors ({doc}`priors`) quantifies this prior sensitivity for a given science sample.
