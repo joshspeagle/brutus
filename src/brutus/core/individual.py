@@ -1,62 +1,33 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-Individual stellar modeling and synthetic photometry generation.
+Model individual stars and generate synthetic photometry from evolutionary tracks.
 
-This module provides classes for modeling individual stars using MIST
-(MESA Isochrones and Stellar Tracks) evolutionary tracks and generating
-synthetic photometry with neural network-based bolometric corrections.
-
-The module follows a clean separation of concerns:
-- EEPTracks: Stellar parameter predictions for individual stars
-- StarEvolTrack: SED/photometry generation for individual stars
-
-This design mirrors the stellar population modeling pattern:
-- Isochrone: Stellar parameter predictions for populations
-- StellarPop: SED/photometry generation for populations
+`EEPTracks` interpolates MIST (MESA Isochrones and Stellar Tracks; Choi et al.
+2016; Dotter 2016) evolutionary tracks to predict stellar parameters from
+initial mass, equivalent evolutionary point (EEP), metallicity, and alpha
+enhancement. `StarEvolTrack` combines an `EEPTracks` instance with neural
+network bolometric corrections (`FastNNPredictor`) to synthesize single- and
+binary-star spectral energy distributions (SEDs). `StarGrid` interpolates
+pre-computed model grids directly.
 
 Examples
 --------
-Basic individual star modeling:
+Predict stellar parameters and synthetic photometry for a single star:
 
 >>> from brutus.core.individual import EEPTracks, StarEvolTrack
->>>
->>> # Create tracks for parameter predictions
 >>> tracks = EEPTracks()
 >>> params = tracks.get_predictions([1.0, 350, 0.0, 0.0])  # mini, eep, feh, afe
->>>
->>> # Create star track for photometry
 >>> star_track = StarEvolTrack(tracks=tracks)
 >>> sed, params, params2 = star_track.get_seds(
->>>     mini=1.0, eep=350, feh=0.0, afe=0.0,
->>>     av=0.1, dist=1000.0
->>> )
+...     mini=1.0, eep=350, feh=0.0, afe=0.0,
+...     av=0.1, dist=1000.0
+... )
 
-Advanced usage with binary stars:
+Model an unresolved binary system with secondary mass fraction ``smf=0.7``:
 
->>> # Model binary system with mass ratio 0.7
 >>> sed, params, params2 = star_track.get_seds(
->>>     mini=1.2, eep=400, feh=-0.2, afe=0.0,
->>>     smf=0.7, av=0.15, dist=1500.0
->>> )
-
-Notes
------
-This design provides several advantages:
-
-1. **Separation of Concerns**: Parameter prediction vs. photometry synthesis
-2. **Consistency**: Mirrors the stellar population modeling pattern
-3. **Flexibility**: Can use different SED generators with same tracks
-4. **Generality**: EEPTracks name allows for future non-MIST implementations
-5. **Maintainability**: Cleaner, more focused class responsibilities
-
-The StarEvolTrack class uses dependency injection, accepting an EEPTracks
-instance rather than inheriting from it. This makes the code more modular
-and allows for different track implementations.
-
-This implementation is based on the MIST stellar evolution framework
-(Choi et al. 2016; Dotter 2016).
+...     mini=1.2, eep=400, feh=-0.2, afe=0.0,
+...     smf=0.7, av=0.15, dist=1500.0
+... )
 
 References
 ----------
@@ -79,14 +50,8 @@ from scipy.interpolate import RegularGridInterpolator
 from scipy.optimize import minimize
 
 from ..data.download import _find_data_file
-
-# Import filter definitions
 from ..data.filters import FILTERS
-
-# Import utilities
 from ..utils.photometry import add_mag
-
-# Import neural network predictor
 from .neural_nets import FastNNPredictor
 
 __all__ = ["EEPTracks", "StarEvolTrack", "StarGrid"]
@@ -98,8 +63,8 @@ __all__ = ["EEPTracks", "StarEvolTrack", "StarGrid"]
 _EEPTRACKS_CACHE_VERSION = 3
 
 # Cached attributes. The interpolator and its padded axes are rebuilt from
-# `gridpoints` and the unpadded `ygrid` on load: pickling them would store a
-# padded single-afe grid at twice the size.
+# `gridpoints` and the unpadded `ygrid` on load because pickling them would
+# store a padded single-afe grid at twice the size.
 _EEPTRACKS_CACHE_ATTRS = (
     "labels",
     "predictions",
@@ -171,18 +136,12 @@ def _mass_corrections(mini, eep, feh, corr_params=None):
 
 class EEPTracks:
     """
-    Stellar parameter predictions for individual stars using evolutionary tracks.
+    Interpolate stellar parameters along MIST evolutionary tracks.
 
-    This class provides interpolation of stellar parameters along evolutionary
-    tracks as a function of initial mass, equivalent evolutionary point (EEP),
-    metallicity, and alpha enhancement. It focuses solely on stellar parameter
-    prediction without photometry generation.
-
-    The class name "EEPTracks" is intentionally general to allow for future
-    implementations beyond MIST, while the current implementation uses MIST
-    (MESA Isochrones and Stellar Tracks) evolutionary models.
-
-    For photometry generation, use StarEvolTrack with this class.
+    Predicts stellar parameters as a function of initial mass (``mini``),
+    equivalent evolutionary point (``eep``), initial metallicity (``feh``), and
+    initial alpha enhancement (``afe``). Pass an instance to `StarEvolTrack`
+    to synthesize photometry.
 
     Parameters
     ----------
@@ -268,7 +227,6 @@ class EEPTracks:
         use_cache=True,
     ):
 
-        # Define input parameter labels
         labels = ["mini", "eep", "feh", "afe"]
         known = [name for name in rename if name not in labels]
         unknown = [p for p in predictions if p not in known]
@@ -279,12 +237,10 @@ class EEPTracks:
                 f"'logl', 'logt' and 'logg'; got {list(predictions)}."
             )
 
-        # Initialize values
         self.labels = list(np.array(labels))
         self.predictions = list(np.array(predictions))
         self.ndim, self.npred = len(self.labels), len(self.predictions)
 
-        # Set label references for fast indexing
         self.mini_idx = np.where(np.array(self.labels) == "mini")[0][0]
         self.eep_idx = np.where(np.array(self.labels) == "eep")[0][0]
         self.feh_idx = np.where(np.array(self.labels) == "feh")[0][0]
@@ -352,26 +308,21 @@ class EEPTracks:
                         f"Cache loading failed ({e}), loading from original file...\n"
                     )
 
-        # Load from original file
         if verbose:
             sys.stderr.write(f"Loading evolutionary tracks from {mistfile}...\n")
 
-        # Load and process track data
         with h5py.File(self.mistfile, "r") as misth5:
             self._make_lib(misth5, verbose=verbose)
         self._lib_as_grid()
 
-        # Construct age weights if requested
         self._ageidx = self.predictions.index("loga")
         if ageweight:
             self._add_age_weights(verbose=verbose)
 
-        # Build interpolation grid
         self._build_interpolator()
 
-        # Free construction-only intermediates: nothing reads them after
-        # the interpolator exists, and retaining them roughly doubles the
-        # memory footprint.
+        # Free construction-only intermediates because nothing reads them after
+        # the interpolator exists and retaining them roughly doubles memory.
         for attr in ("libparams", "output", "X"):
             if hasattr(self, attr):
                 delattr(self, attr)
@@ -638,42 +589,45 @@ class EEPTracks:
         )
 
     def get_predictions(self, labels, apply_corr=True, corr_params=None):
-        """
+        r"""
         Generate stellar parameter predictions for given input parameters.
 
         Parameters
         ----------
         labels : array-like of shape (4,) or (Nobj, 4)
-            Input parameters [mini, eep, feh, afe] where:
-            - mini: Initial mass in solar masses
-            - eep: Equivalent evolutionary point
-            - feh: Metallicity [Fe/H] in logarithmic solar units
-            - afe: Alpha enhancement [alpha/Fe] in logarithmic solar units
+            Input parameters ``[mini, eep, feh, afe]``:
+            - ``mini``: initial mass in solar masses (:math:`M_\odot`).
+            - ``eep``: equivalent evolutionary point (dimensionless).
+            - ``feh``: initial metallicity ``[Fe/H]`` in dex.
+            - ``afe``: initial alpha enhancement ``[alpha/Fe]`` in dex.
 
         apply_corr : bool, optional
-            Whether to apply empirical corrections. Default is True.
+            Whether to apply low-mass empirical corrections. Default is ``True``.
 
-        corr_params : tuple, optional
-            Correction parameters (dtdm, drdm, msto_smooth, feh_scale).
+        corr_params : tuple of 4 floats, optional
+            Correction parameters ``(dtdm, drdm, msto_smooth, feh_scale)``.
 
         Returns
         -------
         preds : numpy.ndarray of shape (Npred,) or (Nobj, Npred)
-            Predicted stellar parameters in the order specified by
-            `self.predictions` attribute.
+            Predicted stellar parameters in the order listed in
+            ``self.predictions`` (``loga`` in log10(yr), ``logl`` in
+            log10(:math:`L_\odot`), ``logt`` in log10(K), ``logg`` in
+            log10(cm/s^2), ``feh_surf`` and ``afe_surf`` in dex, ``mass`` in
+            :math:`M_\odot`, ``logr`` in log10(:math:`R_\odot`), and ``agewt``
+            in yr per EEP).
 
         See Also
         --------
-        get_corrections : Computes empirical corrections applied when apply_corr=True
-        StarEvolTrack.get_seds : Uses these predictions to generate photometry
+        get_corrections : Compute empirical corrections when ``apply_corr=True``.
+        StarEvolTrack.get_seds : Generate synthetic photometry from track predictions.
 
         Notes
         -----
-        When ``apply_corr=True`` the empirical corrections are applied as
-        ``logt += dlogt``, ``logl += 2*dlogr``, ``logg -= 2*dlogr``. This is
-        an effective map calibrated as-is; see `get_corrections` for why the
-        luminosity shift intentionally omits the Stefan-Boltzmann ``4*dlogt``
-        term.
+        When ``apply_corr=True``, the empirical corrections shift ``logt`` by
+        ``dlogt``, ``logl`` by ``+2 * dlogr``, and ``logg`` by ``-2 * dlogr``.
+        See `get_corrections` for why the luminosity shift omits the
+        Stefan-Boltzmann ``4 * dlogt`` term.
 
         Examples
         --------
@@ -700,11 +654,11 @@ class EEPTracks:
         else:
             raise ValueError("Input `labels` must be 1-D or 2-D array.")
 
-        # Apply empirical corrections if requested
         if apply_corr:
             corrs = self.get_corrections(labels, corr_params=corr_params)
-            # NOTE: logl gets +2*dlogr only (no +4*dlogt): an effective map
-            # calibrated as-is -- see get_corrections Notes before changing.
+            # logl gets +2*dlogr only (without +4*dlogt) because the correction
+            # parameters were calibrated against this effective map; see
+            # get_corrections Notes.
             if ndim == 1:
                 dlogt, dlogr = corrs
                 preds[self.logt_idx] += dlogt
@@ -769,22 +723,16 @@ class EEPTracks:
             \Delta \log R = f_{\rm EEP} \cdot f_{\rm [Fe/H]} \cdot \log(1 + \Delta M \cdot \alpha_R)
 
         where :math:`\Delta M = M_{\rm ini} - 1.0` and the EEP factor smoothly
-        transitions from 1 (main sequence) to 0 (post-turnoff): the empirical
-        low-mass corrections apply on the main sequence and are switched off
-        after the main-sequence turnoff (EEP 454).
+        transitions from 1 on the main sequence to 0 after the main-sequence
+        turnoff (EEP 454). Corrections are zero for stars with
+        :math:`M_{\rm ini} \geq 1.0\,M_\odot`.
 
-        Corrections are set to zero for stars with :math:`M_{\rm ini} \geq 1.0 M_\odot`.
-
-        The corrections are applied by `get_predictions` as an *effective*,
-        calibrated-as-is map: the temperature shift is ``dlogt``, while the
-        luminosity/gravity shifts are ``+2*dlogr``/``-2*dlogr``. The
-        luminosity shift deliberately omits the ``4*dlogt`` term that strict
-        Stefan-Boltzmann consistency (:math:`L = 4\pi R^2 \sigma T^4`) would
-        require, so the corrected (logl, logt, logg) do not describe a
-        perfectly self-consistent star. The default `corr_params` were
-        calibrated against data in exactly this form (inherited from the
-        original brutus v0.8 implementation), so do not "fix" the propagation
-        without recalibrating them.
+        `get_predictions` applies these corrections as an effective calibrated
+        map, shifting ``logt`` by ``dlogt``, ``logl`` by ``+2 * dlogr``, and
+        ``logg`` by ``-2 * dlogr``. The luminosity shift omits the ``4 * dlogt``
+        term from the Stefan-Boltzmann law (:math:`L = 4\pi R^2 \sigma T^4`)
+        because the default ``corr_params`` were calibrated against observations
+        using this parameterization.
         """
         labels = np.array(labels)
         ndim = labels.ndim
@@ -806,18 +754,11 @@ class EEPTracks:
 
 class StarEvolTrack:
     """
-    Synthetic photometry generation for individual stars.
+    Synthesize individual-star photometry from evolutionary tracks.
 
-    This class generates synthetic SEDs and photometry for individual stars
-    using neural network-based bolometric corrections. It provides modeling
-    of binary stars, dust extinction, and observational effects.
-
-    This class mirrors StellarPop but for individual stars:
-    - StarEvolTrack: Individual star photometry
-    - StellarPop: Stellar population photometry
-
-    The class uses dependency injection, accepting an EEPTracks instance for
-    stellar parameter predictions rather than inheriting from it.
+    Combines stellar parameter predictions from an `EEPTracks` instance with
+    neural network bolometric corrections (`FastNNPredictor`) to compute
+    reddened apparent magnitudes for single and unresolved binary stars.
 
     Parameters
     ----------
@@ -927,78 +868,83 @@ class StarEvolTrack:
         Parameters
         ----------
         mini : float, optional
-            Initial stellar mass in solar masses. Default is 1.0.
+            Initial stellar mass in solar masses (:math:`M_\odot`). Default is 1.0.
 
         eep : float, optional
-            Equivalent evolutionary point. Default is 350.
+            Equivalent evolutionary point (dimensionless). Default is 350.
 
         feh : float, optional
-            Metallicity [Fe/H]. Default is 0.0.
+            Initial metallicity ``[Fe/H]`` in dex. Default is 0.0.
 
         afe : float, optional
-            Alpha enhancement [α/Fe]. Default is 0.0.
+            Initial alpha enhancement ``[alpha/Fe]`` in dex. Default is 0.0.
 
         av : float, optional
-            V-band extinction A(V). Default is 0.0.
+            V-band extinction :math:`A(V)` in magnitudes. Default is 0.0.
 
         rv : float, optional
-            Extinction law parameter R(V). Default is 3.3.
+            Total-to-selective extinction ratio :math:`R(V)` (dimensionless).
+            Default is 3.3.
 
         smf : float, optional
-            Secondary mass fraction for binary. Default is 0.0 (single star).
+            Secondary-to-primary initial mass ratio :math:`q = M_2 / M_1` in
+            ``[0, 1]``. Default is 0.0 (single star).
 
         dist : float, optional
-            Distance in parsecs. Default is 1000.0.
+            Distance in parsecs (pc). Default is 1000.0.
 
         loga_max : float, optional
-            Maximum log(age) for SED computation. Default is 10.15.
+            Maximum ``log10(age / yr)`` for SED evaluation. Default is 10.15.
 
         eep2 : float, optional
-            EEP of secondary component for binaries.
+            Secondary component EEP. If ``None``, solved by matching the
+            primary's age.
 
         mini_bound : float, optional
-            Minimum mass for SED computation. Default is 0.08.
+            Minimum initial mass in :math:`M_\odot` for SED evaluation.
+            Default is 0.08.
 
         eep_binary_max : float, optional
-            Maximum EEP for binary modeling. Default is 480.0.
+            Maximum primary EEP for binary modeling. Default is 480.0.
 
         apply_corr : bool, optional
-            Apply empirical corrections. Default is True.
+            Whether to apply low-mass empirical corrections. Default is ``True``.
 
-        corr_params : tuple, optional
-            Correction parameters.
+        corr_params : tuple of 4 floats, optional
+            Empirical correction parameters ``(dtdm, drdm, msto_smooth, feh_scale)``.
 
         return_eep2 : bool, optional
-            Return secondary EEP. Default is False.
+            Whether to return the secondary EEP ``eep2``. Default is ``False``.
 
         return_dict : bool, optional
-            Return parameters as dictionary. Default is True.
+            Whether to return ``params`` and ``params2`` as dictionaries
+            keyed by ``tracks.predictions`` (``True``) or 1-D arrays of shape
+            ``(Npred,)`` (``False``). Default is ``True``.
 
         combine_seds : bool, optional
-            If True and binary star requested, combine primary and secondary SEDs by adding
-            their magnitudes. If False, separate SEDs for primary and secondary will be returned.
-            Default is True.
+            If ``True``, sum the primary and secondary fluxes into a single SED.
+            If ``False`` and ``smf > 0``, return ``[sed1, sed2]``. Default is
+            ``True``.
 
         tol : float, optional
-            Convergence tolerance (in dex) on the log10(age) match when solving
-            for the secondary's EEP in a binary. A companion whose age cannot be
-            matched to within ``tol`` is treated as non-existent and a
-            primary-only SED is returned (rather than discarding the model).
-            Default is 1e-2.
+            Convergence tolerance in dex on ``log10(age / yr)`` when solving for
+            the secondary EEP. If the age match exceeds ``tol``, a primary-only
+            SED is returned. Default is 1e-2.
 
         Returns
         -------
-        sed : numpy.ndarray of shape (Nfilters,) or tuple
-            Synthetic SED in magnitudes.
+        sed : numpy.ndarray of shape (Nfilters,) or list of 2 numpy.ndarray
+            Apparent magnitudes in each filter, or ``[sed1, sed2]`` when
+            ``combine_seds=False`` and ``smf > 0``.
 
-        params : dict or numpy.ndarray
-            Primary component stellar parameters.
+        params : dict or numpy.ndarray of shape (Npred,)
+            Primary stellar parameters.
 
-        params2 : dict or numpy.ndarray
-            Secondary component parameters.
+        params2 : dict or numpy.ndarray of shape (Npred,)
+            Secondary stellar parameters (all-NaN when no companion is added).
 
         eep2 : float, optional
-            Secondary EEP (if return_eep2=True).
+            Secondary EEP, returned only when ``return_eep2=True``.
 
         See Also
         --------
@@ -1137,8 +1083,8 @@ class StarEvolTrack:
         r"""
         Calculate EEP for secondary component that matches the age of the primary.
 
-        This method solves the inverse problem: given a target age (from the primary),
-        find the EEP that produces that age for the secondary star with mass mini*smf.
+        Finds the EEP at which a secondary star of mass ``mini * smf`` reaches
+        the primary star's age ``loga``.
         Age is monotonically increasing along a track, so the interpolated
         age(EEP) curve is inverted directly with a single vectorized
         interpolator call over the EEP grid axis. A scalar Nelder-Mead solve
@@ -1287,11 +1233,11 @@ class StarEvolTrack:
 
 class StarGrid:
     """
-    Grid-based stellar modeling and synthetic photometry generation.
+    Interpolate stellar parameters and synthetic photometry from a pre-computed grid.
 
-    This class provides an interface for working with pre-computed stellar
-    model grids, enabling parameter interpolation and SED generation similar
-    to StarEvolTrack but using grid-based models rather than evolutionary tracks.
+    Evaluates stellar parameters and reddened SEDs by multi-linear or KD-tree
+    interpolation over a pre-computed grid of magnitude coefficients and stellar
+    labels.
 
     The grid structure allows for irregular spacing in each dimension, with
     models indexed by their array location. Multi-linear interpolation is used
@@ -1564,8 +1510,9 @@ class StarGrid:
 
         Every multi-valued axis must be given. Each given value must be
         finite and inside its axis range, with a relative tolerance of 1e-6
-        at the edges: stored edges are not round (the MIST mini maximum is
-        2.0000000000000013). A label not in the grid warns and is ignored.
+        at the edges because stored grid edges are not exact decimal numbers
+        (for example, the MIST mini maximum is 2.0000000000000013). A label
+        not in the grid warns and is ignored.
         """
         if not self._axis_names:
             raise ValueError(
@@ -1828,7 +1775,7 @@ class StarGrid:
         smf=None,
         use_multilinear=True,
     ):
-        """
+        r"""
         Get stellar parameter predictions from the grid.
 
         Interpolates grid models to estimate stellar parameters at the
@@ -1837,29 +1784,29 @@ class StarGrid:
         Parameters
         ----------
         mini : float, optional
-            Initial mass in solar masses
+            Initial mass in solar masses (:math:`M_\odot`).
 
         eep : float, optional
-            Equivalent evolutionary phase
+            Equivalent evolutionary point (dimensionless).
 
         feh : float, optional
-            Metallicity [Fe/H]
+            Initial metallicity ``[Fe/H]`` in dex.
 
         afe : float, optional
-            Alpha enhancement [α/Fe]
+            Initial alpha enhancement ``[alpha/Fe]`` in dex.
 
         smf : float, optional
-            Secondary mass fraction for binaries
+            Secondary mass fraction in ``[0, 1]``.
 
         use_multilinear : bool, optional
-            Use multi-linear interpolation (True) or KD-tree nearest neighbor (False).
-            Default is True.
+            Whether to use multi-linear interpolation (``True``) or KD-tree
+            inverse-distance interpolation (``False``). Default is ``True``.
 
         Returns
         -------
-        predictions : dict or numpy.ndarray
-            Predicted stellar parameters. Returns dict with parameter names
-            as keys if parameters are available, otherwise returns array.
+        predictions : dict of str to float
+            Interpolated stellar parameters (or grid labels when
+            ``models_params`` is absent) keyed by parameter name.
 
         Raises
         ------
@@ -1917,57 +1864,60 @@ class StarGrid:
         Parameters
         ----------
         mini : float, optional
-            Initial mass in solar masses
+            Initial mass in solar masses (:math:`M_\odot`).
 
         eep : float, optional
-            Equivalent evolutionary phase
+            Equivalent evolutionary point (dimensionless).
 
         feh : float, optional
-            Metallicity [Fe/H]
+            Initial metallicity ``[Fe/H]`` in dex.
 
         afe : float, optional
-            Alpha enhancement [α/Fe]
+            Initial alpha enhancement ``[alpha/Fe]`` in dex.
 
         av : float, optional
-            V-band extinction in magnitudes. Default is 0.0.
+            V-band extinction :math:`A(V)` in magnitudes. Default is 0.0.
 
         rv : float, optional
-            Reddening law parameter. Default is 3.3.
+            Total-to-selective extinction ratio :math:`R(V)` (dimensionless).
+            Default is 3.3.
 
         smf : float, optional
-            Secondary mass fraction for binaries. NOTE: Currently returns
-            empty placeholder for params2. Full binary support requires
-            a dedicated binary grid with pre-computed combined photometry.
+            Secondary mass fraction in ``[0, 1]``.
 
         dist : float, optional
-            Distance in parsecs. Default is 1000.0 (1 kpc), which corresponds
-            to parallax = 1 mas for consistency with Gaia units.
+            Distance in parsecs (pc). Default is 1000.0 (1 kpc).
 
         return_dict : bool, optional
-            If True, return parameters as dict. Default is True.
+            If ``True``, return ``params`` and ``params2`` as dicts; if
+            ``False``, return 1-D numpy arrays. Default is ``True``.
 
         return_flux : bool, optional
-            If True, return fluxes instead of magnitudes. Default is False.
+            If ``True``, return linear flux densities in maggies
+            (``10**(-0.4 * mag)``) instead of apparent magnitudes. Default is
+            ``False``.
 
         return_predictions : bool, optional
-            If True, compute and return stellar parameters. Set to False
-            to only get photometry (more efficient). Default is True.
+            If ``True``, interpolate and return stellar parameters in ``params``.
+            Default is ``True``.
 
         use_multilinear : bool, optional
-            Use multi-linear interpolation (True) or KD-tree nearest neighbor (False).
-            Default is True.
+            Whether to use multi-linear interpolation (``True``) or KD-tree
+            inverse-distance interpolation (``False``). Default is ``True``.
 
         Returns
         -------
         sed : numpy.ndarray of shape (Nfilt,)
-            Synthetic photometry (magnitudes or fluxes)
+            Synthetic photometry in apparent magnitudes (or maggies when
+            ``return_flux=True``).
 
-        params : dict or numpy.ndarray or None
-            Primary star parameters (None if return_predictions=False)
+        params : dict, numpy.ndarray of shape (Nparam,), or None
+            Interpolated primary star parameters, or ``None`` when
+            ``return_predictions=False``.
 
-        params2 : dict or numpy.ndarray or None
-            Secondary star parameters (empty placeholder - full binary
-            implementation requires dedicated binary grid)
+        params2 : dict or numpy.ndarray of shape (0,)
+            Empty placeholder (``{}`` or ``np.array([])``) for API compatibility
+            with `StarEvolTrack.get_seds`.
 
         Raises
         ------

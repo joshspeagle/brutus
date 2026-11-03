@@ -1,12 +1,10 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-brutus core module: Fundamental stellar modeling utilities.
+Predict stellar parameters and synthetic photometry from evolutionary models.
 
-This module contains the core functionality for stellar evolution modeling,
-including isochrones, tracks, SED computation, neural network utilities,
-and grid generation.
+Provides evolutionary tracks (`EEPTracks`, `StarEvolTrack`), pre-computed model
+grids (`StarGrid`, `GridGenerator`), isochrones (`Isochrone`, `StellarPop`),
+neural network bolometric corrections (`FastNN`, `FastNNPredictor`), and
+reddened SED evaluation (`get_seds`).
 """
 
 from .grid_generation import GridGenerator
