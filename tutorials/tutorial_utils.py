@@ -1,12 +1,7 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 
 """
-Shared utilities for brutus tutorials.
-
-Provides consistent plotting styles, data loading helpers, output
-management, assertion helpers, and standardized setup for all
-tutorial scripts and notebooks.
+Shared plotting, data-loading, and verification utilities for the brutus tutorials.
 """
 
 import os
@@ -88,12 +83,12 @@ def set_plot_style():
 
 def get_plot_dir(tutorial_num):
     """
-    Get (and create if needed) the plot output directory for a tutorial.
+    Return (and create if needed) the plot output directory for a tutorial.
 
     Parameters
     ----------
     tutorial_num : int
-        Tutorial number (0-8).
+        Tutorial number (0-11).
 
     Returns
     -------
@@ -107,36 +102,35 @@ def get_plot_dir(tutorial_num):
 
 def save_figure(fig, tutorial_num, fig_name, tight=True, **kwargs):
     """
-    Save a figure to the appropriate tutorial plot directory.
+    Save a figure to the tutorial plot directory.
 
     Parameters
     ----------
     fig : matplotlib.figure.Figure
         Figure to save.
     tutorial_num : int
-        Tutorial number (0-8).
+        Tutorial number (0-11).
     fig_name : str
         Base name for the figure file (without extension).
     tight : bool, optional
-        Whether to use tight_layout before saving. Default is True.
+        Whether to call ``fig.tight_layout()`` before saving. Default is True.
     **kwargs : dict
-        Additional keyword arguments passed to fig.savefig().
+        Additional keyword arguments passed to ``fig.savefig()``.
 
     Returns
     -------
     save_path : Path
-        Path where the figure was saved.
+        Path to the saved PNG file.
     """
     if tight:
         try:
             fig.tight_layout()
         except Exception:
-            pass  # tight_layout sometimes fails, ignore
+            pass
 
     plot_dir = get_plot_dir(tutorial_num)
     save_path = plot_dir / f"{fig_name}.png"
 
-    # Set default kwargs
     save_kwargs = {"dpi": 150, "bbox_inches": "tight", "facecolor": "white"}
     save_kwargs.update(kwargs)
 
@@ -251,32 +245,36 @@ def find_brutus_data_file(filename, search_paths=None):
 
 def load_tutorial_data(dataset_name, **kwargs):
     """
-    Load common tutorial datasets with consistent handling.
+    Load a tutorial dataset with standardized preprocessing.
 
     Parameters
     ----------
     dataset_name : str
-        Name of the dataset to load. Options:
-        - 'orion': Orion field data from Tutorial 3
-        - 'm67' or 'ngc2682': M67 cluster data from Tutorial 6
+        Dataset identifier:
+        - ``'orion'``: Orion field photometry and astrometry for Tutorial 5.
+        - ``'m67'`` or ``'ngc2682'``: M67 cluster catalog for Tutorial 6.
     **kwargs : dict
-        Additional keyword arguments for dataset-specific loading.
+        Additional keyword arguments (unused; retained for signature compatibility).
 
     Returns
     -------
     data : dict
-        Dictionary containing loaded data arrays and metadata.
+        For ``'orion'``, dictionary containing ``'phot'`` and ``'err'``
+        (flux densities and uncertainties in maggies, shape ``(Nobj, Nfilt)``),
+        ``'mask'`` (bool, shape ``(Nobj, Nfilt)``), ``'parallax'`` and
+        ``'parallax_err'`` (mas, shape ``(Nobj,)``), ``'coords'`` (Galactic
+        ``(l, b)`` in deg, shape ``(Nobj, 2)``), ``'obj_id'`` (shape
+        ``(Nobj,)``), and ``'filename'`` (str). For ``'m67'`` / ``'ngc2682'``,
+        dictionary with ``'data'`` (FITS recarray) and ``'filename'`` (str).
     """
     import h5py
 
     from brutus.utils import inv_magnitude
 
     if dataset_name.lower() == "orion":
-        # Load Orion field data
         try:
             filename = find_brutus_data_file("Orion_l209.1_b-19.9.h5")
         except FileNotFoundError:
-            # Try tutorial directory
             filename = find_brutus_data_file(
                 "Orion_l209.1_b-19.9.h5", [Path(__file__).parent]
             )
@@ -416,23 +414,19 @@ def format_runtime(seconds):
         return f"{seconds/3600:.1f} hours"
 
 
-# Convenience functions for specific datasets
 def load_orion_data(**kwargs):
-    """Load Orion field data. Convenience wrapper for load_tutorial_data."""
+    """Load the Orion field dataset via ``load_tutorial_data('orion')``."""
     return load_tutorial_data("orion", **kwargs)
 
 
 def load_m67_data(**kwargs):
-    """Load M67 cluster data. Convenience wrapper for load_tutorial_data."""
+    """Load the M67 cluster dataset via ``load_tutorial_data('m67')``."""
     return load_tutorial_data("m67", **kwargs)
 
 
 def setup_tutorial(tutorial_num, title=None):
     """
-    Standardized bootstrap for every tutorial notebook.
-
-    Sets plot style, creates output directory, checks data availability,
-    and prints a status header.
+    Configure plot style, output directory, and data checks for a tutorial.
 
     Parameters
     ----------
