@@ -1,36 +1,36 @@
-# Understanding results
+# Understanding Results
 
-`BruteForce.fit` writes its posterior draws, maximum-likelihood parameters, and fit diagnostics to a single HDF5 file.
+{meth}`~brutus.analysis.BruteForce.fit` writes its resampled posterior draws, maximum-likelihood extrinsic parameters, and fit diagnostics to a single HDF5 output file.
 
-## The output file
+## Output HDF5 Schema
 
-Each row corresponds to one star in the order of the input catalog, where $N_d$ is the number of posterior draws (`Ndraws`, 250 by default):
+Each dataset in the output HDF5 file has leading dimension $N$ matching the order of the input catalog, where $N_d$ is the number of posterior draws saved per star (`Ndraws`, equal to $250$ by default):
 
-| Field | Shape | Content |
+| Dataset | Shape | Contents |
 |---|---|---|
-| `labels` | as passed | the star IDs you passed as `data_labels` |
-| `samps_dist` | $(N, N_d)$ | posterior draws of distance, in kpc |
-| `samps_red` | $(N, N_d)$ | posterior draws of $A_V$, in mag |
-| `samps_dred` | $(N, N_d)$ | posterior draws of $R_V$ |
-| `samps_logp` | $(N, N_d)$ | log-weight of each draw's Monte Carlo point (diagnostic only) |
-| `model_idx` | $(N, N_d)$ | grid model of each draw |
-| `ml_scale`, `ml_av`, `ml_rv` | $(N, N_d)$ | best-fit scale factor, $A_V$ and $R_V$ of each draw's model |
-| `ml_cov_sar` | $(N, N_d, 3, 3)$ | covariance of (scale, $A_V$, $R_V$) of each draw's model |
-| `obj_log_post` | $(N, N_d)$ | log posterior weight of each draw's model |
-| `obj_log_evid` | $(N,)$ | log-{term}`evidence` (log of the sum of the weights of the models kept by the selection, each divided by its inclusion probability under `max_models`) |
-| `obj_chi2min` | $(N,)$ | smallest $\chi^2$ over all models, with the parallax term if given |
-| `obj_Nbands` | $(N,)$ | bands used, plus 1 if a parallax was given |
-| `mc_ess` | $(N, N_d)$ | concentration of the Monte Carlo weights of each draw's model |
+| `labels` | `(N,)` | Object identifiers passed via `data_labels` |
+| `samps_dist` | `(N, N_d)` | Resampled posterior draws of heliocentric distance in kpc |
+| `samps_red` | `(N, N_d)` | Resampled posterior draws of visual extinction $A_V$ in magnitudes |
+| `samps_dred` | `(N, N_d)` | Resampled posterior draws of the extinction curve shape $R_V$ |
+| `samps_logp` | `(N, N_d)` | Log-weight of the selected Monte Carlo importance sample for each draw (diagnostic only) |
+| `model_idx` | `(N, N_d)` | Index of the stellar grid model selected for each draw |
+| `ml_scale`, `ml_av`, `ml_rv` | `(N, N_d)` | Maximum-likelihood scale factor $s$, $A_V$, and $R_V$ of each draw's grid model |
+| `ml_cov_sar` | `(N, N_d, 3, 3)` | Inverse Fisher covariance matrix of $(s, A_V, R_V)$ for each draw's grid model |
+| `obj_log_post` | `(N, N_d)` | Marginalized log-posterior weight of each draw's grid model |
+| `obj_log_evid` | `(N,)` | Log-{term}`evidence` (log of the sum of posterior model weights across retained models, divided by their systematic subsampling inclusion probabilities under `max_models`) |
+| `obj_chi2min` | `(N,)` | Minimum $\chi^2$ across all evaluated grid models (including the parallax term when provided) |
+| `obj_Nbands` | `(N,)` | Number of valid photometric bands used in the fit, plus $1$ when a valid parallax was included |
+| `mc_ess` | `(N, N_d)` | Effective weight-concentration metric $1 / \sum_j w_j^2$ across the Monte Carlo importance samples of each draw's grid model |
 
-The `samps_*` fields are written only with `save_dar_draws=True` (the default). {doc}`scientific_background` describes how the draws are made.
+The continuous draw arrays (`samps_*`) are written whenever `save_dar_draws=True` (the default; see {doc}`scientific_background` for the resampling procedure).
 
-Because the saved samples are already drawn in proportion to their posterior weights, treat them as equally weighted posterior draws without reweighting by `samps_logp` or `obj_log_post`. When more than `max_models` models pass the selection, `obj_log_post` still records each model's own log-posterior, while the resampled draws and `obj_log_evid` already include the inverse-probability correction for subsampling.
+Because `samps_dist`, `samps_red`, `samps_dred`, and `model_idx` are already resampled in proportion to the posterior weights, treat them as equally weighted posterior draws without reweighting by `samps_logp` or `obj_log_post`. When more than `max_models` templates pass the Step 2 selection threshold, `obj_log_post` records each model's unadjusted log-posterior weight while both the resampled draws and `obj_log_evid` incorporate the inverse-probability weighting correction for systematic subsampling.
 
-With `running_io=True` (the default), each star is written as soon as it is fitted; rows not yet fitted hold `model_idx = -99`.
+When `running_io=True` (the default), each star's results are flushed to the HDF5 file immediately upon completion; stars that have not yet been fitted (or that had zero valid bands) retain the sentinel value `model_idx = -99`.
 
-## Summaries
+## Computing Posterior Summaries
 
-{func}`~brutus.utils.quantile` gives medians and intervals:
+Use {func}`~brutus.utils.quantile` to compute marginal posterior medians and credible intervals from the equally weighted draws:
 
 ```python
 import h5py
@@ -45,9 +45,9 @@ with h5py.File("results.h5", "r") as f:
 d16, d50, d84 = quantile(dist[0], [0.16, 0.5, 0.84])
 ```
 
-## Stellar properties
+## Extracting Intrinsic Stellar Properties
 
-Each entry in `model_idx` indexes a model in the grid, so indexing `labels` with `model_idx` yields the posterior draws of any stellar property:
+Each integer in `model_idx` indexes a row in the stellar grid, so indexing the `labels` structured array returned by {func}`~brutus.data.load_models` with `model_idx` yields the corresponding posterior draws of any intrinsic or predicted stellar quantity:
 
 ```python
 from brutus.data import load_models
@@ -57,18 +57,18 @@ models, labels, label_mask = load_models("grid_mist_v9.h5", filters=filters)
 with h5py.File("results.h5", "r") as f:
     idx = f["model_idx"][0]
 
-mass = labels["mini"][idx]          # initial mass, M☉
-age = 10 ** labels["loga"][idx] / 1e9  # Gyr
-teff = 10 ** labels["logt"][idx]    # K
+mass = labels["mini"][idx]             # initial mass in Msun
+age = 10 ** labels["loga"][idx] / 1e9  # stellar age in Gyr
+teff = 10 ** labels["logt"][idx]       # effective temperature in K
 ```
 
-Load the grid with the same arguments as for the fit, so that the indices refer to the same models.
+Ensure that `load_models` is called with the same phase and binary cuts (`include_ms`, `include_postms`, `include_binaries`) used during fitting so that row indices in `model_idx` map to the identical grid models.
 
-## Checking a fit
+## Fit Quality and Diagnostic Checks
 
-### Goodness of fit
+### Goodness of Fit ($\chi^2$ Survival Probability)
 
-Evaluate goodness of fit using the $\chi^2$ survival-function p-value of `obj_chi2min` with $N_{\rm bands} - 3$ degrees of freedom rather than $\chi^2 / N_{\rm bands}$, because each model fits 3 free parameters (scale, $A_V$, and $R_V$):
+Evaluate goodness of fit using the $\chi^2$ survival-function p-value of `obj_chi2min` with $N_{\rm bands} - 3$ degrees of freedom rather than the reduced $\chi^2 / N_{\rm bands}$, because each grid model optimizes 3 continuous parameters ($s$, $A_V$, and $R_V$):
 
 ```python
 from scipy.stats import chi2
@@ -80,30 +80,30 @@ with h5py.File("results.h5", "r") as f:
 pvalue = chi2.sf(chi2min, np.maximum(nbands - 3, 1))
 ```
 
-| p-value | Fit | Typical cause of a poor fit |
+| $\chi^2$ p-value | Fit Quality | Typical Astrophysical or Instrumental Causes |
 |---|---|---|
-| $p > 10^{-3}$ | good | |
-| $10^{-6} < p \le 10^{-3}$ | marginal | errors slightly too small, one bad band |
-| $p \le 10^{-6}$ | poor | a binary, a young star, a white dwarf, blended or saturated photometry |
+| $p > 10^{-3}$ | Good fit | Consistent with a single-star template in the grid |
+| $10^{-6} < p \le 10^{-3}$ | Marginal fit | Underestimated photometric errors or a single mild outlier band |
+| $p \le 10^{-6}$ | Poor fit | Unresolved binary, pre-main-sequence star, white dwarf, or blended/saturated photometry |
 
-The p-value is only as good as the errors. Without the systematic errors of the models ({doc}`photometric_offsets`), many good fits of bright stars look poor.
+Because $\chi^2$ p-values are sensitive to the assumed uncertainty model, omitting the $0.02\text{--}0.03\,{\rm mag}$ systematic calibration uncertainty of the stellar models ({doc}`photometric_offsets`) from the measurement errors will cause bright stars with small formal errors to exhibit artificially low p-values.
 
-### Posterior predictive check
+### Posterior Predictive Checks
 
-Compare, band by band, the spread of the predicted fluxes across the draws with the measurement error:
+To verify how well the posterior models reproduce each passband individually, compare the dispersion and residuals of the predicted fluxes across posterior draws against the fitted measurement uncertainties:
 
 ```python
 from brutus.core import get_seds
 
-i = 0  # one star
+i = 0  # star index
 with h5py.File("results.h5", "r") as f:
     idx, av, rv, dist = (f[k][i] for k in ("model_idx", "samps_red", "samps_dred", "samps_dist"))
 
 pred = get_seds(models[idx], av=av, rv=rv, return_flux=True) / dist[:, None] ** 2
-ratio = pred.std(axis=0) / (flux_err[i] * offsets)  # the errors as fitted
+ratio = pred.std(axis=0) / (flux_err[i] * offsets)  # compared against offset-scaled errors
 ```
 
-Here `models` must come from the grid loaded with the bands of the fit, in the same order, and `offsets` are the `phot_offsets` of the fit (1 if none). A ratio much above 1 in a band means the parameters are poorly constrained there.
+Here `models` must be loaded with the same passbands and column ordering used in the fit, and `offsets` is the `phot_offsets` vector applied during fitting ($1.0$ if none). A posterior predictive dispersion much larger than the measurement error in a given band indicates that the available passbands leave the SED weakly constrained at that wavelength.
 
 ```{raw} html
 :file: figures/star-posterior.svg
@@ -111,26 +111,26 @@ Here `models` must come from the grid loaded with the bands of the fit, in the s
 ```
 
 :::{div} figure-caption
-Posterior summary for one star from the Orion sightline in {doc}`scientific_background`. The left panel shows the posterior draws of distance and extinction, where about three quarters of the draws fall within the $1\sigma$ parallax interval and a secondary tail extends toward larger distances and lower extinction. The right panel shows the band-by-band residuals between predicted and observed magnitudes, spanning about 0.1 mag (two to three times the measurement errors in several bands).
+This figure summarizes the posterior inference for one star from the Orion sightline in {doc}`scientific_background`. The left panel shows the posterior draws of distance and extinction, where about three quarters of the draws fall within the $1\sigma$ parallax interval and a secondary tail extends toward larger distances and lower extinction. The right panel shows the band-by-band residuals between predicted and observed magnitudes, spanning about $0.1\,{\rm mag}$ (two to three times the measurement errors in several bands).
 :::
 
-{func}`~brutus.plotting.posterior_predictive` plots the same comparison.
+Calling {func}`~brutus.plotting.posterior_predictive` generates a posterior predictive SED comparison figure directly from the fit outputs.
 
-### Monte Carlo weights
+### Monte Carlo Importance Weight Concentration (`mc_ess`)
 
-`mc_ess` is $1 / \sum_j w_j^2$ over the normalized Monte Carlo weights of a model. It is at most the number of Monte Carlo draws per model (`Nmc_prior`, 50 by default, or fewer when `mem_lim` reduces it). A value of 0 means no Monte Carlo draw of the model has nonzero weight, for example when every draw falls outside `avlim`, `rvlim`, or the distance range. A value near 1 indicates that a single draw carries nearly all the weight because the local Gaussian approximation around the best fit and the position-dependent priors overlap poorly. Because the Monte Carlo draws come in antithetic pairs, `mc_ess` measures weight concentration rather than a count of independent draws.
+For each grid model, `mc_ess` records $1 / \sum_j w_j^2$ evaluated over its normalized Step 3 Monte Carlo importance weights, bounded above by the number of Monte Carlo draws per model (`Nmc_prior`, equal to $50$ by default or fewer when capped by `mem_lim`). A value of `mc_ess == 0` indicates that every Monte Carlo draw for that model received zero prior weight (for example, when all draws fell outside `avlim`, `rvlim`, or the valid distance support). Values of `mc_ess` near $1$ indicate that a single Monte Carlo draw carries nearly all of the model's weight because the local Gaussian likelihood approximation around the best fit and the position-dependent priors overlap poorly. Since the Monte Carlo samples are drawn in antithetic pairs $(z, -z)$, `mc_ess` serves as a diagnostic of importance-weight concentration rather than a count of independent random draws.
 
-### Parallax and prior
+### Parallax Consistency and Prior Sensitivity
 
-If you gave a parallax, compare it with $1/d$ of the draws. A large difference points to a binary, a bad parallax (check the Gaia RUWE) or a model failure. For faint stars without a parallax, the priors can set the distance; {doc}`priors` shows how to test this.
+When a parallax measurement was included in the fit, compare the observed parallax $\hat\varpi \pm \sigma_\varpi$ against the posterior distribution of $1 / d$. A strong discrepancy between the photometric distance and the astrometric parallax typically signals an unresolved binary (whose extra flux makes the star appear closer than $1 / \hat\varpi$), an astrometric solution affected by orbital motion (check the Gaia RUWE diagnostic), or an object outside the stellar grid domain. For faint stars lacking informative parallaxes, compare fits under the default Galactic prior and a flat distance prior ({doc}`priors`) to determine whether the inferred distances are prior-dominated.
 
-## Plots
+## Diagnostic Plotting Utilities
 
-{mod}`brutus.plotting` draws the common figures from the output:
+{mod}`brutus.plotting` provides diagnostic visualization routines that accept the HDF5 output arrays directly:
 
-| Function | Figure |
+| Plotting Function | Visualization |
 |---|---|
-| {func}`~brutus.plotting.cornerplot` | the posterior of the stellar properties, distance and extinction |
-| {func}`~brutus.plotting.dist_vs_red` | the joint posterior of distance and $A_V$ |
-| {func}`~brutus.plotting.posterior_predictive` | the predicted SED against the data |
-| {func}`~brutus.plotting.bin_pdfs_distred` | binned distance-extinction posteriors of many stars |
+| {func}`~brutus.plotting.cornerplot` | Corner plot of marginal and pairwise posteriors over intrinsic stellar parameters, distance, and extinction |
+| {func}`~brutus.plotting.dist_vs_red` | Joint 2D posterior density of distance and extinction ($A_V$ or $E(B-V)$) for a single star |
+| {func}`~brutus.plotting.posterior_predictive` | Posterior predictive SED distribution overlaid on the observed broadband photometry |
+| {func}`~brutus.plotting.bin_pdfs_distred` | Binned stack of stellar distance-extinction posteriors along a line of sight |
