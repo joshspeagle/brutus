@@ -1,11 +1,5 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-Data binning utilities for plotting posterior distributions.
-
-This module provides functions to bin posterior samples of distance and
-reddening for visualization purposes.
+Two-dimensional histogram binning and smoothing for distance-reddening posteriors.
 """
 
 import sys
@@ -49,14 +43,12 @@ def bin_pdfs_distred(
 
     Parameters
     ----------
-    data : 3-tuple or 4-tuple containing `~numpy.ndarray`s of shape `(Nsamps)`
-        The data that will be plotted. Either a collection of
-        `(dists, reds, dreds)` that were saved, or a collection of
-        `(scales, avs, rvs, covs_sar)` that will be used to regenerate
-        `(dists, reds)` in conjunction with any applied distance
-        and/or parallax priors. Prefer the saved draws: regeneration applies
-        only the distance and parallax priors, not the dust-map and
-        label-dependent priors of the fit.
+    data : 3-tuple or 4-tuple of `~numpy.ndarray` of shape `(Nobj, Nsamps)`
+        Either saved ``(dists, reds, dreds)`` draws in ``(kpc, mag, -)`` or
+        ``(scales, avs, rvs, covs_sar)`` used to regenerate draws under the
+        distance and parallax priors. Saved draws are preferred because
+        regeneration applies only the distance and parallax priors rather than
+        the dust-map and label-dependent priors used during fitting.
 
     cdf : bool, optional
         Whether to compute the CDF along the reddening axis instead of the
@@ -67,9 +59,9 @@ def bin_pdfs_distred(
         the provided Rv values. Default is `False`.
 
     dist_type : str, optional
-        The distance format to be plotted. Options include `'parallax'`,
-        `'scale'`, `'distance'`, and `'distance_modulus'`.
-        Default is `'distance_modulus`.
+        Distance quantity for the x-axis (``'parallax'``, ``'scale'``,
+        ``'distance'``, or ``'distance_modulus'``). Default is
+        ``'distance_modulus'``.
 
     lndistprior : func, optional
         The log-distance prior function used. If not provided,
@@ -110,12 +102,13 @@ def bin_pdfs_distred(
         The number of bins to be used in each dimension. Default is
         `(750, 300)` (distance, reddening).
 
-    span : iterable with shape `(2, 2)`, optional
-        `((av_min, av_max), (d_min, d_max))`: the A(V) range of the y-axis
-        in mag and the distance range of the x-axis in kpc, converted to
-        `dist_type`. Note the order: `span` starts with A(V), `bins` and
-        `smooth` start with distance. If not provided, the y-axis spans
-        `avlim` and the x-axis spans distance modulus 4 to 19 (0.063 to
+    span : array_like of shape `(2, 2)`, optional
+        Bounds ``((av_min, av_max), (d_min, d_max))`` giving the :math:`A(V)`
+        range of the y-axis in mag and the distance range of the x-axis in kpc
+        (converted internally to ``dist_type``). Note that ``span`` orders
+        :math:`A(V)` before distance, whereas ``bins`` and ``smooth`` order
+        distance before :math:`A(V)`. If not provided, the y-axis spans
+        ``avlim`` and the x-axis spans distance modulus 4 to 19 (0.063 to
         63.1 kpc).
 
     smooth : float or 2-tuple of floats, optional
@@ -133,10 +126,19 @@ def bin_pdfs_distred(
     verbose : bool, optional
         Whether to print progress to `~sys.stderr`. Default is `False`.
 
+    R_solar : float, optional
+        Solar Galactocentric radius in kpc passed to the default distance
+        prior. Default is 8.2.
+
+    Z_solar : float, optional
+        Solar height above the Galactic midplane in kpc passed to the default
+        distance prior. Default is 0.025.
+
     Returns
     -------
     binned_vals : `~numpy.ndarray` of shape `(Nobj, Nxbin, Nybin)`
-        Binned versions of the PDFs or CDFs.
+        Binned 2-D PDFs (or cumulative distributions along reddening when
+        ``cdf=True``).
 
     xedges : `~numpy.ndarray` of shape `(Nxbin+1,)`
         The edges defining the bins in distance.
@@ -247,10 +249,8 @@ def bin_pdfs_distred(
             # Custom `lndistprior` without coordinates: pass `None` per object.
             coord = [None] * nobjs
         else:
-            # A bare (l, b) pair is shared by every object (e.g. a stack of
-            # stars along one sightline). Anything else must supply one pair
-            # per object -- a mis-shaped coord would otherwise be silently
-            # mis-paired (and truncated) by the zip below.
+            # A 1-D (l, b) pair is shared by every object (such as a sightline
+            # stack); any other shape must provide one pair per object.
             coord = np.asarray(coord)
             if coord.shape == (2,):
                 coord = np.tile(coord, (nobjs, 1))

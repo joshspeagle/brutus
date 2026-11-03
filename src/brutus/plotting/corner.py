@@ -1,11 +1,5 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-Corner plot visualization functions.
-
-This module provides functions for creating corner plots of multi-dimensional
-posterior distributions.
+Corner plots of 1-D and 2-D marginalized posterior distributions.
 """
 
 import warnings
@@ -73,42 +67,39 @@ def cornerplot(
         An array of resampled indices corresponding to the set of models used
         to fit the data.
 
-    data : 3-tuple or 4-tuple containing `~numpy.ndarray`s of shape `(Nsamps)`
-        The data that will be plotted. Either a collection of
-        `(dists, reds, dreds)` that were saved, or a collection of
-        `(scales, avs, rvs, covs_sar)` that will be used to regenerate
-        `(dists, reds, dreds)` in conjunction with any applied distance
-        and/or parallax priors. Prefer the saved draws: regeneration applies
-        only the distance and parallax priors, not the dust-map and
-        label-dependent priors of the fit.
+    data : 3-tuple or 4-tuple of `~numpy.ndarray` of shape `(Nsamps,)`
+        Either saved ``(dists, reds, dreds)`` draws in ``(kpc, mag, -)`` or
+        ``(scales, avs, rvs, covs_sar)`` used to regenerate draws under the
+        distance and parallax priors. Saved draws are preferred because
+        regeneration applies only the distance and parallax priors rather than
+        the dust-map and label-dependent priors used during fitting.
 
-    params : structured `~numpy.ndarray` with shape `(Nmodels,)`
-        Set of parameters corresponding to the input set of models. Note that
-        `'agewt'` will always be ignored.
+    params : structured `~numpy.ndarray` of shape `(Nmodels,)`
+        Structured array of model parameters. The ``'agewt'`` field is ignored.
 
-    lndistprior : func, optional
-        The log-distance prior function used. If not provided,
-        `~brutus.priors.logp_galactic_structure` is assumed.
+    lndistprior : callable, optional
+        Log-distance prior function. Default is
+        :func:`~brutus.priors.logp_galactic_structure`.
 
-    coord : 2-tuple, optional
-        The galactic `(l, b)` coordinates for the object, which is passed to
-        `lndistprior`.
+    coord : 2-tuple of float, optional
+        Galactic ``(l, b)`` coordinates in degrees passed to ``lndistprior``.
 
-    avlim : 2-tuple, optional
-        The Av limits used to truncate regenerated draws. Default is
-        `AVLIM`, (0, 20), the `BruteForce.fit` default.
+    avlim : 2-tuple of float, optional
+        :math:`A(V)` bounds in magnitudes used to truncate regenerated draws.
+        Default is ``AVLIM`` ``(0.0, 20.0)``.
 
-    rvlim : 2-tuple, optional
-        The Rv limits used to truncate results. Default is `RVLIM`, (1, 8).
+    rvlim : 2-tuple of float, optional
+        :math:`R(V)` bounds used to truncate regenerated draws. Default is
+        ``RVLIM`` ``(1.0, 8.0)``.
 
-    weights : `~numpy.ndarray` of shape `(Nsamps)`, optional
-        An optional set of importance weights used to reweight the samples.
+    weights : `~numpy.ndarray` of shape `(Nsamps,)`, optional
+        Importance weights for the samples.
 
     parallax : float, optional
-        The parallax estimate for the source.
+        Measured parallax for the source in milliarcseconds (mas).
 
     parallax_err : float, optional
-        The parallax error.
+        Parallax uncertainty in milliarcseconds (mas).
 
     Nr : int, optional
         The number of Monte Carlo realizations used when sampling using the
@@ -223,19 +214,32 @@ def cornerplot(
         Whether to print the values of the computed quantiles associated with
         each parameter. Default is `False`.
 
-    fig : (`~matplotlib.figure.Figure`, `~matplotlib.axes.Axes`), optional
-        If provided, overplot the traces and marginalized 1-D posteriors
-        onto the provided figure. Otherwise, by default an
-        internal figure is generated.
+    fig : (`~matplotlib.figure.Figure`, `~numpy.ndarray`), optional
+        Existing figure and ``(ndim, ndim)`` axes grid to overplot on. If
+        None, a new figure is created.
 
-    rstate : `~numpy.random.RandomState`, optional
-        `~numpy.random.RandomState` instance.
+    rstate : `~numpy.random.RandomState` or `~numpy.random.Generator`, optional
+        Random number generator for regenerating draws.
+
+    R_solar : float, optional
+        Solar Galactocentric radius in kpc passed to the default distance
+        prior. Default is 8.2.
+
+    Z_solar : float, optional
+        Solar height above the Galactic midplane in kpc passed to the default
+        distance prior. Default is 0.025.
 
     Returns
     -------
-    cornerplot : (`~matplotlib.figure.Figure`, `~matplotlib.axes.Axes`)
-        Output corner plot.
+    cornerplot : (`~matplotlib.figure.Figure`, `~numpy.ndarray`)
+        Figure and ``(ndim, ndim)`` axes array of the corner plot.
 
+    Raises
+    ------
+    ValueError
+        If ``data`` does not have 3 or 4 elements, if ``applied_parallax=True``
+        without both ``parallax`` and ``parallax_err``, if ``weights`` is not
+        1-D of length ``Nsamps``, or if ``fig`` axes do not match ``(ndim, ndim)``.
     """
 
     # Initialize values.
@@ -249,8 +253,8 @@ def cornerplot(
         label_kwargs = dict()
     if title_kwargs is None:
         title_kwargs = dict()
-    # Copy caller-supplied kwargs dicts: defaults are written into them below,
-    # which would otherwise leak state back into the caller and across calls.
+    # Copy caller-supplied kwargs dicts because defaults are written into them
+    # below and would otherwise mutate caller state across calls.
     if hist_kwargs is None:
         hist_kwargs = dict()
     else:
@@ -283,9 +287,8 @@ def cornerplot(
     if labels is None:
         labels = [x for x in params.dtype.names if x != "agewt"]
     else:
-        # Copy any caller-supplied labels: the Av/Rv/Parallax/Distance appends
-        # below mutate this list in place, which would otherwise corrupt the
-        # caller's list and break reuse across repeated calls.
+        # Copy caller-supplied labels because appending Av/Rv/Parallax/Distance
+        # below would otherwise mutate the caller's list.
         labels = list(labels)
 
     # Deal with 1D results.
@@ -325,9 +328,8 @@ def cornerplot(
             rvlim,
             rstate,
         )
-        # Resample one draw per sample: the first draw whose CDF exceeds a
-        # uniform deviate. This takes the same deviates and gives the same
-        # indices as `rstate.choice(Nr, p=pwt[i])` for each sample in turn.
+        # Select the first draw per sample whose cumulative weight exceeds a
+        # uniform deviate, matching sequential `rstate.choice(Nr, p=pwt[i])`.
         if np.any(pwt.sum(axis=1) == 0):
             raise ValueError("The priors give zero weight to every draw of a sample.")
         cdf = pwt.cumsum(axis=1)

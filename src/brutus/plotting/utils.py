@@ -1,11 +1,5 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-Common plotting utilities for brutus visualization functions.
-
-This module provides low-level plotting utilities shared across
-multiple plotting functions.
+Two-dimensional weighted histogram, contour, and posterior-draw helpers for plotting.
 """
 
 import logging
@@ -60,15 +54,14 @@ def hist2d(
         the histogram, as a fraction of the span. An int is a number of
         bins, with no smoothing. Default is `0.02`.
 
-    span : iterable with shape `(2,)`, optional
-        A list where each element is either a length-2 tuple containing
-        lower and upper bounds or a float from `(0., 1.]` giving the
-        fraction of (weighted) samples to include. If a fraction is provided,
-        the bounds are chosen to be equal-tailed. An example would be::
+    span : iterable of length 2, optional
+        Per-axis bounds where each element is either a ``(low, high)`` tuple or
+        a float in ``(0., 1.]`` giving the equal-tailed weighted credible
+        fraction to include, for example::
 
-            span = [(0., 10.), 0.95, (5., 6.)]
+            span = [(0.0, 10.0), 0.95]
 
-        Default is `0.99` (99% credible interval).
+        Default is ``0.99`` (99% credible interval on each axis).
 
     weights : iterable with shape `(nsamps,)`
         Weights associated with the samples. Default is `None` (no weights).

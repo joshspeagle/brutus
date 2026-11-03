@@ -1,11 +1,5 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-Distance and reddening visualization functions.
-
-This module provides functions for plotting distance vs reddening
-posterior distributions.
+Two-dimensional distance-versus-reddening posterior plots.
 """
 
 import numpy as np
@@ -45,25 +39,24 @@ def dist_vs_red(
 
     Parameters
     ----------
-    data : 3-tuple or 4-tuple containing `~numpy.ndarray`s of shape `(Nsamps)`
-        The data that will be plotted. Either a collection of
-        `(dists, reds, dreds)` that were saved, or a collection of
-        `(scales, avs, rvs, covs_sar)` that will be used to regenerate
-        `(dists, reds)` in conjunction with any applied distance
-        and/or parallax priors. Prefer the saved draws: regeneration applies
-        only the distance and parallax priors, not the dust-map and
-        label-dependent priors of the fit. Arrays of shape `(Nobj, Nsamps)` are also
-        accepted; the plotted histogram is then the average of the
-        per-object 2-D PDFs.
+    data : 3-tuple or 4-tuple of `~numpy.ndarray`
+        Arrays of shape ``(Nsamps,)`` or ``(Nobj, Nsamps)`` containing either
+        saved ``(dists, reds, dreds)`` draws in ``(kpc, mag, -)`` or
+        ``(scales, avs, rvs, covs_sar)`` used to regenerate draws under the
+        distance and parallax priors. Saved draws are preferred because
+        regeneration applies only the distance and parallax priors rather than
+        the dust-map and label-dependent priors used during fitting. When
+        ``(Nobj, Nsamps)`` arrays are passed, the plotted histogram is the
+        mean of the per-object 2-D PDFs.
 
     ebv : bool, optional
-        If provided, will convert from Av to E(B-V) when plotting using
-        the provided Rv values. Default is `None` (plot A(V)).
+        If True, convert :math:`A(V)` to :math:`E(B-V) = A(V) / R(V)`. Default
+        is ``None`` (plot :math:`A(V)` in mag).
 
     dist_type : str, optional
-        The distance format to be plotted. Options include `'parallax'`,
-        `'scale'`, `'distance'`, and `'distance_modulus'`.
-        Default is `'distance_modulus`.
+        Distance quantity to plot on the x-axis (``'parallax'``, ``'scale'``,
+        ``'distance'``, or ``'distance_modulus'``). Default is
+        ``'distance_modulus'``.
 
     lndistprior : func, optional
         The log-distance prior function used. If not provided,

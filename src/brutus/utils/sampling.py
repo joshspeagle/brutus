@@ -1,27 +1,10 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-Sampling utility functions for brutus.
-
-This module contains functions for statistical sampling, quantile computation,
-and random number generation used in Bayesian inference workflows. These
-utilities are essential for posterior sampling and uncertainty quantification.
+Weighted quantile estimation and batched multivariate-normal posterior sampling.
 
 See Also
 --------
-brutus.analysis.individual.BruteForce : Uses these for posterior sampling
+brutus.analysis.individual.BruteForce : Uses these functions for posterior sampling
 brutus.utils.math : Mathematical utilities
-
-Notes
------
-The `quantile` function supports weighted samples, which is crucial for
-computing credible intervals from posterior samples with non-uniform weights
-(e.g., from importance sampling or nested sampling).
-
-The `draw_sar` function is specifically designed for sampling the joint
-posterior of distance scale, extinction, and reddening curve shape from
-BruteForce fitting results.
 
 Examples
 --------
@@ -65,14 +48,11 @@ _DRAW_SAR_EMPTY_PASSES = 100
 
 def quantile(x, q, weights=None):
     """
-    Compute (weighted) quantiles from an input set of samples.
+    Compute weighted or unweighted quantiles using the midpoint-CDF convention.
 
-    This function computes quantiles from a set of samples, optionally
-    with weights, using the midpoint-CDF convention: the empirical CDF is
-    evaluated at ``(cumsum(w) - 0.5 * w) / sum(w)`` and linearly
-    interpolated. Omitting `weights` is exactly equivalent to passing
-    uniform weights, so the reported quantiles do not depend on whether a
-    trivially-uniform weights array happens to be supplied.
+    Evaluates the empirical cumulative distribution function at the sample
+    midpoints ``(cumsum(w) - 0.5 * w) / sum(w)`` and interpolates linearly at
+    ``q``. Omitting ``weights`` is equivalent to passing uniform weights.
 
     Parameters
     ----------
@@ -246,10 +226,8 @@ def draw_sar(
     sdraws, adraws, rdraws = np.zeros((3, nsamps, ndraws))
     means = np.column_stack((scales, avs, rvs))
 
-    # Rejection-sample all still-deficient distributions together: each pass
-    # draws `ndraws` candidates per active distribution in ONE batched
-    # Cholesky-based call (instead of one numpy `multivariate_normal` per
-    # distribution) and fills accepted draws in order.
+    # Rejection-sample all active distributions together in one batched
+    # Cholesky-based call per pass and fill accepted draws in order.
     nfilled = np.zeros(nsamps, dtype=np.int64)
     active = np.arange(nsamps)
     n_attempts = 0
@@ -303,15 +281,12 @@ def _cholesky_3x3(A):
     """
     Compute the Cholesky factor of a 3x3 positive SEMI-definite matrix.
 
-    Uses explicit formulas optimized for the 3x3 case. Semi-definite inputs
-    are handled with the standard rank-deficient completion: each pivot
-    argument is clamped at zero before the square root, and the entries below
-    an exactly-zero pivot are set to zero rather than divided (their target
-    values are zero for any exact PSD matrix). For strictly positive-definite
-    input this is bit-identical to the textbook factorization; for singular
-    PSD input it returns a valid factor with ``L @ L.T == A`` instead of
-    dividing by zero (which, inside a parallel numba kernel, silently leaves
-    the output buffer uninitialized).
+    Uses explicit 3x3 formulas with rank-deficient completion for positive
+    semi-definite inputs. Each pivot argument is clamped at zero before the
+    square root, and off-diagonal entries below a zero pivot are set to zero
+    rather than divided. For strictly positive-definite inputs the result is
+    bitwise-identical to the standard factorization, while singular PSD inputs
+    produce a valid factor satisfying ``L @ L.T == A`` without dividing by zero.
     """
     L = np.zeros_like(A)
 

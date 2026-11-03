@@ -1,31 +1,11 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-Photometric utility functions for brutus.
-
-This module contains functions for converting between magnitudes and fluxes,
-handling asinh magnitudes ("luptitudes"), and computing photometric likelihoods.
-These utilities are fundamental for all photometric analysis in brutus.
+Magnitude, luptitude, and photometric log-likelihood functions.
 
 See Also
 --------
-brutus.analysis.individual.BruteForce : Uses phot_loglike for fitting
-brutus.analysis.populations : Uses outlier models for mixture fitting
+brutus.analysis.individual.BruteForce : Uses :func:`phot_loglike` for stellar fitting
+brutus.analysis.populations : Uses outlier log-likelihoods for mixture fitting
 brutus.core.sed_utils : SED generation functions
-
-Notes
------
-The photometric likelihood function `phot_loglike` is the core of brutus's
-Bayesian inference machinery. It supports:
-
-- Multi-filter photometry with flexible masking
-- Optional dimensionality prior (chi-square distribution)
-- Degrees of freedom reduction for fitted parameters
-
-The asinh magnitude system (luptitudes) provides better behavior than
-standard magnitudes for faint sources with high noise, preventing
-negative flux issues.
 
 Examples
 --------
@@ -79,36 +59,30 @@ __all__ = [
 
 def magnitude(phot, err, zeropoints=1.0):
     """
-    Convert photometry to magnitudes.
-
-    Magnitudes are in the survey's native system, with the zero point set
-    by `zeropoints`.
+    Convert linear flux densities and uncertainties to magnitudes.
 
     Parameters
     ----------
-    phot : `~numpy.ndarray` with shape (Nobs, Nfilt)
-        Observed photometric flux densities.
+    phot : `~numpy.ndarray` of shape `(Nobs, Nfilt)`
+        Observed photometric flux densities (in maggies when
+        ``zeropoints=1.0``).
 
-    err : `~numpy.ndarray` with shape (Nobs, Nfilt)
-        Observed photometric flux density errors.
+    err : `~numpy.ndarray` of shape `(Nobs, Nfilt)`
+        Observed photometric flux density uncertainties in the same units as
+        ``phot``.
 
-    zeropoints : float or `~numpy.ndarray` with shape (Nfilt,)
-        Flux density zero-points. Used as a "location parameter".
-        Default is `1.`.
+    zeropoints : float or `~numpy.ndarray` of shape `(Nfilt,)`, optional
+        Flux density zero-points. Default is ``1.0``.
 
     Returns
     -------
-    mag : `~numpy.ndarray` with shape (Nobs, Nfilt)
-        Magnitudes corresponding to input `phot`.
+    mag : `~numpy.ndarray` of shape `(Nobs, Nfilt)`
+        Magnitudes (mag) in the survey's native system.
 
-    mag_err : `~numpy.ndarray` with shape (Nobs, Nfilt)
-        Magnitudes errors corresponding to input `err`.
-
+    mag_err : `~numpy.ndarray` of shape `(Nobs, Nfilt)`
+        First-order magnitude uncertainties (mag).
     """
-    # Compute magnitudes.
     mag = -2.5 * np.log10(phot / zeropoints)
-
-    # Compute errors.
     mag_err = 2.5 / np.log(10.0) * err / phot
 
     return mag, mag_err
@@ -116,36 +90,28 @@ def magnitude(phot, err, zeropoints=1.0):
 
 def inv_magnitude(mag, err, zeropoints=1.0):
     """
-    Convert magnitudes to photometry.
-
-    Magnitudes are in the survey's native system, with the zero point set
-    by `zeropoints`.
+    Convert magnitudes and uncertainties to linear flux densities.
 
     Parameters
     ----------
-    mag : `~numpy.ndarray` with shape (Nobs, Nfilt)
-        Magnitudes.
+    mag : `~numpy.ndarray` of shape `(Nobs, Nfilt)`
+        Magnitudes (mag) in the survey's native system.
 
-    err : `~numpy.ndarray` with shape (Nobs, Nfilt)
-        Magnitude errors.
+    err : `~numpy.ndarray` of shape `(Nobs, Nfilt)`
+        Magnitude uncertainties (mag).
 
-    zeropoints : float or `~numpy.ndarray` with shape (Nfilt,)
-        Flux density zero-points. Used as a "location parameter".
-        Default is `1.`.
+    zeropoints : float or `~numpy.ndarray` of shape `(Nfilt,)`, optional
+        Flux density zero-points. Default is ``1.0``.
 
     Returns
     -------
-    phot : `~numpy.ndarray` with shape (Nobs, Nfilt)
-        Photometric flux densities corresponding to input `mag`.
+    phot : `~numpy.ndarray` of shape `(Nobs, Nfilt)`
+        Photometric flux densities (in maggies when ``zeropoints=1.0``).
 
-    phot_err : `~numpy.ndarray` with shape (Nobs, Nfilt)
-        Photometric errors corresponding to input `err`.
-
+    phot_err : `~numpy.ndarray` of shape `(Nobs, Nfilt)`
+        First-order flux density uncertainties in the same units as ``phot``.
     """
-    # Compute magnitudes.
     phot = 10 ** (-0.4 * mag) * zeropoints
-
-    # Compute errors.
     phot_err = err * 0.4 * np.log(10.0) * phot
 
     return phot, phot_err
