@@ -4,7 +4,7 @@
 
 ### Do I pass magnitudes or fluxes?
 
-Fluxes. brutus works in {term}`maggies <maggie>`, $F = 10^{-0.4\,m}$, in each survey's native system with no zero-point offset. {func}`~brutus.utils.inv_magnitude` converts magnitudes and their errors:
+Pass linear flux densities in {term}`maggies <maggie>`, $F = 10^{-0.4\,m}$, in each survey's native photometric system with no zero-point offset. {func}`~brutus.utils.inv_magnitude` converts magnitudes and their uncertainties into maggies:
 
 ```python
 from brutus.utils import inv_magnitude
@@ -23,7 +23,7 @@ flux, flux_err = inv_magnitude(mag, mag_err)
 
 ### How many bands does a star need?
 
-At least 4: each model has 3 free parameters (scale, $A_V$, $R_V$), and the fit needs one more for a degree of freedom. With fewer than 4 valid bands, `fit()` warns and fits anyway. A star with none is not fitted: `fit()` writes it with `model_idx = -99` and NaN values, warns once with the number of such stars, and fits the rest. A band is valid when its mask is true, its flux is positive, its error is positive and finite, and its error is below 0.25 mag (`merr_max`). Select the stars before fitting:
+A star requires at least 4 valid bands because each model fits 3 free parameters (scale, $A_V$, and $R_V$) and needs at least 1 degree of freedom. With 1 to 3 valid bands, `fit()` issues a warning and fits the star anyway. A star with 0 valid bands is skipped and written with `model_idx = -99` and NaN draws after a single summary warning. A band is valid when its mask is true, its flux is positive, its error is positive and finite, and its error is below 0.25 mag (`merr_max`). Select stars with at least 4 valid bands before fitting:
 
 ```python
 keep = (mask & np.isfinite(mag) & (mag_err < 0.25)).sum(axis=1) >= 4
@@ -63,8 +63,8 @@ The `fetch_*` functions in {mod}`brutus.data` download them from the Harvard Dat
 
 ### How do I make fits faster?
 
-Load only the bands you fit, and use a smaller grid: a narrower range of mass or metallicity, or `include_postms=False` for main-sequence stars. The time per star grows with the number of models ({doc}`grid_generation`).
+Because runtime per star scales linearly with the number of models and filters ({doc}`grid_generation`), load only the observed filters and restrict the grid to the relevant stellar regime (for example, a narrower mass or metallicity range or `include_postms=False` for main-sequence samples).
 
 ### How do I get the same draws again?
 
-Pass a seeded random state: `fit(..., rstate=np.random.RandomState(42))`.
+Pass a seeded NumPy random generator via `fit(..., rstate=np.random.default_rng(42))`.

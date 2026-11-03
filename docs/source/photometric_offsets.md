@@ -1,6 +1,6 @@
 # Photometric offsets
 
-The models and the data disagree by a few percent in each band, from the stellar models, the atmospheres and the photometric calibration. brutus corrects this with one multiplicative offset per band, applied to the data. This page describes the default offsets, how to add their uncertainties, and how to compute your own.
+Stellar atmosphere models, synthetic filter curves, and survey zero-point calibrations disagree at the few-percent level across broadband filters. brutus corrects these systematic residuals by applying one empirical multiplicative flux offset per band to the observed photometry and its uncertainties.
 
 The models themselves also carry an empirical correction to the temperatures and radii of low-mass stars; {doc}`stellar_models` gives its form.
 
@@ -38,7 +38,7 @@ $$
 
 where $\sigma_{{\rm sys},b}$ is the uncertainty in magnitudes. {doc}`quickstart` shows the code for its 11 bands.
 
-Without this term, the fits of bright stars, whose photometric errors are small, are limited by the offsets but do not know it: their $\chi^2$ is too large and their posteriors too narrow.
+Without this systematic uncertainty floor, bright stars with small measurement errors have inflated $\chi^2$ values and overly narrow posteriors because their residuals are dominated by model and calibration systematics.
 
 ## Computing your own offsets
 

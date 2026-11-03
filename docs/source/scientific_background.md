@@ -1,6 +1,6 @@
 # How brutus works
 
-brutus infers the distance, extinction and properties of a star from its photometry and, if available, its parallax {cite:p}`speagle2025`. It does not run a sampler. It evaluates every model in a grid of stellar models, integrates the priors for each one, and builds the posterior as a weighted sum over models.
+brutus infers the distance, extinction, and intrinsic properties of a star from its photometry and optional parallax {cite:p}`speagle2025` by evaluating every model in a pre-computed stellar grid, integrating the continuous priors over distance and reddening for each model, and assembling the posterior as a weighted mixture across the grid.
 
 ```{raw} html
 :file: figures/pipeline.svg
@@ -8,23 +8,23 @@ brutus infers the distance, extinction and properties of a star from its photome
 ```
 
 :::{div} figure-caption
-The four steps of a fit, described in [The fit in four steps](#the-fit-in-four-steps).
+The four stages of a `BruteForce` fit, detailed in [The fit in four steps](#the-fit-in-four-steps).
 :::
 
 ## The forward model
 
-A model star has intrinsic parameters $\theta$, which set its spectral energy distribution ({term}`SED`), and extrinsic parameters $\phi$, which set how it appears to us:
+A model star has intrinsic parameters $\theta$ that determine its spectral energy distribution ({term}`SED`), and extrinsic parameters $\phi$ that determine how its flux is attenuated and scaled along the line of sight:
 
 | | Parameter | Meaning |
 |---|---|---|
 | $\theta$ | $M_{\rm init}$ | {term}`initial mass`, in $M_\odot$ |
-| | EEP | {term}`equivalent evolutionary point <EEP>`: the position along the evolutionary track |
+| | EEP | {term}`equivalent evolutionary point <EEP>` (position along the evolutionary track) |
 | | [Fe/H] | {term}`metallicity` |
 | $\phi$ | $d$ | distance |
 | | $A_V$ | {term}`extinction` in the V band, in mag |
 | | $R_V$ | shape of the extinction curve |
 
-Age is not a parameter: it follows from $(M_{\rm init}, {\rm EEP}, {\rm [Fe/H]})$. {doc}`stellar_models` explains the tracks and why EEP is used.
+Stellar age is determined uniquely by $(M_{\rm init}, {\rm EEP}, {\rm [Fe/H]})$ rather than varied as an independent grid axis ({doc}`stellar_models`).
 
 Each grid model stores its magnitudes $M_b(\theta)$ in every band $b$ at a distance of 1 kpc, and two {term}`reddening vectors <reddening vector>` $R_b(\theta)$ and $R'_b(\theta)$. The predicted flux in band $b$ is
 
@@ -58,7 +58,7 @@ $$
 -2 \ln \mathcal{L}_\varpi(d) = \frac{\left( \hat\varpi - 1/d \right)^2}{\sigma_\varpi^2} + {\rm const}.
 $$
 
-A fit needs at least 4 bands: each model has 3 free parameters ($s$, $A_V$, $R_V$).
+A fit requires at least 4 valid bands because each model optimizes 3 free parameters ($s$, $A_V$, and $R_V$).
 
 ## The priors
 
@@ -79,9 +79,9 @@ $$
 
 ## The fit in four steps
 
-**1. Fit every model.** For each grid model, brutus finds the $(s, A_V, R_V)$ that maximize $\mathcal{L}_{\rm phot}\,\pi(R_V)$ by Gauss-Newton iteration: first in magnitudes for every model, then in fluxes for the models whose magnitude-space fit is close to the best. It also computes their 3×3 Fisher matrix, which describes a Gaussian around the best fit.
+**1. Fit every model.** For each grid model, brutus finds the $(s, A_V, R_V)$ that maximize $\mathcal{L}_{\rm phot}\,\pi(R_V)$ by Gauss-Newton iteration, first in magnitudes across the full grid and then in fluxes for the models whose magnitude-space fit lies near the best. It also computes their 3×3 Fisher matrix, which defines a local Gaussian approximation around the maximum-likelihood point.
 
-**2. Keep the good fits.** Each model gets the weight $\mathcal{L}_{\rm phot}\,\pi_{\rm model}$. If a parallax is given, the weight is multiplied by the parallax likelihood averaged over the model's Gaussian in $\ln d$: $\int \mathcal{N}(\ln d)\,\mathcal{N}(\varpi \mid 1/d,\,\sigma_\varpi)\,d\ln d$. Its width is the uncertainty of $\ln d$ after marginalizing over $A_V$ and $R_V$. A five-node Gauss-Hermite rule, centred on the peak of the integrand, evaluates it for every model. brutus keeps the models whose weight is within a factor $10^{-3}$ of the best (`wt_thresh`). If more than 50,000 remain (`max_models`), it keeps about 50,000 at random: model $i$ is kept with probability $p_i = \min(1, c\,w_i)$, proportional to this weight $w_i$, and its posterior weight in step 4 is divided by $p_i$. This keeps the evidence and the posterior draws unbiased.
+**2. Keep the good fits.** Each model receives the weight $\mathcal{L}_{\rm phot}\,\pi_{\rm model}$. When a parallax is provided, the weight is multiplied by the parallax likelihood averaged over the model's Gaussian in $\ln d$, $\int \mathcal{N}(\ln d)\,\mathcal{N}(\varpi \mid 1/d,\,\sigma_\varpi)\,d\ln d$, whose width is the uncertainty of $\ln d$ after marginalizing over $A_V$ and $R_V$. A five-node adaptive Gauss-Hermite rule, centred on the peak of the integrand, evaluates this integral for every model. brutus retains models whose weight is within a factor $10^{-3}$ of the best (`wt_thresh`). If more than 50,000 remain (`max_models`), it subsamples about 50,000 models using systematic random sampling where model $i$ is kept with probability $p_i = \min(1, c\,w_i)$ proportional to $w_i$, and divides its posterior weight in step 4 by $p_i$ so that the evidence and posterior draws remain unbiased.
 
 **3. Integrate the priors.** For each kept model $i$, brutus draws $N_{\rm mc} = 50$ points from its Gaussian in $(\ln d, A_V, R_V)$, in antithetic pairs $(z, -z)$. Each point $j$ is weighted by the priors that depend on position and by the exact parallax likelihood. The model's posterior weight is the average:
 
@@ -112,7 +112,7 @@ For each star, the output file holds the posterior draws of distance, $A_V$ and 
 
 ## An example: a sightline towards Orion
 
-The tutorials include 207 stars in one small field towards Orion ($\ell = 209.1°$, $b = -19.9°$), with Pan-STARRS and 2MASS photometry and Gaia parallaxes. Fitted with the default grid and priors, the stars that fit well trace the dust along the sightline: their extinction is low out to about 0.4 kpc and, with scatter, rises to 2 to 5 mag beyond 0.5 kpc, behind the Orion molecular cloud.
+The tutorials include 207 stars in a small field towards Orion ($\ell = 209.1°$, $b = -19.9°$) with Pan-STARRS and 2MASS photometry and Gaia parallaxes. Fitted with the default grid and priors, the well-fitting stars trace the dust column along the sightline. Extinction remains low out to about 0.4 kpc and rises to 2 to 5 mag beyond 0.5 kpc behind the Orion molecular cloud.
 
 ```{raw} html
 :file: figures/orion-sightline.svg

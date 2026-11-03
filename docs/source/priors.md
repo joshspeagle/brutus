@@ -1,6 +1,6 @@
 # Priors
 
-Photometry alone often allows several solutions: a nearer, cooler star or a farther, hotter star behind more dust ({doc}`scientific_background`). The priors decide between them when the data cannot. This page gives each prior's equation, its defaults and the argument of {meth}`~brutus.analysis.BruteForce.fit` that changes it.
+Because broadband photometry alone often permits both a nearby cool dwarf and a distant reddened giant ({doc}`scientific_background`), Bayesian priors over stellar evolution, Galactic structure, and interstellar dust break the degeneracy when astrometry or photometry cannot:
 
 | Prior | Depends on | Default | Changed by |
 |---|---|---|---|
@@ -92,7 +92,7 @@ $$
 
 The component weights for the age term include the star's [Fe/H], so the metallicity and the position together set which age distribution applies.
 
-The default prior needs the star's coordinates: pass `data_coords`, an array of shape `(Nstars, 2)` with $(\ell, b)$ in degrees. `fit()` raises `ValueError` without them.
+Evaluating the default Galactic prior requires Galactic coordinates `data_coords` as an array of shape `(Nstars, 2)` with $(\ell, b)$ in degrees (`fit()` raises `ValueError` if `data_coords` is omitted).
 
 ## Dust map
 
@@ -117,7 +117,7 @@ The per-model fit has Gaussian priors on $R_V$ and $A_V$:
 | `av_gauss` | `None` | mean and standard deviation of $A_V$; `None` is flat |
 | `avlim` | `(0.0, 20.0)` | allowed range of $A_V$ |
 
-These priors act in the Gauss-Newton fit of each model, so they also shape the Gaussian that the Monte Carlo step draws from. `av_gauss` adds to the dust-map prior: an informative `av_gauss` together with `dustfile` counts the $A_V$ information twice.
+These priors act in the Gauss-Newton fit of each model, so they also shape the Gaussian that the Monte Carlo step draws from. Because `av_gauss` multiplies the dust-map prior, passing an informative `av_gauss` together with `dustfile` double-counts the $A_V$ constraint.
 
 ## Changing the priors
 

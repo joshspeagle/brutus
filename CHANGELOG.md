@@ -20,7 +20,7 @@ errors. The [migration
 guide](https://brutus.readthedocs.io/en/latest/migration.html) lists
 each change a user must make.
 
-### Fixed — statistical correctness *(output-changing)*
+### Fixed: statistical correctness *(output-changing)*
 
 - **The parallax selection gate no longer removes the true models.**
   `logpost_grid` selects models by a weight that includes the parallax.
@@ -84,7 +84,7 @@ each change a user must make.
   0.2 mag systematic scatter in quadrature to the map spread (new `scatter`
   argument, default `0.2`, as in brutus <= 0.8.3; the 1.x refactor had
   dropped it). Bayestar19 spreads are ~0.02 mag (median), so without it the
-  prior pinned A(V) — and, through the A(V)-distance profile, the distance —
+  prior pinned A(V) (and, through the A(V)-distance profile, the distance)
   far more tightly than the map supports, producing overconfident and
   occasionally badly wrong distances. Map bins with zero spread now also
   receive a proper prior instead of falling back to uniform.
@@ -680,10 +680,10 @@ Systematic audit of every module outside the `BruteForce` hot path (covered in
 maps, plotting, data loading, and utilities. 113 verified findings were fixed
 across pull requests #61-#69, each with a regression test (the suite grew from
 725 to over 1000 tests). Highlights below; full details are in the PR
-descriptions. Items marked *(output-changing)* alter numerical results — in
-every case toward the statistically correct answer.
+descriptions. Items marked *(output-changing)* alter numerical results (in
+every case toward the statistically correct answer).
 
-### Fixed — statistical correctness *(output-changing)*
+### Fixed: statistical correctness *(output-changing)*
 
 - **Cluster fitting**: binary modeling was silently non-functional (an
   `smf=` keyword typo swallowed by `**kwargs`); post-MS models were
@@ -713,7 +713,7 @@ every case toward the statistically correct answer.
   densities are tail-stable; a singular covariance in a batch no longer
   corrupts the parallel sampler.
 
-### Fixed — robustness and API contracts
+### Fixed: robustness and API contracts
 
 - Silent failure modes now raise clear errors: omitting a multi-valued grid
   axis (was quietly pinned to the grid edge), zero surviving filters in

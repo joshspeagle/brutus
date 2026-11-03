@@ -1,6 +1,6 @@
 # Tutorials
 
-The tutorials are Jupyter notebooks in the `tutorials/` folder of the repository. Most need downloaded model data: start with Tutorial 0.
+The tutorials are Jupyter notebooks in the `tutorials/` directory of the repository. Because most notebooks require the downloaded MIST and Bayestar data files, start with Tutorial 0 to verify your installation and download the data.
 
 ## Setup
 

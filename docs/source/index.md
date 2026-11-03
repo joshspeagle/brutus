@@ -73,7 +73,7 @@ Combine the distance-extinction posteriors of many stars to measure the dust alo
 1. Evaluate the likelihood of the data for **every model** in a grid of stellar models.
 2. For each model, fit the **distance and extinction** that match the data best.
 3. Weight each model by its **priors**: Galactic structure, dust maps, parallax and initial mass function.
-4. The posterior is the **weighted mixture** of all models. No sampler, no convergence checks.
+4. Combine the weighted models into the **posterior distribution**, avoiding iterative MCMC sampling and convergence diagnostics.
 :::
 
 {doc}`scientific_background` explains each step.

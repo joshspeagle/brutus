@@ -23,7 +23,7 @@ healpy, which brutus uses for the 3D dust maps, does not run on native Windows. 
 
 ## Model data
 
-brutus fits stars against stellar models that ship separately from the code. Download them once: the `fetch_*` functions in {mod}`brutus.data` store each file in your user cache directory, or in `$ASTRO_BRUTUS_DATA_DIR` if you set it, and check its checksum.
+brutus fits stars against stellar models and calibration tables that are distributed separately from the Python package. The `fetch_*` functions in {mod}`brutus.data` download each file once, store it in your user cache directory (or in `$ASTRO_BRUTUS_DATA_DIR` when set), and verify its checksum:
 
 | Function | File | Size | Needed for |
 |---|---|---|---|

@@ -1,37 +1,37 @@
 # Glossary
 
-Quick reference for key terms used throughout the brutus documentation.
+Definitions of astrophysical, photometric, and statistical terms used throughout the `brutus` documentation.
 
 ## Stellar Evolution
 
 ```{glossary}
 EEP
 Equivalent Evolutionary Point
-   An index along an evolutionary track that marks the same phase on every track, whatever the mass. Key values: 202 ({term}`ZAMS`), 454 ({term}`TAMS`), 605 (tip of the red giant branch). The default grid spans 202 to 808. See {doc}`stellar_models` for the full list.
+   Dimensionless index along an evolutionary track that marks the same physical evolutionary phase on every track regardless of initial mass. Primary values include 202 ({term}`ZAMS`), 454 ({term}`TAMS`), and 605 (tip of the red giant branch). The default grid spans EEP 202 to 808 ({doc}`stellar_models`).
 
 ZAMS
 Zero-Age Main Sequence
-   The point when a star begins hydrogen fusion in its core (EEP 202). Marks the start of the main sequence phase.
+   Onset of stable core hydrogen fusion (EEP 202), marking the start of the main sequence.
 
 TAMS
 Terminal-Age Main Sequence
-   The point when core hydrogen is exhausted (EEP 454). The star then evolves off the main sequence toward the subgiant and red giant phases.
+   Exhaustion of core hydrogen (EEP 454), after which a star evolves off the main sequence toward the subgiant and red giant branches.
 
 isochrone
-   A curve in the HR diagram connecting stars of the *same age* but different masses. Used for modeling stellar clusters where stars formed together. Compare with {term}`evolutionary track`.
+   Curve in the Hertzsprung-Russell diagram connecting stars of the same age across a range of initial masses. Used to model coeval stellar populations such as open and globular clusters (compare with {term}`evolutionary track`).
 
 evolutionary track
-   The path a star of fixed initial mass traces through the HR diagram as it evolves. Tracks are parameterized by {term}`EEP`. Perpendicular to {term}`isochrones <isochrone>`.
+   Path traced through the Hertzsprung-Russell diagram by a star of fixed initial mass and composition as it ages, parameterized in `brutus` by {term}`EEP` (compare with {term}`isochrone`).
 
 initial mass
-   The mass of a star at formation, in solar masses (M☉). Combined with age and metallicity, this determines all other stellar properties.
+   Mass of a star at birth ($M_{\rm init}$), in solar masses ($M_\odot$). Together with evolutionary phase ({term}`EEP`) and chemical composition, initial mass determines the star's present-day physical properties.
 
 MIST
-   MESA Isochrones and Stellar Tracks - the stellar evolution models used by brutus. Covers 0.1-300 M☉, [Fe/H] from -4.0 to +0.5, all evolutionary phases from pre-MS through AGB.
+   MESA Isochrones and Stellar Tracks {cite:p}`choi2016,dotter2016`, the stellar evolution library used by `brutus`. MIST models span $0.1$ to $300\,M_\odot$ and ${\rm [Fe/H]}$ from $-4.0$ to $+0.5$ across evolutionary phases from the pre-main sequence through the asymptotic giant branch.
 
 IMF
 Initial Mass Function
-   The probability distribution of stellar masses at birth. brutus uses the Kroupa IMF: P(M) ∝ M⁻¹·³ for 0.08-0.5 M☉, P(M) ∝ M⁻²·³ above 0.5 M☉ (normalized over 0.08-100 M☉ by default).
+   Probability distribution of stellar initial masses at birth. `brutus` uses the {cite:t}`kroupa2001` broken power-law IMF, $\pi_{\rm IMF}(M) \propto M^{-1.3}$ for $0.08 \le M/M_\odot \le 0.5$ and $\pi_{\rm IMF}(M) \propto M^{-2.3}$ for $0.5 < M/M_\odot \le 100$.
 ```
 
 ## Chemical Abundances
@@ -39,116 +39,115 @@ Initial Mass Function
 ```{glossary}
 metallicity
 [Fe/H]
-   The logarithmic iron abundance relative to solar: [Fe/H] = log₁₀(N_Fe/N_H) - log₁₀(N_Fe/N_H)☉. Solar is [Fe/H] = 0; metal-poor stars have [Fe/H] < 0.
+   Logarithmic iron-to-hydrogen number abundance relative to the Sun, ${\rm [Fe/H]} = \log_{10}(N_{\rm Fe}/N_{\rm H}) - \log_{10}(N_{\rm Fe}/N_{\rm H})_\odot$ in dex. The Sun has ${\rm [Fe/H]} = 0$, and metal-poor stars have ${\rm [Fe/H]} < 0$.
 
 alpha enhancement
 [α/Fe]
-   The abundance of alpha-process elements (O, Mg, Si, Ca, Ti) relative to iron, compared to solar. Old halo and thick disk stars typically have [α/Fe] ~ +0.3. *Note: brutus model interfaces accept alpha enhancement (the afe argument to get_seds and a grid label in load_models), but the shipped MIST data files are computed at [α/Fe] = 0, so models are effectively solar-scaled unless you supply alpha-enhanced grids.*
+   Logarithmic abundance of $\alpha$-process elements (O, Mg, Si, Ca, Ti) relative to iron, in dex relative to the Sun. Old halo and thick-disk stars typically have ${\rm [\alpha/Fe]} \approx +0.3$. While `brutus` model interfaces accept `afe`, the shipped MIST model files are solar-scaled (${\rm [\alpha/Fe]} = 0$).
 ```
 
 ## Photometry
 
 ```{glossary}
 magnitude
-   Logarithmic brightness scale: m = -2.5 log₁₀(F/F_ref). Fainter objects have larger (more positive) magnitudes. A difference of 5 magnitudes corresponds to a factor of 100 in brightness.
+   Logarithmic brightness scale $m = -2.5 \log_{10}(F / F_0)$, where fainter objects have larger magnitudes and a difference of 5 magnitudes corresponds to a factor of 100 in flux.
 
 flux density
 maggie
-   Linear brightness measurement. brutus works in "maggies": 1 maggie is the flux of a source of magnitude 0 in the survey's own system, so flux = 10^(-0.4 × mag). {func}`brutus.utils.inv_magnitude` converts magnitudes and their errors.
+   Linear flux density unit used by `brutus`, where $1\text{ maggie}$ is the flux of a zero-magnitude source in the survey's native photometric system ($F = 10^{-0.4\,m}$). {func}`~brutus.utils.inv_magnitude` converts magnitudes and their uncertainties into maggies.
 
 SED
 Spectral Energy Distribution
-   The distribution of flux across wavelengths or photometric bands. brutus predicts SEDs from stellar models and compares them to observed photometry.
+   Distribution of emitted or observed flux across photometric passbands. `brutus` predicts synthetic broadband SEDs from stellar parameters and compares them against observed fluxes.
 
 parallax
-   The apparent angular shift of a star due to Earth's orbital motion, measured in milliarcseconds (mas). Distance in parsecs = 1000 / parallax_mas.
+   Apparent angular shift of a star caused by Earth's orbit around the Sun, measured in milliarcseconds (mas). For a true distance $d$ in kpc, the model parallax is $\varpi = 1 / d\text{ mas}$ (equivalently $1000 / d\text{ mas}$ for $d$ in pc).
 
 distance modulus
-   The difference between apparent and absolute magnitude: μ = m - M = 5 log₁₀(d / 10 pc). A star at 1 kpc has μ = 10 mag.
+   Logarithmic distance scale $\mu = m - M = 5 \log_{10}(d / 10\text{ pc})$, equal to $10\text{ mag}$ at $d = 1\text{ kpc}$.
 
 photometric offset
-   A multiplicative correction to the flux in one band that removes a systematic difference between the models and the data. {func}`brutus.data.load_offsets` reads them; `BruteForce.fit` applies them through `phot_offsets`. See {doc}`photometric_offsets`.
+   Multiplicative per-band calibration factor applied to observed fluxes and uncertainties to remove systematic zero-point differences between synthetic models and survey data ({doc}`photometric_offsets`). Loaded via {func}`~brutus.data.load_offsets` and passed to `BruteForce.fit` via `phot_offsets`.
 ```
 
 ## Extinction & Dust
 
 ```{glossary}
 extinction
-   Wavelength-dependent attenuation of starlight by interstellar dust, in magnitudes. A_V denotes extinction in the V-band (~550 nm). Extinction is stronger at shorter wavelengths.
+   Wavelength-dependent attenuation of starlight by interstellar dust, measured in magnitudes. $A_V$ denotes extinction in the Johnson $V$ band ($\sim 550\text{ nm}$).
 
 reddening
-   The color change caused by wavelength-dependent extinction. Quantified as color excess E(B-V) = (B-V)_observed - (B-V)_intrinsic.
+   Shift toward redder colors caused by stronger dust attenuation at shorter wavelengths, often expressed as the color excess $E(B - V) = (B - V)_{\rm obs} - (B - V)_0$.
 
 R_V
-   The ratio of total-to-selective extinction: R_V = A_V / E(B-V). Characterizes the dust grain size distribution. Typical values: ~3.1 (diffuse ISM), ~2 (dense molecular clouds), ~5 (diffuse high-latitude).
+   Total-to-selective extinction ratio $R_V = A_V / E(B - V)$, which characterizes the shape of the dust extinction curve and tracks the typical dust grain size. Diffuse interstellar dust averages $R_V \approx 3.1$ to $3.3$, whereas dense molecular clouds can reach $R_V \approx 4$ to $5$.
 
 reddening vector
-   The direction a star moves in color-color or color-magnitude space due to dust extinction. Depends on the extinction law and stellar spectrum.
+   Change in magnitude per unit $A_V$ across photometric passbands, parameterized in `brutus` model grids as $R_b(\theta) + R_V\,R'_b(\theta)$ for each model $\theta$ and filter $b$.
 
 line of sight
-   The direction from the observer toward a point on the sky. Extinction accumulates along it with distance, so stars at different distances in one direction trace the dust in 3D.
+   Direction from the observer toward sky coordinates $(\ell, b)$. Because dust extinction accumulates monotonically with distance along a sightline, the joint $(d, A_V)$ posteriors of stars along that direction trace the 3D dust distribution.
 
 Bayestar
-   The 3D dust map of Green et al. (2019), from Pan-STARRS and 2MASS photometry, covering the sky north of declination -30°. brutus can use it as a prior on extinction; see {doc}`priors`.
+   Three-dimensional dust map of {cite:t}`green2019` inferred from Pan-STARRS 1 and 2MASS photometry across the sky north of $\delta = -30^\circ$, used in `brutus` as an optional distance-dependent prior on $A_V$ ({doc}`priors`).
 ```
 
 ## Statistical Inference
 
 ```{glossary}
 posterior
-   The probability distribution of model parameters given the observed data: P(θ|data) ∝ P(data|θ) × P(θ). This is what brutus computes for each star.
+   Conditional probability distribution of model parameters given the observed data, $P(\theta, \phi \mid D) \propto \mathcal{L}(D \mid \theta, \phi)\,\pi(\theta, \phi)$.
 
 prior
-   Probability distribution encoding knowledge before seeing the data: P(θ). In brutus: {term}`IMF`, Galactic structure, dust maps. See {doc}`priors`.
+   Probability distribution $\pi(\theta, \phi)$ encoding astrophysical knowledge of the initial mass function, evolutionary lifetimes, Galactic structure, and 3D dust before fitting the observed fluxes ({doc}`priors`).
 
 likelihood
-   The probability of observing the data given model parameters: P(data|θ). Measures how well a model matches observations.
+   Probability density $\mathcal{L}(D \mid \theta, \phi)$ of observing the measured fluxes and parallax given model parameters $(\theta, \phi)$.
 
 evidence
-   The likelihood times the prior, integrated over all parameters: P(data). brutus saves an estimate per star (`obj_log_evid`), summed over the models it keeps and with unnormalized grid weights. Compare it only between fits that use the same grid and priors.
+   Marginal likelihood $P(D) = \int \mathcal{L}(D \mid \theta, \phi)\,\pi(\theta, \phi)\,d\theta\,d\phi$ integrated over the parameter space. `brutus` saves the log-evidence per star as `obj_log_evid`, which is comparable across fits that share the same model grid and priors.
 
 marginalization
-   Integrating over nuisance parameters to obtain distributions for parameters of interest. For example, marginalizing over stellar mass to get the distance posterior.
+   Integrating the joint posterior distribution over nuisance parameters to obtain the marginal posterior for parameters of interest, such as integrating over $(d, A_V, R_V)$ to weight each grid model or summing over stellar models to obtain the marginal distance distribution.
 
 brute force
-   The grid-based inference approach that gives brutus its name: systematically evaluate the likelihood at all pre-computed grid points, apply priors, then marginalize. Avoids MCMC convergence issues and guarantees complete parameter space coverage.
+   Grid-based Bayesian inference strategy in which the likelihood is evaluated across every model in a pre-computed stellar grid, continuous extrinsic parameters $(d, A_V, R_V)$ are optimized and integrated via local Gaussian approximations and Monte Carlo importance sampling, and the posterior is formed as a weighted mixture over the grid.
 ```
 
 ## brutus Classes
 
 ```{glossary}
 model grid
-   A set of stellar models at fixed points in initial mass, {term}`EEP` and metallicity (and, in some grids, alpha enhancement and binary mass ratio), each with its {term}`SED` and stellar properties. The default `grid_mist_v9` has 613,530 models.
+   Pre-computed table of stellar models evaluated across initial mass, {term}`EEP`, and metallicity (plus optional alpha enhancement and binary mass ratio), storing 1 kpc magnitudes and reddening vectors alongside physical stellar properties. The default `grid_mist_v9` grid contains 613,530 models.
 
 scale factor
-   The flux ratio between the observed star and its model at 1 kpc: scale = (1 kpc / d)², with d the distance. brutus fits it for each model with the extinction.
+   Flux dilution factor $s = (1\text{ kpc} / d)^2$ between a model stored at $1\text{ kpc}$ and a star at distance $d$ in kpc.
 
 StarGrid
-   A pre-computed {term}`model grid` optimized for fast fitting. Stores magnitudes at a reference distance of 1 kpc plus reddening coefficients for each model.
+   Container class ({class}`~brutus.core.StarGrid`) holding a pre-computed {term}`model grid` for fast SED evaluation and multi-linear grid interpolation.
 
 BruteForce
-   The main fitting class for individual stars. Takes a {term}`StarGrid` and observed photometry, returns posterior samples for distance, extinction, and stellar parameters.
+   Inference engine ({class}`~brutus.analysis.BruteForce`) that fits individual stars over a {term}`StarGrid` and writes posterior draws of distance, extinction, and model indices to HDF5.
 
 EEPTracks
-   Class for interpolating stellar parameters along evolutionary tracks. Provides predictions for any combination of mass, {term}`EEP`, and metallicity.
+   Interpolator class ({class}`~brutus.core.EEPTracks`) that predicts stellar physical properties along MIST evolutionary tracks as a function of $(M_{\rm init}, {\rm EEP}, {\rm [Fe/H]}, {\rm [\alpha/Fe]})$.
 
 Isochrone
-   Class for generating {term}`isochrones <isochrone>` at specified age and metallicity. Used with {term}`StellarPop` for cluster modeling.
+   Interpolator class ({class}`~brutus.core.Isochrone`) that predicts stellar physical properties along a coeval MIST {term}`isochrone` at specified $({\rm [Fe/H]}, {\rm [\alpha/Fe]}, \log_{10} t)$.
 
 StellarPop
-   Class for generating synthetic photometry for stellar populations. Combines {term}`Isochrone` predictions with bolometric corrections and extinction.
+   Population synthesis class ({class}`~brutus.core.StellarPop`) that combines an {term}`Isochrone` with neural network bolometric corrections to generate synthetic photometry for single and binary stellar populations.
 ```
+
 ```{note}
 **Model Coverage**
 
-MIST models in brutus cover: main sequence stars (0.1-300 M☉), subgiants, red giants, horizontal branch, and asymptotic giant branch stars.
-
-**Not covered**: white dwarfs, brown dwarfs (< 0.08 M☉), neutron stars, black holes, or very young pre-main-sequence stars (< 1 Myr).
+The MIST models shipped with `brutus` cover main-sequence stars, subgiants, red giants, core helium-burning stars, and asymptotic giant branch stars ($0.1$ to $300\,M_\odot$ in the full tracks, and $0.5$ to $2.0\,M_\odot$ in the default `mist_v9` grid). Compact remnants (white dwarfs, neutron stars, black holes), brown dwarfs ($< 0.08\,M_\odot$), and interacting binaries are outside the grid domain.
 ```
 
 ## See Also
 
-- {doc}`stellar_models` - Detailed explanation of MIST models and EEP
-- {doc}`scientific_background` - Statistical framework
-- {doc}`priors` - Prior probability distributions
-- {ref}`available-filters` - Supported photometric filters
+- {doc}`stellar_models` for MIST evolutionary tracks, EEPs, and neural network bolometric corrections
+- {doc}`scientific_background` for the statistical forward model and four-step inference pipeline
+- {doc}`priors` for the IMF, Galactic structure, and 3D dust priors
+- {ref}`available-filters` for the 49 supported photometric passbands
