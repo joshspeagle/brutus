@@ -9,6 +9,7 @@
 - **Coordinate Lookup (`lb2pix`):** Converts Galactic $(\ell, b)$ coordinates in degrees to nested or ring HEALPix pixel indices.
 
 ```{eval-rst}
+.. py:module:: brutus.dust
 .. currentmodule:: brutus.dust
 ```
 
@@ -32,16 +33,4 @@
 
 ```{eval-rst}
 .. autofunction:: lb2pix
-```
-
-## Submodules
-
-```{eval-rst}
-.. automodule:: brutus.dust.maps
-   :no-members:
-```
-
-```{eval-rst}
-.. automodule:: brutus.dust.extinction
-   :no-members:
 ```

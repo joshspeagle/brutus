@@ -13,7 +13,7 @@
 ```
 
 :::{div} hero-tagline
-`brutus` infers Bayesian posteriors for stellar distances, dust extinctions, and intrinsic parameters from broadband photometry and astrometry by evaluating and marginalizing over pre-computed stellar model grids.
+Distances, extinctions and stellar properties from photometry and astrometry, by evaluating every model on a grid.
 :::
 
 ::::{div} hero-buttons
@@ -39,7 +39,7 @@ API reference
 
 :::::
 
-## Core Capabilities
+## What brutus does
 
 ::::{grid} 1 1 3 3
 :gutter: 3
@@ -48,35 +48,37 @@ API reference
 :link: quickstart
 :link-type: doc
 
-Infer joint posteriors over distance, extinction ($A_V$, $R_V$), and intrinsic stellar parameters across large photometric and astrometric catalogs using 3D Galactic structure and dust-map priors.
+Fit the distance, extinction and stellar properties of thousands of stars from their photometry and parallaxes, with Galactic and dust-map priors.
 :::
 
 :::{grid-item-card} Model star clusters
 :link: population_modeling
 :link-type: doc
 
-Evaluate marginal likelihoods for coeval stellar populations with shared age, metallicity, distance, and foreground extinction while accounting for unresolved binaries and field-star contamination.
+Fit one age, metallicity, distance and extinction to a coeval population, with binaries and outliers.
 :::
 
 :::{grid-item-card} Map dust in 3D
 :link: tutorials/index
 :link-type: doc
 
-Combine stellar distance-extinction posteriors along a sightline to infer the distances, amplitudes, and widths of foreground interstellar dust clouds.
+Combine the distance-extinction posteriors of many stars to measure the dust along a line of sight.
 :::
 
 ::::
 
-## Inference Pipeline
+## How it works
 
 :::{div} steps
-1. **Evaluate grid likelihoods** across every template in a pre-computed stellar evolution grid (`StarGrid`).
-2. **Optimize extrinsic parameters** by solving for the maximum-likelihood distance scale, visual extinction $A_V$, and reddening vector shape $R_V$ (and their local $3 \times 3$ Fisher information matrix) at each grid node.
-3. **Integrate astrophysical priors** over distance, 3D dust extinction, parallax, the initial mass function (IMF), and evolutionary lifetimes via antithetic Monte Carlo importance sampling.
-4. **Resample the joint posterior** across grid models and continuous extrinsic parameters without requiring iterative Markov chain Monte Carlo (MCMC) burn-in or convergence diagnostics ({doc}`scientific_background`).
+1. Evaluate the likelihood of the data for **every model** in a grid of stellar models.
+2. For each model, fit the **distance and extinction** that match the data best.
+3. Weight each model by its **priors**: Galactic structure, dust maps, parallax and initial mass function.
+4. The posterior is the **weighted mixture** of all models. No sampler, no convergence checks.
 :::
 
-## Minimal Example
+{doc}`scientific_background` explains each step.
+
+## A first fit
 
 ```python
 from brutus.analysis import BruteForce
@@ -87,7 +89,7 @@ from brutus.utils import inv_magnitude
 models, labels, _ = load_models(fetch_grids(grid="mist_v9"), filters=filters)
 fitter = BruteForce(StarGrid(models, labels))
 
-flux, flux_err = inv_magnitude(mag, mag_err)  # linear flux densities in maggies
+flux, flux_err = inv_magnitude(mag, mag_err)  # brutus fits fluxes, not magnitudes
 fitter.fit(
     data=flux, data_err=flux_err, data_mask=mask, data_labels=ids,
     parallax=parallax, parallax_err=parallax_err,  # in mas
@@ -96,11 +98,11 @@ fitter.fit(
 )
 ```
 
-See {doc}`quickstart` for a complete end-to-end workflow including systematic error floors and posterior diagnostics.
+The {doc}`quickstart` runs this end to end and reads the results.
 
 ## Citing brutus
 
-If you use `brutus` in your research, please cite [Speagle et al. (2025), arXiv:2503.02227](https://arxiv.org/abs/2503.02227).
+If you use brutus, please cite [Speagle et al. (2025), arXiv:2503.02227](https://arxiv.org/abs/2503.02227).
 
 ```{toctree}
 :caption: Getting started

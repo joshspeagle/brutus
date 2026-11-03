@@ -1,10 +1,10 @@
 # Quickstart
 
-Fitting a photometric catalog of stars with `brutus` proceeds in four stages: loading a pre-computed stellar model grid, converting observed magnitudes into linear flux densities with systematic uncertainty floors, running {class}`~brutus.analysis.BruteForce` to evaluate the posterior across the grid, and reading the resulting posterior draws and fit diagnostics from the output HDF5 file. Before running the example below, {doc}`install brutus and download the default grid and photometric offsets <installation>`.
+This page fits stars from their photometry and parallaxes, then reads the distance, extinction, mass and fit quality from the results. It assumes you have {doc}`installed brutus <installation>` and downloaded the grid and the offsets.
 
-## 1. Load the Stellar Model Grid
+## 1. Load the models
 
-Specify the photometric passbands in the exact column order of your input catalog (`brutus.data.filters` provides pre-defined filter lists for common surveys, and {ref}`available-filters` lists all 49 supported passbands):
+Choose the filters of your photometry, in the order of your data columns. `brutus.data.filters` has lists for common surveys; {ref}`available-filters` lists all 49.
 
 ```python
 from brutus.core import StarGrid
@@ -18,11 +18,11 @@ grid = StarGrid(models, labels)
 offsets = load_offsets("offsets_mist_v9.txt", filters=filters)
 ```
 
-The default `grid_mist_v9.h5` file contains approximately 600,000 {term}`stellar models <model grid>`, storing each model's unreddened {term}`SED` at 1 kpc, linear reddening coefficients, and intrinsic stellar properties ({term}`initial mass`, age, {term}`metallicity`, {term}`EEP`, effective temperature, and surface gravity).
+The grid holds about 600,000 {term}`stellar models <model grid>`. Each has an {term}`SED` at 1 kpc and its stellar properties ({term}`initial mass`, age, {term}`metallicity`, {term}`EEP`, temperature, surface gravity).
 
-## 2. Prepare the Photometric and Astrometric Inputs
+## 2. Prepare the data
 
-Because flux measurement errors are approximately Gaussian whereas magnitude errors become asymmetric at low signal-to-noise ratios, `brutus` evaluates likelihoods in linear {term}`flux densities <flux density>` (maggies). Convert your observed magnitudes and uncertainties using {func}`~brutus.utils.inv_magnitude` and construct a boolean validity mask:
+brutus fits {term}`flux densities <flux density>`, not magnitudes. Convert them, and mark the bands each star has:
 
 ```python
 import numpy as np
@@ -33,32 +33,30 @@ mask = np.isfinite(mag) & np.isfinite(mag_err)
 flux, flux_err = inv_magnitude(np.nan_to_num(mag), np.nan_to_num(mag_err, nan=1.0))
 ```
 
-By default, `brutus` masks any band with a magnitude uncertainty exceeding 0.25 mag (`merr_max`). Because synthetic stellar atmospheres and empirical survey calibrations still differ at the level of roughly 0.02 mag in optical bands and 0.03 mag in near-infrared bands ({doc}`photometric_offsets`), add this systematic uncertainty floor in quadrature so that bright stars with tiny photon-counting errors do not receive artificially inflated $\chi^2$ values:
+brutus drops any band with an error above 0.25 mag (`merr_max`). The models and the data also differ by about 0.02 mag in optical bands and 0.03 mag in near-infrared bands ({doc}`photometric_offsets`). Add this systematic error in quadrature; without it, good fits of bright stars look poor:
 
 ```python
 sys_mag = np.array([0.02] * 8 + [0.03] * 3)  # Gaia + Pan-STARRS, then 2MASS
 flux_err = np.hypot(flux_err, flux * sys_mag * np.log(10) / 2.5)
 ```
 
-Each star in the catalog also takes the following auxiliary inputs:
+You also need, per star:
 
-| Input | Shape | Units and Description |
+| Input | Shape | Units |
 |---|---|---|
-| `parallax`, `parallax_err` | `(Nstars,)` | Astrometric parallax and uncertainty in mas (optional; breaks the distance-extinction degeneracy) |
-| `coords` | `(Nstars, 2)` | Galactic longitude and latitude $(\ell, b)$ in degrees |
-| `ids` | `(Nstars,)` | Integer or byte-string identifier per star (`h5py` does not store fixed-width NumPy Unicode strings) |
+| `parallax`, `parallax_err` | `(Nstars,)` | mas (optional, but they break the distance-extinction degeneracy) |
+| `coords` | `(Nstars, 2)` | Galactic longitude and latitude, degrees |
+| `ids` | `(Nstars,)` | an integer or byte-string label for each star (h5py cannot save unicode strings) |
 
-A constrained fit requires at least 4 valid photometric bands because each grid model optimizes 3 continuous extrinsic parameters (distance, $A_V$, and $R_V$) and requires at least 1 residual degree of freedom. When a star has between 1 and 3 valid bands, `brutus` issues a warning and proceeds with the fit; when a star has 0 valid bands, `brutus` skips the fit and records `model_idx = -99`. Filter the catalog to retain stars with at least 4 valid bands before fitting:
+A star needs at least 4 valid bands: the fit has 3 free parameters per model (distance, $A_V$ and $R_V$). With fewer, brutus warns; with none, it skips the star and writes it with `model_idx = -99`. Keep only the stars with enough bands:
 
 ```python
 keep = (mask & (mag_err < 0.25)).sum(axis=1) >= 4
 ```
 
-The steps below assume `keep` has been applied to all input arrays.
+The examples below assume you have applied `keep` to every input.
 
-## 3. Run the Grid Fit
-
-Initialize {class}`~brutus.analysis.BruteForce` with the loaded `StarGrid` and run {meth}`~brutus.analysis.BruteForce.fit`:
+## 3. Fit
 
 ```python
 from brutus.analysis import BruteForce
@@ -73,11 +71,11 @@ fitter.fit(
 )
 ```
 
-For each star, `fit` evaluates the likelihood across every model in the grid, optimizes its distance and extinction, integrates the astrophysical {term}`priors <prior>` ({doc}`scientific_background`), and writes 250 equally weighted draws from the joint {term}`posterior` to `results.h5`. To include the Bayestar 3D dust map as a distance-dependent prior on extinction, download the map with `fetch_dustmaps()` and pass `dustfile="bayestar2019_v1.h5"`.
+For each star, `fit` evaluates every model, fits its distance and extinction, weights it by the {term}`priors <prior>`, and saves 250 draws from the {term}`posterior`. {doc}`scientific_background` explains the steps. To add the 3D dust map as a prior on extinction, download it with `fetch_dustmaps()` and pass `dustfile="bayestar2019_v1.h5"`.
 
-## 4. Inspect Posterior Draws and Diagnostics
+## 4. Read the results
 
-The output HDF5 file stores one row per star in the order of the input catalog:
+The draws are in the HDF5 file, one row per star:
 
 ```python
 import h5py
@@ -98,23 +96,23 @@ print(f"A_V = {np.median(av[0]):.2f} mag")
 print(f"initial mass = {np.median(labels['mini'][idx[0]]):.2f} Msun")
 ```
 
-To obtain posterior draws of intrinsic stellar properties (such as initial mass, age, metallicity, or effective temperature), index the grid's `labels` array with `model_idx` for each draw.
+Stellar properties come from the grid: index `labels` with the model of each draw.
 
-Evaluate goodness of fit using the $\chi^2$ survival-function p-value for $N_{\rm bands} - 3$ degrees of freedom rather than the reduced $\chi^2 / N_{\rm bands}$, because each model optimizes 3 free extrinsic parameters:
+Check the fit quality with the p-value of the best fit, not with `chi2 / nbands`:
 
 ```python
 pvalue = stats.chi2.sf(chi2, np.maximum(nbands - 3, 1))
 good = pvalue > 1e-3
 ```
 
-A p-value below $10^{-6}$ indicates that no single-star template in the grid reproduces the observed fluxes within the stated uncertainties, which typically occurs for unresolved binaries, pre-main-sequence stars, or corrupted photometry ({doc}`understanding_results`).
+A p-value below $10^{-6}$ means no model matches the star: it may be a binary, a young star or a bad measurement. {doc}`understanding_results` describes every output and check.
 
-## Further Reading
+## Next steps
 
-| Task | Documentation Guide |
+| To | See |
 |---|---|
-| Work through real survey data and diagnostic plots | {doc}`tutorials/index` |
-| Generate synthetic photometry for individual stars or populations | {doc}`stellar_models` |
-| Fit coeval star clusters with binaries and field stars | {doc}`population_modeling` |
-| Infer 3D dust clouds along a line of sight | {doc}`Tutorial 7 <tutorials/tutorial_07_dust_mapping>` |
-| Customize Galactic structure, IMF, and dust priors | {doc}`priors` |
+| Work through real data, with plots | {doc}`tutorials/index` |
+| Make synthetic photometry for a star or a population | {doc}`stellar_models` |
+| Fit a star cluster | {doc}`population_modeling` |
+| Map dust along a line of sight | {doc}`Tutorial 7 <tutorials/tutorial_07_dust_mapping>` |
+| Change the priors | {doc}`priors` |

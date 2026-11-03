@@ -3,6 +3,7 @@
 `brutus.plotting` generates diagnostic and publication figures from `BruteForce` posterior outputs and stellar model grids, including corner plots of intrinsic and extrinsic parameters, posterior predictive SED comparisons, 2D distance-reddening posteriors, and empirical photometric offset residuals.
 
 ```{eval-rst}
+.. py:module:: brutus.plotting
 .. currentmodule:: brutus.plotting
 ```
 
@@ -48,41 +49,4 @@
 
 ```{eval-rst}
 .. autofunction:: hist2d
-```
-
-## Submodules
-
-```{eval-rst}
-.. automodule:: brutus.plotting.corner
-   :no-members:
-```
-
-```{eval-rst}
-.. automodule:: brutus.plotting.distance
-   :no-members:
-```
-
-```{eval-rst}
-.. automodule:: brutus.plotting.binning
-   :no-members:
-```
-
-```{eval-rst}
-.. automodule:: brutus.plotting.sed
-   :no-members:
-```
-
-```{eval-rst}
-.. automodule:: brutus.plotting.summary
-   :no-members:
-```
-
-```{eval-rst}
-.. automodule:: brutus.plotting.offsets
-   :no-members:
-```
-
-```{eval-rst}
-.. automodule:: brutus.plotting.utils
-   :no-members:
 ```
