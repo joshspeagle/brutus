@@ -8,7 +8,8 @@ Because broadband photometry alone often permits both a nearby cool dwarf and a 
 
 - **Stellar Mass and Luminosity:** Kroupa initial mass function (`logp_imf`) and Pan-STARRS $r$-band luminosity function (`logp_ps1_luminosity_function`).
 - **Astrometry:** Gaussian parallax likelihood (`logp_parallax`) and scale-factor marginalization (`logp_parallax_scale`).
-- **Galactic Structure:** Three-component thin-disk, thick-disk, and halo number density, metallicity, and age distributions (`logp_galactic_structure`, `logn_disk`, `logn_halo`, `logp_feh`, `logp_age_from_feh`).
+- **Galactic Structure:** Thin-disk, thick-disk, halo, and bar number density, metallicity, and age distributions (`logp_galactic_structure`, `galactic_prior_summary`, `logn_disk`, `logn_halo`).
+- **Kinematics:** Velocity moments of the Galactic components, projected to proper motions and radial velocity (`thin_disk_velocity_moments`, `velocity_to_observables`).
 - **Interstellar Extinction:** Truncated Gaussian $A_V$ prior from 3D dust maps (`logp_extinction`).
 
 **Typical Usage:**
@@ -95,6 +96,8 @@ fitter.fit(
 
 ```{eval-rst}
 .. autofunction:: logp_galactic_structure
+
+.. autofunction:: galactic_prior_summary
 ```
 
 ```{eval-rst}
@@ -105,12 +108,28 @@ fitter.fit(
 .. autofunction:: logn_halo
 ```
 
+## Kinematics
+
+The Galactic prior uses the disk vertical dispersions. The fit does not use the velocities yet ([#275](https://github.com/joshspeagle/brutus/issues/275)).
+
 ```{eval-rst}
-.. autofunction:: logp_feh
+.. autofunction:: solar_velocity
 ```
 
 ```{eval-rst}
-.. autofunction:: logp_age_from_feh
+.. autofunction:: thin_disk_velocity_moments
+```
+
+```{eval-rst}
+.. autofunction:: thick_disk_velocity_moments
+```
+
+```{eval-rst}
+.. autofunction:: halo_velocity_moments
+```
+
+```{eval-rst}
+.. autofunction:: velocity_to_observables
 ```
 
 ## Extinction Priors

@@ -9,7 +9,7 @@ include pyproject.toml
 include src/brutus/priors/PSMrLF_lnprior.dat
 
 # Include package data recursively
-recursive-include src/brutus *.dat *.txt *.h5
+recursive-include src/brutus *.dat *.txt *.h5 *.npz
 
 # Exclude development and build files
 exclude setup.py.old

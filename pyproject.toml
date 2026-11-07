@@ -83,7 +83,7 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-"*" = ["*.dat", "*.txt", "*.md"]
+"*" = ["*.dat", "*.txt", "*.md", "*.npz"]
 
 # Development tools configuration
 [tool.black]
