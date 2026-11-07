@@ -67,4 +67,4 @@ Load only the bands you fit, and use a smaller grid: a narrower range of mass or
 
 ### How do I get the same draws again?
 
-Pass a seeded random state: `fit(..., rstate=np.random.RandomState(42))`.
+Pass a seeded random generator: `fit(..., rstate=np.random.default_rng(42))`.

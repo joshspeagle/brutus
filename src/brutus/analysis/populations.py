@@ -1,18 +1,12 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-Isochrone-based stellar population analysis with mixture-before-marginalization.
+Evaluate coeval stellar population likelihoods along isochrone grids.
 
-This module provides functions for Bayesian inference of coeval stellar population
-parameters using isochrone fitting. The implementation uses the mathematically
-correct approach of applying mixture models before marginalization over stellar
-parameters (mass, secondary mass fraction).
-
-The key innovation is the mixture-before-marginalization approach, which properly
-accounts for field contamination by applying the mixture model at each grid point
-before integrating over stellar parameters. This differs from traditional approaches
-that marginalize first and mix later, which can produce biased results.
+Computes the log-likelihood of observed photometry and parallaxes for a coeval
+stellar population with field-star contamination (`isochrone_population_loglike`).
+At each point on the ``(mass, SMF)`` isochrone grid, the cluster and field-outlier
+likelihoods are combined into a two-component mixture before marginalizing over
+initial mass and secondary mass fraction (SMF) with normalized grid-spacing
+Jacobians.
 
 See Also
 --------
@@ -59,14 +53,11 @@ Basic usage with emcee:
 >>> sampler.run_mcmc(initial_pos, nsteps)
 """
 
-from __future__ import division, print_function
-
 import warnings
 
 import numpy as np
 from scipy.special import logsumexp
 
-# Import photometry utilities
 from ..utils.math import LOG_ZERO
 from ..utils.photometry import (
     chisquare_outlier_loglike,
@@ -160,12 +151,19 @@ def generate_isochrone_population_grid(
     -------
     grid : dict
         Dictionary containing:
-        - 'photometry': array, shape (N_total_points, N_filters) - model photometry
-        - 'masses': array, shape (N_total_points,) - stellar masses
-        - 'smf_values': array, shape (N_total_points,) - SMF values for each point
-        - 'mass_jacobians': array, shape (N_total_points,) - mass grid spacing
-        - 'smf_jacobians': array, shape (N_total_points,) - SMF grid spacing
-        - 'grid_info': dict with SMF grid structure information
+
+        - ``'photometry'``: ``numpy.ndarray`` of shape ``(N_total_points, N_filters)``,
+          model flux densities in maggies (``10**(-0.4 * mag)``).
+        - ``'masses'``: ``numpy.ndarray`` of shape ``(N_total_points,)``, initial
+          stellar masses in :math:`M_\odot`.
+        - ``'smf_values'``: ``numpy.ndarray`` of shape ``(N_total_points,)``,
+          secondary mass fractions in ``[0, 1]``.
+        - ``'mass_jacobians'``: ``numpy.ndarray`` of shape ``(N_total_points,)``,
+          mass grid spacings :math:`\Delta M` in :math:`M_\odot`.
+        - ``'smf_jacobians'``: ``numpy.ndarray`` of shape ``(N_total_points,)``,
+          SMF grid spacings :math:`\Delta({\rm SMF})`.
+        - ``'grid_info'``: ``dict`` with ``'smf_grid'``, ``'eep_grid'``, and
+          ``'n_total_points'``.
 
     Raises
     ------
@@ -199,12 +197,11 @@ def generate_isochrone_population_grid(
     .. math::
         P({\rm data}) = \int \int P({\rm data}|m, {\rm SMF}) \, dm \, d({\rm SMF})
 
-    Binary models are only computed for EEP ≤ eep_binary_max (typically
-    main sequence) to avoid unphysical binary configurations. Models above
+    Binary models are computed only for ``eep <= eep_binary_max``. Models above
     ``eep_binary_max`` are independent of SMF, so they are stored once (from
-    the first SMF slice) carrying the **full** SMF measure — the sum of all
-    SMF grid spacings — so that the SMF marginalization weights them
-    consistently with main-sequence models that accumulate over every slice.
+    the first SMF slice) with the total SMF measure (the sum of all SMF grid
+    spacings) so that SMF marginalization weights them consistently with
+    main-sequence models that accumulate over every slice.
     Their recorded ``smf_values`` entry is the slice they were generated from
     and is not meaningful for these SMF-independent models.
     """
@@ -360,9 +357,9 @@ def compute_isochrone_cluster_loglike(
     Parameters
     ----------
     obs_flux : array-like, shape (N_objects, N_filters)
-        Observed flux densities
+        Observed linear flux densities in maggies (``10**(-0.4 * mag)``).
     obs_err : array-like, shape (N_objects, N_filters)
-        Flux errors
+        Flux density errors in maggies.
     isochrone_grid : dict
         Isochrone grid from generate_isochrone_population_grid()
     parallax : array-like, shape (N_objects,), optional
@@ -531,9 +528,9 @@ def compute_isochrone_outlier_loglike(
     Parameters
     ----------
     obs_flux : array-like, shape (N_objects, N_filters)
-        Observed flux densities
+        Observed linear flux densities in maggies (``10**(-0.4 * mag)``).
     obs_err : array-like, shape (N_objects, N_filters)
-        Flux errors
+        Flux density errors in maggies.
     isochrone_grid : dict, optional
         Isochrone grid containing stellar parameters for potential dependence
     parallax : array-like, shape (N_objects,), optional
@@ -635,7 +632,7 @@ def apply_isochrone_mixture_model(
     lnl_cluster, lnl_outlier, cluster_prob, field_fraction
 ):
     r"""
-    Apply mixture model at each grid point: mixture before marginalization.
+    Combine cluster and outlier log-likelihoods at each isochrone grid point.
 
     For each (grid_point, object) pair:
     P(data|mass,SMF) = P_cluster * P(data|cluster) + P_outlier * P(data|outlier)
@@ -680,9 +677,8 @@ def apply_isochrone_mixture_model(
     .. math::
         \ln L_{\rm mix} = \ln(\exp(\ln L_c + \ln w_c) + \exp(\ln L_o + \ln w_o))
 
-    The key distinction from traditional approaches is that this mixture
-    is applied **before** marginalization over stellar parameters, which
-    is mathematically correct for contaminated populations.
+    Applying the mixture at each ``(mass, SMF)`` grid point before marginalizing
+    evaluates the cluster and outlier hypotheses under the same per-star integral.
     """
     lnl_cluster = np.asarray(lnl_cluster)
     lnl_outlier = np.asarray(lnl_outlier)
@@ -756,13 +752,13 @@ def marginalize_isochrone_grid(lnl_mixture, mass_jacobians, smf_jacobians):
     - :math:`\Delta m_i` is the mass grid spacing (mass_jacobians)
     - :math:`\Delta({\rm SMF})_j` is the SMF grid spacing (smf_jacobians)
 
-    Invalid models (with NaN likelihood) are converted to -∞ before the
-    logsumexp operation, so they contribute zero probability. The measure is
-    normalized over the valid grid points (denominator above), making the
-    flat measure a proper uniform prior p(m, SMF | θ): without this, the
-    θ-dependent grid volume multiplies every mixture component — including
-    the θ-independent outlier model — and biases both the population
-    parameters and the field fraction.
+    Invalid models (with NaN likelihood) are set to ``-np.inf`` before
+    ``logsumexp`` so that they contribute zero probability. Normalizing the
+    measure over the valid grid points (the denominator above) makes
+    :math:`p(m, {\rm SMF} \mid \theta)` a proper uniform prior because an
+    unnormalized :math:`\theta`-dependent grid volume would multiply every
+    mixture component, including the :math:`\theta`-independent outlier model,
+    and bias the inferred population parameters and field fraction.
 
     The jacobians represent geometric integration weights and are crucial
     for obtaining unbiased parameter estimates.
@@ -775,13 +771,11 @@ def marginalize_isochrone_grid(lnl_mixture, mass_jacobians, smf_jacobians):
     geometric_jacobian = mass_jacobians * smf_jacobians  # shape (N_grid_points,)
     ln_jacobian = np.log(geometric_jacobian)  # shape (N_grid_points,)
 
-    # Normalize the integration measure over the *valid* grid points, turning
-    # the flat measure into a proper (uniform) prior p(m, SMF | theta). The
-    # grid volume Z(theta) = sum of jacobians changes with the population
-    # parameters (isochrone mass range, invalid-model region); without this
-    # normalization every component of the mixture — including the
-    # theta-independent outlier model — is multiplied by Z(theta), biasing
-    # the inferred population parameters and the field fraction.
+    # Normalize the integration measure over the valid grid points so that
+    # p(m, SMF | theta) is a proper uniform prior. Because the grid volume
+    # Z(theta) = sum of jacobians varies with theta, omitting this normalization
+    # would multiply every mixture component (including the theta-independent
+    # outlier model) by Z(theta) and bias theta and the field fraction.
     valid_rows = np.any(np.isfinite(lnl_mixture), axis=1) & np.isfinite(ln_jacobian)
     if not np.any(valid_rows):
         n_objects = lnl_mixture.shape[1]
@@ -822,9 +816,9 @@ def isochrone_population_loglike(
     **outlier_kwargs,
 ):
     r"""
-    Compute log-likelihood for coeval stellar population using isochrone fitting.
+    Compute log-likelihood for a coeval stellar population using isochrone fitting.
 
-    Uses the mathematically correct mixture-before-marginalization approach:
+    Evaluates the population log-likelihood in five steps:
     1. Generate isochrone grid over (mass, SMF)
     2. Compute cluster and outlier likelihoods at each grid point
     3. Apply mixture model at each grid point

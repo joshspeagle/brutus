@@ -1,17 +1,11 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-Neural network utilities for fast SED prediction.
+Predict stellar bolometric corrections and apparent magnitudes with neural networks.
 
-This module contains classes for neural network-based bolometric correction
-predictions, enabling fast computation of stellar spectral energy distributions
-from fundamental stellar parameters (Teff, log g, [Fe/H], [α/Fe], Av, Rv).
-
-The neural networks are trained on synthetic stellar spectra and provide rapid
-computation of bolometric corrections across multiple photometric bands,
-significantly speeding up stellar parameter inference compared to full spectral
-synthesis.
+`FastNN` loads pre-trained 3-layer feedforward neural networks that evaluate
+bolometric corrections from stellar atmosphere parameters and extinction
+``(Teff, logg, [Fe/H], [alpha/Fe], A(V), R(V))``. `FastNNPredictor` combines
+those bolometric corrections with bolometric luminosity and distance modulus to
+compute apparent magnitudes across photometric filters.
 
 Examples
 --------
@@ -40,7 +34,6 @@ import sys
 import h5py
 import numpy as np
 
-# Import filter definitions from parent module
 from ..data.filters import FILTERS
 from ..data.loader import find_nn_file
 
@@ -49,13 +42,11 @@ __all__ = ["FastNN", "FastNNPredictor"]
 
 class FastNN:
     """
-    Object that wraps the underlying neural networks used to interpolate
-    between grid points on the bolometric correction tables.
+    Evaluate neural network bolometric corrections from stellar parameters.
 
-    This class provides the core neural network functionality for predicting
-    bolometric corrections from stellar parameters. It loads pre-trained
-    neural network weights and biases, and provides methods for encoding
-    input parameters and evaluating the network.
+    Loads pre-trained neural network weights, biases, and input scaling bounds
+    for a set of photometric filters and evaluates bolometric corrections via a
+    3-layer feedforward network.
 
     Parameters
     ----------
@@ -195,10 +186,12 @@ class FastNN:
 
         Parameters
         ----------
-        x : numpy.ndarray of shape (Ninput,) or (Ninput, Nsamples)
-            Input stellar parameters. Expected parameters are:
-            [Teff (K, linear — not log10), log g, [Fe/H], [alpha/Fe], Av, Rv].
-            No bounds checking is performed; see the class Notes.
+        x : numpy.ndarray of shape (6,) or (6, Nsamples)
+            Input parameters ``[Teff, logg, feh_surf, afe, av, rv]`` with
+            ``Teff`` in linear K (not ``log10(Teff)``), ``logg`` in
+            log10(cm/s^2), ``feh_surf`` and ``afe`` in dex, ``av`` in mag, and
+            ``rv`` dimensionless. No bounds checking is performed; see the class
+            Notes.
 
         Returns
         -------
@@ -255,16 +248,18 @@ class FastNN:
 
         Parameters
         ----------
-        x : numpy.ndarray of shape (Ninput,) or (Ninput, Nsamples)
-            Stellar parameters:
-            [Teff (K, linear — not log10), log g, [Fe/H], [alpha/Fe], Av, Rv].
-            No bounds checking is performed; out-of-range inputs silently
-            return extrapolated garbage (see the class Notes).
+        x : numpy.ndarray of shape (6,) or (6, Nsamples)
+            Input parameters ``[Teff, logg, feh_surf, afe, av, rv]`` with
+            ``Teff`` in linear K (not ``log10(Teff)``), ``logg`` in
+            log10(cm/s^2), ``feh_surf`` and ``afe`` in dex, ``av`` in mag, and
+            ``rv`` dimensionless. No bounds checking is performed; see the class
+            Notes.
 
         Returns
         -------
-        y : numpy.ndarray
-            Predicted bolometric corrections for each filter.
+        y : numpy.ndarray of shape (Nfilt,) or (Nfilt, Nsamples)
+            Predicted bolometric corrections in magnitudes for each filter
+            (squeezed along singleton axes).
 
         Notes
         -----
@@ -284,11 +279,10 @@ class FastNN:
 
 class FastNNPredictor(FastNN):
     """
-    Object that generates SED predictions for a provided set of filters using neural networks.
+    Predict apparent magnitudes across photometric filters using neural networks.
 
-    This class extends FastNN to provide a complete interface for stellar
-    SED prediction, including automatic distance modulus calculation and
-    conversion from bolometric corrections to apparent magnitudes.
+    Extends `FastNN` by combining predicted bolometric corrections with
+    bolometric luminosity and distance modulus to return apparent magnitudes.
 
     Parameters
     ----------
@@ -482,7 +476,7 @@ class FastNNPredictor(FastNN):
         dist,
         filt_idxs=slice(None),
     ):
-        """
+        r"""
         Generate SED predictions for an array of stellar parameters.
 
         Vectorized version of :meth:`sed` that evaluates the neural network
@@ -491,29 +485,30 @@ class FastNNPredictor(FastNN):
         Parameters
         ----------
         logt : numpy.ndarray of shape (N,)
-            Base-10 logarithm of effective temperature for each star.
+            Base-10 logarithm of effective temperature in K for each star.
         logg : numpy.ndarray of shape (N,)
-            Base-10 logarithm of surface gravity for each star.
+            Base-10 logarithm of surface gravity in cm/s^2 for each star.
         feh_surf : numpy.ndarray of shape (N,)
-            Surface metallicity [Fe/H] for each star.
+            Surface metallicity ``[Fe/H]`` in dex for each star.
         logl : numpy.ndarray of shape (N,)
-            Base-10 logarithm of luminosity for each star.
+            Base-10 logarithm of bolometric luminosity in :math:`L_\odot` for
+            each star.
         afe : numpy.ndarray of shape (N,)
-            Alpha element enhancement [alpha/Fe] for each star.
+            Surface alpha enhancement ``[alpha/Fe]`` in dex for each star.
         av : float or numpy.ndarray of shape (N,)
-            V-band extinction A(V) in mag.
+            V-band extinction :math:`A(V)` in magnitudes.
         rv : float or numpy.ndarray of shape (N,)
-            Reddening parameter R(V).
+            Total-to-selective extinction ratio :math:`R(V)` (dimensionless).
         dist : float
-            Distance in parsecs (same for all stars).
+            Distance in parsecs (pc), shared by all stars.
         filt_idxs : slice or array-like, optional
-            Filter subset to return. Default is all filters.
+            Filter subset to return. Default is ``slice(None)`` (all filters).
 
         Returns
         -------
         seds : numpy.ndarray of shape (N, Nfilt_subset)
-            Predicted apparent magnitudes for each star and filter.
-            Stars with out-of-bounds parameters get NaN values.
+            Predicted apparent magnitudes in each filter. Stars with parameters
+            outside the neural network training bounds receive NaN rows.
         """
         logt = np.asarray(logt)
         logg = np.asarray(logg)

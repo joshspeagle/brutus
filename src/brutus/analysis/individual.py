@@ -1,13 +1,11 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-Individual star analysis using grid-based Bayesian inference.
+Infer individual-star parameters, distances, and extinctions over a model grid.
 
-This module provides the BruteForce class for fitting stellar parameters,
-distances, and extinction using pre-computed model grids. It performs
-brute-force Bayesian inference over the entire grid to derive posterior
-distributions for stellar properties.
+`BruteForce` evaluates Bayesian posteriors over a `StarGrid` of pre-computed
+stellar models. For each model, it optimizes distance scale, :math:`A(V)`, and
+:math:`R(V)` by damped Gauss-Newton steps and integrates over the 3-D Gaussian
+uncertainty in ``(ln d, A(V), R(V))`` via antithetic Monte Carlo draws under
+Galactic structure, 3D dust-map, and parallax priors.
 
 The fitting procedure uses gradient-based optimization to find the maximum
 likelihood extinction and distance for each grid point, then computes
@@ -35,14 +33,14 @@ Basic usage with grid-based fitting:
 >>> from brutus.analysis import BruteForce
 >>>
 >>> # Load pre-computed grid
->>> models, labels, params = load_models('grid_mist_v9.h5')
->>> grid = StarGrid(models, labels, params)
+>>> models, labels, label_mask = load_models('grid_mist_v9.h5')
+>>> grid = StarGrid(models, labels)
 >>>
 >>> # Initialize fitter
 >>> fitter = BruteForce(grid)
 >>>
->>> # Fit photometry with parallax
->>> results = fitter.fit(
+>>> # Fit photometry with parallax (saves results to 'results.h5')
+>>> results_file = fitter.fit(
 ...     phot_data, phot_err, phot_mask,
 ...     data_labels, save_file='results.h5',
 ...     parallax=parallax, parallax_err=parallax_err,
@@ -62,17 +60,12 @@ import numpy as np
 from numba import jit, prange
 from scipy.special import logsumexp
 
-# Import StarGrid and SED utilities
 from ..core import StarGrid
 from ..core.sed_utils import _get_seds, _model_array, get_seds
-from ..priors.astrometric import logp_parallax, logp_parallax_scale
+from ..priors.astrometric import logp_parallax
 from ..priors.extinction import logp_extinction
 from ..priors.galactic import logp_galactic_structure
-
-# Import refactored prior functions
 from ..priors.stellar import logp_imf, logp_ps1_luminosity_function
-
-# Import utility functions
 from ..utils.math import AVLIM, LOG_ZERO, R_SOLAR, RVLIM, Z_SOLAR
 from ..utils.math import inverse3 as _inverse3
 from ..utils.photometry import magnitude
@@ -250,9 +243,10 @@ def _optimize_fit_mag(
     In magnitudes a model is ``m0 + Av * (r0 + Rv * dr)`` plus a distance
     offset, so the fit is nearly linear. Each model takes Gauss-Newton steps
     in `(Av, Rv)` with the offset profiled out (`_bounded_step`). A step
-    that raises chi2 plus the prior penalties is retried with more
-    Levenberg-Marquardt damping: 1e-3 first, then ten times more each time. A
-    model stops when the predicted gain in log-posterior falls below `tol`,
+    that raises chi2 plus the prior penalties is retried with
+    Levenberg-Marquardt damping starting at 1e-3 and increasing by a factor of
+    10 on each rejection. A model stops when the predicted gain in log-posterior
+    falls below `tol`,
     when a step no longer moves it, when the damping exceeds `_MAX_DAMPING`,
     or after `_MAX_STEPS` steps.
 
@@ -536,6 +530,115 @@ def _get_sed_mle(
     return models, rvecs, drvecs, scale, icov_sar, resid
 
 
+#: Gauss-Hermite nodes x of the parallax selection gate, and ln(w) + x**2.
+_GATE_NODES, _GATE_WEIGHTS = np.polynomial.hermite.hermgauss(5)
+_GATE_LNWEIGHTS = np.log(_GATE_WEIGHTS) + _GATE_NODES**2
+#: Most Gauss-Newton steps of the gate's peak search.
+_GATE_MAX_STEPS = 50
+
+
+@jit(nopython=True, cache=True)
+def _gate_logf(eta, mu, inv_var_eta, parallax, inv_var_plx):
+    # ln of the gate integrand, without its normalization.
+    plx = np.exp(-eta)
+    return -0.5 * ((eta - mu) ** 2 * inv_var_eta + (plx - parallax) ** 2 * inv_var_plx)
+
+
+@jit(nopython=True, cache=True, parallel=True)
+def _lnp_parallax_gate(eta, eta_err, parallax, parallax_err):
+    r"""
+    Return, per model, the log of the parallax likelihood averaged over the
+    model's Gaussian in log-distance:
+
+    .. math::
+        \ln \int \mathcal{N}(\eta; \hat\eta, \sigma_\eta)\,
+        \mathcal{N}(\varpi; e^{-\eta}, \sigma_\varpi)\, d\eta
+
+    with :math:`\eta = \ln(d / {\rm kpc})`, so :math:`e^{-\eta}` is the
+    parallax in mas. Adaptive Gauss-Hermite quadrature centres the nodes on
+    the peak of the integrand, found by Gauss-Newton steps from
+    :math:`\hat\eta` and from :math:`-\ln \varpi`, and scales them to its
+    curvature. For :math:`\sigma_\eta \le 3` it is within 0.6 of the
+    exact value; photometric fits give :math:`\sigma_\eta \lesssim 0.03`.
+    """
+    inv_var_plx = 1.0 / parallax_err**2
+    nstart = 2 if parallax > 0 else 1
+    eta_plx = -np.log(parallax) if parallax > 0 else 0.0
+    lnnorm = np.log(2.0 * np.pi * parallax_err)
+    out = np.empty(len(eta))
+    for i in prange(len(eta)):
+        mu, inv_var_eta = eta[i], 1.0 / eta_err[i] ** 2
+        peak, gpeak = mu, -np.inf
+        for k in range(nstart):
+            e = mu if k == 0 else eta_plx
+            for _ in range(_GATE_MAX_STEPS):
+                plx = np.exp(-e)
+                step = (
+                    -(e - mu) * inv_var_eta + (plx - parallax) * plx * inv_var_plx
+                ) / (inv_var_eta + plx * plx * inv_var_plx)
+                step = min(max(step, -1.0), 1.0)
+                e += step
+                if abs(step) < 1e-10:
+                    break
+            g = _gate_logf(e, mu, inv_var_eta, parallax, inv_var_plx)
+            if g > gpeak:
+                peak, gpeak = e, g
+        # The width comes from the curvature at the peak. The Gauss-Newton
+        # curvature overstates it where the model parallax is below half the
+        # measured one, so the exact curvature is used where it is positive.
+        plx = np.exp(-peak)
+        curv = inv_var_eta + plx * (2.0 * plx - parallax) * inv_var_plx
+        if curv <= 0:
+            curv = inv_var_eta + plx * plx * inv_var_plx
+        width = np.sqrt(2.0 / curv)
+        total = 0.0
+        for k in range(len(_GATE_NODES)):
+            g = _gate_logf(
+                peak + width * _GATE_NODES[k], mu, inv_var_eta, parallax, inv_var_plx
+            )
+            total += np.exp(g - gpeak + _GATE_LNWEIGHTS[k])
+        out[i] = gpeak + np.log(total * width / eta_err[i]) - lnnorm
+    return out
+
+
+def _parallax_gate(scales, icovs_sar, parallax, parallax_err):
+    """Return the parallax term of the selection weight of each model.
+
+    It is `_lnp_parallax_gate` with the model's ln(d) mean and marginal
+    error from its (scale, A(V), R(V)) fit.
+    """
+    # Use the marginal scale error because distance and extinction both dim a
+    # star, driving the scale-A(V) correlation to 0.95-0.998 for reddened stars
+    # and making the conditional error 3-16x too small. cov[0,0] follows from
+    # the cofactor identity
+    # cov[0,0] = (i11*i22 - i12^2) / det(icov). A degenerate matrix falls
+    # back to the conditional error 1/sqrt(icov[0,0]). When icov[0,0] <= 0
+    # the error is 1e10, and the model's term is then too small to pass.
+    scales_err = np.full(len(scales), 1e10)
+    i00, i01, i02 = icovs_sar[:, 0, 0], icovs_sar[:, 0, 1], icovs_sar[:, 0, 2]
+    i11, i12, i22 = icovs_sar[:, 1, 1], icovs_sar[:, 1, 2], icovs_sar[:, 2, 2]
+    minor00 = i11 * i22 - i12 * i12
+    det = i00 * minor00 - i01 * (i01 * i22 - i02 * i12) + i02 * (i01 * i12 - i02 * i11)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        var00 = minor00 / det
+        cond_var00 = 1.0 / i00
+    marg_ok = (det > 0) & np.isfinite(var00) & (var00 > 0)
+    cond_ok = ~marg_ok & (i00 > 0)
+    scales_err[marg_ok] = np.sqrt(var00[marg_ok])
+    scales_err[cond_ok] = np.sqrt(cond_var00[cond_ok])
+
+    # eta = ln(d) = -0.5 ln(s), so sigma_eta = sigma_s / (2 s). Far nodes of
+    # a degenerate model overflow exp(-eta) to inf, which gives the right 0.
+    scales = np.maximum(scales, MIN_SCALE)
+    with np.errstate(over="ignore"):
+        return _lnp_parallax_gate(
+            -0.5 * np.log(scales),
+            scales_err / (2.0 * scales),
+            float(parallax),
+            float(parallax_err),
+        )
+
+
 def _inclusion_probabilities(weights, size):
     """Return inclusion probabilities ``min(1, c * weights)`` that sum to `size`.
 
@@ -557,12 +660,11 @@ def _inclusion_probabilities(weights, size):
 
 class BruteForce:
     """
-    Bayesian parameter estimation for individual stars using grid-based models.
+    Estimate stellar parameters, distances, and extinctions over a `StarGrid`.
 
-    This class performs brute-force fitting over a pre-computed stellar model
-    grid to estimate stellar parameters, distances, and extinction. It uses
-    the StarGrid infrastructure for model management and applies Bayesian
-    priors for robust inference.
+    Evaluates the likelihood of every model in ``star_grid`` by optimizing
+    ``(scale, A(V), R(V))`` per grid point and integrates the posterior over
+    distance and extinction uncertainty via Monte Carlo sampling.
 
     Parameters
     ----------
@@ -581,7 +683,8 @@ class BruteForce:
         Magnitude coefficients from the grid.
 
     models_labels : structured numpy.ndarray
-        Labels for each model in the grid.
+        Labels for each model in the grid: the fields of
+        ``star_grid.labels`` followed by those of ``star_grid.params``.
 
     labels_mask : dict
         Mask indicating which labels are grid parameters (True)
@@ -622,17 +725,17 @@ class BruteForce:
     >>> from brutus.data import load_models
     >>>
     >>> # Load grid
-    >>> models, labels, params = load_models('grid_mist_v9.h5')
-    >>> grid = StarGrid(models, labels, params)
+    >>> models, labels, label_mask = load_models('grid_mist_v9.h5')
+    >>> grid = StarGrid(models, labels)
     >>>
     >>> # Initialize fitter
     >>> fitter = BruteForce(grid)
     >>>
-    >>> # Fit data
-    >>> results = fitter.fit(
+    >>> # Fit data (writes posterior draws and summary metrics to 'results.h5')
+    >>> results_file = fitter.fit(
     ...     data, data_err, data_mask,
     ...     data_labels, save_file='results.h5',
-    ...     parallax=parallax_data,
+    ...     parallax=parallax_data, parallax_err=parallax_err,
     ...     data_coords=coordinates
     ... )
 
@@ -645,7 +748,20 @@ class BruteForce:
 
         self.star_grid = star_grid
         self.models = star_grid.models
+        # The priors read `agewt`, `feh` and `loga` from one array, whichever
+        # of `labels` or `params` holds them. A field in both comes from
+        # `labels`. Copying field by field avoids numpy's merge_arrays, which
+        # loops over the rows in Python.
         self.models_labels = star_grid.labels
+        extra = [n for n in star_grid.param_names if n not in star_grid.label_names]
+        if extra:
+            columns = [(n, star_grid.labels[n]) for n in star_grid.label_names]
+            columns += [(n, star_grid.params[n]) for n in extra]
+            self.models_labels = np.empty(
+                len(star_grid.labels), dtype=[(n, c.dtype) for n, c in columns]
+            )
+            for name, column in columns:
+                self.models_labels[name] = column
 
         # Generate labels mask automatically
         self.labels_mask = self._generate_labels_mask()
@@ -680,8 +796,9 @@ class BruteForce:
 
         Creates a dictionary mapping label names to boolean values indicating
         whether each label is a grid parameter (True) or a derived prediction
-        (False). Grid parameters are the dimensions used to construct the grid,
-        while predictions are stellar properties interpolated from the grid.
+        (False). Grid parameters are the labels in `StarGrid.grid_axes`, and
+        ``Mr`` on a grid without ``mini`` (the Bayestar grid). Every other
+        label, in ``labels`` or in ``params``, is a prediction.
 
         Returns
         -------
@@ -696,18 +813,16 @@ class BruteForce:
         (only to grid parameters) and for understanding which parameters
         define the grid structure vs. which are interpolated outputs.
         """
-        labels_mask = {}
-
-        # Grid parameters (used to compute the grid)
-        for label in self.star_grid.label_names:
-            labels_mask[label] = True
-
-        # Predictions (derived from grid)
-        if self.star_grid.param_names:
-            for param in self.star_grid.param_names:
-                labels_mask[param] = False
-
-        return labels_mask
+        # `load_models` returns the predictions in the same array as the axes.
+        # `Mr` is a prediction of the MIST grids but an input of the Bayestar
+        # grid, which has no `mini` (as for the luminosity-function prior).
+        axes = set(self.star_grid.grid_axes)
+        if "mini" not in axes:
+            axes.add("Mr")
+        names = self.star_grid.label_names + self.star_grid.param_names
+        return {
+            name: name in axes and name in self.star_grid.label_names for name in names
+        }
 
     def get_sed_grid(self, indices=None, av=None, rv=None, return_flux=False):
         r"""
@@ -733,13 +848,19 @@ class BruteForce:
         Returns
         -------
         seds : numpy.ndarray of shape (Nmodels, Nbands)
-            Computed SEDs.
+            Computed SEDs at 1 kpc in apparent magnitudes (or maggies when
+            ``return_flux=True``).
 
         rvecs : numpy.ndarray of shape (Nmodels, Nbands)
-            Reddening vectors.
+            Reddening derivatives :math:`\partial m / \partial A(V)` in mag per
+            mag of :math:`A(V)` (or :math:`\partial F / \partial A(V)` in
+            maggies per mag when ``return_flux=True``).
 
         drvecs : numpy.ndarray of shape (Nmodels, Nbands)
-            Differential reddening vectors with respect to Rv.
+            Scaled differential reddening vectors
+            :math:`A(V)^{-1} \partial m / \partial R(V)` in mag per mag of
+            :math:`A(V)` (or :math:`A(V)^{-1} \partial F / \partial R(V)` in
+            maggies per mag when ``return_flux=True``).
 
         Raises
         ------
@@ -864,21 +985,21 @@ class BruteForce:
 
         # Apply age weighting if requested
         if apply_agewt:
-            try:
-                lnprior += np.log(np.abs(self.models_labels["agewt"]))
-            except (KeyError, ValueError):
-                pass
+            if "agewt" not in self.models_labels.dtype.names:
+                raise ValueError(
+                    "apply_agewt=True needs an 'agewt' label in the grid; "
+                    "pass apply_agewt=False for a grid without one."
+                )
+            lnprior += np.log(np.abs(self.models_labels["agewt"]))
 
         # Reweight based on grid spacing
         if apply_grad:
-            for lbl in self.models_labels.dtype.names:
+            for lbl in (name for name, axis in self.labels_mask.items() if axis):
                 label = self.models_labels[lbl]
-                if self.labels_mask[lbl]:  # Only for grid parameters
-                    ulabel = np.unique(label)
-                    if len(ulabel) > 1:
-                        # Compute and add gradient
-                        lngrad_label = np.log(np.gradient(ulabel))
-                        lnprior += np.interp(label, ulabel, lngrad_label)
+                ulabel = np.unique(label[np.isfinite(label)])
+                if len(ulabel) > 1:
+                    lngrad_label = np.log(np.gradient(ulabel))
+                    lnprior += np.interp(label, ulabel, lngrad_label)
 
         # Initialize Galactic prior
         if lngalprior is None and data_coords is None:
@@ -930,13 +1051,13 @@ class BruteForce:
 
         Parameters
         ----------
-        data : `~numpy.ndarray` of shape `(Nfilt)`
-            Measured flux densities.
+        data : `~numpy.ndarray` of shape `(Nfilt,)`
+            Observed linear flux densities in maggies (``10**(-0.4 * mag)``).
 
-        data_err : `~numpy.ndarray` of shape `(Nfilt)`
-            Measurement errors.
+        data_err : `~numpy.ndarray` of shape `(Nfilt,)`
+            Flux density measurement errors in maggies.
 
-        data_mask : `~numpy.ndarray` of shape `(Nfilt)`
+        data_mask : `~numpy.ndarray` of shape `(Nfilt,)`
             Boolean mask of valid bands (or 0/1 values, converted to bool).
 
         indices : array-like, optional
@@ -1274,7 +1395,9 @@ class BruteForce:
             that subset.
 
         parallax, parallax_err : float, optional
-            Parallax and its error, in mas. Both or neither.
+            Parallax and its error, in mas. Both or neither. The selection
+            weight of each model includes the parallax likelihood averaged
+            over the model's Gaussian in ln(d).
 
         coord : tuple of 2 floats, optional
             Galactic (l, b) of the object, in degrees. The Galactic prior
@@ -1425,68 +1548,18 @@ class BruteForce:
         if lnprior is None:
             lnprior = np.zeros(Nmodels)
 
-        # Compute initial posterior (without parallax — parallax is applied
-        # exactly on MC samples below, not via the approximate scale-based
-        # form which would double-count the constraint).
+        # Initial posterior, without the parallax, which the MC step applies.
         lnprob_base = lnlike + lnprior
 
-        # Add parallax prior for MODEL SELECTION only.
-        # logp_parallax_scale provides a Gaussian approximation on scale
-        # to help select relevant models. This is NOT propagated to MC
-        # sample weights where the exact logp_parallax is used instead.
+        # Add the parallax to the weight that selects the models, but not to
+        # the MC weights, which apply the exact parallax likelihood below.
         lnprob_sel = lnprob_base.copy()
-        if parallax is not None and parallax_err is not None:
-            # Gate each model on "is its fitted scale consistent with the
-            # measured parallax?", treating the photometric scale as a
-            # Gaussian with std scales_err. Two stds can be read off the
-            # 3x3 (scale, A_V, R_V) precision matrix, and the choice
-            # matters:
-            #
-            # * conditional, 1/sqrt(icov[0,0]): scale uncertainty with
-            #   (A_V, R_V) HELD FIXED at their best-fit values;
-            # * marginal, sqrt(cov[0,0]): scale uncertainty after
-            #   propagating the (A_V, R_V) uncertainties and their
-            #   correlation with scale. For two correlated parameters,
-            #   marginal variance = conditional variance / (1 - rho^2).
-            #
-            # Distance and extinction both dim a star, so the scale-A(V)
-            # correlation reaches rho ~ 0.95-0.998 for reddened stars and
-            # the conditional std understates the truth by 3-16x there.
-            # Using it here scored models genuinely ~2 sigma from the
-            # parallax as ~20+ sigma away and pruned them -- irreversibly,
-            # because this gate only selects which models proceed; the
-            # exact parallax likelihood applied to the MC samples later
-            # can reweight survivors but cannot resurrect pruned models.
-            # The marginal std is therefore the correct choice, and being
-            # more permissive here costs only compute, never accuracy.
-            #
-            # cov[0,0] follows from the cofactor identity
-            # cov[0,0] = (i11*i22 - i12^2) / det(icov), so no full matrix
-            # inverse is needed. Degenerate matrices (det <= 0, or a
-            # nonfinite/nonpositive variance) fall back to the conditional
-            # estimate -- the pre-fix behavior -- rather than inventing a
-            # number; if even icov[0,0] <= 0, scales_err stays huge and
-            # the parallax simply does not prune that model.
-            scales_err = np.full(Nmodels, 1e10)  # Large error = uninformative
-            i00, i01, i02 = icovs_sar[:, 0, 0], icovs_sar[:, 0, 1], icovs_sar[:, 0, 2]
-            i11, i12, i22 = icovs_sar[:, 1, 1], icovs_sar[:, 1, 2], icovs_sar[:, 2, 2]
-            minor00 = i11 * i22 - i12 * i12
-            det = (
-                i00 * minor00
-                - i01 * (i01 * i22 - i02 * i12)
-                + i02 * (i01 * i12 - i02 * i11)
-            )
-            with np.errstate(divide="ignore", invalid="ignore"):
-                var00 = minor00 / det  # marginal scale variance
-                cond_var00 = 1.0 / i00  # conditional fallback
-            marg_ok = (det > 0) & np.isfinite(var00) & (var00 > 0)
-            cond_ok = ~marg_ok & (i00 > 0)  # degenerate matrix: old behavior
-            scales_err[marg_ok] = np.sqrt(var00[marg_ok])
-            scales_err[cond_ok] = np.sqrt(cond_var00[cond_ok])
-
-            lnprob_sel += logp_parallax_scale(
-                scales, scales_err, parallax, parallax_err
-            )
+        if _has_parallax(parallax, parallax_err):
+            # The parallax likelihood averaged over the model's Gaussian in
+            # ln(d) (#297). Its width equals that of the MC step below unless
+            # _inverse3 regularizes the matrix or precision_shrinkage > 0. A
+            # model that this gate drops cannot come back.
+            lnprob_sel += _parallax_gate(scales, icovs_sar, parallax, parallax_err)
 
         # Select models above threshold (using parallax-informed weights)
         if wt_thresh is not None:
@@ -1579,10 +1652,10 @@ class BruteForce:
         # BATCH SAMPLING in (ln d, Av, Rv) space.
         # Antithetic pairs (z, -z) reduce the variance of the MC prior integral
         # (and halve the Gaussian draws) while keeping the estimator unbiased.
-        # The brutus integrand is dominated along ln(d) by the galactic-density
-        # falloff and the +log(d) volume Jacobian, both monotone (odd) in the
-        # sampling direction -- exactly the regime where antithetic variates cut
-        # variance. Empirically this gives ~3-5x lower MC-integration std and
+        # The brutus integrand is dominated along ln(d) by the Galactic-density
+        # falloff and the +log(d) volume Jacobian, both monotone in the sampling
+        # direction where antithetic variates reduce variance. Empirically this
+        # gives ~3-5x lower MC-integration std and
         # lower finite-Nmc (Jensen) bias vs a high-Nmc reference. The only regime
         # where antithetic can slightly *increase* variance (never bias) is a
         # very precise parallax centered almost exactly on the photometric
@@ -1793,30 +1866,33 @@ class BruteForce:
         Parameters
         ----------
         data : numpy.ndarray of shape (Ndata, Nfilt)
-            Observed flux densities for each object.
+            Observed linear flux densities in maggies (``10**(-0.4 * mag)``) for
+            each object.
 
         data_err : numpy.ndarray of shape (Ndata, Nfilt)
-            Associated errors on the flux densities.
+            Associated flux density errors in maggies.
 
         data_mask : numpy.ndarray of shape (Ndata, Nfilt)
             Boolean mask of valid measurements (or 0/1 values, converted to
             bool).
 
-        data_labels : numpy.ndarray of shape (Ndata, Nlabels)
-            Labels for each object to be stored in the output file.
+        data_labels : numpy.ndarray of shape (Ndata,) or (Ndata, Nlabels)
+            Identifier labels for each object stored in the ``labels`` dataset
+            of the output file.
 
         save_file : str
-            Path to the output HDF5 file. The '.h5' extension will be added
-            if not present.
+            Path to the output HDF5 file (``.h5`` is appended if absent).
 
         phot_offsets : numpy.ndarray of shape (Nfilt,), optional
-            Multiplicative photometric offsets applied to data and errors.
+            Dimensionless multiplicative photometric offsets applied to ``data``
+            and ``data_err``.
 
         parallax : numpy.ndarray of shape (Ndata,), optional
-            Parallax measurements in mas for each object.
+            Parallax measurements in milliarcseconds (mas) for each object.
 
         parallax_err : numpy.ndarray of shape (Ndata,), optional
-            Errors on parallax measurements. Required if parallax is provided.
+            Parallax measurement errors in mas. Required when ``parallax`` is
+            provided.
 
         Nmc_prior : int, optional
             Number of Monte Carlo samples for prior integration. Default is 50.
@@ -1856,7 +1932,9 @@ class BruteForce:
             Number of posterior draws to save per object. Default is 250.
 
         apply_agewt : bool, optional
-            Whether to apply age weighting from MIST models. Default is True.
+            Whether to add ``ln(agewt)`` to the model prior. The grid must
+            then have an ``agewt`` label, in ``labels`` or ``params``.
+            Default is True.
 
         apply_grad : bool, optional
             Whether to apply grid spacing corrections. Default is True.
@@ -1958,7 +2036,8 @@ class BruteForce:
             or ``lnprior`` disagree, if
             only one of ``parallax`` and ``parallax_err`` is given, if
             ``logl_initthresh`` is not in (0, 1), if ``ltol`` is not positive,
-            or if ``max_models`` is neither None nor a positive integer. These
+            if ``max_models`` is neither None nor a positive integer, or if
+            ``apply_agewt`` is True and the grid has no ``agewt`` label. These
             checks run before the output file is created.
 
         Notes
@@ -2001,8 +2080,8 @@ class BruteForce:
         >>> from brutus.data import load_models
         >>>
         >>> # Load model grid
-        >>> models, labels, params = load_models('grid.h5')
-        >>> grid = StarGrid(models, labels, params)
+        >>> models, labels, label_mask = load_models('grid.h5')
+        >>> grid = StarGrid(models, labels)
         >>> fitter = BruteForce(grid)
         >>>
         >>> # Fit photometry
@@ -2041,13 +2120,6 @@ class BruteForce:
         _check_positive("ltol", ltol)
         _check_max_models(max_models)
 
-        # Load dust map from file path (str or os.PathLike) if needed
-        # (once for all objects)
-        if dustfile is not None and isinstance(dustfile, (str, os.PathLike)):
-            from ..dust import Bayestar
-
-            dustfile = Bayestar(dustfile=dustfile)
-
         # Pre-process data and initialize priors
         setup_results = self._setup(
             data,
@@ -2075,6 +2147,13 @@ class BruteForce:
             lngalprior_proc,
             lndustprior_proc,
         ) = setup_results
+
+        # Load dust map from file path (str or os.PathLike) if needed
+        # (once for all objects), after _setup has checked the inputs
+        if dustfile is not None and isinstance(dustfile, (str, os.PathLike)):
+            from ..dust import Bayestar
+
+            dustfile = Bayestar(dustfile=dustfile)
 
         # Initialize random state
         if rstate is None:
@@ -2436,10 +2515,9 @@ class BruteForce:
             dreds = np.zeros(Ndraws, dtype="float32")
             logwts = np.zeros(Ndraws, dtype="float32")
 
-            # Vectorized MC sample drawing using Gumbel-max trick.
-            # For each posterior draw, select one MC sample proportional
-            # to its weight — equivalent to rstate.choice(p=weights)
-            # but fully vectorized across all Ndraws at once.
+            # Vectorized MC sample drawing using the Gumbel-max trick. For each
+            # posterior draw, select one MC sample proportional to its weight,
+            # equivalent to rstate.choice(p=weights) vectorized across Ndraws.
             all_mc_logwts = lnp_mc[idxs_local]  # (Ndraws, Nmc)
             Nmc_actual = all_mc_logwts.shape[1]
             gumbel_noise = -np.log(

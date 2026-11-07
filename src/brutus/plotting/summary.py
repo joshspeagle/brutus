@@ -1,8 +1,5 @@
 """
-Combined summary plot: corner plot + posterior predictive SED in one figure.
-
-Places the posterior predictive SED in the upper-right triangle of the
-corner plot to eliminate white space and provide a single diagnostic view.
+Combined diagnostic figure pairing a parameter corner plot with an inset SED.
 """
 
 import numpy as np
@@ -53,43 +50,43 @@ def summary_plot(
     idxs : `~numpy.ndarray` of shape `(Nsamps)`
         Resampled model indices.
 
-    reds : `~numpy.ndarray` of shape `(Nsamps)`
-        A(V) samples.
+    reds : `~numpy.ndarray` of shape `(Nsamps,)`
+        Extinction :math:`A(V)` samples in magnitudes.
 
-    dreds : `~numpy.ndarray` of shape `(Nsamps)`
-        R(V) samples.
+    dreds : `~numpy.ndarray` of shape `(Nsamps,)`
+        Reddening curve slope :math:`R(V)` samples.
 
-    dists : `~numpy.ndarray` of shape `(Nsamps)`
+    dists : `~numpy.ndarray` of shape `(Nsamps,)`
         Distance samples in kpc.
 
-    params : structured `~numpy.ndarray` with shape `(Nmodels,)`
-        Model parameters for the corner plot axes.
+    params : structured `~numpy.ndarray` of shape `(Nmodels,)`
+        Structured array of model parameters for the corner plot axes.
 
-    data : `~numpy.ndarray` of shape `(Nfilt)`, optional
-        Observed flux data for the posterior predictive.
+    data : `~numpy.ndarray` of shape `(Nfilt,)`, optional
+        Observed flux densities in maggies for the posterior predictive SED.
 
-    data_err : `~numpy.ndarray` of shape `(Nfilt)`, optional
-        Observed flux errors.
+    data_err : `~numpy.ndarray` of shape `(Nfilt,)`, optional
+        Observed 1-sigma flux density uncertainties in maggies.
 
-    data_mask : `~numpy.ndarray` of shape `(Nfilt)`, optional
-        Binary mask for valid bands.
+    data_mask : `~numpy.ndarray` of shape `(Nfilt,)`, optional
+        Boolean mask (or 0/1 values) indicating valid bands.
 
-    offset : `~numpy.ndarray` of shape `(Nfilt)`, optional
-        Multiplicative photometric offsets.
+    offset : `~numpy.ndarray` of shape `(Nfilt,)`, optional
+        Multiplicative photometric flux offsets.
 
-    coord : tuple, optional
-        Galactic (l, b) coordinates in degrees.
+    coord : 2-tuple of float, optional
+        Galactic ``(l, b)`` coordinates in degrees.
 
     parallax : float, optional
-        Parallax in mas.
+        Measured parallax in milliarcseconds (mas).
 
     parallax_err : float, optional
-        Parallax error in mas.
+        Parallax uncertainty in milliarcseconds (mas).
 
-    labels : list, optional
-        Filter names for the SED plot x-axis.
+    labels : sequence of str of length `Nfilt`, optional
+        Filter names for the SED x-axis.
 
-    weights : `~numpy.ndarray`, optional
+    weights : `~numpy.ndarray` of shape `(Nsamps,)`, optional
         Importance weights for the samples.
 
     show_titles : bool, optional

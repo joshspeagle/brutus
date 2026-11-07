@@ -1,9 +1,5 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-Available filters.
-
+Filter names supported by the pre-computed MIST and Bayestar model grids.
 """
 
 # Define the set of filters available for the provided MIST models.

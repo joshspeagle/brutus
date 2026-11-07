@@ -1,30 +1,30 @@
 # Data Module (`brutus.data`)
 
-The data module manages all external data dependencies for brutus, including MIST stellar evolution grids, isochrones, 3-D dust maps, neural network weights, and photometric calibration offsets. It uses `pooch` to download and cache the data files.
+`brutus.data` downloads, verifies, and loads the external model grids, MIST evolutionary tracks, isochrones, neural network weights, 3D dust maps, and photometric calibration offsets used by `brutus`.
 
 **Data Dependencies:**
 
-brutus requires several types of external data. {doc}`/installation` lists each file with its size and its `fetch_*` function.
+{doc}`/installation` lists every external data file with its download size and corresponding `fetch_*` function.
 
-**Data Management:**
+**Storage and Lookup Order:**
 
-No file downloads on first use. Each `fetch_*` function downloads its file into the brutus data directory and makes a link to it in `target_dir` (default: the current directory). The data directory is `~/.cache/astro-brutus/` (via `pooch.os_cache('astro-brutus')`), or the directory that the `ASTRO_BRUTUS_DATA_DIR` environment variable names. The loaders that find a default file (`find_nn_file`, `EEPTracks` and `Isochrone`) look in the data directory, then in `data/DATAFILES` in the repository. If the file is in neither, they raise `FileNotFoundError` with the `fetch_*` function to run.
+No file downloads automatically on import or class instantiation. Each `fetch_*` function downloads its file via `pooch` into the `brutus` cache directory (`~/.cache/astro-brutus/` by default, or `$ASTRO_BRUTUS_DATA_DIR` when set), verifies its SHA-256 checksum, and creates a symbolic link (or copy) in `target_dir` (the current working directory by default). Loaders that resolve a default filename (`find_nn_file`, `EEPTracks`, and `Isochrone`) check the `brutus` cache directory first and `data/DATAFILES` in the repository second, raising `FileNotFoundError` with the required `fetch_*` command when the file is absent.
 
 **Typical Usage:**
 
-**First-time setup** (download all data files):
+**First-time setup** (download data files):
 
 ```python
 from brutus.data import fetch_grids, fetch_isos, fetch_dustmaps
 
-# Download MIST stellar evolution grids
-fetch_grids()  # Downloads the default grid ('mist_v9', all supported filters)
+# Download the default MIST v9 model grid (all 49 supported filters)
+fetch_grids()
 
-# Download MIST isochrones
+# Download MIST v1.2 isochrones
 fetch_isos()
 
-# Download 3-D dust maps
-fetch_dustmaps(dustmap='bayestar19')
+# Download the Bayestar19 3D dust map
+fetch_dustmaps(dustmap="bayestar19")
 ```
 
 **Loading data for fitting**:
@@ -61,6 +61,7 @@ models, labels, label_mask = load_models('/path/to/my_custom_grid.h5')
 - {doc}`/quickstart` - Basic data loading examples
 
 ```{eval-rst}
+.. py:module:: brutus.data
 .. currentmodule:: brutus.data
 ```
 
@@ -102,24 +103,4 @@ models, labels, label_mask = load_models('/path/to/my_custom_grid.h5')
 
 ```{eval-rst}
 .. autofunction:: find_nn_file
-```
-
-## Submodules
-
-For advanced users who need access to internal implementations:
-
-```{eval-rst}
-.. automodule:: brutus.data.download
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
-```
-
-```{eval-rst}
-.. automodule:: brutus.data.loader
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
 ```

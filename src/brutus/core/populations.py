@@ -1,63 +1,32 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-Stellar population modeling and synthetic photometry generation.
+Model coeval stellar populations and synthesize isochrone photometry.
 
-This module provides classes for modeling stellar populations using MIST
-(MESA Isochrones and Stellar Tracks) isochrones and generating synthetic
-photometry with neural network-based bolometric corrections.
-
-The module follows a clean separation of concerns:
-- Isochrone: Stellar parameter predictions for populations
-- StellarPop: SED/photometry generation for populations
-
-This design is consistent with the individual star modeling pattern:
-- EEPTracks: Stellar parameter predictions for individuals
-- StarEvolTrack: SED/photometry generation for individuals
+`Isochrone` interpolates MIST (MESA Isochrones and Stellar Tracks; Choi et al.
+2016; Dotter 2016) isochrone grids to predict stellar parameters at fixed
+metallicity, alpha enhancement, and age. `StellarPop` combines an `Isochrone`
+instance with neural network bolometric corrections (`FastNNPredictor`) to
+compute reddened apparent magnitudes for single and binary stellar populations.
 
 Examples
 --------
-Basic stellar population modeling:
+Predict stellar parameters and synthetic photometry for a coeval population:
 
 >>> from brutus.core.populations import Isochrone, StellarPop
->>>
->>> # Create isochrone for parameter predictions
 >>> iso = Isochrone()
 >>> params = iso.get_predictions(feh=0.0, afe=0.0, loga=9.0)
->>>
->>> # Create population synthesizer for photometry
 >>> pop_synth = StellarPop(isochrone=iso)
 >>> seds, params, params2 = pop_synth.get_seds(
 ...     feh=0.0, afe=0.0, loga=9.0,
 ...     av=0.1, dist=1000.0
 ... )
 
-Advanced usage with binary populations:
+Model a population with mass-ratio ``binary_fraction=0.4`` binaries:
 
->>> # Model binary stellar populations
 >>> seds, params, params2 = pop_synth.get_seds(
 ...     feh=-0.5, afe=0.0, loga=10.0,
-...     binary_fraction=0.4,  # 40% mass ratio binaries
+...     binary_fraction=0.4,
 ...     av=0.2, dist=2000.0
 ... )
-
-Notes
------
-This design provides several advantages over the original combined approach:
-
-1. **Separation of Concerns**: Parameter prediction vs. photometry synthesis
-2. **Flexibility**: Can use different SED generators with same isochrone
-3. **Consistency**: Matches the individual star modeling pattern
-4. **Maintainability**: Cleaner, more focused class responsibilities
-5. **Testability**: Each component can be tested independently
-
-The StellarPop class uses dependency injection, accepting an
-Isochrone instance rather than inheriting from it. This makes the code
-more modular and allows for different isochrone implementations.
-
-This implementation is based on the MIST stellar evolution framework
-(Choi et al. 2016; Dotter 2016).
 
 References
 ----------
@@ -75,15 +44,9 @@ import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
 from ..data.download import _find_data_file
-
-# Import filter definitions
 from ..data.filters import FILTERS
-
-# Import from utils (to be reorganized)
 from ..utils.photometry import add_mag
 from .individual import _mass_corrections
-
-# Import neural network predictor
 from .neural_nets import FastNNPredictor
 
 __all__ = ["Isochrone", "StellarPop"]
@@ -101,18 +64,12 @@ def _check_binary_fractions(name, values):
 
 class Isochrone:
     """
-    Stellar parameter predictions for isochrones using MIST evolutionary models.
+    Interpolate stellar parameters along MIST isochrones.
 
-    This class provides interpolation of stellar parameters along isochrones of
-    fixed metallicity, alpha enhancement, and age. It focuses solely on stellar
-    parameter prediction (masses, temperatures, luminosities, etc.) without
-    photometry generation.
-
-    This class is analogous to EEPTracks but for stellar populations:
-    - EEPTracks: Individual star parameters (mini, EEP, feh, afe) → parameters
-    - Isochrone: Population parameters (feh, afe, loga, EEP) → parameters
-
-    For photometry generation, use StellarPop with this class.
+    Predicts stellar parameters along an isochrone of fixed metallicity
+    (``feh``), alpha enhancement (``afe``), and log-age (``loga``) across
+    equivalent evolutionary points (``eep``). Pass an instance to `StellarPop`
+    to synthesize population photometry.
 
     Parameters
     ----------
@@ -309,9 +266,8 @@ class Isochrone:
             self.xgrid = tuple(xgrid)
 
             # Duplicate values in the padded dimension via a read-only
-            # broadcast view: both afe layers share the original grid's
-            # memory, so this costs nothing (materializing a copy would
-            # double the ~176 MB grid and transiently hold both arrays).
+            # broadcast view because sharing the original grid's memory avoids
+            # copying the ~176 MB array.
             self.grid_dims[1] += 1
             self.pred_grid = np.broadcast_to(self.pred_grid, tuple(self.grid_dims))
 
@@ -333,18 +289,19 @@ class Isochrone:
         Parameters
         ----------
         feh : float, optional
-            Metallicity [Fe/H] relative to solar. Default is 0.0.
+            Metallicity ``[Fe/H]`` in dex. Default is 0.0.
 
         afe : float, optional
-            Alpha enhancement [alpha/Fe] relative to solar. Default is 0.0.
-            A value outside the grid's `afe` range returns NaN; for the
+            Alpha enhancement ``[alpha/Fe]`` in dex. Default is 0.0.
+            A value outside the grid's ``afe`` range returns NaN; for the
             shipped MIST file, the only valid value is 0.0.
 
         loga : float, optional
-            Log10(age in years). Default is 8.5 (≈316 Myr).
+            Log10(age in yr). Default is 8.5 (~316 Myr).
 
-        eep : array-like, optional
-            Equivalent evolutionary points. If None, uses default grid.
+        eep : array-like of shape (Neep,), optional
+            Equivalent evolutionary points (dimensionless). If ``None``, uses
+            ``self.eep_u``.
 
         apply_corr : bool, optional
             Whether to apply empirical corrections. Default is True.
@@ -432,18 +389,12 @@ class Isochrone:
 
 class StellarPop:
     """
-    Synthetic photometry generation for stellar populations.
+    Synthesize photometry for coeval stellar populations.
 
-    This class generates synthetic SEDs and photometry for stellar populations
-    using neural network-based bolometric corrections. It provides sophisticated
-    modeling of binary stars, dust extinction, and observational effects.
-
-    This class is analogous to StarEvolTrack but for stellar populations:
-    - StarEvolTrack: Individual star photometry
-    - StellarPop: Stellar population photometry
-
-    The class uses dependency injection, accepting an Isochrone instance for
-    stellar parameter predictions rather than inheriting from it.
+    Combines isochrone parameter predictions from an `Isochrone` instance with
+    neural network bolometric corrections (`FastNNPredictor`) to compute
+    reddened apparent magnitudes across equivalent evolutionary points (EEPs)
+    for single and binary stellar populations.
 
     Parameters
     ----------
@@ -509,17 +460,10 @@ class StellarPop:
 
     Notes
     -----
-    The synthetic photometry generation includes:
-
-    1. **Stellar Parameter Prediction**: Uses the injected Isochrone instance
-    2. **Neural Network Photometry**: Fast bolometric correction computation
-    3. **Binary Star Modeling**: Sophisticated binary population synthesis
-    4. **Dust Extinction**: Parameterized extinction laws
-    5. **Distance Effects**: Distance modulus calculations
-
-    Binary modeling includes mass ratio constraints, evolutionary phase matching,
-    and realistic limits on binary evolution (typically restricted to main
-    sequence phases).
+    For binary populations (``binary_fraction > 0``), secondary masses are set
+    to ``binary_fraction * mini`` and secondary EEPs are interpolated from the
+    isochrone's ``mini(EEP)`` relation at the same age and metallicity for main
+    sequence primaries (``eep <= eep_binary_max``).
     """
 
     def __init__(self, isochrone, filters=None, nnfile=None, verbose=True):
@@ -598,53 +542,55 @@ class StellarPop:
         corr_params=None,
         return_dict=True,
     ):
-        """
+        r"""
         Generate synthetic photometry for a stellar population.
 
         Parameters
         ----------
         feh : float, optional
-            Metallicity [Fe/H]. Default is 0.0.
+            Metallicity ``[Fe/H]`` in dex. Default is 0.0.
 
         afe : float, optional
-            Alpha enhancement [alpha/Fe]. Default is 0.0. A value outside the
-            isochrone grid's `afe` range gives NaN SEDs; for the shipped MIST
-            file, the only valid value is 0.0.
+            Alpha enhancement ``[alpha/Fe]`` in dex. Default is 0.0. A value
+            outside the isochrone grid's ``afe`` range gives NaN SEDs; for the
+            shipped MIST file, the only valid value is 0.0.
 
         loga : float, optional
-            Log10(age in years). Default is 8.5.
+            Log10(age in yr). Default is 8.5.
 
-        eep : float or array-like, optional
-            Equivalent evolutionary points, a scalar or a 1-D array.
-            If None, uses the isochrone's EEP grid.
+        eep : float or array-like of shape (Neep,), optional
+            Equivalent evolutionary points (dimensionless), as a scalar or 1-D
+            array. If ``None``, uses the isochrone's EEP grid.
 
         av : float, optional
-            V-band extinction A(V). Default is 0.0.
+            V-band extinction :math:`A(V)` in magnitudes. Default is 0.0.
 
         rv : float, optional
-            Extinction law parameter R(V). Default is 3.3.
+            Total-to-selective extinction ratio :math:`R(V)` (dimensionless).
+            Default is 3.3.
 
         binary_fraction : float, optional
-            Secondary mass fraction for binaries, in [0, 1]. Default is 0.0
-            (no binaries).
-            - 0.0: No binaries
-            - 0 < binary_fraction < 1: Mass ratio binaries
-            - 1.0: Equal mass binaries
+            Secondary-to-primary mass ratio :math:`q = M_2 / M_1` in ``[0, 1]``.
+            Default is 0.0 (single stars):
+            - ``0.0``: single stars only
+            - ``0 < binary_fraction < 1``: mass-ratio binaries
+            - ``1.0``: equal-mass binaries
 
-            Binary companions are only added for primaries with
+            Binary companions are added only for primaries with
             ``eep <= eep_binary_max``; other stars (and stars whose companion
             falls below ``mini_bound`` or has no age-consistent EEP) keep
-            their primary-only SED. The companion EEP inverts mini(EEP) on
-            the isochrone's own EEP grid, so it does not depend on `eep`.
+            their primary-only SED. The companion EEP inverts ``mini(EEP)`` on
+            the isochrone's own EEP grid, independent of ``eep``.
 
         dist : float, optional
-            Distance in parsecs. Default is 1000.0.
+            Distance in parsecs (pc). Default is 1000.0.
 
         mini_bound : float, optional
-            Minimum mass for SED computation. Default is 0.5.
+            Minimum initial mass in :math:`M_\odot` for SED computation.
+            Default is 0.5.
 
         eep_binary_max : float, optional
-            Maximum EEP for binary modeling. Default is 480.0.
+            Maximum primary EEP for binary modeling. Default is 480.0.
 
         apply_corr : bool, optional
             Apply empirical corrections. Default is True.
@@ -761,12 +707,11 @@ class StellarPop:
         Generate synthetic photometry for several binary mass fractions.
 
         Equivalent to calling :meth:`get_seds` once per entry of
-        ``smf_values`` (with ``binary_fraction`` set to that entry), but the
-        primary isochrone predictions and primary SEDs — which do not depend
-        on the binary mass fraction — are computed only once and reused
-        across all values. Only the (per-SMF) secondary components are
-        recomputed, roughly halving the cost of building a full
-        (mass, SMF) population grid.
+        ``smf_values`` (with ``binary_fraction`` set to that entry), except
+        that the primary isochrone predictions and primary SEDs (which do not
+        depend on the binary mass fraction) are computed once and reused across
+        all values. Recomputing only the secondary components roughly halves
+        the cost of building a full ``(mass, SMF)`` population grid.
 
         Parameters
         ----------
@@ -1024,13 +969,11 @@ apply_corr, corr_params, return_dict
         sec_valid = (params2["mini"] >= mini_bound) & np.isfinite(params2["mini"])
         seds2 = self._evaluate_seds(params2, sec_valid, av, rv, dist)
 
-        # Combine primary and secondary SEDs only where a valid secondary
-        # exists. A star without a resolvable companion (post-MS primary,
+        # Combine primary and secondary SEDs only where both components are
+        # finite. A star without a resolvable companion (post-MS primary,
         # secondary below the mass bound, or failed EEP match) keeps its
-        # primary-only SED — combining with a NaN secondary via add_mag would
-        # silently discard the (valid) primary as well.
-        # A companion counts only where the primary has an SED too: adding
-        # it to a NaN primary leaves the combined SED NaN.
+        # primary-only SED because combining with a NaN secondary via add_mag
+        # would turn the valid primary SED into NaN.
         has_secondary = np.all(np.isfinite(seds2), axis=1) & np.all(
             np.isfinite(seds), axis=1
         )

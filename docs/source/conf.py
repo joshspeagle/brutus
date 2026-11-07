@@ -27,7 +27,7 @@ _copy_tutorials()
 # -- Project information -----------------------------------------------------
 
 project = "brutus"
-copyright = "2025, Joshua S. Speagle"
+copyright = "2018–2026, Joshua S. Speagle"
 author = "Joshua S. Speagle"
 
 # Auto-detect version from package metadata or pyproject.toml
@@ -78,13 +78,13 @@ html_static_path = ["_static"]
 html_css_files = ["brutus.css"]
 html_last_updated_fmt = "%b %d, %Y"
 
-# The palette comes from the logo: gold, sand, amber, copper and deep red.
+# The color palette is derived from the brutus logo (gold, sand, amber, copper, and deep red).
 html_theme_options = {
     "light_logo": "brutus-logo-light.svg",
     "dark_logo": "brutus-logo-dark.svg",
     "sidebar_hide_name": True,
-    # No view or edit buttons: the tutorial pages are notebooks copied in at
-    # build time, so their source links would point to missing files.
+    # Omit view and edit buttons because tutorial notebooks are copied into
+    # docs/source/tutorials/ at build time and do not exist at those paths in the repo.
     "top_of_page_buttons": [],
     "footer_icons": [
         {

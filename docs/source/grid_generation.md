@@ -105,6 +105,6 @@ The options of {meth}`~brutus.analysis.BruteForce.fit` that set the cost:
 | `max_models` | 50,000 | most models kept after selection |
 | `mem_lim` | 8000 | memory for the Monte Carlo draws, in MB; `Nmc_prior` is reduced to fit |
 | `running_io` | `True` | write each star when it is done, so an interrupted run keeps its results |
-| `rstate` | `None` | a `numpy.random.RandomState` for reproducible draws |
+| `rstate` | `None` | a `numpy.random.Generator` for reproducible draws |
 
 A smaller grid (fewer bands, a narrower range of mass or metallicity, or `include_postms=False`) is the most effective way to make fits faster.

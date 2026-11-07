@@ -1,12 +1,5 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-Data loading utilities for brutus.
-
-This module contains functions for loading stellar evolution models,
-photometric offsets, and other data files into memory for use in
-stellar fitting and analysis.
+Loaders for pre-computed stellar model grids, neural networks, and offsets.
 """
 
 import sys
@@ -15,7 +8,6 @@ import warnings
 import h5py
 import numpy as np
 
-# Import filter definitions
 from .download import _find_data_file
 from .filters import FILTERS
 
@@ -67,9 +59,7 @@ def load_models(
     verbose=True,
 ):
     """
-    Loads pre-computed stellar model grids with photometric coefficients
-    for multiple filters and stellar parameters. Models can be filtered
-    by evolutionary phase and binary status.
+    Load pre-computed stellar model grids and reddening coefficients.
 
     Parameters
     ----------
@@ -130,9 +120,10 @@ def load_models(
     Raises
     ------
     ValueError
-        If `include_ms` and `include_postms` are both `False`, or if
-        `include_ms` or `include_postms` is `False` and the file has no
-        `'eep'` column.
+        If ``include_ms`` and ``include_postms`` are both ``False``, if
+        ``include_ms`` or ``include_postms`` is ``False`` and the file has no
+        ``'eep'`` column, or if none of the requested ``filters`` exist in
+        ``filepath``.
 
     Notes
     -----
@@ -140,11 +131,11 @@ def load_models(
     written by older `GridGenerator` versions) are dropped so the returned
     grid is always safe to fit with `BruteForce`.
 
-    The `label_mask` return value is a boolean structured array indicating which
-    labels are ancillary (derived from the grid) vs. those used to generate
-    the grid. For example, if luminosity is predicted from mass/age/metallicity,
-    this mask would be False for luminosity. Used internally by StarGrid to
-    determine which parameters to marginalize over during fitting.
+    The `label_mask` return value is a boolean structured array that is True
+    for the labels used to generate the grid and False for those predicted
+    from them. For example, luminosity is predicted from mass, age and
+    metallicity, so the mask is False for luminosity. `StarGrid` and
+    `BruteForce` do not read the mask; they identify the grid inputs by name.
 
     Examples
     --------
@@ -176,7 +167,7 @@ def load_models(
     >>> from brutus.core import StarGrid
     >>> from brutus.analysis import BruteForce
     >>> models, labels, mask = load_models('grid_mist_v9.h5')
-    >>> grid = StarGrid(models, labels, mask)
+    >>> grid = StarGrid(models, labels)
     >>> fitter = BruteForce(grid)
     """
     if not include_ms and not include_postms:
@@ -219,16 +210,15 @@ def load_models(
         valid_filters = [filt for filt in filters if filt in available_filters]
         missing_filters = [filt for filt in filters if filt not in available_filters]
         if not valid_filters:
-            # Fail fast: a zero-filter model array (Nmodel, 0, 3) would only
-            # produce a confusing shape error later in StarGrid/BruteForce.
+            # Raise immediately because a (Nmodel, 0, 3) array would fail later
+            # in StarGrid or BruteForce with an opaque shape error.
             raise ValueError(
                 f"None of the requested filters {list(filters)} exist in "
                 f"'{filepath}'. Available filters: {available_filters}."
             )
         if missing_filters:
-            # The returned model columns follow `valid_filters`; callers who
-            # zip their original filter list against the columns would
-            # silently mislabel every band, so report the survivors.
+            # Warn with the surviving column order so callers do not misalign
+            # their original filter list against the returned columns.
             warnings.warn(
                 f"Requested filters not found in '{filepath}' and skipped: "
                 f"{missing_filters}. The returned model columns correspond "
@@ -242,7 +232,8 @@ def load_models(
                 f"Reading entire dataset ({len(available_filters)} filters) once...\n"
             )
 
-        # Read the ENTIRE dataset once into memory (this is the key optimization!)
+        # Read the structured dataset in a single HDF5 slab read before slicing
+        # out requested filter fields in memory.
         mag_coeffs = mag_coeffs_dataset[:]
 
         if verbose:
@@ -251,14 +242,10 @@ def load_models(
                 f"from memory: {valid_filters}\n"
             )
 
-        # Pre-allocate array for only the valid filters
         models = np.zeros((len(mag_coeffs), len(valid_filters), 3), dtype="float32")
-
-        # Extract each valid filter from the in-memory data (no more H5 I/O!)
         for i, filt in enumerate(valid_filters):
-            models[:, i] = mag_coeffs[filt]  # Extract from memory, not H5!
+            models[:, i] = mag_coeffs[filt]
 
-        # Update filters list to only include the ones we actually loaded
         filters = valid_filters
 
         # Read in labels.
@@ -307,9 +294,8 @@ def load_models(
             stacklevel=2,
         )
 
-    # Apply cuts. Start from a finiteness cut: user-generated grids written
-    # by older GridGenerator versions may contain all-NaN rows for invalid
-    # grid points, which crash BruteForce fitting if they survive loading.
+    # Drop rows with non-finite coefficients because grids written by older
+    # GridGenerator versions can contain all-NaN rows for invalid grid points.
     sel = np.isfinite(models).all(axis=(1, 2))
     n_nonfinite = len(models) - int(sel.sum())
     if n_nonfinite > 0 and verbose:
@@ -340,8 +326,7 @@ def load_models(
 
 def load_offsets(filepath, filters=None, verbose=True):
     """
-    Loads multiplicative photometric offsets used to calibrate
-    systematic differences between observed and synthetic photometry.
+    Load multiplicative photometric flux offsets for a set of filters.
 
     Parameters
     ----------

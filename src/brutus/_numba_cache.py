@@ -28,9 +28,22 @@ def _canonical(path):
 
 @functools.lru_cache
 def package_stamp(root):
-    """Return a SHA-256 over the relative path and the SHA-256 of the
-    content of each code or data file under ``root``, skipping
-    ``__pycache__``. A file that cannot be read is left out."""
+    """
+    Compute a SHA-256 stamp over all code and data files under ``root``.
+
+    Hashes the relative path and content SHA-256 of each ``.py`` and ``.dat``
+    file under ``root``, skipping ``__pycache__`` and unreadable files.
+
+    Parameters
+    ----------
+    root : str
+        Canonical root directory of the package.
+
+    Returns
+    -------
+    stamp : str
+        Hexadecimal SHA-256 digest of the package files.
+    """
     digest = hashlib.sha256()
     for directory, subdirs, names in os.walk(root):
         # Sorted in place, so the walk visits them in a fixed order.
@@ -66,12 +79,18 @@ def _package_locator(base, root):
 
 
 def install_cache_locators(root):
-    """Put package-wide locators for the files under ``root`` ahead of
-    numba's own source-file locators, once per ``root``.
+    """
+    Install package-wide numba cache locators for files under ``root``.
 
-    This uses numba internals. If they are missing, it warns and leaves
-    numba's locators alone. Numba's ``NUMBA_CACHE_LOCATOR_CLASSES``
-    override bypasses the new locators.
+    Places ``PackageLocator`` subclasses ahead of numba's built-in source-file
+    locators once per ``root``. If the required numba cache internals are absent,
+    emits a ``RuntimeWarning`` and leaves numba's locators unchanged. Setting
+    ``NUMBA_CACHE_LOCATOR_CLASSES`` bypasses the installed locators.
+
+    Parameters
+    ----------
+    root : str
+        Package root directory to stamp and monitor.
     """
     root = _canonical(root)
     if root in _installed:

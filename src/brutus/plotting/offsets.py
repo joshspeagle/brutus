@@ -1,11 +1,5 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-Photometric offset visualization functions.
-
-This module provides functions for plotting photometric offsets
-in 1D and 2D formats.
+Plot 1-D and 2-D photometric residuals weighted by leave-one-out posteriors.
 """
 
 import warnings
@@ -53,16 +47,15 @@ def photometric_offsets(
 
     Parameters
     ----------
-    phot : `~numpy.ndarray` of shape `(Nobj, Nfilt)`, optional
-        Observed data values (fluxes). If provided, these will be overplotted.
+    phot : `~numpy.ndarray` of shape `(Nobj, Nfilt)`
+        Observed flux densities in maggies (when ``flux=True``) or observed
+        magnitudes (when ``flux=False``).
 
     err : `~numpy.ndarray` of shape `(Nobj, Nfilt)`
-        Associated errors on the data values. If provided, these will be
-        overplotted as error bars.
+        Uncertainties on ``phot`` in the same units as ``phot``.
 
     mask : `~numpy.ndarray` of shape `(Nobj, Nfilt)`
-        Binary mask (0/1) indicating whether the data value was observed.
-        If provided, these will be used to mask missing/bad data values.
+        Boolean (or 0/1) mask indicating observed bands.
 
     models : `~numpy.ndarray` of shape `(Nmodels, Nfilts, Ncoeffs)`
         Array of magnitude polynomial coefficients used to generate
@@ -253,16 +246,15 @@ def photometric_offsets_2d(
 
     Parameters
     ----------
-    phot : `~numpy.ndarray` of shape `(Nobj, Nfilt)`, optional
-        Observed data values (fluxes). If provided, these will be overplotted.
+    phot : `~numpy.ndarray` of shape `(Nobj, Nfilt)`
+        Observed flux densities in maggies (when ``flux=True``) or observed
+        magnitudes (when ``flux=False``).
 
     err : `~numpy.ndarray` of shape `(Nobj, Nfilt)`
-        Associated errors on the data values. If provided, these will be
-        overplotted as error bars.
+        Uncertainties on ``phot`` in the same units as ``phot``.
 
     mask : `~numpy.ndarray` of shape `(Nobj, Nfilt)`
-        Binary mask (0/1) indicating whether the data value was observed.
-        If provided, these will be used to mask missing/bad data values.
+        Boolean (or 0/1) mask indicating observed bands.
 
     models : `~numpy.ndarray` of shape `(Nmodels, Nfilts, Ncoeffs)`
         Array of magnitude polynomial coefficients used to generate
@@ -394,8 +386,8 @@ def photometric_offsets_2d(
         xloc[x == xbins[-1]] = nx - 1
         yloc[y == ybins[-1]] = ny - 1
         s, wt_s = _band_weights(i, mask, usable, fobs, feobs, mpred, weights)
-        # Group the selected objects in the bins once: a stable sort by flat
-        # bin index keeps each bin's objects in ascending order
+        # Group the selected objects into bins once using a stable sort by flat
+        # bin index so each bin's objects remain in ascending order.
         objs = np.flatnonzero(s)
         inside = (xloc[objs] >= 0) & (xloc[objs] < nx)
         inside &= (yloc[objs] >= 0) & (yloc[objs] < ny)
@@ -441,8 +433,8 @@ def _setup(phot, err, mask, models, idxs, reds, dreds, dists, flux, weights, off
     the observed fluxes and errors, and the observed magnitudes shifted by
     `offset`."""
     nobj, nsamps = idxs.shape
-    # Coerce to boolean: an integer 0/1 mask would otherwise fancy-index
-    # (selecting rows 0/1) and make `~mask` a bitwise complement (-1/-2).
+    # Coerce to bool because an integer 0/1 mask would trigger fancy indexing
+    # and make `~mask` a bitwise complement (-1/-2).
     mask = np.asarray(mask, dtype=bool)
     weights = _sample_weights(weights, nobj, nsamps)
     if offset is None:
@@ -464,10 +456,9 @@ def _setup(phot, err, mask, models, idxs, reds, dreds, dists, flux, weights, off
             # space it is applied as -2.5 log10(offset).
             fobs, feobs = inv_magnitude(phot, err)
             magobs = phot - 2.5 * np.log10(offset)
-    # Require at least 4 observed bands besides the plotted one, and finite
-    # magnitudes only in *observed* bands: unobserved (masked) bands
-    # routinely hold nonpositive/NaN fluxes that map to non-finite
-    # magnitudes and must not disqualify the object.
+    # Require at least 4 observed bands besides the plotted one, and check
+    # finiteness only in observed bands because masked bands routinely hold
+    # non-positive or NaN fluxes.
     usable = (
         (np.sum(mask, axis=1) > 4)
         & np.all(np.isfinite(magobs) | ~mask, axis=1)

@@ -2,14 +2,14 @@ name: Documentation
 
 on:
   push:
-    branches: [ master, main ]
+    branches: [ main ]
   pull_request:
-    branches: [ master, main ]
+    branches: [ main ]
 
 jobs:
   # Build runs everywhere (PRs included). It must NOT declare the
   # github-pages environment: that environment's protection rules only
-  # allow master, so a job tied to it is rejected instantly on every PR
+  # allow main, so a job tied to it is rejected instantly on every PR
   # (the historical always-failing "docs" check). Keeping the job name
   # "docs" preserves the check name PRs have always shown.
   docs:
@@ -34,16 +34,16 @@ jobs:
         make html SPHINXOPTS="-W --keep-going"
 
     - name: Upload Pages artifact
-      if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
       uses: actions/upload-pages-artifact@v3
       with:
         path: docs/build/html
 
-  # Deploy only on pushes to master; this job carries the github-pages
+  # Deploy only on pushes to main; this job carries the github-pages
   # environment and never runs for PRs, so the environment gate is
   # never violated.
   deploy-pages:
-    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: docs
     runs-on: ubuntu-latest
     permissions:

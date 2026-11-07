@@ -17,6 +17,7 @@ See [Results that change](#results-that-change).
 | `fit(ltol=3e-2, logl_initthresh=5e-3)`, the old defaults | The defaults are `ltol=1e-3` (the convergence tolerance) and `logl_initthresh=1e-6` (the first cut; `init_thresh` in `loglike_grid`). Passing the old values does not restore 1.x results, because the optimizer changed. |
 | `max_models=0` to keep every model | Pass `max_models=None`. Other values must be positive integers. |
 | `logpost_grid` returns 8 values | It returns 9. The ninth is `ln_incl`, the log-probability that the `max_models` cap kept each model. |
+| `fit(...)` on a grid without `agewt`, such as the Bayestar grid | Pass `apply_agewt=False`. The default `apply_agewt=True` raises `ValueError` there. |
 | `fit(..., apply_dlabels=False)` had no effect | It now evaluates the Galactic prior without model labels. |
 | `loglike_grid(..., unknown_keyword=...)` | Unknown keywords raise `TypeError`. Fix the spelling. |
 | An integer 0/1 `data_mask`, which 1.x read as band indices | Nothing to change: it now masks bands, so the results change. Boolean masks give the same results as before. |
@@ -92,4 +93,4 @@ See [Results that change](#results-that-change).
 
 ## Results that change
 
-The [changelog](changelog.md) lists each change in results for the same inputs and seed. The entries marked *(output-changing)* change fit results, and most of them are in the first "Fixed" section under "Unreleased". Other entries change plotted values and the log-likelihoods of the cluster and line-of-sight fits.
+The [changelog](changelog.md) lists each change in results for the same inputs and seed. The entries marked *(output-changing)* change fit results, and most of them are in the first "Fixed" section under 2.0.0. Other entries change plotted values and the log-likelihoods of the cluster and line-of-sight fits.

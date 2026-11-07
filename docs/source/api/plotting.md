@@ -1,8 +1,9 @@
 # Plotting Module (`brutus.plotting`)
 
-The plotting module provides visualization utilities for stellar photometry analysis including corner plots, SEDs, distance-reddening plots, and photometric offsets.
+`brutus.plotting` generates diagnostic and publication figures from `BruteForce` posterior outputs and stellar model grids, including corner plots of intrinsic and extrinsic parameters, posterior predictive SED comparisons, 2D distance-reddening posteriors, and empirical photometric offset residuals.
 
 ```{eval-rst}
+.. py:module:: brutus.plotting
 .. currentmodule:: brutus.plotting
 ```
 
@@ -48,64 +49,4 @@ The plotting module provides visualization utilities for stellar photometry anal
 
 ```{eval-rst}
 .. autofunction:: hist2d
-```
-
-## Submodules
-
-For advanced users who need access to internal implementations:
-
-```{eval-rst}
-.. automodule:: brutus.plotting.corner
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
-```
-
-```{eval-rst}
-.. automodule:: brutus.plotting.distance
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
-```
-
-```{eval-rst}
-.. automodule:: brutus.plotting.binning
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
-```
-
-```{eval-rst}
-.. automodule:: brutus.plotting.sed
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
-```
-
-```{eval-rst}
-.. automodule:: brutus.plotting.summary
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
-```
-
-```{eval-rst}
-.. automodule:: brutus.plotting.offsets
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
-```
-
-```{eval-rst}
-.. automodule:: brutus.plotting.utils
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
 ```

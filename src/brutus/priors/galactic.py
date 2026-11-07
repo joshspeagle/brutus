@@ -1,8 +1,5 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-Galactic structure priors for Bayesian stellar parameter estimation.
+Galactic number-density, metallicity and age log-priors.
 
 This module gives the number density of stars in a four-component model
 of the Milky Way (thin disk, thick disk, halo and bar), as a function of
@@ -35,7 +32,7 @@ Combined Galactic structure prior:
 >>> coord = (90.0, 30.0)
 >>> distances = np.array([1.0, 2.0, 5.0])
 >>>
->>> # Evaluate the combined thin disk + thick disk + halo prior
+>>> # Evaluate the combined thin disk, thick disk, halo and bar prior
 >>> log_prior = logp_galactic_structure(distances, coord)
 """
 
@@ -1574,9 +1571,9 @@ def logn_disk(
     R, Z, R_solar=R_SOLAR, Z_solar=Z_SOLAR, R_scale=2.74, Z_scale=0.3, R_smooth=2.0
 ):
     r"""
-    Log-number density for the Galactic disk stellar population.
+    Compute the log-number density for an exponential Galactic disk.
 
-    Implements an exponential disk model with separate radial and vertical
+    Evaluates a double-exponential disk model with separate radial and vertical
     scale lengths, smoothed near the Galactic center to avoid singularities.
 
     Parameters

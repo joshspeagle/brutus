@@ -1,6 +1,6 @@
 # API Reference
 
-This page provides detailed documentation for all public modules, classes, and functions in brutus.
+Public modules, classes, and functions in `brutus`, organized by subpackage:
 
 ```{toctree}
 :maxdepth: 2

@@ -46,6 +46,8 @@ def mock_grid():
         ("logg", "f4"),
         ("Teff", "f4"),
         ("Mr", "f4"),
+        ("agewt", "f4"),
+        ("loga", "f4"),
     ]
     params = np.zeros(nmodels, dtype=params_dtype)
 
@@ -69,8 +71,10 @@ def mock_grid():
                     m**0.8 * (1 + 0.05 * j),  # radius
                     4.4 - 0.1 * j,  # logg
                     5777 * m**0.4,  # Teff
-                    5.0 - 2.5 * np.log10(m),
-                )  # Mr
+                    5.0 - 2.5 * np.log10(m),  # Mr
+                    1.0 + j,  # agewt
+                    9.0 + 0.3 * j,  # loga
+                )
                 idx += 1
 
     filters = ["g", "r", "i", "z", "y"]
@@ -163,6 +167,34 @@ class TestBruteForceInitialization:
         # mini, eep, feh, and the one-value afe and smf of the published grid
         assert grid_params == 5
         assert pred_params > 0  # Should have some predictions
+
+    def test_predictions_in_the_label_array_get_no_grid_spacing_term(self, mock_grid):
+        """Regression (#296): `StarGrid(models, labels)` with the predictions in
+        `labels`, as `load_models` returns them, gives the prior of the split
+        form."""
+        from numpy.lib import recfunctions
+
+        joined = recfunctions.merge_arrays(
+            (mock_grid.labels, mock_grid.params), flatten=True
+        )
+        split = BruteForce(mock_grid, verbose=False)
+        merged = BruteForce(StarGrid(mock_grid.models, joined), verbose=False)
+        assert merged.labels_mask == split.labels_mask
+
+        flux = 10 ** (-0.4 * np.array([15.0, 14.8, 14.7, 14.6, 14.55]))
+        args = (flux, 0.05 * flux, np.ones(5, dtype=bool))
+        kwargs = dict(data_coords=(120.0, 45.0))
+        np.testing.assert_array_equal(
+            merged._setup(*args, **kwargs)[3], split._setup(*args, **kwargs)[3]
+        )
+
+    def test_bayestar_inputs_get_the_grid_spacing_term(self, mock_grid):
+        """Regression (#296): `Mr` and `feh` of the Bayestar grid stay axes."""
+        labels = np.zeros(27, dtype=[("feh", "f8"), ("Mr", "f8")])
+        labels["feh"] = np.repeat([-1.0, 0.0, 0.5], 9)
+        labels["Mr"] = np.tile(np.arange(9.0), 3)
+        fitter = BruteForce(StarGrid(mock_grid.models, labels), verbose=False)
+        assert fitter.labels_mask == {"feh": True, "Mr": True}
 
     def test_verbose_output(self, mock_grid, capsys):
         """Test verbose initialization output."""
@@ -1668,7 +1700,7 @@ class TestSetupLnpriorNotMutated:
         np.testing.assert_allclose(out1, out2)
 
 
-class TestParallaxSelectionMarginalError:
+class TestParallaxSelectionGate:
     def test_degenerate_model_kept_with_marginal_error(self, fitter):
         """A model 2 marginal-sigma from the parallax scale must be kept.
 
@@ -1724,26 +1756,13 @@ class TestParallaxSelectionMarginalError:
         assert 0 in sel
         assert 1 not in sel
 
-    def test_diagonal_precision_matches_conditional(self, fitter):
-        """For a diagonal precision matrix marginal == conditional, so the
-        selection must be identical to the old-code reference computation."""
-        cov = np.diag([0.05**2, 0.1**2, 0.1**2])
-        icov = np.linalg.inv(cov)
-        # Reference (old code): conditional error from icov[0,0].
-        cond_err = 1.0 / np.sqrt(icov[0, 0])
-        # New code marginal error via cofactor formula.
-        minor00 = icov[1, 1] * icov[2, 2] - icov[1, 2] ** 2
-        marg_err = np.sqrt(minor00 / np.linalg.det(icov))
-        np.testing.assert_allclose(marg_err, cond_err, rtol=1e-12)
-
-    def test_singular_precision_does_not_crash(self, fitter):
-        """Degenerate (all-zero) precision matrices fall back gracefully."""
+    def test_model_without_scale_information_is_dropped(self, fitter):
+        """A model whose precision matrix carries no scale information gets
+        an uninformative ln(d) width, so its averaged parallax likelihood is
+        too small to pass the gate."""
         cov = np.diag([0.05**2, 0.1**2, 0.1**2])
         results = list(_make_loglike_results([1.0, 1.0], [cov, cov]))
-        icovs = results[6]
-        icovs[1] = 0.0  # singular: uninformative error is used
-        results[6] = icovs
-
+        results[6][1] = 0.0
         out = fitter.logpost_grid(
             tuple(results),
             parallax=1.0,
@@ -1753,8 +1772,58 @@ class TestParallaxSelectionMarginalError:
             wt_thresh=1e-3,
             rstate=np.random.RandomState(0),
         )
-        sel = out[0]
-        assert len(sel) > 0
+        np.testing.assert_array_equal(out[0], [0])
+
+    def test_gate_matches_adaptive_quadrature(self):
+        """The gate equals a direct integration of the parallax likelihood
+        over the model's ln(d) Gaussian, for low to high parallax SNR."""
+        from scipy.integrate import quad
+
+        from brutus.analysis.individual import _lnp_parallax_gate
+
+        def reference(mu, sig, plx, err):
+            def f(e):
+                return np.exp(
+                    -0.5 * ((e - mu) / sig) ** 2 - 0.5 * ((np.exp(-e) - plx) / err) ** 2
+                ) / (2 * np.pi * sig * err)
+
+            peaks = sorted([mu] + ([-np.log(plx)] if plx > 0 else []))
+            lo, hi = peaks[0] - 12 * sig - 5, peaks[-1] + 12 * sig + 5
+            value = quad(f, lo, hi, points=peaks, limit=500, epsrel=1e-11)[0]
+            return np.log(value) if value > 0 else -np.inf
+
+        cases = [
+            (np.log(dist), sig, plx, err)
+            for dist in (0.25, 1.0, 8.0)
+            for sig in (0.02, 0.2, 1.0, 3.0)
+            for plx, err in ((1.0, 0.01), (0.125, 0.06), (0.3, 0.1), (-0.1, 0.1))
+        ]
+        # The peak far from both starts, with a negative parallax.
+        cases.append((np.log(0.0067), 0.5, -0.5, 0.1))
+        for mu, sig, plx, err in cases:
+            got = _lnp_parallax_gate(np.array([mu]), np.array([sig]), plx, err)[0]
+            ref = reference(mu, sig, plx, err)
+            # The selection threshold is ln(wt_thresh) = -6.9 below the best.
+            if ref > -30:
+                assert abs(got - ref) < 0.25, (mu, sig, plx, err, got, ref)
+
+    def test_low_snr_parallax_removes_the_dwarf_it_excludes(self, fitter):
+        """Regression (#297): the gate ignored parallaxes with SNR <= 4, so
+        a dwarf favoured by the model prior removed the true giant."""
+        # Model 0: dwarf at 0.25 kpc. Model 1: giant at 8 kpc.
+        dwarf = np.diag([2.0**2, 0.1**2, 0.1**2])
+        giant = np.diag([0.002**2, 0.1**2, 0.1**2])
+        results = _make_loglike_results([16.0, 1 / 64], [dwarf, giant])
+        out = fitter.logpost_grid(
+            results,
+            parallax=0.125,
+            parallax_err=0.06,  # SNR 2; the dwarf's parallax is 4 mas
+            lnprior=np.array([10.0, 0.0]),
+            Nmc_prior=5,
+            wt_thresh=1e-3,
+            rstate=np.random.RandomState(0),
+        )
+        np.testing.assert_array_equal(out[0], [1])
 
 
 class TestDustPriorGating:
@@ -2348,3 +2417,72 @@ def test_saved_band_count_and_chi2min_include_the_parallax(
     with h5py.File(path, "r") as f:
         assert f["obj_Nbands"][0] == ndim == fitter.nfilters + (parallax is not None)
         assert f["obj_chi2min"][0] == np.float32(chi2.min())
+
+
+def test_split_and_merged_grids_give_the_same_fit(mock_grid, batch, tmp_path):
+    """Regression (#300): with the predictions in `params`, the fit applied
+    no age weights and gave the Galactic prior no `loga`."""
+    from numpy.lib import recfunctions
+
+    joined = recfunctions.merge_arrays(
+        (mock_grid.labels, mock_grid.params), flatten=True
+    )
+    split = BruteForce(mock_grid, verbose=False)
+    merged = BruteForce(StarGrid(mock_grid.models, joined), verbose=False)
+    np.testing.assert_array_equal(split.models_labels, merged.models_labels)
+
+    out = {}
+    for name, fitter in (("split", split), ("merged", merged)):
+        path = str(tmp_path / f"{name}.h5")
+        fitter.fit(
+            save_file=path,
+            Ndraws=10,
+            Nmc_prior=5,
+            rstate=np.random.RandomState(3),
+            verbose=False,
+            **batch,
+        )
+        with h5py.File(path, "r") as f:
+            out[name] = {key: f[key][()] for key in ("model_idx", "obj_log_post")}
+    for key in out["split"]:
+        np.testing.assert_array_equal(out["split"][key], out["merged"][key])
+
+
+def test_age_weights_on_a_grid_without_agewt_raise(mock_grid, observation):
+    fitter = BruteForce(StarGrid(mock_grid.models, mock_grid.labels), verbose=False)
+    with pytest.raises(ValueError, match="agewt"):
+        fitter._setup(*observation, data_coords=(120.0, 45.0))
+    fitter._setup(*observation, data_coords=(120.0, 45.0), apply_agewt=False)
+
+
+def test_a_field_in_labels_and_params_is_read_from_labels(mock_grid):
+    from numpy.lib import recfunctions
+
+    params = mock_grid.params.copy()
+    params["Mr"] = np.nan
+    labels = recfunctions.merge_arrays(
+        (mock_grid.labels, mock_grid.params[["Mr"]]), flatten=True
+    )
+    fitter = BruteForce(StarGrid(mock_grid.models, labels, params), verbose=False)
+    assert fitter.models_labels.dtype.names.count("Mr") == 1
+    np.testing.assert_array_equal(fitter.models_labels["Mr"], mock_grid.params["Mr"])
+
+
+def test_fits_with_a_parallax_and_the_same_seed_are_identical(fitter, batch, tmp_path):
+    saved = []
+    for run in range(2):
+        path = str(tmp_path / f"run{run}.h5")
+        fitter.fit(
+            save_file=path,
+            parallax=np.array([0.5, 0.2]),
+            parallax_err=np.array([0.3, 0.1]),
+            Ndraws=20,
+            Nmc_prior=10,
+            rstate=np.random.RandomState(7),
+            verbose=False,
+            **batch,
+        )
+        with h5py.File(path, "r") as f:
+            saved.append({key: f[key][()] for key in f.keys()})
+    for key in saved[0]:
+        np.testing.assert_array_equal(saved[0][key], saved[1][key], err_msg=key)

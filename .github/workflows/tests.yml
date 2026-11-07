@@ -2,12 +2,12 @@ name: Tests
 
 on:
   push:
-    branches: [ master, main, develop ]
+    branches: [ main, develop ]
   pull_request:
-    branches: [ master, main ]
+    branches: [ main ]
 
 # A new push to a pull request cancels the run of the commit it replaces. A
-# push to a branch gets its own group, so every commit on master is tested.
+# push to a branch gets its own group, so every commit on main is tested.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: true

@@ -1,11 +1,5 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-SED (Spectral Energy Distribution) plotting utilities.
-
-This module contains functions for visualizing stellar SEDs and related
-posterior predictive distributions.
+Posterior predictive spectral energy distribution (SED) plots.
 """
 
 import matplotlib.pyplot as plt
@@ -63,54 +57,54 @@ def posterior_predictive(
         An optional set of importance weights used to reweight the samples.
 
     flux : bool, optional
-        Whether to plot the SEDs in flux space rather than magniude space.
-        Default is `False`.
+        Whether to plot SEDs in linear flux densities (maggies) rather than
+        magnitudes. Default is `False`.
 
-    data : `~numpy.ndarray` of shape `(Nfilt)`, optional
-        Observed data values (fluxes). If provided, these will be overplotted.
+    data : `~numpy.ndarray` of shape `(Nfilt,)`, optional
+        Observed flux densities in maggies to overplot.
 
-    data_err : `~numpy.ndarray` of shape `(Nfilt)`
-        Associated 1-sigma errors on the data values. If provided,
-        these will be overplotted as `psig`-sigma error bars (default: 2-sigma).
+    data_err : `~numpy.ndarray` of shape `(Nfilt,)`, optional
+        Observed 1-sigma flux density uncertainties in maggies, overplotted as
+        ``psig``-sigma error bars.
 
-    data_mask : `~numpy.ndarray` of shape `(Nfilt)`
-        Boolean mask (or 0/1 values) indicating whether the data value was
-        observed. If provided, these will be used to mask missing/bad data values.
+    data_mask : `~numpy.ndarray` of shape `(Nfilt,)`, optional
+        Boolean mask (or 0/1 values) indicating observed bands.
 
-    offset : `~numpy.ndarray` of shape `(Nfilt)`, optional
-        Multiplicative photometric offsets that will be applied to
-        the data (i.e. `data_new = data * phot_offsets`) and errors
-        when provided.
+    offset : `~numpy.ndarray` of shape `(Nfilt,)`, optional
+        Multiplicative photometric flux offsets applied to ``data`` and
+        ``data_err``.
 
     vcolor : str, optional
-        Color used when plotting the violin plots that comprise the
-        SED posterior predictive distribution. Default is `'black'`.
+        Color for the posterior predictive violin plots. Default is ``'black'``.
 
     pcolor : str, optional
-        Color used when plotting the provided data values.
-        Default is `'black'`.
+        Color for the observed photometric points. Default is ``'black'``.
 
-    labels : iterable with shape `(ndim,)`, optional
-        A list of names corresponding to each filter. If not provided,
-        an ascending set of integers `(0, 1, 2, ...)` will be used.
+    labels : sequence of str of length `Nfilt`, optional
+        Filter names for the x-axis tick labels. If not provided, integer
+        indices ``(0, 1, ..., Nfilt - 1)`` are used.
 
-    rstate : `~numpy.random.RandomState`, optional
-        `~numpy.random.RandomState` instance.
+    rstate : `~numpy.random.RandomState` or `~numpy.random.Generator`, optional
+        Random number generator used to resample weighted draws.
 
     psig : float, optional
-        The number of sigma to plot when showcasing the error bars
-        from any provided `data_err`. Default is `2.`.
+        Error-bar multiple applied to ``data_err``. Default is ``2.0``.
 
     fig : (`~matplotlib.figure.Figure`, `~matplotlib.axes.Axes`), optional
-        If provided, draw on the provided axes and leave the figure layout
-        unchanged. Otherwise, a new figure is generated and laid out with
+        If provided, draw on the given axes and leave the figure layout
+        unchanged. Otherwise, a new figure is created and laid out with
         `~matplotlib.figure.Figure.tight_layout`.
 
     Returns
     -------
     postpredplot : (`~matplotlib.figure.Figure`, `~matplotlib.axes.Axes`, dict)
-        The associated figure, axes, and violinplot dictionary for the
-        posterior predictive distribution.
+        Figure, axes, and violinplot artist dictionary.
+
+    Raises
+    ------
+    ValueError
+        If ``weights`` is not 1-D of length ``Nsamps`` or ``data_mask`` does
+        not have shape ``(Nfilt,)``.
 
     """
 

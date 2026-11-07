@@ -1,23 +1,20 @@
 # Analysis Module (`brutus.analysis`)
 
-The analysis module implements the statistical inference machinery for brutus. It provides high-level fitting functions that combine stellar models with Bayesian inference to estimate parameters from photometric and astrometric data.
+`brutus.analysis` implements the Bayesian inference engines for fitting individual stars, coeval star clusters, empirical photometric offsets, and 3D line-of-sight dust profiles.
 
 **Key Components:**
 
-- **Individual Star Fitting**: `BruteForce` class performs grid-based Bayesian inference for field stars
-- **Population Analysis**: Functions for fitting coeval stellar populations (clusters) with mixture models
-- **Photometric Offsets**: Tools for empirical calibration of systematic photometric errors
-- **Line-of-Sight Dust**: Functions for 3-D dust mapping from stellar ensembles
+- **Individual Star Fitting:** `BruteForce` evaluates Bayesian posteriors over pre-computed stellar model grids.
+- **Population Analysis:** `isochrone_population_loglike` and its component functions evaluate cluster likelihoods with binary stars and field-star mixture models.
+- **Photometric Offsets:** `photometric_offsets` and `PhotometricOffsetsConfig` derive leave-one-out empirical zero-point corrections across survey bands.
+- **Line-of-Sight Dust:** `los_clouds_priortransform` and `los_clouds_loglike_samples` fit multi-cloud 3D extinction profiles to stellar distance-reddening posteriors.
 
-**Design Philosophy:**
+**Inference Workflow:**
 
-The module implements the complete Bayesian inference workflow:
-
-1. **Model Evaluation**: Compute likelihoods over stellar model grids
-2. **Prior Application**: Incorporate Galactic priors on stellar properties and dust
-3. **Optimization**: Find best-fit parameters in distance-extinction space
-4. **Marginalization**: Integrate over nuisance parameters
-5. **Sampling**: Generate posterior samples for uncertainty quantification
+1. **Grid Likelihood Evaluation:** Compute photometric and parallax likelihoods across the stellar model grid.
+2. **Continuous Parameter Optimization:** Solve for the maximum-likelihood $(s, A_V, R_V)$ and $3 \times 3$ Fisher matrix per model via Gauss-Newton iteration.
+3. **Prior Integration:** Integrate Galactic structure, 3D dust, and parallax priors via antithetic Monte Carlo importance sampling in $(\ln d, A_V, R_V)$.
+4. **Posterior Resampling:** Draw equally weighted posterior samples of stellar models, distances, and extinctions.
 
 **Typical Usage Patterns:**
 
@@ -32,36 +29,37 @@ import numpy as np
 import h5py
 
 # Load pre-computed grid
-models, labels, label_mask = load_models('grid_mist_v9.h5')
+models, labels, label_mask = load_models("grid_mist_v9.h5")
 grid = StarGrid(models, labels)
 
 # Initialize fitter
 fitter = BruteForce(grid)
 
 # Observed data (Nstars=1 in this example)
-# BruteForce.fit expects linear flux densities ("maggies"), NOT magnitudes.
-# Convert observed magnitudes + errors to maggies via inv_magnitude.
+# Convert observed magnitudes and errors to linear flux densities (maggies)
 mag = np.array([[16.5, 15.2, 14.8, 13.5, 13.1]])  # shape (1, 5)
-mag_err = np.array([[0.01, 0.01, 0.02, 0.03, 0.03]])
-flux, flux_err = inv_magnitude(mag, mag_err)  # maggies = 10**(-0.4*mag)
-mask = np.array([[True, True, True, True, True]])
-obj_ids = np.array([[1]])
+mag_err = np.array([[0.02, 0.02, 0.02, 0.03, 0.03]])
+flux, flux_err = inv_magnitude(mag, mag_err)  # maggies = 10**(-0.4 * mag)
+mask = np.ones_like(flux, dtype=bool)
+obj_ids = np.array([1])
+coords = np.array([[209.1, -19.9]])  # Galactic (l, b) in degrees
 parallax = np.array([2.5])  # mas
 parallax_err = np.array([0.1])  # mas
 
 # Fit and save results to HDF5
-output_file = fitter.fit(
+fitter.fit(
     data=flux, data_err=flux_err, data_mask=mask,
-    data_labels=obj_ids, save_file='results.h5',
+    data_labels=obj_ids, save_file="results.h5",
     parallax=parallax, parallax_err=parallax_err,
-    Ndraws=250
+    data_coords=coords,
+    Ndraws=250,
 )
 
 # Read posterior samples from HDF5
-with h5py.File(output_file, 'r') as f:
-    dist = f['samps_dist'][0]  # (Ndraws,) distances in kpc
-    av = f['samps_red'][0]     # (Ndraws,) A_V values
-print(f"Distance: {np.median(dist)*1000:.0f} pc")
+with h5py.File("results.h5", "r") as f:
+    dist = f["samps_dist"][0]  # (Ndraws,) distances in kpc
+    av = f["samps_red"][0]     # (Ndraws,) A_V values in mag
+print(f"Distance: {np.median(dist) * 1000:.0f} pc")
 print(f"Extinction: {np.median(av):.2f} mag")
 ```
 
@@ -103,12 +101,12 @@ sampler.run_mcmc(initial_pos, 5000, progress=True)
 samples = sampler.get_chain(discard=1000, thin=10, flat=True)
 ```
 
-**Key Methodological Features:**
+**Methodological Highlights:**
 
-- **Brute-force grid evaluation**: Systematically explores parameter space without convergence issues
-- **Multi-stage optimization**: Fast magnitude-space → accurate flux-space → Bayesian posterior
-- **Mixture-before-marginalization**: Mathematically correct treatment of field contamination in clusters
-- **Importance sampling**: Efficient posterior sampling weighted by probability
+- **Full-grid evaluation:** Evaluates every model in the stellar grid, avoiding MCMC burn-in and multimodal trapping.
+- **Two-stage Gauss-Newton optimization:** Profiles distance out in magnitude space across all models before refining high-weight candidates in flux space.
+- **Pointwise cluster mixture modeling:** Evaluates the cluster-versus-field mixture probability at each $(m, q)$ grid point prior to marginalizing over mass and binary mass ratio.
+- **Antithetic Monte Carlo integration:** Integrates continuous spatial and dust priors in $(\ln d, A_V, R_V)$ using paired draws $(z, -z)$.
 
 **See Also:**
 
@@ -118,6 +116,7 @@ samples = sampler.get_chain(discard=1000, thin=10, flat=True)
 - {doc}`/understanding_results` - Interpreting posterior distributions
 
 ```{eval-rst}
+.. py:module:: brutus.analysis
 .. currentmodule:: brutus.analysis
 ```
 

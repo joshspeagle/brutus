@@ -1,6 +1,6 @@
 #!/bin/bash
 # Time the working tree's src/ against $BASE_REF's (default HEAD; use
-# BASE_REF=origin/master for a pull request). The two sides alternate for
+# BASE_REF=origin/main for a pull request). The two sides alternate for
 # $ROUNDS rounds (default 3); compare the medians. Both sides use the working
 # tree's bench/ tools.
 set -e -o pipefail

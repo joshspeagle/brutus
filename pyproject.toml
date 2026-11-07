@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "astro-brutus"
-version = "1.2.0"
+version = "2.0.0"
 description = "Brute-force Bayesian inference for photometric distances, reddenings, and stellar properties"
 readme = "README.md"
 license = "MIT"

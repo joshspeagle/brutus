@@ -1,71 +1,61 @@
 # Priors Module (`brutus.priors`)
 
-The priors module implements prior probability distributions for Bayesian inference in brutus. These priors encode astrophysical knowledge about the Galaxy and are critical for breaking parameter degeneracies in stellar parameter estimation.
+`brutus.priors` implements the astrophysical prior probability distributions used by `BruteForce` to break degeneracies between stellar luminosity, distance, and dust reddening.
 
-**Why Priors Matter:**
+**Role in Inference:**
 
-Photometry alone cannot uniquely determine stellar properties—a faint red star could be either a nearby cool dwarf or a distant reddened giant. Priors resolve these ambiguities by incorporating knowledge about:
+Because broadband photometry alone often permits both a nearby cool dwarf and a distant reddened giant, `brutus` incorporates prior distributions over:
 
-- Where different stellar types are located in the Galaxy (Galactic structure)
-- How dust extinction varies with distance and direction (3-D dust maps)
-- The relative abundance of different stellar masses (IMF)
-- The metallicity and age structure of different Galactic populations
-
-**Prior Categories:**
-
-1. **Stellar Priors**: Initial Mass Function (IMF) and luminosity functions
-2. **Astrometric Priors**: Parallax-based distance constraints
-3. **Galactic Structure Priors**: 3-D spatial distribution of stars (thin/thick disk, halo)
-4. **Kinematics**: velocity moments of the same components, projected to proper motions and radial velocity
-5. **Extinction Priors**: 3-D dust maps and R_V variation
+- **Stellar Mass and Luminosity:** Kroupa initial mass function (`logp_imf`) and Pan-STARRS $r$-band luminosity function (`logp_ps1_luminosity_function`).
+- **Astrometry:** Gaussian parallax likelihood (`logp_parallax`) and scale-factor marginalization (`logp_parallax_scale`).
+- **Galactic Structure:** Thin-disk, thick-disk, halo, and bar number density, metallicity, and age distributions (`logp_galactic_structure`, `galactic_prior_summary`, `logn_disk`, `logn_halo`).
+- **Kinematics:** Velocity moments of the Galactic components, projected to proper motions and radial velocity (`thin_disk_velocity_moments`, `velocity_to_observables`).
+- **Interstellar Extinction:** Truncated Gaussian $A_V$ prior from 3D dust maps (`logp_extinction`).
 
 **Typical Usage:**
 
-Priors are automatically applied by the `BruteForce` fitter, but can also be evaluated directly:
+Priors are evaluated automatically inside `BruteForce.fit`, and can also be called directly:
 
 ```python
 from brutus.priors.stellar import logp_imf
 from brutus.priors.galactic import logp_galactic_structure
 from brutus.priors.extinction import logp_extinction
+from brutus.dust import Bayestar
 import numpy as np
 
-# Evaluate IMF prior for range of masses
+# Evaluate IMF prior for a range of initial masses (in Msun)
 masses = np.array([0.5, 1.0, 2.0, 5.0])
 log_prior_imf = logp_imf(masses)
 
-# Evaluate Galactic structure prior
+# Evaluate Galactic structure prior along a sightline
 distances = np.array([0.1, 0.5, 1.0, 5.0])  # kpc
 gal_l, gal_b = 45.0, 10.0  # Galactic coordinates (deg)
 log_prior_gal = logp_galactic_structure(distances, (gal_l, gal_b))
 
-# Evaluate extinction prior from 3-D dust map
-from brutus.dust import Bayestar
-dustmap = Bayestar()  # load a 3-D dust map object
+# Evaluate extinction prior from a 3D dust map
+dustmap = Bayestar()
 av_values = np.array([0.1, 0.5, 1.0, 2.0])  # mag
-log_prior_dust = logp_extinction(av_values, dustmap, (gal_l, gal_b),
-                                 distance=distances[0])
+log_prior_dust = logp_extinction(
+    av_values, dustmap, (gal_l, gal_b), distance=distances
+)
 ```
 
 **Customization:**
 
-Advanced users can customize or disable priors by passing callables to `fit()`.
-The Galactic structure prior is supplied via `lngalprior`, which is called as
-`lngalprior(dist, coord, labels=...)` where `coord` is a single `(l, b)` tuple:
+Pass custom callables to `BruteForce.fit` to replace or disable specific priors. The Galactic structure prior is supplied via `lngalprior(dist, coord, labels=...)`, where `coord` is a `(l, b)` tuple in degrees:
 
 ```python
 from brutus.analysis import BruteForce
 
 fitter = BruteForce(grid)
 
-# Disable the Galactic structure prior with a flat (zero) prior
+# Replace the Galactic structure prior with a flat log-prior in distance
 fitter.fit(
     data=flux, data_err=flux_err, data_mask=mask,
-    data_labels=obj_ids, save_file='results.h5',
+    data_labels=obj_ids, save_file="results.h5",
     data_coords=coords,
-    lngalprior=lambda dist, coord, labels=None: np.zeros(len(np.atleast_1d(dist))),
+    lngalprior=lambda dist, coord, labels=None: np.zeros_like(dist, dtype=float),
 )
-
-# Or provide a custom Galactic prior function with the same signature
 ```
 
 **See Also:**
@@ -74,6 +64,7 @@ fitter.fit(
 - {doc}`/scientific_background` - How priors fit into the Bayesian framework
 
 ```{eval-rst}
+.. py:module:: brutus.priors
 .. currentmodule:: brutus.priors
 ```
 
@@ -119,7 +110,7 @@ fitter.fit(
 
 ## Kinematics
 
-Velocity moments of the Galactic components and their projection to proper motions and radial velocity. The Galactic prior uses the disk vertical dispersions; the fit does not use the velocities yet ([#275](https://github.com/joshspeagle/brutus/issues/275)).
+The Galactic prior uses the disk vertical dispersions. The fit does not use the velocities yet ([#275](https://github.com/joshspeagle/brutus/issues/275)).
 
 ```{eval-rst}
 .. autofunction:: solar_velocity
@@ -145,48 +136,4 @@ Velocity moments of the Galactic components and their projection to proper motio
 
 ```{eval-rst}
 .. autofunction:: logp_extinction
-```
-
-## Submodules
-
-For advanced users who need access to internal implementations:
-
-```{eval-rst}
-.. automodule:: brutus.priors.stellar
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
-```
-
-```{eval-rst}
-.. automodule:: brutus.priors.astrometric
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
-```
-
-```{eval-rst}
-.. automodule:: brutus.priors.galactic
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
-```
-
-```{eval-rst}
-.. automodule:: brutus.priors.kinematic
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
-```
-
-```{eval-rst}
-.. automodule:: brutus.priors.extinction
-   :members:
-   :undoc-members:
-   :show-inheritance:
-   :no-index:
 ```
