@@ -83,7 +83,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ends; beyond, they keep their values there. The thin-disk sigma_z stops growing
   with height above 2 kpc, the top of the heights Sharma et al. (2021)
   fitted, so the thin disk no longer falls only as |z|^-2 at large
-  heights. `thick_R_sigma` in
+  heights. Its angular-momentum factor keeps its value at the L_z of a
+  circular orbit at 14 kpc, and the thin-disk density is tapered to 0
+  between |z| = 5 and 7 kpc, so the flared outer disk no longer spreads
+  like a halo: its column height at 20 kpc is 1.46 kpc, from 2.14 kpc
+  (#320). `thick_R_sigma` in
   `logp_galactic_structure` and `R_sigma` in
   `thick_disk_velocity_moments` are removed, and so are the constants of
   `brutus.priors.kinematic` that set the old potential and dispersion

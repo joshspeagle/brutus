@@ -577,8 +577,9 @@ class TestVerticalJeans:
     def test_thin_disk_falls_faster_than_z_squared_at_height(self, feh):
         # With sigma_z growing as 1 + gamma_z |z| without bound, the Jeans
         # integral converges and d ln nu / d ln |z| tends to -2. Holding |z|
-        # at 2 kpc makes it fall far faster over 15-30 kpc.
-        d = np.array([15.0, 30.0])
+        # at 2 kpc makes it fall far faster above 2 kpc, below the height
+        # taper (5 to 7 kpc).
+        d = np.array([2.5, 4.5])
         _, comps = logp_galactic_structure(
             d,
             (0.0, 90.0),
@@ -587,7 +588,31 @@ class TestVerticalJeans:
             return_components=True,
         )
         thin = comps["number_density"][0] + comps["labels"][0] - 2 * np.log(d)
-        assert np.diff(thin)[0] / np.log(2.0) < -10.0
+        assert np.diff(thin)[0] / np.log(4.5 / 2.5) < -5.0
+
+    def test_thin_disk_is_tapered_to_zero_between_5_and_7_kpc_in_height(self):
+        # Toward the pole |z| = d + Z_SOLAR. Regression for #320.
+        d = np.array([4.0, 5.5, 6.5, 6.97, 7.5, 12.0])
+        _, comps = logp_galactic_structure(d, (0.0, 90.0), return_components=True)
+        thin = comps["number_density"][0] - 2 * np.log(d)
+        assert np.all(np.isfinite(thin[:4])) and np.all(np.diff(thin[:4]) < 0)
+        assert np.all(thin[4:] <= gal.LOG_ZERO / 2)
+        x = np.linspace(4.0, 6.999, 13)
+        expected = np.log(0.5 * (1 + np.cos(np.pi * np.clip(x - 5.0, 0, 2) / 2.0)))
+        got = [gal._ln_taper(v, 5.0, 7.0) for v in x]
+        np.testing.assert_allclose(got, expected, rtol=1e-9, atol=1e-12)
+        assert gal._ln_taper(7.0, 5.0, 7.0) == gal.LOG_ZERO
+
+    def test_outer_thin_disk_makes_no_second_peak_in_the_distance_prior(self):
+        # Regression for #320: toward (90, 30) the flared outer thin disk made
+        # a second peak near 20 kpc, higher than the first.
+        d = np.geomspace(0.05, 100, 2000)
+        _, comps = logp_galactic_structure(d, (90.0, 30.0), return_components=True)
+        w = np.exp(comps["number_density"][0] + np.log(d))
+        is_peak = (w[1:-1] > w[:-2]) & (w[1:-1] > w[2:])
+        peaks = w[1:-1][is_peak]
+        assert d[1:-1][is_peak][np.argmax(peaks)] < 5.0  # the main peak is near
+        assert peaks.size == 1 or np.sort(peaks)[-2] < 0.3 * peaks.max()
 
     @pytest.mark.parametrize("x", [0.137, 0.5046, 1.00625, 2.31, 3.6])
     @pytest.mark.parametrize("abs_z", [0.2, 1.0, 3.0, 8.0])
@@ -702,8 +727,8 @@ class TestVerticalInputs:
 def _sigma_z(R, age, feh):
     """Midplane sigma_z of a thin-disk population, with the dispersion
     relations written out and the mean L_z of the kinematic kernels."""
-    L, (L_sun, L_clamp) = _mean_L(R, age, feh)
-    L = _clamp(L, *L_clamp)
+    L, (L_sun, (L_lo, _, width, L_hi_z)) = _mean_L(R, age, feh)
+    L = _clamp(L, L_lo, L_hi_z, width)  # sigma_z is held beyond THIN_DISK_SIGZ_R_MAX
     a, lam = kin.THIN_DISK_ALPHA_L[1], kin.THIN_DISK_LAMBDA_L[1]
     f_L = (a * (L / L_sun) ** 2 + np.exp(-(L - L_sun) / lam)) / (1 + a)
     return (
@@ -1438,7 +1463,7 @@ class TestBar:
         # Regression: 1 + cos rounded to 0 just inside 6 kpc, so its log
         # was -inf, or raised without JIT.
         r2 = np.nextafter(36.0, 0.0)
-        got = gal._ln_bar_taper(r2)
+        got = gal._ln_taper(np.sqrt(r2), *gal._BAR_TAPER)
         assert np.isfinite(got)
         np.testing.assert_allclose(
             got, 2 * np.log(np.sin(0.5 * np.pi * (6 - np.sqrt(r2)))), rtol=1e-12
