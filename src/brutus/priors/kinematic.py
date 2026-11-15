@@ -108,6 +108,10 @@ THIN_DISK_GAMMA_Z = (0.12, 0.20)
 # kpc of each edge, so that v_phi stays continuous; [Fe/H] is held at the
 # edges of its range.
 THIN_DISK_R_RANGE = (3.0, 20.0)
+# Radius in kpc of the circular orbit at whose L_z the L_z factor of
+# sigma_z is held (#320). Gaia Collaboration (2018) see no upturn in sigma_z out to 14 kpc;
+# beyond, the L_z^2 term of Sharma et al. (2021) would keep raising it.
+THIN_DISK_SIGZ_R_MAX = 14.0
 THIN_DISK_FEH_RANGE = (-1.0, 0.5)
 DISK_EDGE = 1.0
 # Greatest |z| in kpc of the Sharma et al. (2021) fit of the height term
@@ -371,12 +375,14 @@ def _thin_disk_L_refs(R_solar, vc_solar):
     """Return L_z of a circular orbit at the Sun and the ``L_clamp`` of
     ``_thin_disk_fL``."""
     lo, hi = THIN_DISK_R_RANGE
+    hi_z = THIN_DISK_SIGZ_R_MAX
     return (
         R_solar * _circular_velocity(R_solar, R_solar, vc_solar)[0],
         (
             lo * _circular_velocity(lo, R_solar, vc_solar)[0],
             hi * _circular_velocity(hi, R_solar, vc_solar)[0],
             DISK_EDGE * vc_solar,
+            hi_z * _circular_velocity(hi_z, R_solar, vc_solar)[0],
         ),
     )
 
@@ -411,15 +417,19 @@ def _thin_disk_fz(abs_z):
 def _thin_disk_fL(L, L_solar, L_clamp):
     """Return the Sharma et al. (2021) f_L of sigma_R and of sigma_z, and
     d ln f_L(sigma_R) / d ln L_z, with L_z clamped by
-    ``L_clamp`` = (L_lo, L_hi, width): L_z of circular orbits at the ends
-    of THIN_DISK_R_RANGE, and DISK_EDGE times v_c at the Sun."""
-    L_eff, dL = _soft_clamp(L, L_clamp[0], L_clamp[1], L_clamp[2])
+    ``L_clamp`` = (L_lo, L_hi, width, L_hi_z): L_z of circular orbits at
+    the ends of THIN_DISK_R_RANGE, DISK_EDGE times v_c at the Sun, and the
+    L_z of a circular orbit at THIN_DISK_SIGZ_R_MAX, where f_L of sigma_z
+    is held instead."""
+    L_lo, L_hi, width, L_hi_z = L_clamp
+    L_eff, dL = _soft_clamp(L, L_lo, L_hi, width)
     u2 = (L_eff / L_solar) ** 2
     a_R, a_z = THIN_DISK_ALPHA_L
     lam_R, lam_z = THIN_DISK_LAMBDA_L
     e_R = exp(-(L_eff - L_solar) / lam_R)
     f_R = (a_R * u2 + e_R) / (1.0 + a_R)
-    f_z = (a_z * u2 + exp(-(L_eff - L_solar) / lam_z)) / (1.0 + a_z)
+    L_z = _soft_clamp(L, L_lo, L_hi_z, width)[0]
+    f_z = (a_z * (L_z / L_solar) ** 2 + exp(-(L_z - L_solar) / lam_z)) / (1.0 + a_z)
     dlnf_dlnL = (2.0 * a_R * u2 - (L_eff / lam_R) * e_R) / ((1.0 + a_R) * f_R)
     return f_R, f_z, dlnf_dlnL * dL * L / L_eff
 
@@ -759,7 +769,12 @@ def thin_disk_velocity_moments(
     22.7 kpc for 5 Gyr and [Fe/H] = 0 and at 25.2 kpc for 13.8 Gyr and
     [Fe/H] = -1; beyond 21 kpc its dispersions still change a little, by
     up to 0.6 km/s in :math:`\bar{v}_\phi` through the missing gradient.
-    [Fe/H] is held at the edges of its range. The azimuthal dispersion
+    [Fe/H] is held at the edges of its range. The angular-momentum factor
+    of :math:`\sigma_z` alone is held at the :math:`L_z` of a circular
+    orbit at 14 kpc (``THIN_DISK_SIGZ_R_MAX``), which lagging populations
+    reach further out: Gaia Collaboration (2018) see no upturn of
+    :math:`\sigma_z` out to 14 kpc, and the :math:`L_z^2` term would keep
+    raising it. The azimuthal dispersion
     follows the epicyclic ratio
     :math:`\sigma_\phi^2 / \sigma_R^2 = (1 + d\ln v_c / d\ln R) / 2`.
 

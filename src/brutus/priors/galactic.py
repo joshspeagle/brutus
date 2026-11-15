@@ -511,6 +511,11 @@ _BAR_LONG = (
 # centre, by a cosine taper: the bar's half-length is 5.0 +/- 0.2 kpc
 # (Wegg et al. 2015), and the long-bar terms decay slowly beyond it.
 _BAR_TAPER = (5.0, 6.0)
+# The thin-disk density goes to 0 between these heights |z| in kpc, by the
+# same cosine taper (#320). Thin-disk density fits reach |z| = 5 kpc (Yu et
+# al. 2021); above that, the hottest outer-disk populations in a weak
+# vertical potential would spread out like a halo.
+_THIN_TAPER = (5.0, 7.0)
 # Integral of the tapered density in Msun, by the midpoint rule on grids
 # of 0.04 and 0.02 kpc with Richardson extrapolation. Untapered, the three
 # terms hold 1.27656e10, 0.33319e10 and 0.21542e10 (Table 1: 1.28, 0.33,
@@ -873,8 +878,9 @@ def _components(
     # p(labels | R) nu(z) / (2 H).
     thin = _ln_surface(R, R_solar, Rs_thin, R_thin) - ln_d0
     ln_thick, ln_halo, fl, nodes, ages, ln_w = label_terms
-    if has_age and age > MAX_AGE:
-        # The labelled ages of every component lie in 0 to MAX_AGE.
+    if (has_age and age > MAX_AGE) or abs_z >= _THIN_TAPER[1]:
+        # The labelled ages of every component lie in 0 to MAX_AGE, and the
+        # thin disk is tapered to 0 at _THIN_TAPER[1].
         thin = LOG_ZERO
     elif fl >= 0.0:
         fi = x / (_V_DX * _LABEL_STEPS[0])
@@ -892,6 +898,8 @@ def _components(
         thin -= ln_norm_R
     else:
         thin += _ln_marginal(x, abs_z, marginal)
+    if thin > LOG_ZERO:
+        thin += _ln_taper(abs_z, *_THIN_TAPER)
 
     # Thick disk: one isothermal population. A component that is off
     # (LOG_ZERO amplitude) is not evaluated.
@@ -921,15 +929,16 @@ def _ln_bar_density(X, Y, Z, cos_a, sin_a):
 
 
 @jit(nopython=True, cache=True)
-def _ln_bar_taper(r2):
-    """Return ln of the bar taper at squared Galactocentric radius r2, for
-    r2 below the square of the taper's end."""
-    r0, r1 = _BAR_TAPER
-    if r2 <= r0 * r0:
+def _ln_taper(x, x0, x1):
+    """Return ln of the cosine taper (1 + cos(pi (x - x0) / (x1 - x0))) / 2:
+    0 up to x0 and LOG_ZERO from x1."""
+    if x <= x0:
         return 0.0
-    # (1 + cos(pi t)) / 2 written as sin^2(pi (1 - t) / 2), which does not
-    # cancel to 0 just inside r1.
-    return 2.0 * log(sin(0.5 * pi * (r1 - sqrt(r2)) / (r1 - r0)))
+    if x >= x1:
+        return LOG_ZERO
+    # Written as sin^2(pi (x1 - x) / 2 (x1 - x0)), which does not cancel to
+    # 0 just inside x1.
+    return 2.0 * log(sin(0.5 * pi * (x1 - x) / (x1 - x0)))
 
 
 @jit(nopython=True, parallel=True, cache=True)
@@ -1060,7 +1069,7 @@ def _galactic_prior_array(
                     ln_rho = _catmull_rom_table(f, bar_line)
                 else:
                     ln_rho = _ln_bar_density(X[i], Y[i], Z[i], cos_a, sin_a)
-                bar_n = ln_rho + _ln_bar_taper(r2) + ln_bar_amp + ln_bar
+                bar_n = ln_rho + _ln_taper(sqrt(r2), *_BAR_TAPER) + ln_bar_amp + ln_bar
             mx = max(max(thin, thick), max(hal, bar_n))
             # Components that are off add nothing; the sum keeps its order.
             acc = exp(thin - mx)
@@ -1969,10 +1978,14 @@ def logp_galactic_structure(
 
     A thin-disk population of a given age and [Fe/H] takes the vertical
     dispersion of Sharma et al. (2021), which grows with height as
-    :math:`f_z = 1 + \gamma_z |z|` up to 2 kpc. Its ages and [Fe/H] at
-    radius R follow the star formation, enrichment and radial migration
-    model of Frankel et al. (2018), read as the distribution per unit
-    area and held outside the radii of their fit, 5 to 14 kpc
+    :math:`f_z = 1 + \gamma_z |z|` up to 2 kpc, with its angular-momentum
+    factor held at the :math:`L_z` of a circular orbit at 14 kpc; the
+    thin-disk density is tapered to 0 between :math:`|z|` = 5 and 7 kpc,
+    by the cosine taper of the bar, which removes those stars. Its
+    ages and [Fe/H] at radius R follow the star formation, enrichment and
+    radial migration model of Frankel et al. (2018), read as the
+    distribution per unit area and held outside the radii of their fit, 5
+    to 14 kpc
     (``THIN_DISK_*`` constants). Labels not given are summed over. A
     thin-disk star's labelled age is a normal about its true age, of the
     age systematic and truncated to 0 to 13.8 Gyr, and its vertical
@@ -2006,6 +2019,8 @@ def logp_galactic_structure(
     Sormani et al. (2022), MNRAS, 514, L1
     Portail et al. (2017), MNRAS, 465, 1621
     Wegg et al. (2015), MNRAS, 450, 4050
+    Gaia Collaboration, Katz et al. (2018), A&A, 616, A11
+    Yu et al. (2021), ApJ (arXiv:2105.07151)
     Gonzalez et al. (2015), A&A, 584, A46
     Zoccali et al. (2017), A&A, 599, A12
     Bensby et al. (2017), A&A, 605, A89

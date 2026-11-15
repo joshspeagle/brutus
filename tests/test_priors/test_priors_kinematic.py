@@ -465,11 +465,28 @@ def test_thick_disk_rotation_solves_the_jeans_equation():
     np.testing.assert_allclose(mean[:, 1], jeans, rtol=1e-7)
 
 
+@pytest.mark.parametrize("age", [1.0, 5.0])
+def test_thin_disk_sigma_z_is_held_beyond_14_kpc(age):
+    # Regression for #320: the L_z^2 term kept raising sigma_z outward, and
+    # the hottest outer-disk populations spread out like a halo. Older
+    # populations lag more and reach the hold further out.
+    R = np.array([17.0, 19.5, 30.0])
+    cov = _thin(R, age=age, feh=-0.2)[1]
+    np.testing.assert_allclose(cov[:, 2, 2], cov[0, 2, 2], rtol=1e-12)
+
+
+def test_thin_disk_sigma_z_height_factor_stops_growing_above_2_kpc():
+    # Growing without bound, the thin disk would fall only as |z|^-2 far
+    # above the plane.
+    f = [kin._thin_disk_fz(z) for z in (2.5, 4.5, 10.0)]
+    np.testing.assert_allclose(f, 1 + kin.THIN_DISK_GAMMA_Z[1] * kin.THIN_DISK_Z_MAX)
+
+
 def test_thin_disk_angular_momentum_slope_holds_through_the_clamp_blends():
     """d ln f_L / d ln L_z from _thin_disk_fL matches finite differences,
     also where the clamp blends in."""
     L_solar, L_clamp = kin._thin_disk_L_refs(R_SOLAR, _vc_solar())
-    lo, hi, width = L_clamp
+    lo, hi, width, _ = L_clamp
     # Points inside both blends, off their ends (+-width), where the second
     # derivative jumps.
     t = np.linspace(-0.9, 0.9, 7) * width
