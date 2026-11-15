@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 from matplotlib import rcParams
+from matplotlib.colors import LinearSegmentedColormap
 
 TUTORIALS_DIR = Path(__file__).resolve().parent
 
@@ -22,7 +23,7 @@ DATA_REQUIREMENTS = {
         ["nn_c3k.h5", "MIST_1.2_EEPtrk.h5"],
         ["grid_mist_v9.h5", "grid_bayestar_v5.h5"],
     ),
-    4: ([], ["bayestar2019_v1.h5"]),
+    4: ([], ["bayestar2019_v1.h5", "grid_mist_v9.h5"]),
     5: (
         ["grid_mist_v9.h5", "Orion_l209.1_b-19.9.h5"],
         ["offsets_mist_v9.txt", "bayestar2019_v1.h5"],
@@ -78,6 +79,66 @@ def set_plot_style():
             "axes.facecolor": "white",
             "axes.grid": False,
             "grid.alpha": 0.3,
+        }
+    )
+
+
+#: Colour of each Galactic component, checked to stay distinct on white
+GALACTIC_COLORS = {
+    "Thin disk": "#2a78d6",
+    "Thick disk": "#eb6834",
+    "Halo": "#1baf7a",
+    "Bar": "#a8262e",
+}
+
+#: Colour of text and reference marks in the Galactic-prior figures
+INK = "#1d1a17"
+
+#: Sequential map for densities: cream to gold, copper, brutus red, near black
+DENSITY_CMAP = LinearSegmentedColormap.from_list(
+    "brutus_density",
+    ["#ffffff", "#f6dfa6", "#f2b45c", "#d9783a", "#b5452a", "#7c0008", "#2b0505"],
+)
+
+
+def set_prior_style():
+    """Set the plot style of the Galactic-prior figures in Tutorial 4."""
+    muted = "#8c867e"
+    rcParams.update(
+        {
+            "font.size": 10,
+            "figure.facecolor": "white",
+            "axes.facecolor": "white",
+            "axes.edgecolor": "#cfc7bb",
+            "axes.linewidth": 0.8,
+            "axes.labelcolor": "#57524c",
+            "axes.titlesize": 10.5,
+            "axes.titleweight": "bold",
+            "axes.titlecolor": INK,
+            "axes.titlelocation": "left",
+            "axes.titlepad": 8,
+            "axes.labelpad": 4,
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "axes.grid": True,
+            "grid.color": "#ece6dc",
+            "grid.linewidth": 0.7,
+            "grid.alpha": 1.0,
+            "axes.axisbelow": True,
+            "xtick.color": muted,
+            "ytick.color": muted,
+            "xtick.labelcolor": "#57524c",
+            "ytick.labelcolor": "#57524c",
+            "xtick.major.size": 0,
+            "ytick.major.size": 0,
+            "xtick.minor.size": 0,
+            "ytick.minor.size": 0,
+            "xtick.major.pad": 4,
+            "ytick.major.pad": 4,
+            "lines.linewidth": 2,
+            "legend.frameon": False,
+            "legend.fontsize": 8.5,
+            "figure.dpi": 80,
         }
     )
 

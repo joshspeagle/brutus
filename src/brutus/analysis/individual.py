@@ -137,6 +137,24 @@ def _check_max_models(value):
         )
 
 
+def _dust_prior(lndustprior, dustfile):
+    """Return the A(V) prior to apply: `logp_extinction` by default with a
+    dust map. Raise ValueError for `logp_extinction` without a map."""
+    if lndustprior is None and dustfile is not None:
+        return logp_extinction
+    if dustfile is None and _is_logp_extinction(lndustprior):
+        raise ValueError(
+            "`lndustprior` is `logp_extinction`, which reads a dust map: "
+            "pass `dustfile`."
+        )
+    return lndustprior
+
+
+def _is_logp_extinction(prior):
+    """Whether `prior` is `logp_extinction` or a `functools.partial` of it."""
+    return prior is logp_extinction or getattr(prior, "func", None) is logp_extinction
+
+
 def _check_positive(name, value):
     """Raise ValueError naming `name` unless `value` is a positive finite
     real number."""
@@ -1019,8 +1037,7 @@ class BruteForce:
                 "`data_coords` must be provided when using a dust-map "
                 "extinction prior (`dustfile`)."
             )
-        if lndustprior is None and dustfile is not None:
-            lndustprior = logp_extinction
+        lndustprior = _dust_prior(lndustprior, dustfile)
 
         return (data, data_err, data_mask, lnprior, lngalprior, lndustprior)
 
@@ -1431,17 +1448,24 @@ class BruteForce:
 
         lngalprior : callable, optional
             Galactic prior ``f(dists, coord, labels=...)``, with ``dists`` in
-            kpc. Default is `~brutus.priors.logp_galactic_structure` with
-            `R_solar` and `Z_solar`.
+            kpc. It returns the log-prior per unit distance, including the
+            volume element: a uniform space density is ``2 ln d``, and 0 is
+            flat in distance. Default is
+            `~brutus.priors.logp_galactic_structure` with `R_solar` and
+            `Z_solar`.
 
         lndustprior : callable, optional
-            Dust-map prior ``f(avs, dustmap, coord, distance=...)``. Default
-            is `~brutus.priors.logp_extinction`, given `avlim` unless it is a
+            A(V) prior ``f(avs, dustmap, coord, distance=...)``, applied
+            when it or ``dustfile`` is given and ``apply_av_prior`` is True.
+            Without ``dustfile``, ``dustmap`` is None, and without
+            ``coord``, ``coord`` is None. Default with ``dustfile`` is
+            `~brutus.priors.logp_extinction`, given `avlim` unless it is a
             `functools.partial` that binds its own.
 
         dustfile : str, path-like or `~brutus.dust.Bayestar`, optional
-            3D dust map for the dust-map prior. A path is loaded as a
-            `~brutus.dust.Bayestar` map.
+            3D dust map for the A(V) prior. A path is loaded as a
+            `~brutus.dust.Bayestar` map. Any object with the ``query``
+            method of `~brutus.dust.Bayestar` also works.
 
         dlabels : structured `~numpy.ndarray` of shape `(Nmodels,)` or None, optional
             Model labels passed to the Galactic prior. By default, the labels
@@ -1459,8 +1483,8 @@ class BruteForce:
             Random state for the draws and the `max_models` sampling.
 
         apply_av_prior : bool, optional
-            Whether to apply the dust-map extinction prior when ``dustfile``
-            is provided. Default is True.
+            Whether to apply the A(V) prior when ``dustfile`` or
+            ``lndustprior`` is given. Default is True.
 
         R_solar, Z_solar : float, optional
             Galactocentric radius and height of the Sun, in kpc, for the
@@ -1505,7 +1529,8 @@ class BruteForce:
         ValueError
             If only one of ``parallax`` and ``parallax_err`` is given, if
             ``dustfile`` is given with ``apply_av_prior`` but without
-            ``coord``, if ``max_models`` is neither None nor a positive
+            ``coord``, if ``lndustprior`` is `~brutus.priors.logp_extinction`
+            without ``dustfile``, if ``max_models`` is neither None nor a positive
             integer, or if ``lnprior`` or ``dlabels`` (with ``coord``) does
             not have one entry per model in ``results``.
         """
@@ -1517,6 +1542,7 @@ class BruteForce:
                 "position: pass `coord` to logpost_grid (or `data_coords` "
                 "to fit())."
             )
+        lndustprior = _dust_prior(lndustprior, dustfile)
 
         if (parallax is None) != (parallax_err is None):
             raise ValueError("parallax and parallax_err must be given together")
@@ -1735,15 +1761,12 @@ class BruteForce:
                 ).reshape(Nmc, Nsel)
             lnp_mc += lnp_gal
 
-        if dustfile is not None and apply_av_prior:
+        if apply_av_prior and lndustprior is not None:
             # Load dust map from file path (str or os.PathLike) if needed
             if isinstance(dustfile, (str, os.PathLike)):
                 from ..dust import Bayestar
 
                 dustfile = Bayestar(dustfile=dustfile)
-
-            if lndustprior is None:
-                lndustprior = logp_extinction
 
             # Dust prior evaluation (VECTORIZED)
             # For 3D dust maps, pass distances so the prior can interpolate
@@ -1753,9 +1776,8 @@ class BruteForce:
             # The built-in prior, bare or a partial that leaves avlim free,
             # normalizes over the fitted A(V) support; custom priors keep the
             # documented 4-argument signature.
-            builtin = lndustprior is logp_extinction or (
-                getattr(lndustprior, "func", None) is logp_extinction
-                and "avlim" not in lndustprior.keywords
+            builtin = _is_logp_extinction(lndustprior) and "avlim" not in getattr(
+                lndustprior, "keywords", {}
             )
             dust_kw = {"avlim": avlim} if builtin else {}
             lnp_dust_flat = lndustprior(
@@ -1904,9 +1926,9 @@ class BruteForce:
             (mean, std) for a Gaussian prior on A(V) applied during the
             per-model likelihood optimization. Default is None, which maps
             to the essentially-flat `(0.0, 1e6)`. Note this is applied in
-            *addition* to any dust-map prior from ``dustfile`` (they are
-            not exclusive), so passing an informative ``av_gauss`` together
-            with ``dustfile`` counts the A(V) constraint twice.
+            *addition* to any A(V) prior from ``lndustprior`` or ``dustfile``
+            (they are not exclusive), so passing an informative ``av_gauss``
+            together with either counts the A(V) constraint twice.
 
         rvlim : tuple, optional
             (min, max) bounds on R(V). Default is `RVLIM`, (1, 8).
@@ -1941,14 +1963,19 @@ class BruteForce:
 
         lngalprior : callable, optional
             Galactic structure prior function with signature
-            ``f(dists, coord, labels=None)``. If not provided, uses
-            `~brutus.priors.logp_galactic_structure`. Applied only when
-            ``data_coords`` is given.
+            ``f(dists, coord, labels=None)``. It returns the log-prior per
+            unit distance, including the volume element: a uniform space
+            density is ``2 ln d``, and 0 is flat in distance. If not
+            provided, uses `~brutus.priors.logp_galactic_structure`.
+            Applied only when ``data_coords`` is given.
 
         lndustprior : callable, optional
-            Dust prior function with signature
-            ``f(avs, dustmap, coord, distance=None)``. If not provided
-            and dustfile is given, uses ``logp_extinction``.
+            A(V) prior function with signature
+            ``f(avs, dustmap, coord, distance=None)``, applied when it or
+            ``dustfile`` is given. Without ``dustfile``, ``dustmap`` is
+            None, and without ``data_coords``, ``coord`` is None. If not
+            provided and dustfile is given, uses ``logp_extinction``, which
+            needs ``dustfile``.
 
         dustfile : str, path-like, or `~brutus.dust.Bayestar`, optional
             3D dust map for extinction priors. Can be a file path (string
@@ -2036,8 +2063,10 @@ class BruteForce:
             or ``lnprior`` disagree, if
             only one of ``parallax`` and ``parallax_err`` is given, if
             ``logl_initthresh`` is not in (0, 1), if ``ltol`` is not positive,
-            if ``max_models`` is neither None nor a positive integer, or if
-            ``apply_agewt`` is True and the grid has no ``agewt`` label. These
+            if ``max_models`` is neither None nor a positive integer, if
+            ``lndustprior`` is `~brutus.priors.logp_extinction` without
+            ``dustfile``, or if ``apply_agewt`` is True and the grid has no
+            ``agewt`` label. These
             checks run before the output file is created.
 
         Notes
@@ -2365,9 +2394,9 @@ class BruteForce:
         Ndraws : int, optional
             Number of posterior draws to return.
         lngalprior : callable, optional
-            Galactic structure prior function.
+            Galactic structure prior function, as in `logpost_grid`.
         lndustprior : callable, optional
-            Dust prior function.
+            A(V) prior function, as in `logpost_grid`.
         dustfile : str, path-like, or `~brutus.dust.Bayestar`, optional
             Path to a 3D dust map file (loaded automatically), or a
             pre-loaded ``Bayestar`` object.
