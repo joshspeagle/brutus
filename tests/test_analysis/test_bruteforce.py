@@ -1841,8 +1841,6 @@ class TestDustPriorGating:
         calls = []
         out = fitter.logpost_grid(
             like,
-            coord=(120.0, 45.0),
-            dustfile=object(),
             lndustprior=self._mock_dust(calls),
             apply_av_prior=False,
             Nmc_prior=5,
@@ -1859,8 +1857,6 @@ class TestDustPriorGating:
         calls = []
         out = fitter.logpost_grid(
             like,
-            coord=(120.0, 45.0),
-            dustfile=object(),
             lndustprior=self._mock_dust(calls),
             apply_av_prior=True,
             Nmc_prior=5,
@@ -1897,6 +1893,44 @@ class TestDustPriorGating:
             rstate=np.random.RandomState(0),
         )
         assert seen == [{"avlim": (0.0, 6.0)}]
+
+    def test_custom_dust_prior_applies_without_dustfile(self, fitter, observation):
+        flux, flux_err, mask = observation
+        like = fitter.loglike_grid(flux, flux_err, mask.copy(), return_vals=True)
+
+        seen = []
+
+        def lndust(avs, dustmap, coord, distance=None):
+            seen.append((dustmap, coord))
+            return np.full(np.shape(avs), -1.3)
+
+        kwargs = dict(Nmc_prior=5, wt_thresh=0.1)
+        base = fitter.logpost_grid(like, rstate=np.random.RandomState(0), **kwargs)
+        out = fitter.logpost_grid(
+            like, lndustprior=lndust, rstate=np.random.RandomState(0), **kwargs
+        )
+        assert seen == [(None, None)]
+        # A constant prior shifts every draw's weight, so each model's lnp.
+        np.testing.assert_allclose(out[2], base[2] - 1.3, rtol=0, atol=1e-12)
+
+    def test_logp_extinction_without_dustfile_raises(self, fitter, observation):
+        from functools import partial
+
+        from brutus.priors import logp_extinction
+
+        flux, flux_err, mask = observation
+        like = fitter.loglike_grid(flux, flux_err, mask.copy(), return_vals=True)
+        for prior in (logp_extinction, partial(logp_extinction, scatter=0.1)):
+            with pytest.raises(ValueError, match="logp_extinction"):
+                fitter.logpost_grid(like, lndustprior=prior, wt_thresh=0.1)
+            with pytest.raises(ValueError, match="logp_extinction"):
+                fitter._setup(
+                    flux,
+                    flux_err,
+                    mask,
+                    lngalprior=lambda d, coord, labels=None: np.zeros_like(d),
+                    lndustprior=prior,
+                )
 
     def test_dustfile_without_coord_raises(self, fitter, observation):
         flux, flux_err, mask = observation

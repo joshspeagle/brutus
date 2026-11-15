@@ -167,6 +167,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `q_halo`, and `galactic_prior_summary` reports `halo_density_solar`
   and `f_halo_solar` (#290).
 
+### Fixed
+
+- **A custom A(V) prior no longer needs a dust map** *(output-changing)*.
+  `BruteForce.fit` and `logpost_grid` ignored `lndustprior` unless
+  `dustfile` was also given. They now apply it whenever it is given, with
+  `dustmap=None` when there is no `dustfile`. `lndustprior=logp_extinction`
+  without `dustfile` raises `ValueError` (#329).
+
 ## [2.0.0] - 2026-10-29
 
 This release collects the pull requests merged since 1.2.0, #71 to #306,

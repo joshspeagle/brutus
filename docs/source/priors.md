@@ -209,7 +209,7 @@ fitter.fit(
 
 The same pattern switches a component off, for example `partial(logp_galactic_structure, bar_mass=0.0)`.
 
-`lndustprior` replaces the dust prior. It applies only when `dustfile` is given. `fit()` calls it as `lndustprior(av, dustmap, coord, distance=dist)`.
+`lndustprior` replaces the dust prior. It applies when it or `dustfile` is given, unless `apply_av_prior=False`. `fit()` calls it as `lndustprior(av, dustmap, coord, distance=dist)`. Without `dustfile`, `dustmap` is None, and without `data_coords`, `coord` is None. The default {func}`~brutus.priors.logp_extinction` reads a map, so `fit()` raises `ValueError` if it is given without `dustfile`.
 
 To check how much a result depends on the priors, fit the same stars twice, with the default and the flat prior, and compare the posterior distances. Stars whose distances change by more than their uncertainty are prior-dominated.
 
