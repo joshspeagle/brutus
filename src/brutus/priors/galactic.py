@@ -893,17 +893,21 @@ def _components(
     else:
         thin += _ln_marginal(x, abs_z, marginal)
 
-    # Thick disk: one isothermal population.
-    s = var_thick * exp(_thick_disk_ln_var(x, 2)[0] - ln_phi)
-    thick = (
-        ln_f_thick
-        + _ln_surface(R, R_solar, Rs_thick, R_thick)
-        - dphi / s
-        - _LN2
-        - _ln_column(x, log(s), _THICK_COLUMN)
-        - ln_d0
-    )
-    hal = _halo_shape(R, Z, halo[0], halo[1], halo[2], halo[3], halo[4]) + halo[5]
+    # Thick disk: one isothermal population. A component that is off
+    # (LOG_ZERO amplitude) is not evaluated.
+    thick, hal = LOG_ZERO, LOG_ZERO
+    if ln_f_thick > LOG_ZERO:
+        s = var_thick * exp(_thick_disk_ln_var(x, 2)[0] - ln_phi)
+        thick = (
+            ln_f_thick
+            + _ln_surface(R, R_solar, Rs_thick, R_thick)
+            - dphi / s
+            - _LN2
+            - _ln_column(x, log(s), _THICK_COLUMN)
+            - ln_d0
+        )
+    if halo[5] > LOG_ZERO:
+        hal = _halo_shape(R, Z, halo[0], halo[1], halo[2], halo[3], halo[4]) + halo[5]
     return thin, thick + ln_thick, hal + ln_halo
 
 
@@ -1058,7 +1062,12 @@ def _galactic_prior_array(
                     ln_rho = _ln_bar_density(X[i], Y[i], Z[i], cos_a, sin_a)
                 bar_n = ln_rho + _ln_bar_taper(r2) + ln_bar_amp + ln_bar
             mx = max(max(thin, thick), max(hal, bar_n))
-            acc = exp(thin - mx) + exp(thick - mx) + exp(hal - mx)
+            # Components that are off add nothing; the sum keeps its order.
+            acc = exp(thin - mx)
+            if thick > LOG_ZERO:
+                acc += exp(thick - mx)
+            if hal > LOG_ZERO:
+                acc += exp(hal - mx)
             if bar_n > LOG_ZERO:
                 acc += exp(bar_n - mx)
             vol = 2.0 * ln_d
@@ -1448,18 +1457,31 @@ def _bar_populations(bar_feh, bar_age, feh_sys, age_frac, age_floor):
     return np.array(rows)
 
 
+def _check_amplitudes(**values):
+    """Raise ValueError unless each amplitude is non-negative and finite;
+    0 switches its component off."""
+    for name, value in values.items():
+        if not (np.isfinite(value) and value >= 0):
+            raise ValueError(f"{name} must be non-negative and finite, got {value}")
+
+
+def _ln_amplitude(amp):
+    """Return ln of a component amplitude, LOG_ZERO for a component that is
+    off."""
+    return log(amp) if amp > 0.0 else LOG_ZERO
+
+
 def _bar_args(bar_mass, bar_angle, rho_thin_solar):
     """Return the bar arguments of `_galactic_prior_array`: the cosine and
     sine of ``bar_angle`` and ln of the bar amplitude relative to the thin
     disk at the Sun (LOG_ZERO for no bar)."""
     (bar_mass,) = _floats("bar_mass", (bar_mass,), 1)
     (bar_angle,) = _floats("bar_angle", (bar_angle,), 1)
-    if bar_mass < 0:
-        raise ValueError(f"bar_mass must not be negative, got {bar_mass}")
+    _check_amplitudes(bar_mass=bar_mass)
     angle = np.deg2rad(bar_angle)
     # Msun/kpc^3 to Msun/pc^3.
     amp = bar_mass / (BAR_MASS * 1e9 * float(rho_thin_solar))
-    return cos(angle), sin(angle), log(amp) if amp > 0.0 else LOG_ZERO
+    return cos(angle), sin(angle), _ln_amplitude(amp)
 
 
 def _bar_table(ell, b, R_solar, Z_solar, bar):
@@ -1512,16 +1534,15 @@ def _normalizations(
     _check_positive(
         R_thin=R_thin,
         R_thick=R_thick,
-        f_thick_surface=f_thick_surface,
         thick_sigma_z=thick_sigma_z,
         Rs_halo=Rs_halo,
         eta_halo_inner=eta_halo_inner,
         eta_halo_outer=eta_halo_outer,
         r_break_halo=r_break_halo,
         q_halo=q_halo,
-        halo_mass=halo_mass,
         rho_thin_solar=rho_thin_solar,
     )
+    _check_amplitudes(f_thick_surface=f_thick_surface, halo_mass=halo_mass)
     R_solar, Z_solar = float(R_solar), float(Z_solar)
     vc_solar = _vc_solar(v_circ_solar, R_solar)
     key = (
@@ -1533,10 +1554,10 @@ def _normalizations(
     )
     tables = _thin_disk_tables(*key)
     ln_d0 = _ln_marginal(1.0, abs(Z_solar), tables[1])
-    ln_f_thick = log(f_thick_surface)
-    disk = (R_solar, 2.0 * log(vc_solar / _V_VC0))
-    disk += tuple(map(float, (R_thin, Rs_thin, R_thick, Rs_thick)))
-    disk += (ln_f_thick, float(thick_sigma_z) ** 2, ln_d0)
+    head = (R_solar, 2.0 * log(vc_solar / _V_VC0))
+    head += tuple(map(float, (R_thin, Rs_thin, R_thick, Rs_thick)))
+    tail = (float(thick_sigma_z) ** 2, ln_d0)
+    disk = head + (_ln_amplitude(float(f_thick_surface)),) + tail
     shape = _halo_args(
         R_smooth=Rs_halo,
         eta_inner=eta_halo_inner,
@@ -1545,10 +1566,11 @@ def _normalizations(
         q=q_halo,
     )
     # Msun/kpc^3 to Msun/pc^3.
-    ln_halo_amplitude = log(
-        float(halo_mass) / (_halo_volume(shape) * 1e9 * float(rho_thin_solar))
+    halo = shape + (
+        _ln_amplitude(
+            float(halo_mass) / (_halo_volume(shape) * 1e9 * float(rho_thin_solar))
+        ),
     )
-    halo = shape + (ln_halo_amplitude,)
     # At the Sun the thin disk is 1, so the others are their ratios to it;
     # without labels, the label arguments are not read.
     no_nodes = np.empty((0, 11))
@@ -1556,6 +1578,10 @@ def _normalizations(
         (0.0,) * 13,
         (0.0, 0.0, -1.0, no_nodes, np.empty(0), np.empty(0)),
     )
+    # With the thick disk off, evaluate it with a unit surface ratio so that
+    # its column height stays defined.
+    on = f_thick_surface > 0
+    ln_f = disk[6] if on else 0.0
     _, thick, ln_f_halo = _components(
         R_solar,
         Z_solar,
@@ -1563,7 +1589,7 @@ def _normalizations(
         0.0,
         False,
         False,
-        disk,
+        head + (ln_f,) + tail,
         halo,
         *no_labels,
         *tables,
@@ -1571,8 +1597,8 @@ def _normalizations(
     )
     summary = dict(
         thin_column_height=0.5 * exp(-ln_d0),
-        thick_column_height=0.5 * exp(ln_f_thick - ln_d0 - thick),
-        f_thick_solar=exp(thick),
+        thick_column_height=0.5 * exp(ln_f - ln_d0 - thick),
+        f_thick_solar=exp(thick) if on else 0.0,
         halo_density_solar=exp(ln_f_halo) * float(rho_thin_solar),
         f_halo_solar=exp(ln_f_halo),
     )
@@ -1812,7 +1838,8 @@ def logp_galactic_structure(
         Default is 0.18, the high-[alpha/Fe] surface mass fraction of
         Mackereth et al. (2017). The prior converts it to the ratio of
         densities at the Sun's position with the column heights of the
-        vertical profiles; `galactic_prior_summary` returns both.
+        vertical profiles; `galactic_prior_summary` returns both. 0
+        removes the thick disk.
     Rs_thick : float, optional
         Thick disk smoothing radius in kpc. Default is 2.0.
     Rs_halo : float, optional
@@ -1825,7 +1852,7 @@ def logp_galactic_structure(
     halo_mass : float, optional
         Halo stellar mass in Msun between Galactocentric radii of 2 and
         70 kpc. Default is 7.5e8, the middle of the 6.7e8 to 8.4e8 of
-        Lane et al. (2023).
+        Lane et al. (2023). 0 removes the halo.
     bar_mass : float, optional
         Stellar mass of the bar in Msun. Default is ``BAR_MASS``, 1.8133e10,
         the integral of the tapered density of Sormani et al. (2022). 0
@@ -1914,8 +1941,8 @@ def logp_galactic_structure(
         number density times :math:`d^2` of the thin disk, thick disk, halo
         and bar; and, with labels, ``'labels'``, the list of ln p(labels) of
         each component at that position, 0 where the component has no
-        stars (the bar beyond 6 kpc from the centre, or with
-        ``bar_mass=0``). Their sums are the
+        stars (the bar beyond 6 kpc from the centre, or a component
+        switched off with 0). Their sums are the
         terms of ``logp``.
 
     Raises
@@ -1924,8 +1951,7 @@ def logp_galactic_structure(
         If ``labels``, ``feh`` or ``loga`` is not shaped as above or not
         finite, if a label-distribution keyword is not a tuple of
         finite numbers with positive widths, or if a keyword that sets a
-        normalization is not positive and finite (see
-        `galactic_prior_summary`).
+        normalization is out of its range (see `galactic_prior_summary`).
 
     Notes
     -----
@@ -2164,10 +2190,11 @@ def galactic_prior_summary(**kwargs):
     TypeError
         If a keyword does not set a normalization.
     ValueError
-        If ``R_thin``, ``R_thick``, ``f_thick_surface``, ``thick_sigma_z``,
-        ``v_circ_solar``, ``Rs_halo``, ``eta_halo_inner``,
-        ``eta_halo_outer``, ``r_break_halo``, ``q_halo``, ``halo_mass`` or
-        ``rho_thin_solar`` is not positive and finite.
+        If ``R_thin``, ``R_thick``, ``thick_sigma_z``, ``v_circ_solar``,
+        ``Rs_halo``, ``eta_halo_inner``, ``eta_halo_outer``,
+        ``r_break_halo``, ``q_halo`` or ``rho_thin_solar`` is not positive
+        and finite, or if ``f_thick_surface`` or ``halo_mass`` is negative
+        or not finite.
 
     Examples
     --------

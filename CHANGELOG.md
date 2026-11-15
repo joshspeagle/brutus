@@ -53,8 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Mackereth et al. 2017). It derives the ratio at the Sun from the
   column heights of the two vertical profiles, 0.054 with the defaults,
   so a change to `thick_sigma_z` or `feh_thin` keeps the surface ratio.
-  Passing `f_thick` raises `TypeError`, and `f_thick_surface` must be
-  positive, so the thick disk can no longer be switched off with 0. The new
+  Passing `f_thick` raises `TypeError`. `f_thick_surface=0` removes the
+  thick disk, as `halo_mass=0` removes the halo and `bar_mass=0` the bar,
+  and a component that is off is not evaluated (#326). The new
   `brutus.priors.galactic_prior_summary` returns the derived
   normalizations (#288).
 - **The disk scale lengths are those of the surface density**
