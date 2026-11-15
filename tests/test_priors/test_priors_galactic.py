@@ -114,6 +114,13 @@ def _bar_reference(x, y, z):
     return out
 
 
+def _tapered_bar_reference(x, y, z):
+    """`_bar_reference` times the cosine taper from 5 to 6 kpc."""
+    r = np.sqrt(np.square(x) + np.square(y) + np.square(z))
+    taper = 0.5 * (1 + np.cos(np.pi * np.clip(r - 5.0, 0.0, 1.0)))
+    return taper * _bar_reference(x, y, z)
+
+
 def _bar_frame(d, ell, b, angle=gal.BAR_ANGLE):
     """Bar-frame position of a star at distance d toward (l, b)."""
     X, Y, Z = galactic_to_galactocentric(d, ell, b)
@@ -806,12 +813,14 @@ class TestColumnsAndNormalization:
                 - np.log(halo_norm)
                 + stats.truncnorm.logpdf(age[i], -8.0, 1.8 / 1.5, 12.0, 1.5)
             )
-            ln_bar = np.log(
-                _bar_reference(*_bar_frame(d[i], *coord)) / 0.030e9
-            ) + _ln_bar_labels(feh[i], age[i], 0.0, 0.0)
-            np.testing.assert_allclose(
-                got[:, i], [thin, thick, halo, ln_bar], atol=5e-4
-            )
+            np.testing.assert_allclose(got[:3, i], [thin, thick, halo], atol=5e-4)
+            rho_bar = _tapered_bar_reference(*_bar_frame(d[i], *coord))
+            if rho_bar > 0:
+                ln_bar = np.log(rho_bar / 0.030e9)
+                ln_bar += _ln_bar_labels(feh[i], age[i], 0.0, 0.0)
+                np.testing.assert_allclose(got[3, i], ln_bar, atol=5e-4)
+            else:  # beyond the bar's taper
+                assert got[3, i] <= gal.LOG_ZERO / 2
 
     def test_thin_disk_density_without_labels_is_the_sum_over_populations(self):
         # Off the nodes of the summed table in x and z.
@@ -960,10 +969,7 @@ class TestColumnsAndNormalization:
         )
         thin, thick, halo, bar = comp["number_density"]
         summary = gal.galactic_prior_summary(**kwargs)
-        # The bar's sightline table holds its value at 1 pc below 1 pc.
-        np.testing.assert_allclose(
-            np.exp(bar - thin), summary["f_bar_solar"], rtol=1e-3
-        )
+        assert bar <= gal.LOG_ZERO / 2  # the bar is tapered to 0 at 6 kpc
         np.testing.assert_allclose(thin - 2 * np.log(1e-6), 0.0, atol=1e-5)
         np.testing.assert_allclose(
             np.exp(thick - thin), summary["f_thick_solar"], rtol=1e-5
@@ -1350,14 +1356,16 @@ class TestBar:
         got = [gal._bar_density(*p) for p in pts]
         np.testing.assert_allclose(got, _bar_reference(*pts.T), rtol=1e-12)
 
-    def test_masses_are_those_of_the_paper(self):
+    def test_masses_are_those_of_the_paper_and_of_the_tapered_bar(self):
         # Midpoint rule in one octant, 0.05 kpc steps.
         h = 0.05
         x = np.arange(h / 2, 9.0, h)
         z = np.arange(h / 2, 4.0, h)
         X, Y, Z = np.meshgrid(x, x, z, indexing="ij", sparse=True)
         mass = 8 * h**3 * _bar_reference(X, Y, Z).sum()
-        np.testing.assert_allclose(mass, gal.BAR_MASS, rtol=2e-4)
+        np.testing.assert_allclose(mass, 1.8252e10, rtol=2e-4)
+        tapered = 8 * h**3 * _tapered_bar_reference(X, Y, Z).sum()
+        np.testing.assert_allclose(tapered, gal.BAR_MASS, rtol=2e-4)
         # The X-shaped bar alone is 1.28e10 in Table 1 of the paper.
         x_only = 8 * h**3 * _x_bar_reference(X, Y, Z).sum()
         assert abs(x_only - 1.28e10) < 0.005e10
@@ -1370,9 +1378,38 @@ class TestBar:
             d, (ell, b), bar_mass=2 * gal.BAR_MASS, return_components=True
         )
         expected = np.log(
-            2 * _bar_reference(*_bar_frame(d, ell, b)) / 0.030e9
+            2 * _tapered_bar_reference(*_bar_frame(d, ell, b)) / 0.030e9
         ) + 2 * np.log(d)
         np.testing.assert_allclose(comps["number_density"][3], expected, rtol=1e-12)
+
+    @pytest.mark.parametrize("several", [False, True])
+    def test_bar_is_tapered_to_zero_between_5_and_6_kpc(self, several):
+        # Toward l = 20 deg the sightline crosses 5 to 6 kpc from the centre
+        # twice. One sightline interpolates in the table; a second
+        # sightline far away makes the call one with several.
+        d = np.linspace(0.5, 16.0, 1551)
+        ell, b = np.full(d.size, 20.0), np.zeros(d.size)
+        if several:
+            ell[-1] = 180.0
+        _, comps = logp_galactic_structure(d, (ell, b), return_components=True)
+        bar = (comps["number_density"][3] - 2 * np.log(d))[:-1]
+        xb, yb, zb = _bar_frame(d[:-1], 20.0, 0.0)
+        r = np.sqrt(xb**2 + yb**2 + zb**2)
+        expected = _tapered_bar_reference(xb, yb, zb) / 0.030e9
+        keep = expected > 1e3 / 0.030e9  # above 1e3 Msun/kpc^3
+        np.testing.assert_allclose(bar[keep], np.log(expected[keep]), rtol=0, atol=2e-3)
+        assert np.any(keep & (r > 5.5))
+        assert np.all(bar[r >= 6.0] <= gal.LOG_ZERO / 2)
+
+    def test_taper_is_finite_just_inside_its_end(self):
+        # Regression: 1 + cos rounded to 0 just inside 6 kpc, so its log
+        # was -inf, or raised without JIT.
+        r2 = np.nextafter(36.0, 0.0)
+        got = gal._ln_bar_taper(r2)
+        assert np.isfinite(got)
+        np.testing.assert_allclose(
+            got, 2 * np.log(np.sin(0.5 * np.pi * (6 - np.sqrt(r2)))), rtol=1e-12
+        )
 
     @pytest.mark.parametrize("coord", [(0.0, 0.0), (-6.0, 3.0), (10.0, 5.0)])
     def test_sightline_table_matches_the_density_at_each_point(self, coord):
@@ -1412,7 +1449,10 @@ class TestBar:
     )
     def test_negative_distance_gives_nan_inside_the_table(self):
         # Regression: a NaN table index read outside the table.
-        assert np.isnan(logp_galactic_structure(np.array([-3.0]), (0.0, 4.0)))[0]
+        # With the Sun 5 kpc from the centre, d = -0.5 kpc is 5.5 kpc from
+        # it, inside the taper, so the table is read at a NaN index.
+        lp = logp_galactic_structure(np.array([-0.5]), (0.0, 4.0), R_solar=5.0)
+        assert np.isnan(lp[0])
 
     def test_near_end_is_at_positive_longitude(self):
         d = np.linspace(4.0, 13.0, 901)
