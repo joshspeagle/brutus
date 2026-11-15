@@ -75,6 +75,8 @@ $$
 
 The thin-disk column height sums over the thin-disk ages and [Fe/H]. With the defaults it is 0.33 kpc, the thick disk's is 1.27 kpc, and $f_{\rm thick} = 0.046$. A change to a parameter that sets the heights, such as `thick_sigma_z` or `v_circ_solar`, therefore keeps the surface ratio and moves the ratio at the Sun. {func}`~brutus.priors.galactic_prior_summary` returns these quantities for any parameters.
 
+Setting `f_thick_surface`, `halo_mass` or `bar_mass` to 0 removes that component, and the prior then skips it. The thin disk sets the normalization, so it always stays.
+
 The halo is the broken power law of {cite:t}`amarante2024` in a flattened radius $m$, with a core $R_s$ that keeps it finite at the Galactic centre:
 
 $$

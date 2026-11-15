@@ -978,6 +978,38 @@ class TestColumnsAndNormalization:
             np.exp(halo - thin), summary["f_halo_solar"], rtol=1e-5
         )
 
+    @pytest.mark.parametrize(
+        "name, k", [("f_thick_surface", 1), ("halo_mass", 2), ("bar_mass", 3)]
+    )
+    @pytest.mark.parametrize("labelled", [False, True])
+    def test_zero_amplitude_removes_the_component(self, name, k, labelled):
+        d = np.linspace(0.1, 15.0, 50)
+        coord = (0.0, 4.0)
+        labels = dict(feh=np.full(50, 0.1), loga=np.full(50, 9.9)) if labelled else {}
+        lp, comps = logp_galactic_structure(
+            d, coord, return_components=True, **{name: 0.0}, **labels
+        )
+        _, full = logp_galactic_structure(d, coord, return_components=True, **labels)
+        terms = np.add(comps["number_density"], comps.get("labels", 0.0))
+        others = [i for i in range(4) if i != k]
+        assert np.all(terms[k] <= gal.LOG_ZERO / 2)
+        np.testing.assert_allclose(
+            lp, logsumexp(terms[others], axis=0), rtol=1e-12, atol=1e-15
+        )
+        np.testing.assert_array_equal(
+            np.array(comps["number_density"])[others],
+            np.array(full["number_density"])[others],
+        )
+
+    def test_summary_reports_zero_fractions_for_components_that_are_off(self):
+        default = gal.galactic_prior_summary()
+        off = gal.galactic_prior_summary(f_thick_surface=0.0, halo_mass=0.0)
+        assert off["f_thick_solar"] == 0.0 and off["f_halo_solar"] == 0.0
+        assert off["halo_density_solar"] == 0.0
+        np.testing.assert_allclose(
+            off["thick_column_height"], default["thick_column_height"], rtol=1e-12
+        )
+
     def test_summary_rejects_keywords_that_set_no_normalization(self):
         with pytest.raises(TypeError, match="f_halo"):
             gal.galactic_prior_summary(f_halo=0.01)
@@ -985,10 +1017,11 @@ class TestColumnsAndNormalization:
     @pytest.mark.parametrize(
         "kwargs",
         [
-            {"f_thick_surface": 0.0},
+            {"f_thick_surface": -0.1},
             {"f_thick_surface": np.inf},
             {"R_thin": np.nan},
-            {"halo_mass": 0.0},
+            {"halo_mass": -1.0},
+            {"halo_mass": np.nan},
             {"eta_halo_inner": np.nan},
             {"rho_thin_solar": -0.03},
             {"thick_feh": (-0.45, 0.0, -0.5)},
@@ -1461,19 +1494,6 @@ class TestBar:
             _, comps = logp_galactic_structure(d, (ell, 3.0), return_components=True)
             peak[ell] = d[np.argmax(comps["number_density"][3])]
         assert peak[6.0] < peak[-6.0] - 0.5
-
-    def test_zero_mass_gives_the_three_component_prior(self):
-        d = np.linspace(0.1, 15.0, 50)
-        coord = (0.0, 4.0)
-        feh, loga = np.full(50, 0.1), np.full(50, 9.9)
-        lp, comps = logp_galactic_structure(
-            d, coord, feh=feh, loga=loga, bar_mass=0.0, return_components=True
-        )
-        terms = np.add(comps["number_density"], comps["labels"])
-        assert np.all(terms[3] <= gal.LOG_ZERO / 2)
-        np.testing.assert_allclose(
-            lp, logsumexp(terms[:3], axis=0), rtol=1e-12, atol=1e-15
-        )
 
     def test_labels_are_the_mixture_with_the_thick_disk_systematics(self):
         rng = np.random.default_rng(8)
