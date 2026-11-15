@@ -1431,8 +1431,11 @@ class BruteForce:
 
         lngalprior : callable, optional
             Galactic prior ``f(dists, coord, labels=...)``, with ``dists`` in
-            kpc. Default is `~brutus.priors.logp_galactic_structure` with
-            `R_solar` and `Z_solar`.
+            kpc. It returns the log-prior per unit distance, including the
+            volume element: a uniform space density is ``2 ln d``, and 0 is
+            flat in distance. Default is
+            `~brutus.priors.logp_galactic_structure` with `R_solar` and
+            `Z_solar`.
 
         lndustprior : callable, optional
             Dust-map prior ``f(avs, dustmap, coord, distance=...)``. Default
@@ -1941,9 +1944,11 @@ class BruteForce:
 
         lngalprior : callable, optional
             Galactic structure prior function with signature
-            ``f(dists, coord, labels=None)``. If not provided, uses
-            `~brutus.priors.logp_galactic_structure`. Applied only when
-            ``data_coords`` is given.
+            ``f(dists, coord, labels=None)``. It returns the log-prior per
+            unit distance, including the volume element: a uniform space
+            density is ``2 ln d``, and 0 is flat in distance. If not
+            provided, uses `~brutus.priors.logp_galactic_structure`.
+            Applied only when ``data_coords`` is given.
 
         lndustprior : callable, optional
             Dust prior function with signature
@@ -2365,7 +2370,7 @@ class BruteForce:
         Ndraws : int, optional
             Number of posterior draws to return.
         lngalprior : callable, optional
-            Galactic structure prior function.
+            Galactic structure prior function, as in `logpost_grid`.
         lndustprior : callable, optional
             Dust prior function.
         dustfile : str, path-like, or `~brutus.dust.Bayestar`, optional
