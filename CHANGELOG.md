@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `brutus.utils.pm_equatorial_to_galactic` converts Gaia proper motions
   and their covariance to Galactic coordinates. The fit does not use them
   yet (#275).
+- **Tutorial 4 is a guide to the Galactic prior.** It draws each
+  component edge-on, face-on, along sightlines and across the sky; the
+  [Fe/H] and age at each place; how a star's labels move its distance
+  prior; the velocity ellipsoids; and the prior with components switched
+  off. It ends with fits of mock stars with and without the prior. The
+  documentation's priors page gains a section on the velocities (#329).
 - **`brutus.utils.galactic_to_galactocentric`** converts distance and
   (l, b) to Galactocentric Cartesian positions;
   `galactic_to_galactocentric_cyl` now builds on it (#299).
