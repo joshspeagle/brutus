@@ -507,22 +507,25 @@ _BAR_LONG = (
         1.62966434,
     ),
 )
-# Integral of the density in Msun: 1.27656e10, 0.33319e10 and 0.21542e10
-# for the three terms (Table 1: 1.28, 0.33, 0.22), by the midpoint rule on
-# grids of 0.04 and 0.02 kpc with Richardson extrapolation.
-BAR_MASS = 1.8252e10
+# The density goes to 0 between these distances in kpc from the Galactic
+# centre, by a cosine taper: the bar's half-length is 5.0 +/- 0.2 kpc
+# (Wegg et al. 2015), and the long-bar terms decay slowly beyond it.
+_BAR_TAPER = (5.0, 6.0)
+# Integral of the tapered density in Msun, by the midpoint rule on grids
+# of 0.04 and 0.02 kpc with Richardson extrapolation. Untapered, the three
+# terms hold 1.27656e10, 0.33319e10 and 0.21542e10 (Table 1: 1.28, 0.33,
+# 0.22), 1.8252e10 in all; the taper removes 0.0119e10.
+BAR_MASS = 1.8133e10
 # Angle in degrees between the long axis and the Sun-centre line, near end
 # at l > 0 (AGAMA, after Portail et al. 2017).
 BAR_ANGLE = 25.0
-# Beyond this distance in kpc from the Galactic centre the bar is left out
-# to save its evaluation; on that sphere it is at most 1.4e-4 of the disks.
-_BAR_R_MAX = 12.0
-# With one sightline, ln of the bar density is interpolated in a table of
-# _BAR_NODES distances, uniform in ln d from 1 pc to 25 kpc; beyond 25 kpc
-# a star is more than _BAR_R_MAX from the centre while R_solar < 13 kpc. The density has kinks
-# (|y|^0.97 in a long-bar term), so the error falls slowly with the step:
-# at most 1.2e-3 in ln n_bar where the bar exceeds 1e3 Msun/kpc^3, on 10
-# sightlines.
+# With one sightline, ln of the untapered bar density is interpolated in
+# a table of _BAR_NODES distances, uniform in ln d from 1 pc to 25 kpc;
+# beyond 25 kpc a star is past the taper while the Sun is less than 19 kpc
+# from the centre. The taper is applied after the interpolation, which
+# would overshoot its steep fall. The density has kinks (|y|^0.97 in a long-bar term), so the error
+# falls slowly with the step: at most 1.2e-3 in ln n_bar where the bar
+# exceeds 1e3 Msun/kpc^3, on 10 sightlines.
 _BAR_NODES = 4096
 _BAR_LN_D0 = log(1e-3)
 _BAR_DLN_D = (log(25.0) - _BAR_LN_D0) / (_BAR_NODES - 3)
@@ -530,8 +533,8 @@ _BAR_DLN_D = (log(25.0) - _BAR_LN_D0) / (_BAR_NODES - 3)
 
 @jit(nopython=True, cache=True)
 def _bar_density(x, y, z):
-    """Return the bar density in Msun/kpc^3 at (x, y, z) in the bar frame,
-    for scalars."""
+    """Return the untapered bar density in Msun/kpc^3 at (x, y, z) in the
+    bar frame, for scalars."""
     ax, ay, az = abs(x), abs(y), abs(z)
     rho, x0, y0, z0, c_par, c_perp, m, r_cut, alpha, c, n, xc, yc = _BAR_X
     a = (
@@ -906,11 +909,23 @@ def _components(
 
 @jit(nopython=True, cache=True)
 def _ln_bar_density(X, Y, Z, cos_a, sin_a):
-    """Return ln of the bar density in Msun/kpc^3 at the Galactocentric
+    """Return ln of the untapered bar density in Msun/kpc^3 at the Galactocentric
     (X, Y, Z), with the bar at the angle of (cos_a, sin_a); ln 1e-300
     where it underflows."""
     rho = _bar_density(X * cos_a - Y * sin_a, X * sin_a + Y * cos_a, Z)
     return log(max(rho, 1e-300))
+
+
+@jit(nopython=True, cache=True)
+def _ln_bar_taper(r2):
+    """Return ln of the bar taper at squared Galactocentric radius r2, for
+    r2 below the square of the taper's end."""
+    r0, r1 = _BAR_TAPER
+    if r2 <= r0 * r0:
+        return 0.0
+    # (1 + cos(pi t)) / 2 written as sin^2(pi (1 - t) / 2), which does not
+    # cancel to 0 just inside r1.
+    return 2.0 * log(sin(0.5 * pi * (r1 - sqrt(r2)) / (r1 - r0)))
 
 
 @jit(nopython=True, parallel=True, cache=True)
@@ -1030,9 +1045,10 @@ def _galactic_prior_array(
                 by_label,
             )
             ln_d = log(dists[i] + 1e-300)
-            # Bar: by mass like the halo, left out far from the centre.
+            # Bar: by mass like the halo, tapered to 0 at _BAR_TAPER[1].
             bar_n = LOG_ZERO
-            if ln_bar_amp > LOG_ZERO and R * R + Z[i] * Z[i] < _BAR_R_MAX**2:
+            r2 = R * R + Z[i] * Z[i]
+            if ln_bar_amp > LOG_ZERO and r2 < _BAR_TAPER[1] ** 2:
                 if len(bar_line):
                     f = (ln_d - _BAR_LN_D0) / _BAR_DLN_D
                     if not f > 0.0:  # below 1 pc, or NaN for a bad distance
@@ -1040,7 +1056,7 @@ def _galactic_prior_array(
                     ln_rho = _catmull_rom_table(f, bar_line)
                 else:
                     ln_rho = _ln_bar_density(X[i], Y[i], Z[i], cos_a, sin_a)
-                bar_n = ln_rho + ln_bar_amp + ln_bar
+                bar_n = ln_rho + _ln_bar_taper(r2) + ln_bar_amp + ln_bar
             mx = max(max(thin, thick), max(hal, bar_n))
             acc = exp(thin - mx) + exp(thick - mx) + exp(hal - mx)
             if bar_n > LOG_ZERO:
@@ -1449,14 +1465,22 @@ def _bar_args(bar_mass, bar_angle, rho_thin_solar):
 def _bar_table(ell, b, R_solar, Z_solar, bar):
     """Return ln of the bar density at the _BAR_NODES distances of its table
     toward (l, b), or an empty table where the call has more than one
-    sightline, R_solar is 13 kpc or more, or there is no bar."""
+    sightline, the Sun is 19 kpc or more from the centre, there is no bar,
+    or the sightline does not pass within the taper's end of the centre."""
     ell, b = np.ravel(ell), np.ravel(b)
+    r_sun2 = R_solar**2 + Z_solar**2
     if (
         np.ptp(ell) > 0
         or np.ptp(b) > 0
-        or R_solar + _BAR_R_MAX >= 25.0
+        or sqrt(r_sun2) + _BAR_TAPER[1] >= 25.0
         or bar[2] <= LOG_ZERO
     ):
+        return np.empty(0)
+    # Closest approach of the sightline to the centre: the bar is 0 on a
+    # sightline that stays beyond the taper, and the kernel skips it.
+    ell_r, b_r = np.radians(ell[0]), np.radians(b[0])
+    t0 = R_solar * cos(b_r) * cos(ell_r) - Z_solar * sin(b_r)
+    if r_sun2 - max(t0, 0.0) ** 2 >= _BAR_TAPER[1] ** 2:
         return np.empty(0)
     d = np.exp(_BAR_LN_D0 + _BAR_DLN_D * np.arange(_BAR_NODES))
     X, Y, Z = galactic_to_galactocentric(d, ell[0], b[0], R_solar, Z_solar)
@@ -1479,14 +1503,12 @@ def _normalizations(
     r_break_halo,
     q_halo,
     halo_mass,
-    bar_mass,
-    bar_angle,
     rho_thin_solar,
     feh_systematic,
 ):
-    """Return the disk and halo arguments of `_components`, the bar
-    arguments of `_bar_args`, the tables of `_thin_disk_tables` and their
-    key, and the normalizations that `galactic_prior_summary` reports."""
+    """Return the disk and halo arguments of `_components`, the tables of
+    `_thin_disk_tables` and their key, and the normalizations that
+    `galactic_prior_summary` reports."""
     _check_positive(
         R_thin=R_thin,
         R_thick=R_thick,
@@ -1547,16 +1569,14 @@ def _normalizations(
         *tables,
         np.empty((0, 0, 0)),
     )
-    bar = _bar_args(bar_mass, bar_angle, rho_thin_solar)
     summary = dict(
         thin_column_height=0.5 * exp(-ln_d0),
         thick_column_height=0.5 * exp(ln_f_thick - ln_d0 - thick),
         f_thick_solar=exp(thick),
         halo_density_solar=exp(ln_f_halo) * float(rho_thin_solar),
         f_halo_solar=exp(ln_f_halo),
-        f_bar_solar=exp(_ln_bar_density(-R_solar, 0.0, Z_solar, *bar[:2]) + bar[2]),
     )
-    return disk, halo, bar, tables, key, summary
+    return disk, halo, tables, key, summary
 
 
 __all__ = [
@@ -1807,9 +1827,9 @@ def logp_galactic_structure(
         70 kpc. Default is 7.5e8, the middle of the 6.7e8 to 8.4e8 of
         Lane et al. (2023).
     bar_mass : float, optional
-        Stellar mass of the bar in Msun. Default is ``BAR_MASS``, 1.8252e10,
-        the integral of the density of Sormani et al. (2022). 0 removes the
-        bar.
+        Stellar mass of the bar in Msun. Default is ``BAR_MASS``, 1.8133e10,
+        the integral of the tapered density of Sormani et al. (2022). 0
+        removes the bar.
     bar_angle : float, optional
         Angle in degrees between the long axis of the bar and the line from
         the Sun to the Galactic centre, with the near end at l > 0. Default
@@ -1894,7 +1914,7 @@ def logp_galactic_structure(
         number density times :math:`d^2` of the thin disk, thick disk, halo
         and bar; and, with labels, ``'labels'``, the list of ln p(labels) of
         each component at that position, 0 where the component has no
-        stars (the bar beyond 12 kpc from the centre, or with
+        stars (the bar beyond 6 kpc from the centre, or with
         ``bar_mass=0``). Their sums are the
         terms of ``logp``.
 
@@ -1943,9 +1963,11 @@ def logp_galactic_structure(
     The bar is the analytic density of Sormani et al. (2022), a fit to the
     dynamical model of Portail et al. (2017): an X-shaped bar and a long
     bar, which together reach 5 kpc from the centre. It is turned by
-    ``bar_angle`` and scaled to ``bar_mass``, and is left out beyond
-    12 kpc from the Galactic centre, where it is at most 1.4e-4 of the
-    disks.
+    ``bar_angle`` and scaled to ``bar_mass``. Beyond 5 kpc from the
+    Galactic centre it is multiplied by the taper
+    :math:`(1 + \cos[\pi (r - 5\,{\rm kpc}) / 1\,{\rm kpc}]) / 2`, which
+    reaches 0 at 6 kpc, since the published long-bar terms decay slowly
+    beyond the end of the bar.
     Its labels do not depend on position, and its [Fe/H] and ages are
     widened by the thick-disk systematics.
 
@@ -1957,6 +1979,7 @@ def logp_galactic_structure(
     Youakim et al. (2020), MNRAS, 492, 4986
     Sormani et al. (2022), MNRAS, 514, L1
     Portail et al. (2017), MNRAS, 465, 1621
+    Wegg et al. (2015), MNRAS, 450, 4050
     Gonzalez et al. (2015), A&A, 584, A46
     Zoccali et al. (2017), A&A, 599, A12
     Bensby et al. (2017), A&A, 605, A89
@@ -1995,7 +2018,7 @@ def logp_galactic_structure(
         age_systematic,
         age_floor,
     )
-    disk, halo, bar, tables, key, _ = _normalizations(
+    disk, halo, tables, key, _ = _normalizations(
         R_solar=R_solar,
         Z_solar=Z_solar,
         R_thin=R_thin,
@@ -2011,11 +2034,10 @@ def logp_galactic_structure(
         r_break_halo=r_break_halo,
         q_halo=q_halo,
         halo_mass=halo_mass,
-        bar_mass=bar_mass,
-        bar_angle=bar_angle,
         rho_thin_solar=rho_thin_solar,
         feh_systematic=feh_systematic,
     )
+    bar = _bar_args(bar_mass, bar_angle, rho_thin_solar)
     by_label = _label_table(key, feh is not None, loga is not None, label_args[0])
 
     X, Y, Z = np.broadcast_arrays(
@@ -2124,8 +2146,8 @@ def galactic_prior_summary(**kwargs):
         Keywords of `logp_galactic_structure` that set the normalizations:
         ``R_solar``, ``Z_solar``, the disk scale lengths and smoothing
         radii, ``f_thick_surface``, ``v_circ_solar``, ``thick_sigma_z``,
-        the halo-shape keywords, ``halo_mass``, ``bar_mass``,
-        ``bar_angle``, ``rho_thin_solar`` and ``feh_systematic``, whose
+        the halo-shape keywords, ``halo_mass``, ``rho_thin_solar`` and
+        ``feh_systematic``, whose
         thin-disk entry changes the thin-disk column. Omitted keywords take
         its defaults.
 
@@ -2134,9 +2156,8 @@ def galactic_prior_summary(**kwargs):
     summary : dict
         ``thin_column_height`` and ``thick_column_height`` in kpc,
         ``f_thick_solar`` (the thick- to thin-disk density ratio at the
-        Sun's position), ``halo_density_solar`` in Msun/pc^3,
-        ``f_halo_solar`` (the halo to thin-disk density ratio at the Sun)
-        and ``f_bar_solar`` (the same for the bar).
+        Sun's position), ``halo_density_solar`` in Msun/pc^3 and
+        ``f_halo_solar`` (the halo to thin-disk density ratio at the Sun).
 
     Raises
     ------
@@ -2146,8 +2167,7 @@ def galactic_prior_summary(**kwargs):
         If ``R_thin``, ``R_thick``, ``f_thick_surface``, ``thick_sigma_z``,
         ``v_circ_solar``, ``Rs_halo``, ``eta_halo_inner``,
         ``eta_halo_outer``, ``r_break_halo``, ``q_halo``, ``halo_mass`` or
-        ``rho_thin_solar`` is not positive and finite, if ``bar_mass`` is
-        negative or not finite, or if ``bar_angle`` is not finite.
+        ``rho_thin_solar`` is not positive and finite.
 
     Examples
     --------
