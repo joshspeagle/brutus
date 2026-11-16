@@ -10,6 +10,7 @@ from brutus.analysis.individual import BruteForce
 from brutus.core.individual import StarGrid
 from brutus.priors.galactic import logp_galactic_structure
 from brutus.utils import inv_magnitude
+from brutus.utils.math import LOG_ZERO
 
 
 @pytest.fixture(scope="module")
@@ -395,7 +396,6 @@ class TestBruteForcePosterior:
         results = bruteforce_fitter.logpost_grid(
             like_results,
             Nmc_prior=10,
-            wt_thresh=0.01,  # Small for testing
             rstate=np.random.RandomState(379),
         )
 
@@ -426,7 +426,6 @@ class TestBruteForcePosterior:
             results = bruteforce_fitter.logpost_grid(
                 like_results,
                 Nmc_prior=10,
-                wt_thresh=0.01,
                 mem_lim=1e-4,
                 rstate=np.random.RandomState(407),
             )
@@ -453,36 +452,6 @@ class TestBruteForcePosterior:
             with pytest.raises(ValueError, match="valid photometric band"):
                 bruteforce_fitter.loglike_grid(flux, flux_err, zero_mask)
 
-    def test_logpost_model_selection(self, bruteforce_fitter, synthetic_observation):
-        """Test different model selection methods."""
-        flux, flux_err, mask, true_idx = synthetic_observation
-
-        like_results = bruteforce_fitter.loglike_grid(
-            flux, flux_err, mask, return_vals=True
-        )
-
-        # Test weight threshold
-        results_wt = bruteforce_fitter.logpost_grid(
-            like_results,
-            Nmc_prior=10,
-            wt_thresh=1e-3,
-            cdf_thresh=None,
-            rstate=np.random.RandomState(442),
-        )
-
-        # Test CDF threshold
-        results_cdf = bruteforce_fitter.logpost_grid(
-            like_results,
-            Nmc_prior=10,
-            wt_thresh=None,
-            cdf_thresh=0.95,
-            rstate=np.random.RandomState(447),
-        )
-
-        # Both should select some models
-        assert len(results_wt[0]) > 0
-        assert len(results_cdf[0]) > 0
-
     def test_logpost_monte_carlo_sampling(
         self, bruteforce_fitter, synthetic_observation
     ):
@@ -496,7 +465,6 @@ class TestBruteForcePosterior:
         results = bruteforce_fitter.logpost_grid(
             like_results,
             Nmc_prior=100,  # More samples for better statistics
-            wt_thresh=0.01,
             rstate=np.random.RandomState(465),
         )
 
@@ -557,7 +525,6 @@ class TestBruteForceInternal:
             parallax_err=0.2,
             coord=(120.0, 45.0),
             Nmc_prior=10,
-            wt_thresh=0.01,
             rstate=np.random.RandomState(518),
         )
 
@@ -718,7 +685,6 @@ class TestBruteForceRealGrid:
         results_basic = fitter.logpost_grid(
             like_results,
             Nmc_prior=10,  # Small number for fast testing
-            wt_thresh=0.1,  # Relaxed threshold to ensure models selected
             coord=None,  # No spatial priors initially
             dustfile=None,  # No dust priors initially
             parallax=None,  # No parallax constraints initially
@@ -751,7 +717,6 @@ class TestBruteForceRealGrid:
         results_galactic = fitter.logpost_grid(
             like_results,
             Nmc_prior=10,
-            wt_thresh=0.1,
             coord=coord_galactic,  # Add galactic structure prior
             dlabels=fitter.models_labels[indices],
             dustfile=None,
@@ -765,24 +730,7 @@ class TestBruteForceRealGrid:
 
         print(f"✓ With galactic prior: {len(sel_gal)} models selected")
 
-        # Step 6: Test threshold-based model selection
-        # Test both weight threshold and CDF threshold
-        results_cdf = fitter.logpost_grid(
-            like_results,
-            Nmc_prior=10,
-            wt_thresh=None,
-            cdf_thresh=0.5,  # Select top 50% of models
-            coord=coord_galactic,
-            dlabels=fitter.models_labels[indices],
-            rstate=np.random.RandomState(732),
-        )
-
-        sel_cdf = results_cdf[0]
-        assert len(sel_cdf) > 0, "CDF threshold eliminated all models"
-
-        print(f"✓ CDF selection: {len(sel_cdf)} models selected")
-
-        # Step 7: Basic validation that the pipeline produces reasonable results
+        # Step 6: Basic validation that the pipeline produces reasonable results
         # Verify that Monte Carlo samples are within expected bounds
         assert np.all(
             (av_mc >= 0) & (av_mc <= 20)
@@ -1057,7 +1005,6 @@ class TestBruteForceCoverageCompletion:
         results = bruteforce_fitter.logpost_grid(
             tuple(like_results),
             Nmc_prior=5,
-            wt_thresh=0.1,
             rstate=np.random.RandomState(1015),
         )
 
@@ -1105,7 +1052,6 @@ class TestBruteForceMathematicalValidation:
                 coord=coord,  # Galactic coordinates for dust/galactic priors
                 dlabels=fitter.models_labels[test_indices],
                 Nmc_prior=10,  # Small for speed
-                wt_thresh=0.1,
                 rstate=np.random.RandomState(1058),
             )
 
@@ -1139,7 +1085,6 @@ class TestBruteForceMathematicalValidation:
                 logpost_results = fitter.logpost_grid(
                     loglike_results,
                     Nmc_prior=10,
-                    wt_thresh=0.1,
                     rstate=np.random.RandomState(1092),
                 )
                 sel = logpost_results[0]
@@ -1208,7 +1153,6 @@ class TestBruteForceFitMethod:
             data_coords=data_coords,
             Ndraws=10,
             Nmc_prior=5,
-            wt_thresh=0.1,
             running_io=True,
             save_dar_draws=True,
             verbose=False,
@@ -1271,7 +1215,6 @@ class TestBruteForceFitMethod:
             data_coords=data_coords,
             Ndraws=5,
             Nmc_prior=3,
-            wt_thresh=0.2,
             running_io=False,  # Batch mode
             save_dar_draws=True,
             verbose=False,
@@ -1310,7 +1253,6 @@ class TestBruteForceFitMethod:
             data_coords=data_coords,
             Ndraws=5,
             Nmc_prior=3,
-            wt_thresh=0.2,
             save_dar_draws=False,  # Don't save distance/reddening draws
             verbose=False,
             rstate=np.random.RandomState(1331),
@@ -1356,7 +1298,6 @@ class TestBruteForceFitMethod:
             parallax_err=parallax_err,
             Ndraws=5,
             Nmc_prior=3,
-            wt_thresh=0.2,
             verbose=False,
             rstate=np.random.RandomState(1374),
         )
@@ -1388,7 +1329,6 @@ class TestBruteForceFitMethod:
             data_coords=data_coords,
             Ndraws=3,
             Nmc_prior=2,
-            wt_thresh=0.3,
             verbose=False,
             rstate=np.random.RandomState(1409),
         )
@@ -1411,7 +1351,6 @@ class TestBruteForceFitMethod:
             coord=(120.0, 45.0),
             Nmc_prior=5,
             Ndraws=10,
-            wt_thresh=0.1,
             return_distreds=True,
             rstate=np.random.RandomState(1371),
         )
@@ -1472,7 +1411,6 @@ class TestBruteForceFitMethod:
             coord=(120.0, 45.0),
             Nmc_prior=5,
             Ndraws=10,
-            wt_thresh=0.1,
             return_distreds=False,
             rstate=np.random.RandomState(1431),
         )
@@ -1514,7 +1452,6 @@ class TestBruteForceFitMethod:
             data_coords=data_coords,
             Ndraws=3,
             Nmc_prior=2,
-            wt_thresh=0.3,
             verbose=True,
             rstate=np.random.RandomState(1532),
         )
@@ -1562,7 +1499,6 @@ class TestBruteForceFitIntegration:
             data_coords=data_coords,
             Ndraws=50,
             Nmc_prior=20,
-            wt_thresh=0.01,  # Tight threshold
             verbose=False,
             rstate=np.random.RandomState(1579),
         )
@@ -1619,7 +1555,7 @@ def test_capped_fit_keeps_the_evidence_of_the_uncapped_fit(fitter, observation):
     """Regression (#89): _fit weights each model kept by the max_models cap
     by 1 / pi, so the mean capped evidence matches the uncapped one."""
     flux, flux_err, mask = observation
-    kwargs = dict(Nmc_prior=5, Ndraws=20, wt_thresh=1e-12, return_distreds=False)
+    kwargs = dict(Nmc_prior=5, Ndraws=20, return_distreds=False)
     nseed = 100
     capped = [
         fitter._fit(
@@ -1700,14 +1636,21 @@ class TestSetupLnpriorNotMutated:
         np.testing.assert_allclose(out1, out2)
 
 
+def _inclusion_probability(out, model):
+    """Probability that `model` of two is kept with ``max_models=1``."""
+    sel, ln_incl = out[0], out[-1]
+    p_kept = np.exp(ln_incl[0])
+    return p_kept if sel[0] == model else 1.0 - p_kept
+
+
 class TestParallaxSelectionGate:
     def test_degenerate_model_kept_with_marginal_error(self, fitter):
         """A model 2 marginal-sigma from the parallax scale must be kept.
 
         With a strong scale-A(V) degeneracy (rho=0.99) the conditional std
         is ~7x smaller than the marginal std. The old conditional gate gave
-        this model a selection penalty of ~98 (pruned at log(1e-3)=-6.9);
-        the marginal gate gives ~2 (kept).
+        this model a selection penalty of ~98, so a probability near e^-98 of
+        being kept; the marginal gate gives ~2.
         """
         sig_s, sig_a, sig_r, rho = 1.0, 1.0, 0.1, 0.99
         cov = np.array(
@@ -1727,12 +1670,10 @@ class TestParallaxSelectionGate:
             parallax_err=0.01,
             coord=None,
             Nmc_prior=5,
-            wt_thresh=1e-3,
+            max_models=1,
             rstate=np.random.RandomState(0),
         )
-        sel = out[0]
-        assert 0 in sel
-        assert 1 in sel, (
+        assert _inclusion_probability(out, 1) > 1e-4, (
             "Model 2 marginal-sigma from the parallax scale was pruned: "
             "selection gate is using the conditional (not marginal) "
             "scale uncertainty"
@@ -1749,12 +1690,10 @@ class TestParallaxSelectionGate:
             parallax_err=0.01,
             coord=None,
             Nmc_prior=5,
-            wt_thresh=1e-3,
+            max_models=1,
             rstate=np.random.RandomState(0),
         )
-        sel = out[0]
-        assert 0 in sel
-        assert 1 not in sel
+        assert _inclusion_probability(out, 1) < 1e-3
 
     def test_gate_matches_adaptive_quadrature(self):
         """The gate equals a direct integration of the parallax likelihood
@@ -1785,7 +1724,6 @@ class TestParallaxSelectionGate:
         for mu, sig, plx, err in cases:
             got = _lnp_parallax_gate(np.array([mu]), np.array([sig]), plx, err)[0]
             ref = reference(mu, sig, plx, err)
-            # The selection threshold is ln(wt_thresh) = -6.9 below the best.
             if ref > -30:
                 assert abs(got - ref) < 0.25, (mu, sig, plx, err, got, ref)
 
@@ -1802,10 +1740,10 @@ class TestParallaxSelectionGate:
             parallax_err=0.06,  # SNR 2; the dwarf's parallax is 4 mas
             lnprior=np.array([10.0, 0.0]),
             Nmc_prior=5,
-            wt_thresh=1e-3,
+            max_models=1,
             rstate=np.random.RandomState(0),
         )
-        np.testing.assert_array_equal(out[0], [1])
+        assert _inclusion_probability(out, 1) > 0.999
 
 
 def test_lnlike_includes_the_av_and_rv_prior_at_the_fit(
@@ -1847,6 +1785,53 @@ class TestModelWeights:
         expected = 0.5 * np.log((2 * np.pi) ** 3 * sig_eta**2 * var_ar)
         np.testing.assert_allclose(lnp, expected, atol=1e-6)
 
+    def test_prior_that_returns_nan_gives_the_model_no_weight(self, fitter):
+        """A custom prior that returns NaN for one model drops that model
+        instead of emptying the selection."""
+        cov = np.diag([1e-4, 1e-4, 1e-4])
+        like = _make_loglike_results([1.0, 0.25], [cov, cov])
+
+        def lngalprior(dists, coord, labels=None):
+            return np.where(np.isclose(dists, 2.0), np.nan, 0.0)
+
+        out = fitter.logpost_grid(
+            like,
+            coord=(120.0, 45.0),
+            lngalprior=lngalprior,
+            dlabels=None,
+            Nmc_prior=4,
+            rstate=np.random.RandomState(0),
+        )
+        np.testing.assert_array_equal(out[0], [0])
+
+    def test_selection_follows_the_galactic_prior_without_parallax(self, fitter):
+        """Regression (#307): the selection weight includes the distance
+        priors, so a distant giant that the Galactic volume favours is kept
+        in proportion to its posterior weight, though the model prior
+        favours a near dwarf by e^8."""
+        # Model 0: dwarf at 0.25 kpc. Model 1: giant at 8 kpc. 1% in ln(d).
+        dwarf = np.diag([(0.02 * 16) ** 2, 0.05**2, 0.05**2])
+        giant = np.diag([(0.02 / 64) ** 2, 0.05**2, 0.05**2])
+        like = _make_loglike_results([16.0, 1 / 64], [dwarf, giant])
+        dlabels = np.array(
+            [(0.0, 9.5), (0.0, 9.9)], dtype=[("feh", "f8"), ("loga", "f8")]
+        )
+        kwargs = dict(
+            coord=(0.0, 4.0),
+            dlabels=dlabels,
+            lnprior=np.array([8.0, 0.0]),
+            Nmc_prior=20,
+        )
+        lnp = fitter.logpost_grid(
+            like, max_models=None, rstate=np.random.RandomState(0), **kwargs
+        )[2]
+        share = np.exp(lnp[1] - np.logaddexp(*lnp))
+        out = fitter.logpost_grid(
+            like, max_models=1, rstate=np.random.RandomState(0), **kwargs
+        )
+        assert share > 0.5
+        assert abs(_inclusion_probability(out, 1) - share) < 0.05
+
     def test_model_without_a_positive_definite_precision_gets_zero_weight(self, fitter):
         """A model whose precision matrix is not positive definite has no
         finite Laplace volume, so it gets zero weight and is never kept."""
@@ -1857,6 +1842,33 @@ class TestModelWeights:
             tuple(results), Nmc_prior=5, rstate=np.random.RandomState(0)
         )
         np.testing.assert_array_equal(out[0], [0])
+
+    def test_tabulated_galactic_prior_matches_the_prior(self):
+        """The table in the selection weight agrees with the Galactic prior:
+        exactly at its corner nodes, to 0.05 in median between nodes, and
+        with zero prior above MAX_AGE."""
+        from brutus.priors.galactic import MAX_AGE, _tabulated_galactic_prior
+
+        rng = np.random.default_rng(0)
+        n = 2000
+        eta = rng.uniform(np.log(0.1), np.log(20.0), n)
+        labels = {
+            "feh": rng.choice([-1.0, -0.5, 0.0, 0.25], n),
+            "loga": rng.uniform(8.0, 10.13, n),
+        }
+        # Corner nodes: the extreme distance and age with the extreme [Fe/H].
+        eta[:2] = eta.min(), eta.max()
+        labels["loga"][:2] = labels["loga"].min(), labels["loga"].max()
+        labels["feh"][:2] = -1.0, 0.25
+        labels["loga"][2] = np.log10(MAX_AGE * 1e9) + 1e-6
+        for coord in [(0.0, 4.0), (90.0, 45.0)]:
+            got = _tabulated_galactic_prior(
+                logp_galactic_structure, eta, coord, labels, np.ones(n, bool)
+            )
+            exact = logp_galactic_structure(np.exp(eta), coord, **labels)
+            np.testing.assert_allclose(got[:2], exact[:2], rtol=1e-12)
+            assert got[2] == exact[2] == LOG_ZERO
+            assert np.median(np.abs(got[3:] - exact[3:])) < 0.05
 
 
 class TestDustPriorGating:
@@ -1877,7 +1889,6 @@ class TestDustPriorGating:
             lndustprior=self._mock_dust(calls),
             apply_av_prior=False,
             Nmc_prior=5,
-            wt_thresh=0.1,
             rstate=np.random.RandomState(0),
         )
         assert len(out[0]) > 0
@@ -1893,11 +1904,11 @@ class TestDustPriorGating:
             lndustprior=self._mock_dust(calls),
             apply_av_prior=True,
             Nmc_prior=5,
-            wt_thresh=0.1,
             rstate=np.random.RandomState(0),
         )
         assert len(out[0]) > 0
-        assert len(calls) == 1
+        # Once on every model for the selection, once on the draws.
+        assert len(calls) == 2
 
     def test_default_dust_prior_receives_fit_avlim(
         self, fitter, observation, monkeypatch
@@ -1922,10 +1933,10 @@ class TestDustPriorGating:
             dustfile=object(),
             avlim=(0.0, 6.0),
             Nmc_prior=5,
-            wt_thresh=0.1,
             rstate=np.random.RandomState(0),
         )
-        assert seen == [{"avlim": (0.0, 6.0)}]
+        # Once for the selection, once for the draws.
+        assert seen == [{"avlim": (0.0, 6.0)}] * 2
 
     def test_custom_dust_prior_applies_without_dustfile(self, fitter, observation):
         flux, flux_err, mask = observation
@@ -1937,12 +1948,12 @@ class TestDustPriorGating:
             seen.append((dustmap, coord))
             return np.full(np.shape(avs), -1.3)
 
-        kwargs = dict(Nmc_prior=5, wt_thresh=0.1)
+        kwargs = dict(Nmc_prior=5)
         base = fitter.logpost_grid(like, rstate=np.random.RandomState(0), **kwargs)
         out = fitter.logpost_grid(
             like, lndustprior=lndust, rstate=np.random.RandomState(0), **kwargs
         )
-        assert seen == [(None, None)]
+        assert seen == [(None, None)] * 2
         # A constant prior shifts every draw's weight, so each model's lnp.
         np.testing.assert_allclose(out[2], base[2] - 1.3, rtol=0, atol=1e-12)
 
@@ -1955,7 +1966,7 @@ class TestDustPriorGating:
         like = fitter.loglike_grid(flux, flux_err, mask.copy(), return_vals=True)
         for prior in (logp_extinction, partial(logp_extinction, scatter=0.1)):
             with pytest.raises(ValueError, match="logp_extinction"):
-                fitter.logpost_grid(like, lndustprior=prior, wt_thresh=0.1)
+                fitter.logpost_grid(like, lndustprior=prior)
             with pytest.raises(ValueError, match="logp_extinction"):
                 fitter._setup(
                     flux,
@@ -1976,7 +1987,6 @@ class TestDustPriorGating:
                 dustfile=object(),
                 lndustprior=self._mock_dust([]),
                 Nmc_prior=5,
-                wt_thresh=0.1,
                 rstate=np.random.RandomState(1851),
             )
 
@@ -1992,7 +2002,6 @@ class TestDustPriorGating:
             lndustprior=self._mock_dust(calls),
             apply_av_prior=False,
             Nmc_prior=5,
-            wt_thresh=0.1,
             rstate=np.random.RandomState(0),
         )
         assert len(out[0]) > 0
@@ -2026,12 +2035,11 @@ class TestDustPriorGating:
             lndustprior=self._mock_dust(calls),
             apply_av_prior=True,
             Nmc_prior=5,
-            wt_thresh=0.1,
             rstate=np.random.RandomState(0),
         )
         assert len(out[0]) > 0
         assert loaded == [dust_path], "Path dustfile was not auto-loaded"
-        assert len(calls) == 1
+        assert len(calls) == 2
 
     def test_setup_dustfile_without_data_coords_raises(self, fitter):
         data = 10 ** (-0.4 * np.array([15, 14.8, 14.7, 14.6, 14.55]))
@@ -2204,8 +2212,6 @@ class TestTruncatedDraws:
             like[4 if param == "av" else 5][1] = -5.0 if param == "av" else 20.0
         sel, _, lnp, d_mc, a_mc, r_mc, _, mc_ess, _ = fitter.logpost_grid(
             tuple(like),
-            wt_thresh=None,
-            cdf_thresh=None,
             Nmc_prior=20,
             rstate=np.random.RandomState(5),
         )
@@ -2223,8 +2229,6 @@ class TestTruncatedDraws:
             lngalprior=lambda d, coord, labels=None: np.full(np.shape(d), -1e300),
             dlabels=fitter.models_labels[:2],
             lnprior=np.zeros(2),
-            wt_thresh=None,
-            cdf_thresh=None,
             Nmc_prior=20,
             rstate=np.random.RandomState(5),
         )[7]
@@ -2238,8 +2242,6 @@ class TestTruncatedDraws:
         like[4] = np.array([0.5, 0.0])
         _, _, lnp, *_ = fitter.logpost_grid(
             tuple(like),
-            wt_thresh=None,
-            cdf_thresh=None,
             Nmc_prior=20,
             rstate=np.random.RandomState(5),
         )
@@ -2282,10 +2284,9 @@ class TestDustPriorPartial:
             lndustprior=partial(func, **bound),
             avlim=(0.0, 6.0),
             Nmc_prior=5,
-            wt_thresh=0.1,
             rstate=np.random.RandomState(0),
         )
-        assert seen == [{**bound, **expected}]
+        assert seen == [{**bound, **expected}] * 2
 
 
 class TestSubsetResults:
@@ -2379,7 +2380,8 @@ def test_apply_dlabels_controls_galactic_prior_labels(
         verbose=False,
         **batch,
     )
-    assert len(seen) == 2
+    # Per object: once for the selection, once for the draws.
+    assert len(seen) == 4
     if apply_dlabels:
         assert all(labels.dtype == fitter.models_labels.dtype for labels in seen)
     else:
@@ -2393,7 +2395,7 @@ def test_precision_return_inverts_to_the_returned_covariances(fitter, observatio
 
     flux, flux_err, mask = observation
     like = fitter.loglike_grid(flux, flux_err, mask, return_vals=True)
-    kwargs = dict(Nmc_prior=5, wt_thresh=0.1)
+    kwargs = dict(Nmc_prior=5)
     cov = fitter.logpost_grid(like, rstate=np.random.RandomState(1), **kwargs)[1]
     icov = fitter.logpost_grid(
         like, rstate=np.random.RandomState(1), return_precision=True, **kwargs

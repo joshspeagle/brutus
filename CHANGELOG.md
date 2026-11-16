@@ -167,6 +167,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `q_halo`, and `galactic_prior_summary` reports `halo_density_solar`
   and `f_halo_solar` (#290).
 
+- **Fits keep a random sample of 5,000 models, chosen with the distance
+  priors** *(output-changing)*. `logpost_grid` used to keep the models
+  whose likelihood times model prior was within `wt_thresh` (1e-3) of the
+  best, before the Galactic and dust priors and the distance Jacobian were
+  applied. Toward the bulge, without a parallax, that dropped a median of
+  82% of the posterior weight, mostly distant giants. Each model's
+  selection weight now includes those priors at its best fit; the default
+  Galactic prior is interpolated from a table along the sightline. Then
+  `max_models` (now 5,000, was 50,000) models are kept at random, each
+  with a probability proportional to its selection weight, and the
+  evidence and draws divide by it. `wt_thresh` and `cdf_thresh` are
+  removed from `fit` and `logpost_grid`: pass `max_models` to set
+  the cost, or `max_models=None` to keep every model (#307).
+
 ### Fixed
 
 - **Model weights include the volume of each model's fit**

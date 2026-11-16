@@ -2162,6 +2162,72 @@ def _label_array(name, value, dists_shape):
     return value
 
 
+#: Nodes of `_tabulated_galactic_prior` in ln(d), and in each label that
+#: takes more than _TABLE_MAX_UNIQUE values.
+_TABLE_NODES, _TABLE_MAX_UNIQUE = 32, 64
+
+
+def _tabulated_galactic_prior(prior, eta, coord, labels, span):
+    """Return `prior` (`logp_galactic_structure` or a partial of it) at
+    distances ``exp(eta)``, interpolated linearly from a table over ln(d)
+    and the labels.
+
+    `labels` maps 'feh' and/or 'loga' to one value per entry of `eta`. The
+    ln(d) nodes span the `eta` values where `span` (a boolean mask) is True;
+    the others take the edge of the table. A label with at most
+    _TABLE_MAX_UNIQUE values has a node at each, so it is exact. Labelled
+    ages above MAX_AGE get LOG_ZERO, as in the prior, and so do labels that
+    are not finite, which the prior rejects.
+    """
+    lo, hi = eta[span].min(), eta[span].max()
+    step = max(hi - lo, 1e-6) / (_TABLE_NODES - 1)
+    # Per axis: its nodes, and each entry's lower node and fraction (None
+    # where the label is exact).
+    axes = [(lo + step * np.arange(_TABLE_NODES), *_linear_cell(eta, lo, step))]
+    for name, x in labels.items():
+        nodes = np.unique(x[np.isfinite(x)])
+        if name == "loga":
+            # A node above MAX_AGE would blur the zero into the oldest ages.
+            nodes = nodes[nodes <= np.log10(MAX_AGE * 1e9)]
+        if nodes.size <= _TABLE_MAX_UNIQUE:
+            axes.append(
+                (nodes, np.minimum(np.searchsorted(nodes, x), nodes.size - 1), None)
+            )
+        else:
+            n_lo, n_step = nodes[0], (nodes[-1] - nodes[0]) / (_TABLE_NODES - 1)
+            nodes = n_lo + n_step * np.arange(_TABLE_NODES)
+            axes.append((nodes, *_linear_cell(x, n_lo, n_step)))
+    shape = tuple(nodes.size for nodes, _, _ in axes)
+    mesh = np.meshgrid(*(nodes for nodes, _, _ in axes[1:]), indexing="ij")
+    dists = np.broadcast_to(np.exp(axes[0][0]).reshape((-1,) + (1,) * len(mesh)), shape)
+    table = prior(dists, coord, **dict(zip(labels, mesh))).ravel()
+
+    strides = np.cumprod((1,) + shape[:0:-1])[::-1]
+    base = sum(i * k for (_, i, _), k in zip(axes, strides))
+    out = np.zeros(len(eta))
+    linear = [(f, k) for (_, _, f), k in zip(axes, strides) if f is not None]
+    for corner in np.ndindex(*([2] * len(linear))):
+        weight, offset = 1.0, 0
+        for (f, k), c in zip(linear, corner):
+            weight = weight * (f if c else 1.0 - f)
+            offset += c * k
+        out += weight * table.take(base + offset)
+    if "loga" in labels:
+        out[labels["loga"] > np.log10(MAX_AGE * 1e9)] = LOG_ZERO
+    for x in labels.values():
+        out[~np.isfinite(x)] = LOG_ZERO
+    return out
+
+
+def _linear_cell(x, lo, step):
+    """Return the lower node of each `x` on the nodes ``lo + step * k``
+    (k < _TABLE_NODES), and its fraction of the cell, both clipped to the
+    nodes. A NaN takes the first node."""
+    u = np.clip(np.nan_to_num((x - lo) / step), 0.0, _TABLE_NODES - 1)
+    i = np.minimum(u.astype(np.intp), _TABLE_NODES - 2)
+    return i, u - i
+
+
 def galactic_prior_summary(**kwargs):
     r"""
     Return the normalizations that `logp_galactic_structure` derives.

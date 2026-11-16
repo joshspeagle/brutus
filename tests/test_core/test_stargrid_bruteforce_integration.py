@@ -83,7 +83,6 @@ class TestStarGridBruteForceIntegration:
             parallax=1.0 / dist_kpc,
             parallax_err=0.05 / dist_kpc,
             Nmc_prior=20,
-            wt_thresh=0.05,
             rstate=np.random.RandomState(84),
         )
 
@@ -174,7 +173,6 @@ class TestStarGridBruteForceIntegration:
                 flux_err,
                 mask,
                 Nmc_prior=10,
-                wt_thresh=0.1,
                 rstate=np.random.RandomState(189),
             )
             results.append(result)
@@ -382,7 +380,6 @@ class TestRealWorldScenarios:
             parallax_err=0.2,  # 10% error
             coord=(180.0, 30.0),  # Some Galactic coordinates
             Nmc_prior=50,
-            wt_thresh=0.01,
             rstate=np.random.RandomState(387),
         )
 
@@ -436,7 +433,6 @@ class TestRealWorldScenarios:
             avlim=(0.0, 5.0),
             rvlim=(2.5, 4.5),
             Nmc_prior=30,
-            wt_thresh=0.02,
             rstate=np.random.RandomState(441),
         )
 
