@@ -73,7 +73,7 @@ $$
 - **Grid volume** $\Delta V$: the spacing of the grid in each parameter, so that a sum over models approximates an integral. The default grid steps EEP by 6 on the main sequence and by 2 after it.
 - **Galactic structure** $\pi_{\rm gal}$: the density of a thin disk, a thick disk and a halo along the sightline $(\ell, b)$, each with its own metallicity distribution and an age distribution set by that metallicity.
 - **Dust map** $\pi_{\rm dust}$: the {term}`Bayestar` 3D dust map {cite:p}`green2019`, if given, with 0.2 mag of scatter added to the map's own spread. Where the map has no reliable value, this prior is uniform in $A_V$.
-- **Extinction curve** $\pi(R_V)$: Gaussian with mean 3.32 and standard deviation 0.18 {cite:p}`schlafly2016`. It enters the fit of each model in step 1, and so the Gaussian that step 3 draws from.
+- **Extinction curve** $\pi(R_V)$: Gaussian with mean 3.32 and standard deviation 0.18 {cite:p}`schlafly2016`. It enters the fit of each model in step 1, and so the Gaussian that step 3 draws from, and its value at the fit enters the model's weight.
 
 {doc}`priors` gives each prior's equation, defaults and function.
 
@@ -86,10 +86,10 @@ $$
 **3. Integrate the priors.** For each kept model $i$, brutus draws $N_{\rm mc} = 50$ points from its Gaussian in $(\ln d, A_V, R_V)$, in antithetic pairs $(z, -z)$. Each point $j$ is weighted by the priors that depend on position and by the exact parallax likelihood. The model's posterior weight is the average:
 
 $$
-w_i \;\propto\; \mathcal{L}_{{\rm phot},i}\, \pi_{{\rm model},i} \; \frac{1}{N_{\rm mc}} \sum_{j=1}^{N_{\rm mc}} \pi_{\rm gal}(d_{ij}, \theta_i)\; \pi_{\rm dust}(A_{V,ij} \mid d_{ij})\; \mathcal{L}_\varpi(d_{ij})\; d_{ij}.
+w_i \;\propto\; \mathcal{L}_{{\rm phot},i}\, \pi_{{\rm model},i}\, |2\pi\Sigma_i|^{1/2} \; \frac{1}{N_{\rm mc}} \sum_{j=1}^{N_{\rm mc}} \pi_{\rm gal}(d_{ij}, \theta_i)\; \pi_{\rm dust}(A_{V,ij} \mid d_{ij})\; \mathcal{L}_\varpi(d_{ij})\; d_{ij}.
 $$
 
-The factor $d_{ij}$ is the Jacobian of sampling in $\ln d$. Sampling in $s$ instead would bias distances by a factor $d^{-3}$.
+$\Sigma_i$ is the covariance of the model's Gaussian, so $\mathcal{L}_{{\rm phot},i}\,|2\pi\Sigma_i|^{1/2}$ is the Laplace approximation of the likelihood integrated over $(\ln d, A_V, R_V)$. A model whose fit is less tightly constrained covers more of that space and weighs more. The factor $d_{ij}$ is the Jacobian of sampling in $\ln d$. Sampling in $s$ instead would bias distances by a factor $d^{-3}$.
 
 The parallax is used three times. During step 1, models whose magnitude-space fit, with the parallax added at the best-fit $s$, is more than a factor $10^6$ worse than the best (`logl_initthresh`) keep that fit and are not refined. The averaged term in step 2 then decides which models are kept. Only the exact term here sets the weights.
 

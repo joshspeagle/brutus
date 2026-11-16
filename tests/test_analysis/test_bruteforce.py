@@ -1756,24 +1756,6 @@ class TestParallaxSelectionGate:
         assert 0 in sel
         assert 1 not in sel
 
-    def test_model_without_scale_information_is_dropped(self, fitter):
-        """A model whose precision matrix carries no scale information gets
-        an uninformative ln(d) width, so its averaged parallax likelihood is
-        too small to pass the gate."""
-        cov = np.diag([0.05**2, 0.1**2, 0.1**2])
-        results = list(_make_loglike_results([1.0, 1.0], [cov, cov]))
-        results[6][1] = 0.0
-        out = fitter.logpost_grid(
-            tuple(results),
-            parallax=1.0,
-            parallax_err=0.01,
-            coord=None,
-            Nmc_prior=5,
-            wt_thresh=1e-3,
-            rstate=np.random.RandomState(0),
-        )
-        np.testing.assert_array_equal(out[0], [0])
-
     def test_gate_matches_adaptive_quadrature(self):
         """The gate equals a direct integration of the parallax likelihood
         over the model's ln(d) Gaussian, for low to high parallax SNR."""
@@ -1824,6 +1806,57 @@ class TestParallaxSelectionGate:
             rstate=np.random.RandomState(0),
         )
         np.testing.assert_array_equal(out[0], [1])
+
+
+def test_lnlike_includes_the_av_and_rv_prior_at_the_fit(
+    bruteforce_fitter, synthetic_observation
+):
+    """The precision matrices include the A(V) and R(V) priors, so the
+    Laplace weight needs their normalized height at each model's fit:
+    lnl + 0.5 chi2 less that height is one constant for every model."""
+    flux, flux_err, mask, _ = synthetic_observation
+    av_gauss, rv_gauss = (0.5, 0.3), (3.32, 0.18)
+    lnl, _, chi2, _, av, rv, _ = bruteforce_fitter.loglike_grid(
+        flux, flux_err, mask, av_gauss=av_gauss, rv_gauss=rv_gauss, return_vals=True
+    )
+    height = sum(
+        -0.5 * ((x - m) / sd) ** 2 - np.log(np.sqrt(2 * np.pi) * sd)
+        for x, (m, sd) in ((av, av_gauss), (rv, rv_gauss))
+    )
+    rest = lnl + 0.5 * chi2 - height
+    np.testing.assert_allclose(rest, rest[0], rtol=0, atol=1e-8)
+    assert np.ptp(height) > 1.0
+
+
+class TestModelWeights:
+    def test_model_weight_is_the_integral_of_its_gaussian(self, fitter):
+        """Regression (#331): a model's weight is its likelihood integrated
+        over (ln d, A(V), R(V)), so it includes the volume |2 pi Sigma|^(1/2)
+        of the model's Gaussian."""
+        # Same best fit; model 1's A(V) and R(V) errors are twice model 0's.
+        narrow = np.diag([1e-6, 0.01**2, 0.01**2])
+        wide = np.diag([1e-6, 0.02**2, 0.02**2])
+        like = _make_loglike_results([1.0, 1.0], [narrow, wide])
+        lnp = fitter.logpost_grid(like, Nmc_prior=20, rstate=np.random.RandomState(0))[
+            2
+        ]
+        # sigma(ln d) = sigma(s) / 2s, and the mean of d over the draws is 1
+        # to 1e-7; the likelihood is 1 and there are no other priors.
+        sig_eta = 1e-3 / 2
+        var_ar = np.array([0.01**4, 0.02**4])
+        expected = 0.5 * np.log((2 * np.pi) ** 3 * sig_eta**2 * var_ar)
+        np.testing.assert_allclose(lnp, expected, atol=1e-6)
+
+    def test_model_without_a_positive_definite_precision_gets_zero_weight(self, fitter):
+        """A model whose precision matrix is not positive definite has no
+        finite Laplace volume, so it gets zero weight and is never kept."""
+        cov = np.diag([0.05**2, 0.1**2, 0.1**2])
+        results = list(_make_loglike_results([1.0, 1.0], [cov, cov]))
+        results[6][1] = 0.0
+        out = fitter.logpost_grid(
+            tuple(results), Nmc_prior=5, rstate=np.random.RandomState(0)
+        )
+        np.testing.assert_array_equal(out[0], [0])
 
 
 class TestDustPriorGating:
@@ -2131,8 +2164,15 @@ class TestLikelihoodNormalization:
         flux = 10 ** (-0.4 * models[13, :, 0])
         flux_err = 0.05 * flux
         mask = np.ones(5, dtype=bool)
-        lnl, ndim, chi2 = fitter.loglike_grid(flux, flux_err, mask, dim_prior=False)
+        lnl, ndim, chi2, _, av, rv, _ = fitter.loglike_grid(
+            flux, flux_err, mask, dim_prior=False, return_vals=True
+        )
         expected = -0.5 * (ndim * np.log(2 * np.pi) + np.sum(np.log(flux_err**2)))
+        # The default A(V) and R(V) priors at each fit.
+        for x, (m, sd) in ((av, (0.0, 1e6)), (rv, (3.32, 0.18))):
+            expected = (
+                expected - 0.5 * ((x - m) / sd) ** 2 - np.log(np.sqrt(2 * np.pi) * sd)
+            )
         np.testing.assert_allclose(lnl + 0.5 * chi2, expected, rtol=1e-12)
 
 

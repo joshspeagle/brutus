@@ -1058,7 +1058,11 @@ class TestLogpostGridDistancePosterior:
         results = _results_tuple(np.zeros(3), scales, [1.0] * 3, [3.3] * 3, icovs)
         sel, _, lnp, dist_mc, a_mc, r_mc, lnp_mc, mc_ess, _ = (
             logpost_fitter.logpost_grid(
-                results, Nmc_prior=50, rstate=np.random.RandomState(1634)
+                results,
+                Nmc_prior=50,
+                wt_thresh=None,
+                cdf_thresh=None,
+                rstate=np.random.RandomState(1634),
             )
         )
         npt.assert_array_equal(sel, np.arange(3))

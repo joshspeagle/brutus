@@ -619,42 +619,45 @@ def _lnp_parallax_gate(eta, eta_err, parallax, parallax_err):
     return out
 
 
-def _parallax_gate(scales, icovs_sar, parallax, parallax_err):
-    """Return the parallax term of the selection weight of each model.
+def _eta_gaussians(scales, icovs_sar):
+    """Return the ln(d) mean, marginal ln(d) error and ``0.5 ln|2 pi Sigma|``
+    of each model's Gaussian in (ln d, A(V), R(V)).
 
-    It is `_lnp_parallax_gate` with the model's ln(d) mean and marginal
-    error from its (scale, A(V), R(V)) fit.
+    Sigma is the inverse of the (scale, A(V), R(V)) precision mapped to
+    ln(d), regularized as the Monte Carlo draws are (`~brutus.utils.math.inverse3`).
+    The last term is the Laplace volume of the model's fit (#331):
+    LOG_ZERO where the precision is not positive definite, since the model
+    has no finite volume. The error of such a model is 1.
     """
-    # Use the marginal scale error because distance and extinction both dim a
-    # star, driving the scale-A(V) correlation to 0.95-0.998 for reddened stars
-    # and making the conditional error 3-16x too small. cov[0,0] follows from
-    # the cofactor identity
-    # cov[0,0] = (i11*i22 - i12^2) / det(icov). A degenerate matrix falls
-    # back to the conditional error 1/sqrt(icov[0,0]). When icov[0,0] <= 0
-    # the error is 1e10, and the model's term is then too small to pass.
-    scales_err = np.full(len(scales), 1e10)
-    i00, i01, i02 = icovs_sar[:, 0, 0], icovs_sar[:, 0, 1], icovs_sar[:, 0, 2]
-    i11, i12, i22 = icovs_sar[:, 1, 1], icovs_sar[:, 1, 2], icovs_sar[:, 2, 2]
-    minor00 = i11 * i22 - i12 * i12
-    det = i00 * minor00 - i01 * (i01 * i22 - i02 * i12) + i02 * (i01 * i12 - i02 * i11)
+    i00, i11, i22 = icovs_sar[:, 0, 0], icovs_sar[:, 1, 1], icovs_sar[:, 2, 2]
+    diag = i00 > 0, i11 > 0, i22 > 0
     with np.errstate(divide="ignore", invalid="ignore"):
-        var00 = minor00 / det
-        cond_var00 = 1.0 / i00
-    marg_ok = (det > 0) & np.isfinite(var00) & (var00 > 0)
-    cond_ok = ~marg_ok & (i00 > 0)
-    scales_err[marg_ok] = np.sqrt(var00[marg_ok])
-    scales_err[cond_ok] = np.sqrt(cond_var00[cond_ok])
+        c01 = icovs_sar[:, 0, 1] / np.sqrt(i00 * i11)
+        c02 = icovs_sar[:, 0, 2] / np.sqrt(i00 * i22)
+        c12 = icovs_sar[:, 1, 2] / np.sqrt(i11 * i22)
+        # The determinant of the correlation form, with 1e-3 added to its
+        # diagonal where it is below 1e-10, as inverse3 does.
+        cross = 2.0 * c01 * c02 * c12
+        squares = c01**2 + c02**2 + c12**2
+        one = np.where(np.abs(1.0 + cross - squares) < 1e-10, 1.0 + 1e-3, 1.0)
+        det = one**3 + cross - one * squares
+        # Sylvester's criterion.
+        positive = diag[0] & diag[1] & diag[2] & (one**2 - c01**2 > 0) & (det > 0)
 
-    # eta = ln(d) = -0.5 ln(s), so sigma_eta = sigma_s / (2 s). Far nodes of
-    # a degenerate model overflow exp(-eta) to inf, which gives the right 0.
-    scales = np.maximum(scales, MIN_SCALE)
-    with np.errstate(over="ignore"):
-        return _lnp_parallax_gate(
-            -0.5 * np.log(scales),
-            scales_err / (2.0 * scales),
-            float(parallax),
-            float(parallax_err),
+        # eta = ln(d) = -0.5 ln(s), so sigma_eta = sigma_s / (2 s) and
+        # |Sigma_eta| = |Sigma_sar| / (2 s)^2. The marginal scale variance is
+        # cov[0,0] = minor00 / det: distance and extinction both dim a star,
+        # so the conditional error is 3-16x too small for reddened stars.
+        log_s = np.log(np.maximum(scales, MIN_SCALE))
+        var00 = (one**2 - c12**2) / (det * i00)
+        eta_err = np.where(positive, 0.5 * np.sqrt(var00) * np.exp(-log_s), 1.0)
+        logdet = np.log(i00) + np.log(i11) + np.log(i22) + np.log(det)
+        half_logdet = np.where(
+            positive,
+            1.5 * np.log(2.0 * np.pi) - 0.5 * logdet - np.log(2.0) - log_s,
+            LOG_ZERO,
         )
+    return -0.5 * log_s, eta_err, half_logdet
 
 
 def _inclusion_probabilities(weights, size):
@@ -1128,8 +1131,9 @@ class BruteForce:
         -------
         lnl : `~numpy.ndarray` of shape `(Nmodels,)`
             Log-likelihood of each model at its fit, with the Gaussian
-            normalization and, if `dim_prior`, the dimensional term. It does
-            not include the parallax.
+            normalization and, if `dim_prior`, the dimensional term, plus the
+            log-density of the `av_gauss` and `rv_gauss` priors at the fit.
+            It does not include the parallax.
         Ndim : int
             Number of valid bands.
         chi2 : `~numpy.ndarray` of shape `(Nmodels,)`
@@ -1366,6 +1370,13 @@ class BruteForce:
         if dim_prior:
             lnl -= 0.5 * (3.0 - Ndim) * np.log(Ndim)
 
+        # The fit maximizes the likelihood times the A(V) and R(V) priors, and
+        # icov_sar includes their precision, so lnl takes their normalized
+        # height at the fit: logpost_grid's Laplace weight integrates that
+        # product.
+        for value, (mean, std) in ((av, av_gauss), (rv, rv_gauss)):
+            lnl -= 0.5 * ((value - mean) / std) ** 2 + np.log(np.sqrt(2 * np.pi) * std)
+
         if return_vals:
             return lnl, Ndim, chi2, scale, av, rv, icov_sar
         else:
@@ -1510,9 +1521,11 @@ class BruteForce:
         a_mc, r_mc : `~numpy.ndarray` of shape `(Nsel, Nmc)`
             Monte Carlo A(V) and R(V) draws.
         lnp_mc : `~numpy.ndarray` of shape `(Nsel, Nmc)`
-            Log-posterior weight of each draw: the model's log-likelihood and
-            ``lnprior``, the log-distance Jacobian, and the Galactic, dust and
-            parallax terms at the draw. To pool draws across models, subtract
+            Log-posterior weight of each draw: the model's log-likelihood,
+            ``lnprior`` and Laplace volume ``0.5 ln|2 pi Sigma|`` (Sigma is the
+            covariance of its Gaussian in (ln d, A(V), R(V))), the
+            log-distance Jacobian, and the Galactic, dust and parallax terms
+            at the draw. To pool draws across models, subtract
             ``ln_incl[:, None]``.
         mc_ess : `~numpy.ndarray` of shape `(Nsel,)`
             ``1 / sum(w**2)`` of the normalized weights of each model's draws.
@@ -1574,8 +1587,10 @@ class BruteForce:
         if lnprior is None:
             lnprior = np.zeros(Nmodels)
 
-        # Initial posterior, without the parallax, which the MC step applies.
-        lnprob_base = lnlike + lnprior
+        # The weight of each model before the distance priors, with the
+        # Laplace volume of its likelihood. The MC step applies the parallax.
+        eta_hat, eta_err, half_logdet = _eta_gaussians(scales, icovs_sar)
+        lnprob_base = lnlike + lnprior + half_logdet
 
         # Add the parallax to the weight that selects the models, but not to
         # the MC weights, which apply the exact parallax likelihood below.
@@ -1585,7 +1600,9 @@ class BruteForce:
             # ln(d) (#297). Its width equals that of the MC step below unless
             # _inverse3 regularizes the matrix or precision_shrinkage > 0. A
             # model that this gate drops cannot come back.
-            lnprob_sel += _parallax_gate(scales, icovs_sar, parallax, parallax_err)
+            lnprob_sel += _lnp_parallax_gate(
+                eta_hat, eta_err, float(parallax), float(parallax_err)
+            )
 
         # Select models above threshold (using parallax-informed weights)
         if wt_thresh is not None:
