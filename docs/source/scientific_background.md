@@ -73,7 +73,7 @@ $$
 - **Grid volume** $\Delta V$: the spacing of the grid in each parameter, so that a sum over models approximates an integral. The default grid steps EEP by 6 on the main sequence and by 2 after it.
 - **Galactic structure** $\pi_{\rm gal}$: the density of a thin disk, a thick disk and a halo along the sightline $(\ell, b)$, each with its own metallicity distribution and an age distribution set by that metallicity.
 - **Dust map** $\pi_{\rm dust}$: the {term}`Bayestar` 3D dust map {cite:p}`green2019`, if given, with 0.2 mag of scatter added to the map's own spread. Where the map has no reliable value, this prior is uniform in $A_V$.
-- **Extinction curve** $\pi(R_V)$: Gaussian with mean 3.32 and standard deviation 0.18 {cite:p}`schlafly2016`. It enters the fit of each model in step 1, and so the Gaussian that step 3 draws from.
+- **Extinction curve** $\pi(R_V)$: Gaussian with mean 3.32 and standard deviation 0.18 {cite:p}`schlafly2016`. It enters the fit of each model in step 1, and so the Gaussian that step 3 draws from, and its value at the fit enters the model's weight.
 
 {doc}`priors` gives each prior's equation, defaults and function.
 
@@ -81,17 +81,25 @@ $$
 
 **1. Fit every model.** For each grid model, brutus finds the $(s, A_V, R_V)$ that maximize $\mathcal{L}_{\rm phot}\,\pi(R_V)$ by Gauss-Newton iteration: first in magnitudes for every model, then in fluxes for the models whose magnitude-space fit is close to the best. It also computes their 3×3 Fisher matrix, which describes a Gaussian around the best fit.
 
-**2. Keep the good fits.** Each model gets the weight $\mathcal{L}_{\rm phot}\,\pi_{\rm model}$. If a parallax is given, the weight is multiplied by the parallax likelihood averaged over the model's Gaussian in $\ln d$: $\int \mathcal{N}(\ln d)\,\mathcal{N}(\varpi \mid 1/d,\,\sigma_\varpi)\,d\ln d$. Its width is the uncertainty of $\ln d$ after marginalizing over $A_V$ and $R_V$. A five-node Gauss-Hermite rule, centred on the peak of the integrand, evaluates it for every model. brutus keeps the models whose weight is within a factor $10^{-3}$ of the best (`wt_thresh`). If more than 50,000 remain (`max_models`), it keeps about 50,000 at random: model $i$ is kept with probability $p_i = \min(1, c\,w_i)$, proportional to this weight $w_i$, and its posterior weight in step 4 is divided by $p_i$. This keeps the evidence and the posterior draws unbiased.
+**2. Choose the models.** Each model gets a selection weight: its posterior weight of step 3, with the priors at its best fit $(\hat d, \hat A_V)$ in place of their average,
+
+$$
+\mathcal{L}_{\rm phot}\,\pi_{\rm model}\,|2\pi\Sigma|^{1/2}\;\pi_{\rm gal}(\hat d, \theta)\;\pi_{\rm dust}(\hat A_V \mid \hat d)\;\hat d.
+$$
+
+$\Sigma$ is the covariance of the model's Gaussian in $(\ln d, A_V, R_V)$ (step 3). brutus interpolates the default Galactic prior from a table along the sightline, in distance, [Fe/H] and age. If a parallax is given, the weight is multiplied by the parallax likelihood averaged over the model's Gaussian in $\ln d$: $\int \mathcal{N}(\ln d)\,\mathcal{N}(\varpi \mid 1/d,\,\sigma_\varpi)\,d\ln d$. Its width is the uncertainty of $\ln d$ after marginalizing over $A_V$ and $R_V$. A five-node Gauss-Hermite rule, centred on the peak of the integrand, evaluates it for every model.
+
+brutus then keeps 5,000 models (`max_models`) at random. Model $i$ is kept with probability $p_i = \min(1, c\,w_i)$, proportional to its selection weight $w_i$, and its posterior weight in step 4 is divided by $p_i$. This keeps the evidence and the posterior draws unbiased for any selection weight. The closer the selection weight is to the posterior weight, the smaller their scatter.
 
 **3. Integrate the priors.** For each kept model $i$, brutus draws $N_{\rm mc} = 50$ points from its Gaussian in $(\ln d, A_V, R_V)$, in antithetic pairs $(z, -z)$. Each point $j$ is weighted by the priors that depend on position and by the exact parallax likelihood. The model's posterior weight is the average:
 
 $$
-w_i \;\propto\; \mathcal{L}_{{\rm phot},i}\, \pi_{{\rm model},i} \; \frac{1}{N_{\rm mc}} \sum_{j=1}^{N_{\rm mc}} \pi_{\rm gal}(d_{ij}, \theta_i)\; \pi_{\rm dust}(A_{V,ij} \mid d_{ij})\; \mathcal{L}_\varpi(d_{ij})\; d_{ij}.
+w_i \;\propto\; \mathcal{L}_{{\rm phot},i}\, \pi_{{\rm model},i}\, |2\pi\Sigma_i|^{1/2} \; \frac{1}{N_{\rm mc}} \sum_{j=1}^{N_{\rm mc}} \pi_{\rm gal}(d_{ij}, \theta_i)\; \pi_{\rm dust}(A_{V,ij} \mid d_{ij})\; \mathcal{L}_\varpi(d_{ij})\; d_{ij}.
 $$
 
-The factor $d_{ij}$ is the Jacobian of sampling in $\ln d$. Sampling in $s$ instead would bias distances by a factor $d^{-3}$.
+$\Sigma_i$ is the covariance of the model's Gaussian, so $\mathcal{L}_{{\rm phot},i}\,|2\pi\Sigma_i|^{1/2}$ is the Laplace approximation of the likelihood integrated over $(\ln d, A_V, R_V)$. A model whose fit is less tightly constrained covers more of that space and weighs more. The factor $d_{ij}$ is the Jacobian of sampling in $\ln d$. Sampling in $s$ instead would bias distances by a factor $d^{-3}$.
 
-The parallax is used three times. During step 1, models whose magnitude-space fit, with the parallax added at the best-fit $s$, is more than a factor $10^6$ worse than the best (`logl_initthresh`) keep that fit and are not refined. The averaged term in step 2 then decides which models are kept. Only the exact term here sets the weights.
+The parallax is used three times. During step 1, models whose magnitude-space fit, with the parallax added at the best-fit $s$, is more than a factor $10^6$ worse than the best (`logl_initthresh`) keep that fit and are not refined. The averaged term in step 2 then sets the probability that each model is kept. Only the exact term here sets the weights.
 
 **4. Draw the posterior.** brutus draws 250 models (`Ndraws`) in proportion to the posterior weight $w_i$ of step 3, divided by $p_i$ for the models kept by `max_models`, and for each one draws a point $(d, A_V, R_V)$ from its weighted Monte Carlo points. These are the saved posterior draws.
 

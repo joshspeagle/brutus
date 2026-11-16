@@ -1076,13 +1076,13 @@ class TestLogpostGridDistancePosterior:
 
 
 class TestLogpostGridSubsampling:
-    """Test the max_models subsampling of the models above the threshold."""
+    """Test the max_models subsampling of the models."""
 
     max_models = 5
 
     def _results(self):
-        # 20 models with ln L = -0.5 * rank, in shuffled order. With
-        # wt_thresh=1e-3, ranks 0-13 pass the cut (0.5 * 13 < ln 1e3 = 6.9).
+        # 20 models with ln L = -0.5 * rank, in shuffled order, and the same
+        # fit otherwise, so their selection weights differ only by -0.5 * rank.
         rank = np.random.RandomState(228).permutation(20)
         icovs = [_sar_precision(0.01, 0.1, 0.2, SAR_CORR)] * 20
         lnlike = -0.5 * rank
@@ -1111,14 +1111,13 @@ class TestLogpostGridSubsampling:
         # With nearly equal weights no model is certain.
         npt.assert_allclose(_inclusion_probabilities(np.ones(14), 5), 5 / 14)
 
-    def test_cap_keeps_max_models_distinct_models_above_threshold(self, logpost_fitter):
-        """The cap keeps max_models distinct models, all above the cut."""
+    def test_cap_keeps_max_models_distinct_models(self, logpost_fitter):
+        """The cap keeps max_models distinct models."""
         results, rank = self._results()
         sel, _, lnp, *_, ln_incl = self._logpost(
             logpost_fitter, results, 1581, self.max_models
         )
         assert np.unique(sel).size == self.max_models
-        assert np.all(rank[sel] <= 13)
         assert lnp.shape == ln_incl.shape == (self.max_models,)
 
     def test_kept_frequencies_and_evidence_match_the_uncapped_selection(
@@ -1128,11 +1127,7 @@ class TestLogpostGridSubsampling:
         sum(exp(lnp - ln_incl)) is an unbiased estimate of the uncapped
         evidence (#89)."""
         results, rank = self._results()
-        passed = rank <= 13
-        prob = np.zeros(20)
-        prob[passed] = _inclusion_probabilities(
-            np.exp(-0.5 * rank[passed]), self.max_models
-        )
+        prob = _inclusion_probabilities(np.exp(-0.5 * rank), self.max_models)
         nseed = 200
         kept = np.zeros(20)
         evid_capped, evid_full = np.zeros(nseed), np.zeros(20)
@@ -1147,9 +1142,9 @@ class TestLogpostGridSubsampling:
         for seed in range(20):
             lnp_full = self._logpost(logpost_fitter, results, seed, None)[2]
             evid_full[seed] = np.sum(np.exp(lnp_full))
-        freq = kept[passed] / nseed
-        se = np.sqrt(prob[passed] * (1 - prob[passed]) / nseed)
-        assert np.all(np.abs(freq - prob[passed]) <= 4 * se + 1e-12)
+        freq = kept / nseed
+        se = np.sqrt(prob * (1 - prob) / nseed)
+        assert np.all(np.abs(freq - prob) <= 4 * se + 1e-12)
         ratio = evid_capped / evid_full.mean()
         se = np.hypot(
             ratio.std() / np.sqrt(nseed),
