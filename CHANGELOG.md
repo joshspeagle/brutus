@@ -177,9 +177,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Galactic prior is interpolated from a table along the sightline. Then
   `max_models` (now 5,000, was 50,000) models are kept at random, each
   with a probability proportional to its selection weight, and the
-  evidence and draws divide by it. `wt_thresh` and `cdf_thresh` are
-  removed from `fit` and `logpost_grid`: pass `max_models` to set
-  the cost, or `max_models=None` to keep every model (#307).
+  evidence and draws divide by it. Pass `max_models` to set the cost, or
+  `max_models=None` to keep every model (#307).
+
+### Deprecated
+
+- **`wt_thresh` and `cdf_thresh` of `fit` and `logpost_grid`** now
+  default to None, no cut. A value still cuts the selection weight before
+  the `max_models` sampling and raises a `FutureWarning`; a cut drops
+  posterior weight that the sampling keeps. They will be removed (#307).
 
 ### Fixed
 

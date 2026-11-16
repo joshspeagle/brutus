@@ -1391,6 +1391,8 @@ class BruteForce:
         Nmc_prior=100,
         lnprior=None,
         max_models=5000,
+        wt_thresh=None,
+        cdf_thresh=None,
         precision_shrinkage=0.0,
         lngalprior=None,
         lndustprior=None,
@@ -1445,6 +1447,14 @@ class BruteForce:
             and log-distance terms at its best fit, and the parallax
             likelihood averaged over its Gaussian in ln(d). None keeps every
             model. Default is 5000.
+
+        wt_thresh, cdf_thresh : float or None, optional
+            Deprecated; will be removed. A hard cut applied to the selection
+            weight before the sampling: keep the models whose weight is above
+            `wt_thresh` times the largest, or, if `wt_thresh` is None, the
+            models of highest weight that hold ``1 - cdf_thresh`` of the
+            total. A cut drops posterior weight that the sampling would keep
+            (#307). Default is None for both: no cut.
 
         precision_shrinkage : float, optional
             Fraction by which the off-diagonal terms of each (scale, A(V),
@@ -1665,6 +1675,20 @@ class BruteForce:
         # are dropped.
         w = np.exp(lnprob_sel - np.max(lnprob_sel))
         sel = np.flatnonzero(w > 0)
+        if wt_thresh is not None or cdf_thresh is not None:
+            warnings.warn(
+                "`wt_thresh` and `cdf_thresh` are deprecated and will be "
+                "removed: a cut drops posterior weight that the max_models "
+                "sampling keeps (#307).",
+                FutureWarning,
+                stacklevel=2,
+            )
+            if wt_thresh is not None:
+                sel = sel[w[sel] > wt_thresh]
+            else:
+                sel = sel[np.argsort(w[sel])[::-1]]
+                cdf = np.cumsum(w[sel])
+                sel = sel[: np.searchsorted(cdf / cdf[-1], 1.0 - cdf_thresh) + 1]
         ln_incl = np.zeros(len(sel))
         if max_models is not None and len(sel) > max_models:
             pi = _inclusion_probabilities(w[sel], max_models)
@@ -1885,6 +1909,8 @@ class BruteForce:
         running_io=True,
         mem_lim=8000.0,
         max_models=5000,
+        wt_thresh=None,
+        cdf_thresh=None,
         precision_shrinkage=0.0,
         verbose=True,
         R_solar=R_SOLAR,
@@ -2037,6 +2063,10 @@ class BruteForce:
             posterior draws divide each kept model's weight by that
             probability, so they stay unbiased. None keeps every model.
             Default is 5000.
+
+        wt_thresh, cdf_thresh : float or None, optional
+            Deprecated hard cuts on the selection weight; see `logpost_grid`.
+            Default is None for both: no cut.
 
         precision_shrinkage : float, optional
             Fractional shrinkage applied to the off-diagonal terms of the 3x3
@@ -2271,6 +2301,8 @@ class BruteForce:
                         mem_lim=mem_lim,
                         precision_shrinkage=precision_shrinkage,
                         max_models=max_models,
+                        wt_thresh=wt_thresh,
+                        cdf_thresh=cdf_thresh,
                         rstate=rstate,
                         return_distreds=save_dar_draws,
                         R_solar=R_solar,
@@ -2351,6 +2383,8 @@ class BruteForce:
         logl_initthresh=1e-6,
         mem_lim=8000.0,
         max_models=5000,
+        wt_thresh=None,
+        cdf_thresh=None,
         precision_shrinkage=0.0,
         rstate=None,
         return_distreds=True,
@@ -2480,6 +2514,8 @@ class BruteForce:
             mem_lim=mem_lim,
             precision_shrinkage=precision_shrinkage,
             max_models=max_models,
+            wt_thresh=wt_thresh,
+            cdf_thresh=cdf_thresh,
             rstate=rstate,
             R_solar=R_solar,
             Z_solar=Z_solar,

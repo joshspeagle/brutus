@@ -1,5 +1,7 @@
 """Tests of BruteForce in brutus.analysis.individual."""
 
+import warnings
+
 import h5py
 import numpy as np
 import pytest
@@ -1869,6 +1871,27 @@ class TestModelWeights:
             np.testing.assert_allclose(got[:2], exact[:2], rtol=1e-12)
             assert got[2] == exact[2] == LOG_ZERO
             assert np.median(np.abs(got[3:] - exact[3:])) < 0.05
+
+
+def test_deprecated_thresholds_warn_and_cut_the_selection(fitter):
+    """wt_thresh and cdf_thresh still cut the selection weight, with a
+    FutureWarning, which Python shows by default; the defaults neither cut
+    nor warn."""
+    cov = np.diag([1e-4, 1e-4, 1e-4])
+    like = list(_make_loglike_results([1.0, 1.0, 1.0], [cov] * 3))
+    like[0] = np.array([0.0, -1.0, -10.0])
+    like = tuple(like)
+    kwargs = dict(Nmc_prior=4, rstate=np.random.RandomState(0))
+    with pytest.warns(FutureWarning, match="wt_thresh"):
+        sel = fitter.logpost_grid(like, wt_thresh=1e-3, **kwargs)[0]
+    np.testing.assert_array_equal(np.sort(sel), [0, 1])
+    with pytest.warns(FutureWarning, match="cdf_thresh"):
+        sel = fitter.logpost_grid(like, cdf_thresh=0.5, **kwargs)[0]
+    np.testing.assert_array_equal(sel, [0])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        sel = fitter.logpost_grid(like, **kwargs)[0]
+    np.testing.assert_array_equal(sel, [0, 1, 2])
 
 
 class TestDustPriorGating:
