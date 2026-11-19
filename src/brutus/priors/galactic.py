@@ -113,6 +113,12 @@ THIN_DISK_FEH_FLOOR = 0.03
 # Radii of the Frankel et al. fit, in kpc. Outside them the label
 # distribution keeps its edge value, through blends of half-width DISK_EDGE.
 THIN_DISK_FIT_RADII = (5.0, 14.0)
+# Radius in kpc inside which both disks keep the density they have there,
+# through a blend of half-width DISK_EDGE. The dispersions are held inside
+# about 3 kpc while K_z keeps rising toward the bulge, so the Jeans profiles
+# would pinch the disks threefold toward the centre; the bar fills the
+# inner Galaxy instead.
+DISK_INNER_RADIUS = 4.0
 
 
 def _gauss_legendre_panels(edges, n):
@@ -870,13 +876,14 @@ def _components(
         return np.nan, np.nan, np.nan
     R_solar, ln_phi, R_thin, Rs_thin, R_thick, Rs_thick = disk[:6]
     ln_f_thick, var_thick, ln_d0 = disk[6:]
-    x = R / R_solar
+    # Inside DISK_INNER_RADIUS each disk keeps the density it has there.
+    x = _soft_clamp(R, DISK_INNER_RADIUS, np.inf, DISK_EDGE)[0] / R_solar
     abs_z = abs(Z)
     ln_fz2, jeans, dphi = _vertical_terms(x, abs_z)
 
     # Thin disk: surface density, times the sum over its populations of
     # p(labels | R) nu(z) / (2 H).
-    thin = _ln_surface(R, R_solar, Rs_thin, R_thin) - ln_d0
+    thin = _ln_surface(x * R_solar, R_solar, Rs_thin, R_thin) - ln_d0
     ln_thick, ln_halo, fl, nodes, ages, ln_w = label_terms
     if (has_age and age > MAX_AGE) or abs_z >= _THIN_TAPER[1]:
         # The labelled ages of every component lie in 0 to MAX_AGE, and the
@@ -887,7 +894,7 @@ def _components(
         fk = asinh(abs_z / _V_ZS) / (_V_DU * _LABEL_STEPS[1])
         thin += _catmull_rom_3d(fl, fi, fk, by_label)
     elif has_feh or has_age:
-        R_fit, ln_norm_R = _thin_disk_fit_radius(R, ln_norm)
+        R_fit, ln_norm_R = _thin_disk_fit_radius(x * R_solar, ln_norm)
         if has_feh:
             thin += _thin_disk_ln_feh_sum(nodes, R_fit, x, ln_phi, f_L, ln_fz2, jeans)
         else:
@@ -908,7 +915,7 @@ def _components(
         s = var_thick * exp(_thick_disk_ln_var(x, 2)[0] - ln_phi)
         thick = (
             ln_f_thick
-            + _ln_surface(R, R_solar, Rs_thick, R_thick)
+            + _ln_surface(x * R_solar, R_solar, Rs_thick, R_thick)
             - dphi / s
             - _LN2
             - _ln_column(x, log(s), _THICK_COLUMN)
