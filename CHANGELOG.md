@@ -29,6 +29,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Inside 4 kpc each Galactic disk keeps the density it has at 4 kpc**
+  *(output-changing)*. The disk dispersions are held there while the
+  vertical force of the potential keeps rising toward the bulge, which
+  squeezed both disks threefold in height toward the centre. The disks
+  now hold 0.14e10 Msun in the bar box, against 0.32e10 before.
+- **Beyond 15.3 kpc the thin-disk [Fe/H] at birth stops falling, and
+  beyond 14 kpc the thin-disk age mix keeps its value there**
+  *(output-changing)*. The label distribution was held at its 14 kpc value
+  beyond 14 kpc, which put the distance prior of every star with [Fe/H]
+  below -0.5 toward the anticentre at the same 14.9 kpc. Young stars now
+  scatter about [Fe/H] = -0.49 beyond the knee, where classical Cepheids
+  flatten (Albarracin et al. 2026), and [Fe/H] at each age follows the
+  Frankel et al. (2018) model. `THIN_DISK_GRADIENT_KNEE` sets the knee.
 - **The disk heights in the Galactic prior follow from the vertical
   Jeans equation** *(output-changing)*. `logp_galactic_structure`
   replaced the exponential scale heights (0.3 and 0.9 kpc) with profiles

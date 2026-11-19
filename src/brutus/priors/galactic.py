@@ -38,7 +38,7 @@ Combined Galactic structure prior:
 
 import inspect
 from functools import lru_cache
-from math import asinh, cos, exp, isfinite, log, pi, sin, sqrt
+from math import asinh, cos, exp, isfinite, log, log1p, pi, sin, sqrt
 
 import numpy as np
 from numba import get_num_threads, jit, prange
@@ -110,9 +110,16 @@ THIN_DISK_ONSET = (8.0, 1.0)
 # al. cite. Migration supplies the spread of all but the youngest stars;
 # this floor keeps the youngest from a single [Fe/H].
 THIN_DISK_FEH_FLOOR = 0.03
-# Radii of the Frankel et al. fit, in kpc. Outside them the label
-# distribution keeps its edge value, through blends of half-width DISK_EDGE.
+# Radii of the Frankel et al. fit, in kpc. Inside the first, the label
+# distribution keeps its value there; beyond the second, the age mix
+# p(age | R) keeps its value there, while [Fe/H] at each age follows the
+# model with the knee below. Both through blends of half-width DISK_EDGE.
 THIN_DISK_FIT_RADII = (5.0, 14.0)
+# Birth radius in kpc beyond which the [Fe/H] at birth stops falling.
+# Classical Cepheids flatten beyond 15.28 kpc at [Fe/H] = -0.48 (Albarracin
+# et al. 2026, arXiv:2611.10132), where the gradient above reaches -0.49 at
+# the present day; Trentin et al. (2024) see no break out to 20 kpc.
+THIN_DISK_GRADIENT_KNEE = 15.3
 # Radius in kpc inside which both disks keep the density they have there,
 # through a blend of half-width DISK_EDGE. The dispersions are held inside
 # about 3 kpc while K_z keeps rising toward the bulge, so the Jeans profiles
@@ -294,9 +301,10 @@ def _thin_disk_ln_joint(feh, R, ln_sfr, rexp, s, feh0, sig_birth):
 
     The integral over the birth radius R0 is analytic, except for the
     normalization of the migration kernel over R >= 0, 1 / Phi(R0 / s):
-    it is taken at the mean R0 of the truncated Gaussian of R0. The error
-    is largest for stars born near R0 = 0: 2.5% at most where the density
-    exceeds 1e-3 of its peak at that age and R.
+    it is taken at the mean R0 of the truncated Gaussian of R0, and as 1
+    beyond THIN_DISK_GRADIENT_KNEE. The error is largest for stars born
+    near R0 = 0: 2.5% at most where the density exceeds 1e-3 of its peak
+    at that age and R.
     """
     return _thin_disk_ln_at(
         R, _thin_disk_joint_terms(feh, ln_sfr, rexp, s, feh0, sig_birth)
@@ -308,11 +316,11 @@ def _thin_disk_joint_terms(feh, ln_sfr, rexp, s, feh0, sig_birth):
     """Return the terms of `_thin_disk_ln_joint` that do not depend on R,
     for `_thin_disk_ln_at`."""
     if ln_sfr == LOG_ZERO:
-        return LOG_ZERO, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+        return LOG_ZERO, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, LOG_ZERO, 0.0
     grad = THIN_DISK_ENRICHMENT[1]
     # exp(-R0 / R_exp) N(R; R0, s) = exp(-R / R_exp + s^2 / 2 R_exp^2)
-    # N(R0; mu, s) with mu = R - s^2 / R_exp, and the [Fe/H] of birth is
-    # N(R0; r_birth, sig_birth).
+    # N(R0; mu, s) with mu = R - s^2 / R_exp, and below the knee the [Fe/H]
+    # of birth is N(R0; r_birth, sig_birth).
     r_birth = (feh - feh0) / grad
     var, var_birth = s * s, sig_birth * sig_birth
     var2 = var + var_birth
@@ -323,7 +331,14 @@ def _thin_disk_joint_terms(feh, ln_sfr, rexp, s, feh0, sig_birth):
     d0 = r_birth + var / rexp
     m0 = var * (r_birth - var_birth / rexp) / var2
     sv = s * sig_birth / sqrt(var2)
-    return ln, 1.0 / rexp, d0, 1.0 / var2, var_birth / var2, m0, sv, s
+    # Beyond the knee the [Fe/H] of birth is that at the knee, whatever R0:
+    # its normal density times the share of births beyond the knee, which
+    # is Phi((R - c) / s) with c = s^2 / R_exp + knee.
+    u = (r_birth - THIN_DISK_GRADIENT_KNEE) / sig_birth
+    ln_out = ln_sfr - log(rexp * abs(grad) * sig_birth) + 0.5 * var / (rexp * rexp)
+    ln_out -= 0.5 * (_LOG_2PI + u * u)
+    c = var / rexp + THIN_DISK_GRADIENT_KNEE
+    return ln, 1.0 / rexp, d0, 1.0 / var2, var_birth / var2, m0, sv, s, ln_out, c
 
 
 @jit(nopython=True, cache=True)
@@ -333,19 +348,44 @@ def _thin_disk_ln_at(R, terms):
     ln = terms[0]
     if ln == LOG_ZERO:
         return LOG_ZERO
+    knee = THIN_DISK_GRADIENT_KNEE
     d = terms[2] - R
     ln -= R * terms[1] + 0.5 * d * d * terms[3]
+    ln_out = terms[8] - R * terms[1]
     s = terms[7]
     if s > 0.0:
         # The product of the two Gaussians in R0 is N(R0; m, sv), truncated
-        # to R0 >= 0, weighted by the kernel normalization 1 / Phi(R0 / s).
+        # to 0 <= R0 < knee, weighted by the kernel normalization
+        # 1 / Phi(R0 / s) at its truncated mean.
         m = terms[4] * R + terms[5]
         sv = terms[6]
-        a = m / sv
-        ln_mass = _ln_ndtr(a)
-        m_trunc = m + sv * exp(-0.5 * (a * a + _LOG_2PI) - ln_mass)
-        ln += ln_mass - _ln_ndtr(m_trunc / s)
-    return ln
+        a, b = -m / sv, (knee - m) / sv
+        ln_mass = _ln_ndtr_diff(b, a)
+        if ln_mass > LOG_ZERO:
+            phi_a = exp(-0.5 * (a * a + _LOG_2PI) - ln_mass)
+            phi_b = exp(-0.5 * (b * b + _LOG_2PI) - ln_mass)
+            ln += ln_mass - _ln_ndtr((m + sv * (phi_a - phi_b)) / s)
+        else:
+            ln = LOG_ZERO
+        ln_out += _ln_ndtr((R - terms[9]) / s)
+    elif R < knee:
+        ln_out = LOG_ZERO
+    else:
+        ln = LOG_ZERO
+    hi, lo = max(ln, ln_out), min(ln, ln_out)
+    return hi + log1p(exp(lo - hi)) if hi > LOG_ZERO else LOG_ZERO
+
+
+@jit(nopython=True, cache=True)
+def _ln_ndtr_diff(b, a):
+    """Return ln(Phi(b) - Phi(a)) for b > a, or LOG_ZERO where it
+    underflows; in the upper tail by symmetry, to keep the precision."""
+    if a > 0.0:
+        a, b = -b, -a
+    hi, lo = _ln_ndtr(b), _ln_ndtr(a)
+    if not hi > lo:
+        return LOG_ZERO
+    return hi + log1p(-exp(lo - hi))
 
 
 @jit(nopython=True, cache=True)
@@ -361,13 +401,18 @@ def _two_panel_node(k, lo, cut, hi, nodes, weights):
 
 # Ages of the sums over the thin-disk age distribution: 6-point
 # Gauss-Legendre panels with edges where it changes form. Nodes of the sums
-# over [Fe/H]: 12-point Gauss-Legendre for each of two panels.
+# over [Fe/H]: 12-point Gauss-Legendre for each of _FEH_PANELS panels.
 _AGE_EDGES = [0.0, 0.5, 2.0, 5.0, THIN_DISK_ONSET[0], 10.0, THIN_DISK_SFH[0]]
 _AGE_NODES, _AGE_WEIGHTS = _gauss_legendre_panels(_AGE_EDGES, 6)
 _AGE_LN_W = np.log(_AGE_WEIGHTS)
 _P_NODES, _P_WEIGHTS = np.polynomial.legendre.leggauss(12)
+_FEH_PANELS = 4
 # Size of the arrays that `_thin_disk_feh_nodes` fills.
-_FEH_NODES = 2 * len(_P_NODES)
+_FEH_NODES = _FEH_PANELS * len(_P_NODES)
+# Terms of `_thin_disk_joint_terms`, and columns of the rows of
+# `_thin_disk_feh_ages`: ln weight, the terms, ln sigma_R0, ln sigma_z0, age.
+_JOINT_TERMS = 10
+_NODE_COLUMNS = _JOINT_TERMS + 4
 
 
 @jit(nopython=True, cache=True)
@@ -382,15 +427,47 @@ def _thin_disk_feh_nodes(R, terms, sig_birth, feh, ln_w):
     spread = sqrt(s * s + sig_birth * sig_birth)
     mu = R - s * s / rexp
     lo, hi = mu - 6.0 * spread, mu + 6.0 * spread
-    cut = 0.5 * (lo + hi)
+    # Panel edges, then the widest panel split until there are _FEH_PANELS.
+    edges = np.empty(_FEH_PANELS + 1)
+    n_edges = 1
     if s > 0.0:
         edge = -mu * sig_birth * sig_birth / (s * s)
         width = 5.0 * sig_birth * spread / s
         lo = max(lo, edge - width)
         if lo < edge + width < hi:
-            cut = edge + width
+            edges[1] = edge + width
+            n_edges = 2
+    # No birth [Fe/H] lies below that at the knee by more than 6 standard
+    # deviations. Births beyond the knee, where they reach R, put a peak of
+    # width sig_birth at the knee in birth radius, with an edge either side.
+    knee = THIN_DISK_GRADIENT_KNEE
+    knee_lo, knee_hi = knee - 6.0 * sig_birth, knee + 6.0 * sig_birth
+    if mu + 6.0 * s > knee:
+        lo, hi = min(lo, knee_lo), knee_hi
+        if n_edges == 2 and edges[1] >= knee_lo:
+            n_edges = 1
+        if lo < knee_lo:
+            edges[n_edges] = knee_lo
+            n_edges += 1
+        edges[n_edges] = knee
+        n_edges += 1
+    else:
+        hi = min(hi, knee_hi)
+        if n_edges == 2 and not edges[1] < hi:
+            n_edges = 1
+    edges[0] = lo
+    edges[n_edges] = hi
+    while n_edges < _FEH_PANELS:
+        widths = edges[1 : n_edges + 1] - edges[:n_edges]
+        j = np.argmax(widths)
+        edges[j + 2 : n_edges + 2] = edges[j + 1 : n_edges + 1].copy()
+        edges[j + 1] = edges[j] + 0.5 * widths[j]
+        n_edges += 1
+    n = len(_P_NODES)
     for k in range(_FEH_NODES):
-        r_birth, ln_dr = _two_panel_node(k, lo, cut, hi, _P_NODES, _P_WEIGHTS)
+        a, b = edges[k // n], edges[k // n + 1]
+        r_birth = 0.5 * (a + b) + 0.5 * (b - a) * _P_NODES[k % n]
+        ln_dr = log(0.5 * (b - a) * _P_WEIGHTS[k % n])
         feh[k] = feh0 + grad * r_birth
         ln_w[k] = _thin_disk_ln_joint(feh[k], R, *terms, sig_birth) + ln_dr
         ln_w[k] += log(abs(grad))
@@ -423,10 +500,39 @@ def _thin_disk_norm_table(sig_birth):
 
 @jit(nopython=True, cache=True)
 def _thin_disk_fit_radius(R, ln_norm):
-    """Return R held to THIN_DISK_FIT_RADII, and ln of the label
-    normalization there from a table of `_thin_disk_norm_table`."""
-    R = _soft_clamp(R, THIN_DISK_FIT_RADII[0], THIN_DISK_FIT_RADII[1], DISK_EDGE)[0]
-    return R, _catmull_rom_table((R - _NORM_R0) / _NORM_DR, ln_norm)
+    """Return the radii of the thin-disk labels at R: that of [Fe/H], held
+    inside THIN_DISK_FIT_RADII, and that of the age mix, held outside them;
+    and ln of the label normalization at the second, from a table of
+    `_thin_disk_norm_table`."""
+    lo, hi = THIN_DISK_FIT_RADII
+    R_feh = _soft_clamp(R, lo, np.inf, DISK_EDGE)[0]
+    R_age = _soft_clamp(R, lo, hi, DISK_EDGE)[0]
+    return R_feh, R_age, _catmull_rom_table((R_age - _NORM_R0) / _NORM_DR, ln_norm)
+
+
+@jit(nopython=True, cache=True)
+def _thin_disk_ln_feh_mass(R, terms, sig_birth):
+    """Return ln int p([Fe/H], age, R) d[Fe/H] by the nodes of
+    `_thin_disk_feh_nodes`, for the age terms ``terms``."""
+    feh, ln_w = np.empty(_FEH_NODES), np.empty(_FEH_NODES)
+    _thin_disk_feh_nodes(R, terms, sig_birth, feh, ln_w)
+    top = ln_w.max()
+    if top <= LOG_ZERO:
+        return LOG_ZERO
+    return top + log(np.exp(ln_w - top).sum())
+
+
+@jit(nopython=True, cache=True)
+def _thin_disk_age_shift(terms, R_feh, R_age, sig_birth):
+    """Return ln p(age | R_age) - ln p(age | R_feh), unnormalized alike, for
+    the age terms ``terms``: added to ln p([Fe/H], age | R_feh), it gives
+    the age mix of R_age with the [Fe/H] at each age of R_feh."""
+    if R_feh == R_age:
+        return 0.0
+    at_feh = _thin_disk_ln_feh_mass(R_feh, terms, sig_birth)
+    if at_feh <= LOG_ZERO:
+        return 0.0
+    return _thin_disk_ln_feh_mass(R_age, terms, sig_birth) - at_feh
 
 
 # Radial range of the halo mass of Lane et al. (2023), in kpc, and the
@@ -772,56 +878,72 @@ def _true_age_nodes(age, frac, floor):
 @jit(nopython=True, cache=True)
 def _thin_disk_feh_ages(feh, ages, ln_w, sig_birth):
     """Return a row per true age of a sum over ``ages`` with ln weights
-    ``ln_w`` at a given ``feh``: its ln weight, the terms of
-    `_thin_disk_joint_terms`, and ln sigma_R0 and ln sigma_z0. Nothing in
-    it depends on position."""
-    nodes = np.empty((len(ages), 11))
+    ``ln_w`` at a given ``feh``: its ln weight, the _JOINT_TERMS terms of
+    `_thin_disk_joint_terms`, ln sigma_R0, ln sigma_z0 and the age. Nothing
+    in it depends on position."""
+    nodes = np.empty((len(ages), _NODE_COLUMNS))
     for k in range(len(ages)):
         terms = _thin_disk_joint_terms(feh, *_thin_disk_age_terms(ages[k]), sig_birth)
         sig_R0, sig_z0 = _thin_disk_sigma0(ages[k], feh)
         nodes[k, 0] = ln_w[k]
-        for j in range(8):
+        for j in range(_JOINT_TERMS):
             nodes[k, 1 + j] = terms[j]
-        nodes[k, 9], nodes[k, 10] = log(sig_R0), log(sig_z0)
+        nodes[k, -3], nodes[k, -2] = log(sig_R0), log(sig_z0)
+        nodes[k, -1] = ages[k]
     return nodes
 
 
 @jit(nopython=True, cache=True)
-def _thin_disk_ln_feh_sum(nodes, R_fit, x, ln_phi, f_L, ln_fz2, jeans):
+def _thin_disk_ln_feh_sum(
+    nodes, R_feh, R_age, x, ln_phi, f_L, ln_fz2, jeans, sig_birth
+):
     """Return ln of the sum over the true ages of `_thin_disk_feh_ages` of
     p([Fe/H], true age | R) nu / (2 H), each with the vertical profile of
-    its true age."""
+    its true age, with the label radii of `_thin_disk_fit_radius`."""
     mx, acc = LOG_ZERO, 0.0
     for k in range(len(nodes)):
-        ln_s = _thin_disk_ln_s(nodes[k, 9], nodes[k, 10], x, ln_phi, f_L)
-        v = nodes[k, 0] + _thin_disk_ln_at(R_fit, nodes[k, 1:9])
+        ln_s = _thin_disk_ln_s(nodes[k, -3], nodes[k, -2], x, ln_phi, f_L)
+        v = nodes[k, 0] + _thin_disk_ln_at(R_feh, nodes[k, 1 : 1 + _JOINT_TERMS])
+        v += _thin_disk_age_shift(
+            _thin_disk_age_terms(nodes[k, -1]), R_feh, R_age, sig_birth
+        )
         v += _thin_disk_ln_nu(ln_s, _ln_column(x, ln_s, _THIN_COLUMN), ln_fz2, jeans)
         mx, acc = _accumulate(mx, acc, v)
     return mx + log(acc) if acc > 0.0 else LOG_ZERO
 
 
 @jit(nopython=True, cache=True)
-def _thin_disk_feh_populations(nodes, x, R_fit, ln_phi, f_L):
+def _thin_disk_feh_populations(nodes, x, R_feh, R_age, ln_phi, f_L, sig_birth):
     """Return ln of the weights, ln s and ln of the columns of the
-    populations of the ``nodes`` of `_thin_disk_feh_ages` at R_fit, for
-    `_ln_height_sums`."""
+    populations of the ``nodes`` of `_thin_disk_feh_ages` at the label radii
+    of `_thin_disk_fit_radius`, for `_ln_height_sums`."""
     n = len(nodes)
     ln_w, ln_s, ln_col = np.empty(n), np.empty(n), np.empty(n)
     for k in range(n):
-        ln_w[k] = nodes[k, 0] + _thin_disk_ln_at(R_fit, nodes[k, 1:9])
-        ln_s[k] = _thin_disk_ln_s(nodes[k, 9], nodes[k, 10], x, ln_phi, f_L)
+        ln_w[k] = nodes[k, 0] + _thin_disk_ln_at(R_feh, nodes[k, 1 : 1 + _JOINT_TERMS])
+        ln_w[k] += _thin_disk_age_shift(
+            _thin_disk_age_terms(nodes[k, -1]), R_feh, R_age, sig_birth
+        )
+        ln_s[k] = _thin_disk_ln_s(nodes[k, -3], nodes[k, -2], x, ln_phi, f_L)
         ln_col[k] = _ln_column(x, ln_s[k], _THIN_COLUMN)
     return ln_w, ln_s, ln_col
 
 
 @jit(nopython=True, cache=True)
-def _thin_disk_age_populations(age, x, R_fit, ln_phi, f_L, sig_birth):
+def _thin_disk_age_populations(age, x, R_feh, R_age, ln_phi, f_L, sig_birth):
     """Return ln of the label weights, unnormalized in R, ln s and ln of
-    the columns of the thin-disk populations of true ``age`` at R_fit: the
-    [Fe/H] nodes of `_thin_disk_feh_nodes`."""
+    the columns of the thin-disk populations of true ``age`` at the label
+    radii of `_thin_disk_fit_radius`: the [Fe/H] nodes of
+    `_thin_disk_feh_nodes`."""
     fehs, ln_w = np.empty(_FEH_NODES), np.empty(_FEH_NODES)
     ln_s, ln_col = np.empty(_FEH_NODES), np.empty(_FEH_NODES)
-    _thin_disk_feh_nodes(R_fit, _thin_disk_age_terms(age), sig_birth, fehs, ln_w)
+    terms = _thin_disk_age_terms(age)
+    _thin_disk_feh_nodes(R_feh, terms, sig_birth, fehs, ln_w)
+    if R_feh != R_age:
+        top = ln_w.max()
+        if top > LOG_ZERO:
+            at_feh = top + log(np.exp(ln_w - top).sum())
+            ln_w += _thin_disk_ln_feh_mass(R_age, terms, sig_birth) - at_feh
     for j in range(_FEH_NODES):
         sig_R0, sig_z0 = _thin_disk_sigma0(age, fehs[j])
         ln_s[j] = _thin_disk_ln_s(log(sig_R0), log(sig_z0), x, ln_phi, f_L)
@@ -894,12 +1016,14 @@ def _components(
         fk = asinh(abs_z / _V_ZS) / (_V_DU * _LABEL_STEPS[1])
         thin += _catmull_rom_3d(fl, fi, fk, by_label)
     elif has_feh or has_age:
-        R_fit, ln_norm_R = _thin_disk_fit_radius(x * R_solar, ln_norm)
+        R_feh, R_age, ln_norm_R = _thin_disk_fit_radius(x * R_solar, ln_norm)
         if has_feh:
-            thin += _thin_disk_ln_feh_sum(nodes, R_fit, x, ln_phi, f_L, ln_fz2, jeans)
+            thin += _thin_disk_ln_feh_sum(
+                nodes, R_feh, R_age, x, ln_phi, f_L, ln_fz2, jeans, labels[0]
+            )
         else:
             populations = _thin_disk_age_sum(
-                ages, ln_w, x, R_fit, ln_phi, f_L, labels[0]
+                ages, ln_w, x, R_feh, R_age, ln_phi, f_L, labels[0]
             )
             thin += _ln_sum_nu(*populations, ln_fz2, jeans)
         thin -= ln_norm_R
@@ -1029,7 +1153,7 @@ def _galactic_prior_array(
     _BAR_LN_D0 + k _BAR_DLN_D along the sightline."""
     cos_a, sin_a, ln_bar_amp = bar
     out = np.empty(len(Z))
-    no_nodes, no_ages = np.empty((0, 11)), np.empty(0)
+    no_nodes, no_ages = np.empty((0, _NODE_COLUMNS)), np.empty(0)
     for c in prange(n_labels):
         feh_c = feh[c] if has_feh else 0.0
         age_c = 10.0 ** loga[c] / 1e9 if has_age else 0.0
@@ -1130,16 +1254,17 @@ def _thin_disk_fL_rows(R_solar, vc_solar, R_thin, Rs_thin):
 
 
 @jit(nopython=True, cache=True)
-def _thin_disk_age_sum(ages, ln_w_ages, x, R_fit, ln_phi, f_L, sig_birth):
+def _thin_disk_age_sum(ages, ln_w_ages, x, R_feh, R_age, ln_phi, f_L, sig_birth):
     """Return ln of the weights, unnormalized in R, ln s and ln of the
     columns of the thin-disk populations of a sum over ``ages`` with ln
-    weights ``ln_w_ages`` and over the [Fe/H] nodes of each, at R_fit."""
+    weights ``ln_w_ages`` and over the [Fe/H] nodes of each, at the label
+    radii of `_thin_disk_fit_radius`."""
     n = len(ages) * _FEH_NODES
     ln_w, ln_s, ln_col = np.empty(n), np.empty(n), np.empty(n)
     for k in range(len(ages)):
         m = slice(k * _FEH_NODES, (k + 1) * _FEH_NODES)
         w, ln_s[m], ln_col[m] = _thin_disk_age_populations(
-            ages[k], x, R_fit, ln_phi, f_L, sig_birth
+            ages[k], x, R_feh, R_age, ln_phi, f_L, sig_birth
         )
         ln_w[m] = w + ln_w_ages[k]
     return ln_w, ln_s, ln_col
@@ -1176,9 +1301,9 @@ def _thin_disk_tables(R_solar, vc_solar, R_thin, Rs_thin, sig_birth):
     marginal = np.empty((len(_TABLE_ROWS), len(_V_Z)))
     for r, i in enumerate(_TABLE_ROWS):
         x = i * _V_DX
-        R_fit, ln_norm_R = _thin_disk_fit_radius(x * R_solar, ln_norm)
+        R_feh, R_age, ln_norm_R = _thin_disk_fit_radius(x * R_solar, ln_norm)
         populations = _thin_disk_age_sum(
-            _AGE_NODES, _AGE_LN_W, x, R_fit, ln_phi, f_L, sig_birth
+            _AGE_NODES, _AGE_LN_W, x, R_feh, R_age, ln_phi, f_L, sig_birth
         )
         marginal[r] = _ln_height_sums(i, *populations) - ln_norm_R
     for table in (f_L, marginal):
@@ -1207,9 +1332,12 @@ def _thin_disk_feh_table(R_solar, vc_solar, R_thin, Rs_thin, sig_birth):
     table = np.empty((len(fehs), len(_LABEL_ROWS), len(_V_Z[:: _LABEL_STEPS[1]])))
     for r, i in enumerate(_LABEL_ROWS):
         x = i * _V_DX
-        R_fit, ln_norm_R = _thin_disk_fit_radius(x * R_solar, ln_norm)
+        R_feh, R_age, ln_norm_R = _thin_disk_fit_radius(x * R_solar, ln_norm)
         populations = np.array(
-            [_thin_disk_feh_populations(n, x, R_fit, ln_phi, f_L) for n in nodes]
+            [
+                _thin_disk_feh_populations(n, x, R_feh, R_age, ln_phi, f_L, sig_birth)
+                for n in nodes
+            ]
         )
         table[:, r] = (
             _ln_height_sums(i, *populations.transpose(1, 0, 2), _LABEL_STEPS[1])
@@ -1261,10 +1389,10 @@ def _thin_disk_age_table(R_solar, vc_solar, R_thin, Rs_thin, sig_birth, frac, fl
     table = np.empty((n, len(_LABEL_ROWS), len(_V_Z[:: _LABEL_STEPS[1]])))
     for r, i in enumerate(_LABEL_ROWS):
         x = i * _V_DX
-        R_fit, ln_norm_R = _thin_disk_fit_radius(x * R_solar, ln_norm)
+        R_feh, R_age, ln_norm_R = _thin_disk_fit_radius(x * R_solar, ln_norm)
         populations = np.array(
             [
-                _thin_disk_age_populations(t, x, R_fit, ln_phi, f_L, sig_birth)
+                _thin_disk_age_populations(t, x, R_feh, R_age, ln_phi, f_L, sig_birth)
                 for t in true
             ]
         )
@@ -1589,7 +1717,7 @@ def _normalizations(
     )
     # At the Sun the thin disk is 1, so the others are their ratios to it;
     # without labels, the label arguments are not read.
-    no_nodes = np.empty((0, 11))
+    no_nodes = np.empty((0, _NODE_COLUMNS))
     no_labels = (
         (0.0,) * 13,
         (0.0, 0.0, -1.0, no_nodes, np.empty(0), np.empty(0)),
