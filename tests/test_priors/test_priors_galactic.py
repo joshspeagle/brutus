@@ -882,17 +882,6 @@ class TestColumnsAndNormalization:
         # Inside DISK_INNER_RADIUS - DISK_EDGE both disks have the density of
         # the held radius at every height, so they neither pinch nor rise.
         disk, halo, tables, *_ = gal._normalizations(**gal._NORMALIZATION_DEFAULTS)
-        no_labels = (
-            (0.0,) * 13,
-            (
-                0.0,
-                0.0,
-                -1.0,
-                np.empty((0, gal._NODE_COLUMNS)),
-                np.empty(0),
-                np.empty(0),
-            ),
-        )
 
         def disks(R, Z):
             return gal._components(
@@ -904,7 +893,7 @@ class TestColumnsAndNormalization:
                 False,
                 disk,
                 halo,
-                *no_labels,
+                *gal._NO_LABELS,
                 *tables,
                 np.empty((0, 0, 0)),
             )[:2]
@@ -1286,14 +1275,21 @@ class TestThinDiskLabels:
         # formation, and by the direct sums beyond the table.
         sig_birth = 1.4
         ln_mass = gal._thin_disk_mass_table(sig_birth)
+        ln_norm = gal._thin_disk_norm_table(sig_birth)
         for age in [0.003, 0.37, 2.9, 7.95, 8.6, 11.97]:
             terms = gal._thin_disk_age_terms(age)
-            for R in [13.13, 16.4, 22.7, 39.3, 45.0]:
-                R_age = gal._thin_disk_fit_radius(R, gal._thin_disk_norm_table(1.4))[1]
+            for R, tol in [
+                (13.13, 5e-4),
+                (16.4, 5e-4),
+                (22.7, 5e-4),
+                (39.3, 5e-4),
+                (45.0, 5e-4),
+            ]:
+                R_age = gal._thin_disk_fit_radius(R, ln_norm)[1]
                 direct = gal._thin_disk_ln_feh_mass(R_age, terms, sig_birth)
                 direct -= gal._thin_disk_ln_feh_mass(R, terms, sig_birth)
                 got = gal._thin_disk_age_shift(age, R, R_age, sig_birth, ln_mass)
-                assert got == pytest.approx(direct, abs=5e-4)
+                assert got == pytest.approx(direct, abs=tol)
 
     @pytest.mark.parametrize("R", [17.0, 22.0])
     def test_young_stars_beyond_the_knee_have_the_feh_of_the_knee(self, R):

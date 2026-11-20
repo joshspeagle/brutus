@@ -321,19 +321,22 @@ def _thin_disk_joint_terms(feh, ln_sfr, rexp, s, feh0, sig_birth):
     """Return the terms of `_thin_disk_ln_joint` that do not depend on R,
     for `_thin_disk_ln_at`: those of `_birth_terms` for the narrow birth
     [Fe/H] of spread ``sig_birth`` and for the tail of THIN_DISK_FEH_TAIL."""
-    share = THIN_DISK_FEH_TAIL[0]
-    return _birth_terms(
-        feh, ln_sfr, rexp, s, feh0, sig_birth, log(1.0 - share)
-    ) + _birth_terms(feh, ln_sfr, rexp, s, feh0, _tail_sig(sig_birth), log(share))
+    sig, ln_share, sig_tail, ln_tail = _birth_components(sig_birth)
+    return _birth_terms(feh, ln_sfr, rexp, s, feh0, sig, ln_share) + _birth_terms(
+        feh, ln_sfr, rexp, s, feh0, sig_tail, ln_tail
+    )
 
 
 @jit(nopython=True, cache=True)
-def _tail_sig(sig_birth):
-    """Return the spread in kpc of the birth radius that the [Fe/H] tail
-    implies, with the same systematic as ``sig_birth``."""
+def _birth_components(sig_birth):
+    """Return the spread in kpc of the birth radius and the ln share of the
+    narrow birth [Fe/H] and of its tail (THIN_DISK_FEH_TAIL), the tail with
+    the same systematic as ``sig_birth``."""
+    share, tail = THIN_DISK_FEH_TAIL
     grad = THIN_DISK_ENRICHMENT[1]
-    extra = (THIN_DISK_FEH_TAIL[1] ** 2 - THIN_DISK_FEH_FLOOR**2) / (grad * grad)
-    return sqrt(sig_birth * sig_birth + extra)
+    extra = (tail**2 - THIN_DISK_FEH_FLOOR**2) / (grad * grad)
+    sig_tail = sqrt(sig_birth * sig_birth + extra)
+    return sig_birth, log(1.0 - share), sig_tail, log(share)
 
 
 @jit(nopython=True, cache=True)
@@ -372,10 +375,13 @@ def _birth_terms(feh, ln_sfr, rexp, s, feh0, sig_birth, ln_share):
 def _thin_disk_ln_at(R, terms):
     """Return `_thin_disk_ln_joint` at R from the terms of
     `_thin_disk_joint_terms` (a tuple or an array)."""
-    hi = _birth_ln_at(R, terms, 0)
-    lo = _birth_ln_at(R, terms, _BIRTH_TERMS)
-    if lo > hi:
-        hi, lo = lo, hi
+    return _ln_add(_birth_ln_at(R, terms, 0), _birth_ln_at(R, terms, _BIRTH_TERMS))
+
+
+@jit(nopython=True, cache=True)
+def _ln_add(a, b):
+    """Return ln(e^a + e^b), or LOG_ZERO when both are LOG_ZERO."""
+    hi, lo = max(a, b), min(a, b)
     return hi + log1p(exp(lo - hi)) if hi > LOG_ZERO else LOG_ZERO
 
 
@@ -411,8 +417,7 @@ def _birth_ln_at(R, all_terms, start):
         ln_out = LOG_ZERO
     else:
         ln = LOG_ZERO
-    hi, lo = max(ln, ln_out), min(ln, ln_out)
-    return hi + log1p(exp(lo - hi)) if hi > LOG_ZERO else LOG_ZERO
+    return _ln_add(ln, ln_out)
 
 
 @jit(nopython=True, cache=True)
@@ -461,11 +466,9 @@ def _thin_disk_feh_nodes(R, terms, sig_birth, feh, ln_w):
     weights of a sum over p([Fe/H], age, R) d[Fe/H], unnormalized in R,
     with ``terms`` from `_thin_disk_age_terms`: the first half for the
     narrow birth [Fe/H], the second for its tail."""
-    share = THIN_DISK_FEH_TAIL[0]
-    _birth_feh_nodes(R, terms, sig_birth, log(1.0 - share), feh, ln_w, 0)
-    _birth_feh_nodes(
-        R, terms, _tail_sig(sig_birth), log(share), feh, ln_w, _FEH_NODES // 2
-    )
+    sig, ln_share, sig_tail, ln_tail = _birth_components(sig_birth)
+    _birth_feh_nodes(R, terms, sig, ln_share, feh, ln_w, 0)
+    _birth_feh_nodes(R, terms, sig_tail, ln_tail, feh, ln_w, _FEH_NODES // 2)
 
 
 @jit(nopython=True, cache=True)
@@ -847,18 +850,11 @@ def _ln_labels(feh, age, has_feh, has_age, labels, thick_ages, halo_feh, bar_pop
     halo_mean, halo_sd, halo_norm = labels[10:]
     if has_age and age > MAX_AGE:
         return LOG_ZERO, LOG_ZERO, (LOG_ZERO, LOG_ZERO)
-    # The bulge populations, each normal in [Fe/H] and in age: the
-    # metal-poor spheroid, then the metal-rich bar.
-    bar = np.zeros(2)
-    if has_feh or has_age:
-        for k in range(2):
-            feh_mean, feh_sd, age_mean, age_sd, age_norm = bar_pops[k, 1:]
-            if has_feh:
-                u = (feh - feh_mean) / feh_sd
-                bar[k] -= 0.5 * (u * u + _LOG_2PI) + log(feh_sd)
-            if has_age:
-                u = (age - age_mean) / age_sd
-                bar[k] -= 0.5 * u * u + age_norm
+    # The bulge populations: the metal-poor spheroid, then the metal-rich bar.
+    bar = (
+        _ln_bar_labels(feh, age, has_feh, has_age, bar_pops[0]),
+        _ln_bar_labels(feh, age, has_feh, has_age, bar_pops[1]),
+    )
     thick = 0.0
     halo = 0.0
     if has_feh:
@@ -879,7 +875,22 @@ def _ln_labels(feh, age, has_feh, has_age, labels, thick_ages, halo_feh, bar_pop
                 u = (age - thick_ages[k, 1]) / thick_ages[k, 2]
                 mx, acc = _accumulate(mx, acc, thick_ages[k, 0] - 0.5 * u * u)
             thick = mx + log(acc)
-    return thick, halo, (bar[0], bar[1])
+    return thick, halo, bar
+
+
+@jit(nopython=True, cache=True)
+def _ln_bar_labels(feh, age, has_feh, has_age, pop):
+    """Return ln p(labels) of one bulge population of `_bar_populations`,
+    normal in [Fe/H] and in age."""
+    feh_mean, feh_sd, age_mean, age_sd, age_norm = pop
+    ln = 0.0
+    if has_feh:
+        u = (feh - feh_mean) / feh_sd
+        ln -= 0.5 * (u * u + _LOG_2PI) + log(feh_sd)
+    if has_age:
+        u = (age - age_mean) / age_sd
+        ln -= 0.5 * u * u + age_norm
+    return ln
 
 
 @jit(nopython=True, cache=True)
@@ -1144,15 +1155,13 @@ def _spheroid_volume():
     Gauss-Legendre quadrature in ln r below the taper and in r across it."""
     slope, core = SPHEROID_SHAPE
     lo, hi = _BAR_TAPER
-    x, w = np.polynomial.legendre.leggauss(64)
-    a, b = log(1e-5), log(lo)
-    r = np.exp(0.5 * (b - a) * x + 0.5 * (b + a))
-    inner = 0.5 * (b - a) * w @ (r**3 * (r * r + core * core) ** (-0.5 * slope))
-    r = 0.5 * (hi - lo) * x + 0.5 * (hi + lo)
-    taper = 0.5 * (1.0 + np.cos(np.pi * (r - lo) / (hi - lo)))
-    outer = (
-        0.5 * (hi - lo) * w @ (r * r * (r * r + core * core) ** (-0.5 * slope) * taper)
-    )
+    ln_r, w = _gauss_legendre_panels((log(1e-5), log(lo)), 64)
+    r = np.exp(ln_r)
+    inner = w @ (r**3 * (r * r + core * core) ** (-0.5 * slope))
+    r, w = _gauss_legendre_panels(_BAR_TAPER, 64)
+    # The taper of `_ln_taper`.
+    taper = np.sin(0.5 * pi * (hi - r) / (hi - lo)) ** 2
+    outer = w @ (r * r * (r * r + core * core) ** (-0.5 * slope) * taper)
     return 4.0 * pi * float(inner + outer)
 
 
@@ -1319,8 +1328,7 @@ def _galactic_prior_array(
                 if ln_sph_amp > LOG_ZERO:
                     sph = -0.5 * slope * log(r2 + core * core)
                     sph += taper + ln_sph_amp + ln_bar[0]
-                    hi, lo = max(bar_n, sph), min(bar_n, sph)
-                    bar_n = hi + log1p(exp(lo - hi)) if hi > LOG_ZERO else LOG_ZERO
+                    bar_n = _ln_add(bar_n, sph)
             mx = max(max(thin, thick), max(hal, bar_n))
             # Components that are off add nothing; the sum keeps its order.
             acc = exp(thin - mx)
@@ -1415,8 +1423,8 @@ def _thin_disk_tables(R_solar, vc_solar, R_thin, Rs_thin, sig_birth):
     """Return the f_L table of `_thin_disk_fL_rows`; ln nu(|z|) / (2 H) of
     the thin disk summed over its age and [Fe/H] distribution, in 1/kpc,
     at x = i _MARGINAL_STEP dx and the heights of the potential tables;
-    and the tables of `_thin_disk_norm_table` and `_thin_disk_mass_table`. Costs 0.1 s, or 2 s with
-    NUMBA_DISABLE_JIT."""
+    and the tables of `_thin_disk_norm_table` and `_thin_disk_mass_table`.
+    Costs 0.7 s on 4 threads, or 20 s with NUMBA_DISABLE_JIT."""
     ln_phi = 2.0 * log(vc_solar / _V_VC0)
     f_L = _thin_disk_fL_rows(R_solar, vc_solar, R_thin, Rs_thin)
     ln_norm = _thin_disk_norm_table(sig_birth)
@@ -1702,9 +1710,10 @@ def _label_args(
 
 
 def _bar_populations(bar_feh, bar_age, feh_sys, age_frac, age_floor):
-    """Return the bar populations as rows of (ln weight, [Fe/H] mean and
-    standard deviation, age mean and standard deviation, ln normalization
-    of the age density), each width widened by the thick-disk systematics."""
+    """Return the bulge populations, metal-poor then metal-rich, as rows of
+    ([Fe/H] mean and standard deviation, age mean and standard deviation, ln
+    normalization of the age density), each width widened by the thick-disk
+    systematics. Their mass shares enter through `_bar_args`."""
     bar_feh = _floats("bar_feh", bar_feh, 5)
     bar_age = _floats("bar_age", bar_age, 4)
     if not 0.0 <= bar_feh[0] <= 1.0:
@@ -1716,12 +1725,11 @@ def _bar_populations(bar_feh, bar_age, feh_sys, age_frac, age_floor):
         **{"bar_age[1]": bar_age[1], "bar_age[3]": bar_age[3]},
     )
     rows = []
-    for weight, k in ((bar_feh[0], 0), (1.0 - bar_feh[0], 2)):
+    for k in (0, 2):
         age_mean = bar_age[k]
         age_sd = _age_spread(age_mean, age_frac, age_floor, bar_age[k + 1])
         rows.append(
             (
-                log(weight) if weight > 0.0 else LOG_ZERO,
                 bar_feh[k + 1],
                 sqrt(bar_feh[k + 2] ** 2 + feh_sys**2),
                 age_mean,
@@ -1791,6 +1799,14 @@ def _bar_table(ell, b, R_solar, Z_solar, bar):
     return _ln_bar_densities(X, Y, Z, bar[0], bar[1])
 
 
+# The label arguments of `_components` for a call without labels, which
+# does not read them.
+_NO_LABELS = (
+    (0.0,) * 13,
+    (0.0, 0.0, -1.0, np.empty((0, _NODE_COLUMNS)), np.empty(0), np.empty(0)),
+)
+
+
 def _normalizations(
     R_solar,
     Z_solar,
@@ -1853,13 +1869,7 @@ def _normalizations(
             float(halo_mass) / (_halo_volume(shape) * 1e9 * float(rho_thin_solar))
         ),
     )
-    # At the Sun the thin disk is 1, so the others are their ratios to it;
-    # without labels, the label arguments are not read.
-    no_nodes = np.empty((0, _NODE_COLUMNS))
-    no_labels = (
-        (0.0,) * 13,
-        (0.0, 0.0, -1.0, no_nodes, np.empty(0), np.empty(0)),
-    )
+    # At the Sun the thin disk is 1, so the others are their ratios to it.
     # With the thick disk off, evaluate it with a unit surface ratio so that
     # its column height stays defined.
     on = f_thick_surface > 0
@@ -1873,7 +1883,7 @@ def _normalizations(
         False,
         head + (ln_f,) + tail,
         halo,
-        *no_labels,
+        *_NO_LABELS,
         *tables,
         np.empty((0, 0, 0)),
     )

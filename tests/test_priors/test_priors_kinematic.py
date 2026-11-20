@@ -517,5 +517,4 @@ def test_youngest_thin_disk_sigma_z_keeps_its_floor():
     assert kin._thin_disk_sigma0(0.0, 0.0)[1] == pytest.approx(
         (sharma**4 + floor**4) ** 0.25, rel=1e-12
     )
-    assert kin._thin_disk_sigma0(0.0, 0.0)[1] > floor
     assert kin._thin_disk_sigma0(10.0, 0.0)[1] == pytest.approx(21.1, rel=6e-3)
