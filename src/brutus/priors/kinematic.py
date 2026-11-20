@@ -102,6 +102,12 @@ THIN_DISK_LAMBDA_L = (2300.0, 1130.0)
 THIN_DISK_ALPHA_L = (0.09, 0.58)
 THIN_DISK_GAMMA_FEH = (-0.19, -0.52)
 THIN_DISK_GAMMA_Z = (0.12, 0.20)
+# Floor in km/s of the thin-disk sigma_z at the Sun, joined as
+# (sigma^4 + floor^4)^(1/4): extrapolated to age 0 the relation above gives
+# 2.8 km/s, while stars younger than about 200 Myr toward the anticentre
+# have 8 km/s, like the gas (Gaia Collaboration, Antoja et al. 2021, 4.1).
+# The join raises sigma_z by 0.5% at 10 Gyr, 1.7% at 5 Gyr and 7.4% at 2 Gyr.
+THIN_DISK_SIGZ_FLOOR = 8.0
 # Radii in kpc and [Fe/H] in dex where the thin-disk relations were fitted
 # (Sharma et al. 2021, Fig. 1). Beyond the radii the dispersions keep their
 # values at the edges, reached through a quadratic blend within DISK_EDGE
@@ -357,16 +363,18 @@ def _thin_disk_feh_factor(feh):
 @jit(nopython=True, cache=True)
 def _thin_disk_sigma0(age, feh):
     """Return the Sharma et al. (2021) (sigma_R, sigma_z) of one stellar
-    model at solar L_z and z = 0: sigma_0 f_tau f_[Fe/H].
+    model at solar L_z and z = 0: sigma_0 f_tau f_[Fe/H], with sigma_z
+    joined to THIN_DISK_SIGZ_FLOOR.
 
     These factors depend only on the model, so a caller that evaluates many
     positions per model computes them once.
     """
     a = (age + 0.1) / 10.1
     f_R, f_z = _thin_disk_feh_factor(feh)
+    sig_z = THIN_DISK_SIGMA0[1] * a ** THIN_DISK_BETA[1] * f_z
     return (
         THIN_DISK_SIGMA0[0] * a ** THIN_DISK_BETA[0] * f_R,
-        THIN_DISK_SIGMA0[1] * a ** THIN_DISK_BETA[1] * f_z,
+        (sig_z**4 + THIN_DISK_SIGZ_FLOOR**4) ** 0.25,
     )
 
 

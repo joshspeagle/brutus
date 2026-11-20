@@ -29,6 +29,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The bulge's metal-poor population is a spheroid** *(output-changing)*.
+  The bar's metal-poor population, 0.6 of `bar_mass` (`bar_feh[0]`, 0.5
+  before), now has a spherical cored power law (`SPHEROID_SHAPE`) instead
+  of the bar's shape, so the metal-poor share of the bulge rises away from
+  the plane as Zoccali et al. (2017) find, and bulge labels depend on
+  position. Over 23 of their fields the rms difference in the metal-poor
+  share falls from 0.18 to 0.11. `return_components` keeps four entries;
+  the fourth holds the bar and the spheroid.
+- **The thin-disk sigma_z has a floor of 8 km/s, and 2% of thin-disk
+  stars have a broad [Fe/H] at birth** *(output-changing)*. Extrapolated
+  to age 0, the Sharma et al. (2021) relation gave 2.8 km/s, which piled
+  the youngest stars into a thin midplane layer; stars younger than 200
+  Myr have about 8 km/s (Gaia Collaboration 2021). The floor raises the
+  thin-disk column height at the Sun from 0.33 to 0.35 kpc and the
+  thick-disk ratio there from 0.046 to 0.050. The [Fe/H] tail
+  (`THIN_DISK_FEH_TAIL`, 0.3 dex) keeps stars far from the gas [Fe/H] of
+  their radius, such as young solar-[Fe/H] stars at 20 kpc, at about
+  1e-3 of the peak density instead of 1e-5 or less.
+- **Inside 4 kpc each Galactic disk keeps the density it has at 4 kpc**
+  *(output-changing)*. The disk dispersions are held there while the
+  vertical force of the potential keeps rising toward the bulge, which
+  squeezed both disks threefold in height toward the centre. The disks
+  now hold 0.14e10 Msun in the bar box, against 0.32e10 before.
+- **Beyond 15.3 kpc the thin-disk [Fe/H] at birth stops falling, and
+  beyond 14 kpc the thin-disk age mix keeps its value there**
+  *(output-changing)*. The label distribution was held at its 14 kpc value
+  beyond 14 kpc, which put the distance prior of every star with [Fe/H]
+  below -0.5 toward the anticentre at the same 14.9 kpc. Young stars now
+  scatter about [Fe/H] = -0.49 beyond the knee, where classical Cepheids
+  flatten (Albarracin et al. 2026), and [Fe/H] at each age follows the
+  Frankel et al. (2018) model. `THIN_DISK_GRADIENT_KNEE` sets the knee.
 - **The disk heights in the Galactic prior follow from the vertical
   Jeans equation** *(output-changing)*. `logp_galactic_structure`
   replaced the exponential scale heights (0.3 and 0.9 kpc) with profiles
