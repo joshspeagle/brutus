@@ -2274,16 +2274,18 @@ def logp_galactic_structure(
     the halo do not depend on position. The halo, `logn_halo`, is
     normalized by ``halo_mass``, as in `galactic_prior_summary`.
 
-    The bar is the analytic density of Sormani et al. (2022), a fit to the
-    dynamical model of Portail et al. (2017): an X-shaped bar and a long
-    bar, which together reach 5 kpc from the centre. It is turned by
-    ``bar_angle`` and scaled to ``bar_mass``. Beyond 5 kpc from the
-    Galactic centre it is multiplied by the taper
+    The bulge has two populations. The metal-rich one, (1 - bar_feh[0])
+    of ``bar_mass``, has the analytic bar density of Sormani et al.
+    (2022), a fit to the dynamical model of Portail et al. (2017): an
+    X-shaped bar and a long bar, which together reach 5 kpc from the
+    centre, turned by ``bar_angle``. The metal-poor one, bar_feh[0] of
+    ``bar_mass``, has the spherical density of ``SPHEROID_SHAPE``. Beyond
+    5 kpc from the Galactic centre both are multiplied by the taper
     :math:`(1 + \cos[\pi (r - 5\,{\rm kpc}) / 1\,{\rm kpc}]) / 2`, which
     reaches 0 at 6 kpc, since the published long-bar terms decay slowly
-    beyond the end of the bar.
-    Its labels do not depend on position, and its [Fe/H] and ages are
-    widened by the thick-disk systematics.
+    beyond the end of the bar. The bulge labels are the local mix of the
+    two populations, so they depend on position; their [Fe/H] and ages
+    are widened by the thick-disk systematics.
 
     References
     ----------
