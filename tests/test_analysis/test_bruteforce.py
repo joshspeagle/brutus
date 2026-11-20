@@ -2486,3 +2486,92 @@ def test_fits_with_a_parallax_and_the_same_seed_are_identical(fitter, batch, tmp
             saved.append({key: f[key][()] for key in f.keys()})
     for key in saved[0]:
         np.testing.assert_array_equal(saved[0][key], saved[1][key], err_msg=key)
+
+
+class TestFitWithProperMotions:
+    """The kinematic term of the Galactic prior in fit()."""
+
+    NDATA = 3
+    COORDS = np.array([[120.0, 45.0], [130.0, 50.0], [140.0, 55.0]])
+    PM = dict(
+        pmra=np.array([-3.0, 5.0, np.nan]),
+        pmdec=np.array([-8.0, 2.0, 1.0]),
+        pmra_error=np.array([0.05, 0.1, 0.1]),
+        pmdec_error=np.array([0.04, 0.1, 0.1]),
+        pmra_pmdec_corr=np.array([0.2, 0.0, 0.0]),
+    )
+
+    def _fit(self, fitter, path, name, **kwargs):
+        rng = np.random.RandomState(42)
+        data = 10 ** (-0.4 * (15 + rng.randn(self.NDATA, 5) * 0.5))
+        labels = np.array([(i,) for i in range(self.NDATA)], dtype=[("id", "i4")])
+        out = fitter.fit(
+            data,
+            data * 0.05,
+            np.ones((self.NDATA, 5), dtype=bool),
+            labels,
+            str(path / name),
+            data_coords=self.COORDS,
+            Ndraws=10,
+            Nmc_prior=5,
+            wt_thresh=0.1,
+            running_io=False,
+            verbose=False,
+            rstate=np.random.RandomState(1231),
+            **kwargs,
+        )
+        with h5py.File(out, "r") as f:
+            return {k: f[k][()] for k in f}
+
+    def test_switched_off_proper_motions_give_the_fit_without_them(
+        self, mock_fitter, tmp_path
+    ):
+        plain = self._fit(mock_fitter, tmp_path, "plain")
+        off = self._fit(mock_fitter, tmp_path, "off", apply_pm_prior=False, **self.PM)
+        for k in plain:
+            np.testing.assert_array_equal(plain[k], off[k], err_msg=k)
+
+    def test_proper_motions_reweigh_the_draws_and_nan_rows_are_left_out(
+        self, mock_fitter, tmp_path
+    ):
+        plain = self._fit(mock_fitter, tmp_path, "plain")
+        pm = self._fit(mock_fitter, tmp_path, "pm", **self.PM)
+        assert not np.array_equal(plain["samps_dist"][0], pm["samps_dist"][0])
+        assert np.all(np.isfinite(pm["samps_dist"]))
+        # Objects whose proper motions hold a NaN are fitted without the
+        # term: with every pmra NaN, the fit is the one without motions.
+        nan_only = dict(self.PM)
+        nan_only["pmra"] = np.full(self.NDATA, np.nan)
+        none = self._fit(mock_fitter, tmp_path, "none", **nan_only)
+        for k in plain:
+            np.testing.assert_array_equal(plain[k], none[k], err_msg=k)
+
+    @pytest.mark.parametrize(
+        "drop, match",
+        [("pmdec", "go together"), ("pmra_pmdec_corr", "go together")],
+    )
+    def test_incomplete_proper_motion_columns_raise(
+        self, mock_fitter, tmp_path, drop, match
+    ):
+        kwargs = {k: v for k, v in self.PM.items() if k != drop}
+        with pytest.raises(ValueError, match=match):
+            self._fit(mock_fitter, tmp_path, "bad", **kwargs)
+
+    def test_radial_velocity_needs_proper_motions(self, mock_fitter, tmp_path):
+        with pytest.raises(ValueError, match="needs the proper motions"):
+            self._fit(
+                mock_fitter,
+                tmp_path,
+                "bad",
+                radial_velocity=np.zeros(self.NDATA),
+                radial_velocity_error=np.ones(self.NDATA),
+            )
+
+    def test_custom_galactic_prior_must_take_the_kinematic_keywords(
+        self, mock_fitter, tmp_path
+    ):
+        def prior(dists, coord, labels=None):
+            return np.zeros(np.shape(dists))
+
+        with pytest.raises(ValueError, match="keyword `pm`"):
+            self._fit(mock_fitter, tmp_path, "bad", lngalprior=prior, **self.PM)

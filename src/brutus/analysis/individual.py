@@ -48,6 +48,7 @@ Basic usage with grid-based fitting:
 ... )
 """
 
+import inspect
 import numbers
 import os
 import sys
@@ -64,10 +65,11 @@ from ..core import StarGrid
 from ..core.sed_utils import _get_seds, _model_array, get_seds
 from ..priors.astrometric import logp_parallax
 from ..priors.extinction import logp_extinction
-from ..priors.galactic import logp_galactic_structure
+from ..priors.galactic import PM_OUTLIER, logp_galactic_structure
 from ..priors.stellar import logp_imf, logp_ps1_luminosity_function
-from ..utils.math import AVLIM, LOG_ZERO, R_SOLAR, RVLIM, Z_SOLAR
+from ..utils.math import AVLIM, LOG_ZERO, R_SOLAR, RVLIM, Z_SOLAR, galactic_to_icrs
 from ..utils.math import inverse3 as _inverse3
+from ..utils.math import pm_equatorial_to_galactic
 from ..utils.photometry import magnitude
 from ..utils.sampling import sample_multivariate_normal
 
@@ -127,6 +129,91 @@ def _check_threshold(name, value):
     """
     if not (isinstance(value, numbers.Real) and 0.0 < value < 1.0):
         raise ValueError(f"{name} must be a number in (0, 1), got {value!r}")
+
+
+# The kinematic keywords that a fit with proper motions passes to the
+# Galactic prior.
+_MOTION_KEYWORDS = ("pm", "pm_cov", "rv", "rv_err", "pm_outlier", "pm_floor")
+
+
+def _motions(
+    Ndata,
+    data_coords,
+    pmra,
+    pmdec,
+    pmra_error,
+    pmdec_error,
+    pmra_pmdec_corr,
+    radial_velocity,
+    radial_velocity_error,
+    apply_pm_prior,
+    pm_outlier,
+    pm_floor,
+    lngalprior,
+):
+    """Return the ``motion`` of `BruteForce.logpost_grid` for each object,
+    None where no kinematic term applies, after checking the inputs."""
+    columns = (pmra, pmdec, pmra_error, pmdec_error, pmra_pmdec_corr)
+    rv = (radial_velocity, radial_velocity_error)
+    if all(c is None for c in columns):
+        if any(c is not None for c in rv):
+            raise ValueError("radial_velocity needs the proper motions")
+        return [None] * Ndata
+    if any(c is None for c in columns):
+        raise ValueError(
+            "pmra, pmdec, pmra_error, pmdec_error and pmra_pmdec_corr go together"
+        )
+    if (rv[0] is None) != (rv[1] is None):
+        raise ValueError("radial_velocity and radial_velocity_error go together")
+    if not apply_pm_prior:
+        return [None] * Ndata
+    if data_coords is None:
+        raise ValueError("proper motions need data_coords")
+    names = ("pmra", "pmdec", "pmra_error", "pmdec_error", "pmra_pmdec_corr")
+    columns = [np.asarray(c, dtype=float) for c in columns]
+    for name, c in zip(names, columns):
+        _check_shape(name, c, (Ndata,))
+    if rv[0] is not None:
+        rv = [np.asarray(c, dtype=float) for c in rv]
+        for name, c in zip(("radial_velocity", "radial_velocity_error"), rv):
+            _check_shape(name, c, (Ndata,))
+    if lngalprior is not None:
+        _check_motion_keywords(lngalprior)
+    ok = np.all(np.isfinite(columns), axis=0)
+    ra, dec = galactic_to_icrs(*np.asarray(data_coords, dtype=float).T)
+    pm, pm_cov = pm_equatorial_to_galactic(
+        ra, dec, *(np.where(ok, c, 0.0) for c in columns)
+    )
+    ok &= np.all(np.isfinite(pm), axis=1)
+    motions = []
+    for i in range(Ndata):
+        if not ok[i]:
+            motions.append(None)
+            continue
+        motion = {
+            "pm": pm[i],
+            "pm_cov": pm_cov[i],
+            "pm_outlier": pm_outlier,
+            "pm_floor": pm_floor,
+        }
+        if rv[0] is not None and np.isfinite(rv[0][i]) and np.isfinite(rv[1][i]):
+            motion["rv"], motion["rv_err"] = rv[0][i], rv[1][i]
+        motions.append(motion)
+    return motions
+
+
+def _check_motion_keywords(lngalprior):
+    """Raise ValueError naming the first kinematic keyword that a custom
+    Galactic prior does not accept."""
+    params = inspect.signature(lngalprior).parameters
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return
+    for name in _MOTION_KEYWORDS:
+        if name not in params:
+            raise ValueError(
+                f"lngalprior must accept the keyword `{name}` to use proper "
+                "motions; pass apply_pm_prior=False to fit without them"
+            )
 
 
 def _check_max_models(value):
@@ -1378,6 +1465,7 @@ class BruteForce:
         R_solar=R_SOLAR,
         Z_solar=Z_SOLAR,
         return_precision=False,
+        motion=None,
     ):
         """
         Compute log-posterior over the stellar model grid.
@@ -1471,6 +1559,13 @@ class BruteForce:
             Return the (scale, A(V), R(V)) precision matrices of the selected
             models in place of their covariances, which skips the inversion.
             Default is False.
+
+        motion : dict, optional
+            Keyword arguments of the kinematic term of the Galactic prior,
+            passed to ``lngalprior``: ``pm`` and ``pm_cov``, and optionally
+            ``rv``, ``rv_err``, ``pm_outlier`` and ``pm_floor``, as in
+            `~brutus.priors.logp_galactic_structure`. Default is None, no
+            kinematic term.
 
         Returns
         -------
@@ -1725,13 +1820,13 @@ class BruteForce:
                     for name in ("feh", "loga")
                     if name in names
                 }
-                lnp_gal = lngalprior(dist_mc, coord, **per_model)
+                lnp_gal = lngalprior(dist_mc, coord, **per_model, **(motion or {}))
             else:
                 # Custom prior: the structured labels tiled to match the
                 # flattened distances.
                 labels_flat = None if dlabels is None else np.tile(dlabels[sel], Nmc)
                 lnp_gal = lngalprior(
-                    dist_mc.ravel(), coord, labels=labels_flat
+                    dist_mc.ravel(), coord, labels=labels_flat, **(motion or {})
                 ).reshape(Nmc, Nsel)
             lnp_mc += lnp_gal
 
@@ -1856,6 +1951,16 @@ class BruteForce:
         verbose=True,
         R_solar=R_SOLAR,
         Z_solar=Z_SOLAR,
+        pmra=None,
+        pmdec=None,
+        pmra_error=None,
+        pmdec_error=None,
+        pmra_pmdec_corr=None,
+        radial_velocity=None,
+        radial_velocity_error=None,
+        apply_pm_prior=True,
+        pm_outlier=PM_OUTLIER,
+        pm_floor=0.0,
     ):
         """
         Fit all input models to the input data to compute log-posteriors.
@@ -1963,6 +2068,28 @@ class BruteForce:
         data_coords : numpy.ndarray of shape (Ndata, 2), optional
             Galactic (l, b) coordinates for each object in degrees.
             Required if using default Galactic prior.
+
+        pmra, pmdec, pmra_error, pmdec_error, pmra_pmdec_corr : numpy.ndarray of shape (Ndata,), optional
+            Gaia proper motions in mas/yr (``pmra`` is mu_alpha cos(delta)),
+            their errors and correlation, as in the Gaia catalogue. All
+            five go together and need ``data_coords``. Each is rotated to
+            Galactic components with
+            `~brutus.utils.pm_equatorial_to_galactic` and enters the
+            Galactic prior's kinematic term. An object with a NaN entry is
+            fitted without it.
+
+        radial_velocity, radial_velocity_error : numpy.ndarray of shape (Ndata,), optional
+            Heliocentric radial velocities and errors in km/s, which add to
+            the proper motions. NaN entries are left out.
+
+        apply_pm_prior : bool, optional
+            Whether to apply the kinematic term when proper motions are
+            given. Default is True. With False, or without proper motions,
+            the fit is the same as without them, at the same cost.
+
+        pm_outlier, pm_floor : float, optional
+            The outlier share and the proper-motion error floor in mas/yr of
+            `~brutus.priors.logp_galactic_structure`. Defaults are 0.01 and 0.
 
         logl_dim_prior : bool, optional
             Whether to apply dimensional correction to log-likelihood.
@@ -2119,6 +2246,21 @@ class BruteForce:
         _check_threshold("logl_initthresh", logl_initthresh)
         _check_positive("ltol", ltol)
         _check_max_models(max_models)
+        motions = _motions(
+            Ndata,
+            data_coords,
+            pmra,
+            pmdec,
+            pmra_error,
+            pmdec_error,
+            pmra_pmdec_corr,
+            radial_velocity,
+            radial_velocity_error,
+            apply_pm_prior,
+            pm_outlier,
+            pm_floor,
+            lngalprior,
+        )
 
         # Pre-process data and initialize priors
         setup_results = self._setup(
@@ -2245,6 +2387,7 @@ class BruteForce:
                         return_distreds=save_dar_draws,
                         R_solar=R_solar,
                         Z_solar=Z_solar,
+                        motion=motions[i],
                     )
                     row = dict(zip(fields, results, strict=True))
 
@@ -2328,6 +2471,7 @@ class BruteForce:
         return_distreds=True,
         R_solar=R_SOLAR,
         Z_solar=Z_SOLAR,
+        motion=None,
     ):
         """
         Perform internal fitting for a single object.
@@ -2462,6 +2606,7 @@ class BruteForce:
             R_solar=R_solar,
             Z_solar=Z_solar,
             return_precision=True,
+            motion=motion,
         )
 
         sel, icov_sar_sel, lnp, dist_mc, a_mc, r_mc, lnp_mc, mc_ess_sel, ln_incl = (

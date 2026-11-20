@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Binney & Vasiliev (2024). A share `pm_outlier` (0.01) of stars follows a
   broad 300 km/s ellipsoid instead, and `pm_floor` adds a systematic error.
   Without a proper motion the prior is unchanged.
+- **`BruteForce.fit` takes Gaia proper motions and radial velocities.**
+  `pmra`, `pmdec`, `pmra_error`, `pmdec_error` and `pmra_pmdec_corr`, and
+  optionally `radial_velocity` and `radial_velocity_error`, are rotated to
+  Galactic components and enter the Galactic prior's kinematic term;
+  `apply_pm_prior=False` turns it off, and rows with NaN are fitted
+  without it. A custom `lngalprior` must accept the kinematic keywords,
+  or the fit raises an error naming the missing one.
+  `brutus.utils.galactic_to_icrs` converts Galactic coordinates to ICRS.
 - **`bulge_velocity_moments`** gives the velocity ellipsoid of the bulge,
   from the bulge disc of Binney & Vasiliev (2024), now tabulated in
   `bv24_tables.npz`.
