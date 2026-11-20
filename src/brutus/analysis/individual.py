@@ -726,6 +726,80 @@ def _parallax_gate(scales, icovs_sar, parallax, parallax_err):
         )
 
 
+# Chebyshev-Lobatto nodes in [-1, 1] for the Galactic prior across a model's
+# draws, and their barycentric weights; the even nodes form the 3-node set
+# whose interpolant estimates the error of the 5-node one.
+_PRIOR_NODES = np.cos(np.pi * np.arange(5) / 4)
+_PRIOR_WEIGHTS = np.array([0.5, -1.0, 1.0, -1.0, 0.5])
+_PRIOR_WEIGHTS3 = np.array([0.5, -1.0, 0.5])
+# Largest difference in ln prior between the two interpolants at a draw
+# before the model's prior is evaluated exactly.
+PRIOR_INTERP_TOL = 1e-3
+
+
+@jit(nopython=True, cache=True)
+def _barycentric(u, x, w, f):
+    """Return the polynomial through (x, f) at u, from weights w."""
+    num, den = 0.0, 0.0
+    for k in range(len(x)):
+        diff = u - x[k]
+        if diff == 0.0:
+            return f[k]
+        q = w[k] / diff
+        num += q * f[k]
+        den += q
+    return num / den
+
+
+@jit(nopython=True, cache=True, parallel=True)
+def _interpolate_prior(eta, lo, hi, f):
+    """Interpolate the prior f, given at the nodes of each model's range
+    [lo, hi] in ln(d), at its draws eta. Return the values and, per model,
+    the largest difference from the 3-node interpolant (inf where a node is
+    at zero probability)."""
+    Nmc, N = eta.shape
+    out = np.empty((Nmc, N))
+    err = np.zeros(N)
+    x3 = _PRIOR_NODES[::2]
+    for n in prange(N):
+        fn = f[:, n].copy()
+        f3 = fn[::2].copy()
+        if fn.min() <= LOG_ZERO / 2:
+            err[n] = np.inf
+        mid, half = 0.5 * (hi[n] + lo[n]), 0.5 * (hi[n] - lo[n])
+        for m in range(Nmc):
+            u = (eta[m, n] - mid) / half if half > 0.0 else 0.0
+            p = _barycentric(u, _PRIOR_NODES, _PRIOR_WEIGHTS, fn)
+            out[m, n] = p
+            err[n] = max(err[n], abs(p - _barycentric(u, x3, _PRIOR_WEIGHTS3, f3)))
+    return out, err
+
+
+def _galactic_prior_at_draws(prior, dists, coord, labels, motion):
+    """Return the default Galactic prior at the draws `dists` (Nmc, Nsel) of
+    each model, interpolated in ln(d) from 5 nodes over the model's draws.
+
+    A model's draws span 0.01-0.03 in ln(d) for most stars, because its
+    absolute magnitude fixes its distance, and the prior is smooth over
+    that range. Where the 3-node interpolant differs from the 5-node one by
+    more than PRIOR_INTERP_TOL, or a node is at zero probability, the
+    model's prior is evaluated at its draws.
+    """
+    if len(dists) <= len(_PRIOR_NODES):
+        return prior(dists, coord, **labels, **motion)
+    eta = np.log(dists)
+    lo, hi = eta.min(axis=0), eta.max(axis=0)
+    nodes = 0.5 * (hi + lo) + 0.5 * (hi - lo) * _PRIOR_NODES[:, None]
+    f = prior(np.exp(nodes), coord, **labels, **motion)
+    out, err = _interpolate_prior(eta, lo, hi, f)
+    exact = np.flatnonzero(err > PRIOR_INTERP_TOL)
+    if len(exact):
+        out[:, exact] = prior(
+            dists[:, exact], coord, **{k: v[exact] for k, v in labels.items()}, **motion
+        )
+    return out
+
+
 def _inclusion_probabilities(weights, size):
     """Return inclusion probabilities ``min(1, c * weights)`` that sum to `size`.
 
@@ -1820,7 +1894,9 @@ class BruteForce:
                     for name in ("feh", "loga")
                     if name in names
                 }
-                lnp_gal = lngalprior(dist_mc, coord, **per_model, **(motion or {}))
+                lnp_gal = _galactic_prior_at_draws(
+                    lngalprior, dist_mc, coord, per_model, motion or {}
+                )
             else:
                 # Custom prior: the structured labels tiled to match the
                 # flattened distances.

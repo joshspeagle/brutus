@@ -53,6 +53,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`fit()` interpolates the Galactic prior across each model's draws**
+  *(output-changing)*. The default prior is evaluated at 5 nodes in ln(d)
+  over each model's Monte Carlo draws and interpolated at the draws, and
+  exactly where the 3-node interpolant differs by more than
+  `PRIOR_INTERP_TOL` (1e-3 in ln prior). The prior costs 6 to 10 times less;
+  on 37 stars over 12 sightlines, each model's integrated ln prior moved
+  by at most 5e-4.
 - **The bulge's metal-poor population is a spheroid** *(output-changing)*.
   The bar's metal-poor population, 0.6 of `bar_mass` (`bar_feh[0]`, 0.5
   before), now has a spherical cored power law (`SPHEROID_SHAPE`) instead
