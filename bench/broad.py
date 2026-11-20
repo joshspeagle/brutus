@@ -29,7 +29,8 @@ Each sample file holds, per star: ``mag`` and ``mag_err`` (N, 6) in the
 order of ``filters``, ``l``, ``b``, ``field``, ``pmra``, ``pmdec``,
 ``pmra_error``, ``pmdec_error``, ``pmra_pmdec_corr``, ``rv`` and ``rv_err``.
 The stars file is read from ``$BRUTUS_BENCH_STARS``, by default
-``bench/artifacts/broad_stars.npz``.
+``bench/broad_stars.npz``: 48 stars, 4 from each field of the three samples
+of #335 (Gaia DR3 by its ADQL there, GeDR3mock, and the mock).
 """
 
 import glob
@@ -45,7 +46,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 import disteq as D  # noqa: E402
 import harness as H  # noqa: E402
 
-STARS = os.environ.get("BRUTUS_BENCH_STARS", os.path.join(H.OUTDIR, "broad_stars.npz"))
+STARS = os.environ.get(
+    "BRUTUS_BENCH_STARS", os.path.join(os.path.dirname(__file__), "broad_stars.npz")
+)
 DUST = os.path.join(H.CACHE, "bayestar2019_v1.h5")
 COLUMNS = ("mag", "mag_err", "l", "b", "field", "pmra", "pmdec", "pmra_error")
 COLUMNS += ("pmdec_error", "pmra_pmdec_corr", "rv", "rv_err")

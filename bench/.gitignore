@@ -1,3 +1,4 @@
 artifacts/
 *.npz
 __pycache__/
+!broad_stars.npz
