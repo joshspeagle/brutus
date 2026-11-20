@@ -110,6 +110,11 @@ THIN_DISK_ONSET = (8.0, 1.0)
 # al. cite. Migration supplies the spread of all but the youngest stars;
 # this floor keeps the youngest from a single [Fe/H].
 THIN_DISK_FEH_FLOOR = 0.03
+# Share of thin-disk stars, and its [Fe/H] spread at birth in dex, in a
+# tail that keeps [Fe/H] far from the gas of the birth radius within reach
+# of the prior. At 20 kpc and 0.5 Gyr, solar [Fe/H] has 1.8e-3 of the peak
+# density with the tail and 5.6e-6 without it; +0.3 has 2.5e-4 and 6e-14.
+THIN_DISK_FEH_TAIL = (0.02, 0.3)
 # Radii of the Frankel et al. fit, in kpc. Inside the first, the label
 # distribution keeps its value there; beyond the second, the age mix
 # p(age | R) keeps its value there, while [Fe/H] at each age follows the
@@ -314,7 +319,28 @@ def _thin_disk_ln_joint(feh, R, ln_sfr, rexp, s, feh0, sig_birth):
 @jit(nopython=True, cache=True)
 def _thin_disk_joint_terms(feh, ln_sfr, rexp, s, feh0, sig_birth):
     """Return the terms of `_thin_disk_ln_joint` that do not depend on R,
-    for `_thin_disk_ln_at`."""
+    for `_thin_disk_ln_at`: those of `_birth_terms` for the narrow birth
+    [Fe/H] of spread ``sig_birth`` and for the tail of THIN_DISK_FEH_TAIL."""
+    share = THIN_DISK_FEH_TAIL[0]
+    return _birth_terms(
+        feh, ln_sfr, rexp, s, feh0, sig_birth, log(1.0 - share)
+    ) + _birth_terms(feh, ln_sfr, rexp, s, feh0, _tail_sig(sig_birth), log(share))
+
+
+@jit(nopython=True, cache=True)
+def _tail_sig(sig_birth):
+    """Return the spread in kpc of the birth radius that the [Fe/H] tail
+    implies, with the same systematic as ``sig_birth``."""
+    grad = THIN_DISK_ENRICHMENT[1]
+    extra = (THIN_DISK_FEH_TAIL[1] ** 2 - THIN_DISK_FEH_FLOOR**2) / (grad * grad)
+    return sqrt(sig_birth * sig_birth + extra)
+
+
+@jit(nopython=True, cache=True)
+def _birth_terms(feh, ln_sfr, rexp, s, feh0, sig_birth, ln_share):
+    """Return the _BIRTH_TERMS terms of `_birth_ln_at` for one normal birth
+    [Fe/H] of spread ``sig_birth`` (kpc in birth radius) and ln weight
+    ``ln_share``."""
     if ln_sfr == LOG_ZERO:
         return LOG_ZERO, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, LOG_ZERO, 0.0
     grad = THIN_DISK_ENRICHMENT[1]
@@ -324,7 +350,7 @@ def _thin_disk_joint_terms(feh, ln_sfr, rexp, s, feh0, sig_birth):
     r_birth = (feh - feh0) / grad
     var, var_birth = s * s, sig_birth * sig_birth
     var2 = var + var_birth
-    ln = ln_sfr - log(rexp * abs(grad)) + 0.5 * var / (rexp * rexp)
+    ln = ln_share + ln_sfr - log(rexp * abs(grad)) + 0.5 * var / (rexp * rexp)
     ln -= 0.5 * (_LOG_2PI + log(var2))
     # r_birth - mu = d0 - R, and the mean of the product of the Gaussians in
     # R0 is m = w R + m0.
@@ -335,7 +361,8 @@ def _thin_disk_joint_terms(feh, ln_sfr, rexp, s, feh0, sig_birth):
     # its normal density times the share of births beyond the knee, which
     # is Phi((R - c) / s) with c = s^2 / R_exp + knee.
     u = (r_birth - THIN_DISK_GRADIENT_KNEE) / sig_birth
-    ln_out = ln_sfr - log(rexp * abs(grad) * sig_birth) + 0.5 * var / (rexp * rexp)
+    ln_out = ln_share + ln_sfr - log(rexp * abs(grad) * sig_birth)
+    ln_out += 0.5 * var / (rexp * rexp)
     ln_out -= 0.5 * (_LOG_2PI + u * u)
     c = var / rexp + THIN_DISK_GRADIENT_KNEE
     return ln, 1.0 / rexp, d0, 1.0 / var2, var_birth / var2, m0, sv, s, ln_out, c
@@ -345,20 +372,32 @@ def _thin_disk_joint_terms(feh, ln_sfr, rexp, s, feh0, sig_birth):
 def _thin_disk_ln_at(R, terms):
     """Return `_thin_disk_ln_joint` at R from the terms of
     `_thin_disk_joint_terms` (a tuple or an array)."""
-    ln = terms[0]
+    hi = _birth_ln_at(R, terms, 0)
+    lo = _birth_ln_at(R, terms, _BIRTH_TERMS)
+    if lo > hi:
+        hi, lo = lo, hi
+    return hi + log1p(exp(lo - hi)) if hi > LOG_ZERO else LOG_ZERO
+
+
+@jit(nopython=True, cache=True)
+def _birth_ln_at(R, all_terms, start):
+    """Return ln p([Fe/H], age, R) at R of one birth [Fe/H] component, from
+    its terms of `_birth_terms` at ``start`` in ``all_terms``."""
+    o = start
+    ln = all_terms[o]
     if ln == LOG_ZERO:
         return LOG_ZERO
     knee = THIN_DISK_GRADIENT_KNEE
-    d = terms[2] - R
-    ln -= R * terms[1] + 0.5 * d * d * terms[3]
-    ln_out = terms[8] - R * terms[1]
-    s = terms[7]
+    d = all_terms[o + 2] - R
+    ln -= R * all_terms[o + 1] + 0.5 * d * d * all_terms[o + 3]
+    ln_out = all_terms[o + 8] - R * all_terms[o + 1]
+    s = all_terms[o + 7]
     if s > 0.0:
         # The product of the two Gaussians in R0 is N(R0; m, sv), truncated
         # to 0 <= R0 < knee, weighted by the kernel normalization
         # 1 / Phi(R0 / s) at its truncated mean.
-        m = terms[4] * R + terms[5]
-        sv = terms[6]
+        m = all_terms[o + 4] * R + all_terms[o + 5]
+        sv = all_terms[o + 6]
         a, b = -m / sv, (knee - m) / sv
         ln_mass = _ln_ndtr_diff(b, a)
         if ln_mass > LOG_ZERO:
@@ -367,7 +406,7 @@ def _thin_disk_ln_at(R, terms):
             ln += ln_mass - _ln_ndtr((m + sv * (phi_a - phi_b)) / s)
         else:
             ln = LOG_ZERO
-        ln_out += _ln_ndtr((R - terms[9]) / s)
+        ln_out += _ln_ndtr((R - all_terms[o + 9]) / s)
     elif R < knee:
         ln_out = LOG_ZERO
     else:
@@ -408,10 +447,11 @@ _AGE_LN_W = np.log(_AGE_WEIGHTS)
 _P_NODES, _P_WEIGHTS = np.polynomial.legendre.leggauss(12)
 _FEH_PANELS = 4
 # Size of the arrays that `_thin_disk_feh_nodes` fills.
-_FEH_NODES = _FEH_PANELS * len(_P_NODES)
+_FEH_NODES = 2 * _FEH_PANELS * len(_P_NODES)
 # Terms of `_thin_disk_joint_terms`, and columns of the rows of
 # `_thin_disk_feh_ages`: ln weight, the terms, ln sigma_R0, ln sigma_z0, age.
-_JOINT_TERMS = 10
+_BIRTH_TERMS = 10
+_JOINT_TERMS = 2 * _BIRTH_TERMS
 _NODE_COLUMNS = _JOINT_TERMS + 4
 
 
@@ -419,7 +459,19 @@ _NODE_COLUMNS = _JOINT_TERMS + 4
 def _thin_disk_feh_nodes(R, terms, sig_birth, feh, ln_w):
     """Fill ``feh`` and ``ln_w`` with the _FEH_NODES [Fe/H] nodes and ln
     weights of a sum over p([Fe/H], age, R) d[Fe/H], unnormalized in R,
-    with ``terms`` from `_thin_disk_age_terms`."""
+    with ``terms`` from `_thin_disk_age_terms`: the first half for the
+    narrow birth [Fe/H], the second for its tail."""
+    share = THIN_DISK_FEH_TAIL[0]
+    _birth_feh_nodes(R, terms, sig_birth, log(1.0 - share), feh, ln_w, 0)
+    _birth_feh_nodes(
+        R, terms, _tail_sig(sig_birth), log(share), feh, ln_w, _FEH_NODES // 2
+    )
+
+
+@jit(nopython=True, cache=True)
+def _birth_feh_nodes(R, terms, sig_birth, ln_share, feh, ln_w, start):
+    """Fill _FEH_NODES // 2 entries of ``feh`` and ``ln_w`` from ``start``
+    for one birth [Fe/H] component of `_birth_terms`."""
     ln_sfr, rexp, s, feh0 = terms
     grad = THIN_DISK_ENRICHMENT[1]
     # Birth radii implied by [Fe/H] over 6 standard deviations either side,
@@ -464,13 +516,16 @@ def _thin_disk_feh_nodes(R, terms, sig_birth, feh, ln_w):
         edges[j + 1] = edges[j] + 0.5 * widths[j]
         n_edges += 1
     n = len(_P_NODES)
-    for k in range(_FEH_NODES):
+    for k in range(_FEH_NODES // 2):
         a, b = edges[k // n], edges[k // n + 1]
         r_birth = 0.5 * (a + b) + 0.5 * (b - a) * _P_NODES[k % n]
-        ln_dr = log(0.5 * (b - a) * _P_WEIGHTS[k % n])
-        feh[k] = feh0 + grad * r_birth
-        ln_w[k] = _thin_disk_ln_joint(feh[k], R, *terms, sig_birth) + ln_dr
-        ln_w[k] += log(abs(grad))
+        f = feh0 + grad * r_birth
+        bt = _birth_terms(f, ln_sfr, rexp, s, feh0, sig_birth, ln_share)
+        feh[start + k] = f
+        ln_w[start + k] = _birth_ln_at(R, bt, 0) + log(
+            0.5 * (b - a) * _P_WEIGHTS[k % n]
+        )
+        ln_w[start + k] += log(abs(grad))
 
 
 # Radii of the table of ln int int p([Fe/H], age, R) d[Fe/H] d(age), in

@@ -731,12 +731,12 @@ def _sigma_z(R, age, feh):
     L = _clamp(L, L_lo, L_hi_z, width)  # sigma_z is held beyond THIN_DISK_SIGZ_R_MAX
     a, lam = kin.THIN_DISK_ALPHA_L[1], kin.THIN_DISK_LAMBDA_L[1]
     f_L = (a * (L / L_sun) ** 2 + np.exp(-(L - L_sun) / lam)) / (1 + a)
-    return (
+    sig_z0 = (
         kin.THIN_DISK_SIGMA0[1]
         * ((age + 0.1) / 10.1) ** kin.THIN_DISK_BETA[1]
         * (1 + kin.THIN_DISK_GAMMA_FEH[1] * np.clip(feh, -1.0, 0.5))
-        * f_L
     )
+    return (sig_z0**4 + kin.THIN_DISK_SIGZ_FLOOR**4) ** 0.25 * f_L
 
 
 def _ln_profile(x, s, thin):
@@ -1125,7 +1125,15 @@ def _frankel_reference(feh, age, R, scatter=0.03):
     def integrand(r0):
         kernel = stats.norm.pdf(R, r0, s) / stats.norm.cdf(r0 / s)
         feh0 = f_m + grad * min(r0, knee) - (f_m + grad * r_now) * f
-        birth = 1.0 if scatter is None else stats.norm.pdf(feh, feh0, scatter)
+        if scatter is None:
+            birth = 1.0
+        else:
+            # The narrow birth [Fe/H] and its tail, with the same systematic.
+            share, tail = gal.THIN_DISK_FEH_TAIL
+            wide = np.sqrt(scatter**2 + tail**2 - gal.THIN_DISK_FEH_FLOOR**2)
+            birth = (1 - share) * stats.norm.pdf(
+                feh, feh0, scatter
+            ) + share * stats.norm.pdf(feh, feh0, wide)
         return np.exp(-r0 / rexp) / rexp * kernel * birth
 
     points = sorted({R, knee})
@@ -1140,7 +1148,8 @@ class TestThinDiskLabels:
         [
             (0.1, 0.3, 8.0, 1e-6),
             (-0.2, 2.0, 11.0, 1e-4),
-            (0.0, 4.0, 6.0, 1e-3),
+            # The [Fe/H] tail reaches births near R0 = 0.
+            (0.0, 4.0, 6.0, 3e-3),
             # Born near R0 = 0, where the kernel normalization is
             # approximated.
             (0.1, 7.5, 8.3, 0.03),
@@ -1237,7 +1246,7 @@ class TestThinDiskLabels:
     def test_young_stars_beyond_the_knee_have_the_feh_of_the_knee(self, R):
         # [Fe/H] at birth stops falling at the knee, so stars of 10 Myr at
         # R well beyond it scatter about the [Fe/H] there, -0.49 at the
-        # present day, with the birth and systematic spread.
+        # present day, with the birth and systematic spread and its tail.
         terms = gal._thin_disk_age_terms(0.01)
         fehs, ln_w = np.empty(gal._FEH_NODES), np.empty(gal._FEH_NODES)
         gal._thin_disk_feh_nodes(R, terms, 1.4, fehs, ln_w)
@@ -1245,8 +1254,12 @@ class TestThinDiskLabels:
         knee_feh = terms[3] + gal.THIN_DISK_ENRICHMENT[1] * gal.THIN_DISK_GRADIENT_KNEE
         assert knee_feh == pytest.approx(-0.49, abs=0.01)
         assert w @ fehs == pytest.approx(knee_feh, abs=1e-6)
+        share, tail = gal.THIN_DISK_FEH_TAIL
+        narrow = 1.4 * 0.075
+        var = (1 - share) * narrow**2
+        var += share * (narrow**2 + tail**2 - gal.THIN_DISK_FEH_FLOOR**2)
         assert np.sqrt(w @ (fehs - knee_feh) ** 2) == pytest.approx(
-            1.4 * 0.075, rel=1e-4
+            np.sqrt(var), rel=1e-4
         )
 
     def test_star_formation_fades_beyond_8_gyr_and_stops_at_12_gyr(self):
@@ -1314,7 +1327,10 @@ class TestThinDiskLabels:
         p = np.exp([gal._thin_disk_ln_joint(f, 8.0, *terms, sig_birth) for f in fehs])
         mean = np.trapezoid(p * fehs, fehs) / np.trapezoid(p, fehs)
         sd = np.sqrt(np.trapezoid(p * (fehs - mean) ** 2, fehs) / np.trapezoid(p, fehs))
-        assert sd == pytest.approx(np.hypot(0.03, systematic), rel=1e-3)
+        share, tail = gal.THIN_DISK_FEH_TAIL
+        var = (1 - share) * (0.03**2 + systematic**2)
+        var += share * (tail**2 + systematic**2)
+        assert sd == pytest.approx(np.sqrt(var), rel=1e-3)
 
 
 class TestThickDiskAndHaloLabels:

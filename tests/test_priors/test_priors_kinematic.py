@@ -21,7 +21,6 @@ from brutus.priors.kinematic import (
     HALO_SIGMA_T_LOBE,
     PM_SGRA,
     THIN_DISK_R_RANGE,
-    THIN_DISK_SIGMA0,
     U_SUN,
     V_PEC_SUN,
     VC_SOURCES,
@@ -182,7 +181,7 @@ def _dln_dlnR(f, R, h=1e-5):
 
 def test_thin_disk_dispersions_use_the_mean_angular_momentum():
     # Sharma et al. (2021): sigma = sigma_0 f_L(L_z) at 10 Gyr, [Fe/H] = 0
-    # and z = 0, with L_z the population's mean R v_phi (to 0.3%).
+    # and z = 0, with sigma_z joined to its floor, with L_z the population's mean R v_phi (to 0.3%).
     # Near the edges of THIN_DISK_R_RANGE the fixed point once oscillated.
     R = np.array([3.05, 4.0, R_SOLAR, 14.0, 19.95])
     mean, cov = _thin(R, age=10.0)
@@ -192,7 +191,7 @@ def test_thin_disk_dispersions_use_the_mean_angular_momentum():
         f_R, f_z, _ = kin._thin_disk_fL(R[i] * mean[i, 1], L_solar, L_clamp)
         np.testing.assert_allclose(
             np.sqrt(cov[i, [0, 2], [0, 2]]),
-            np.multiply(THIN_DISK_SIGMA0, (f_R, f_z)),
+            np.multiply(kin._thin_disk_sigma0(10.0, 0.0), (f_R, f_z)),
             rtol=2e-3,
         )
         # Away from the clamp, the circular L_z = R v_c gives other
@@ -507,3 +506,16 @@ def test_thin_disk_gradient_fades_only_outside_the_fitted_radii():
     outside = [kin._thin_disk_fade(r) for r in (lo - edge, 0.5, hi + edge, 40.0)]
     np.testing.assert_array_equal(inside, 1.0)
     np.testing.assert_array_equal(outside, 0.0)
+
+
+def test_youngest_thin_disk_sigma_z_keeps_its_floor():
+    # Extrapolated to age 0, Sharma et al. (2021) give sigma_z = 2.8 km/s at
+    # the Sun; the floor joins it as (sigma^4 + floor^4)^(1/4) and leaves
+    # old populations within 0.6%.
+    sharma = 21.1 * (0.1 / 10.1) ** 0.441
+    floor = kin.THIN_DISK_SIGZ_FLOOR
+    assert kin._thin_disk_sigma0(0.0, 0.0)[1] == pytest.approx(
+        (sharma**4 + floor**4) ** 0.25, rel=1e-12
+    )
+    assert kin._thin_disk_sigma0(0.0, 0.0)[1] > floor
+    assert kin._thin_disk_sigma0(10.0, 0.0)[1] == pytest.approx(21.1, rel=6e-3)
