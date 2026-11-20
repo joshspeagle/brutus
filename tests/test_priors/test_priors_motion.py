@@ -6,7 +6,7 @@ from scipy.stats import multivariate_normal
 
 from brutus.priors import galactic as gal
 from brutus.priors import kinematic as kin
-from brutus.priors import logp_galactic_structure
+from brutus.priors import logp_galactic_structure, sample_motions
 from brutus.priors.kinematic import (
     bulge_velocity_moments,
     halo_velocity_moments,
@@ -244,3 +244,37 @@ def test_bulge_moments_are_held_beyond_the_table():
     )
     np.testing.assert_array_equal(near[0], far[0])
     np.testing.assert_array_equal(near[1], far[1])
+
+
+@pytest.mark.parametrize("motion", [{}, {"pm": PM, "pm_cov": PM_COV}])
+def test_sampled_motions_follow_the_mixture_of_the_components(motion):
+    # The mean of the draws at one point is the mixture of the projected
+    # component means, weighted by the terms of the prior.
+    n = 40000
+    d = np.array([2.0])
+    _, comps = _prior(d, **motion)
+    ln_c = np.ravel(sum(np.array(term) for term in comps.values()))
+    w = np.exp(ln_c - np.logaddexp.reduce(ln_c))
+    R, Z = galactic_to_galactocentric_cyl(d, *COORD)[:2]
+    moments = [
+        thin_disk_velocity_moments(R, Z, np.array([AGE]), np.array([FEH])),
+        thick_disk_velocity_moments(R, R_scale=1.9, R_smooth=2.0),
+    ]
+    hw, hm, hc = halo_velocity_moments(R, Z)
+    means = [velocity_to_observables(d, COORD, *m)[0][0] for m in moments]
+    lobes = [
+        velocity_to_observables(d, COORD, hm[:, k], hc[:, k])[0][0] for k in range(3)
+    ]
+    means.append(np.sum(hw[0][:, None] * np.array(lobes), axis=0))
+    assert w[3] < 1e-12  # 2 kpc toward (30, 5) is outside the bulge
+    expected = np.sum(w[:3, None] * np.array(means), axis=0)
+    draws = sample_motions(
+        np.full(n, 2.0),
+        COORD,
+        np.full(n, FEH),
+        np.full(n, np.log10(AGE * 1e9)),
+        np.random.default_rng(7),
+        **motion,
+    )
+    err = draws.std(axis=0) / np.sqrt(n)
+    np.testing.assert_array_less(np.abs(draws.mean(axis=0) - expected), 4 * err)

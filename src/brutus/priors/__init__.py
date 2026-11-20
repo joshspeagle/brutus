@@ -14,6 +14,7 @@ from .galactic import (
     logn_disk,
     logn_halo,
     logp_galactic_structure,
+    sample_motions,
 )
 from .kinematic import (
     bulge_velocity_moments,
@@ -33,6 +34,7 @@ __all__ = [
     "convert_parallax_to_scale",
     "logp_galactic_structure",
     "galactic_prior_summary",
+    "sample_motions",
     "logn_disk",
     "logn_halo",
     "solar_velocity",

@@ -80,7 +80,12 @@ from brutus.priors.kinematic import (
     _vc_solar,
     _vertical_row,
     _vertical_terms,
+    bulge_velocity_moments,
+    halo_velocity_moments,
     solar_velocity,
+    thick_disk_velocity_moments,
+    thin_disk_velocity_moments,
+    velocity_to_observables,
 )
 from brutus.utils.math import (
     LOG_ZERO,
@@ -92,6 +97,7 @@ from brutus.utils.math import (
     _ln_ndtr_diff,
     _truncnorm_lognorm_scalar,
     galactic_to_galactocentric,
+    galactic_to_galactocentric_cyl,
 )
 
 _LOG_2PI = log(2.0 * pi)
@@ -2087,6 +2093,7 @@ __all__ = [
     "logn_halo",
     "logp_galactic_structure",
     "galactic_prior_summary",
+    "sample_motions",
 ]
 
 
@@ -2692,6 +2699,101 @@ def _label_array(name, value, dists_shape):
     if dists_shape[len(dists_shape) - value.ndim :] != value.shape:
         value = value.reshape(dists_shape)
     return value
+
+
+def sample_motions(dists, coord, feh, loga, rstate, **kwargs):
+    r"""
+    Draw the proper motion and radial velocity predicted at each distance.
+
+    Each point draws its component with probability proportional to the
+    terms of `logp_galactic_structure`: the number density, the
+    probability of its labels and, when ``kwargs`` holds an observed
+    proper motion, its kinematic likelihood. It then draws a velocity
+    from that component's ellipsoid (the halo from its mixture) and
+    projects it with `velocity_to_observables`. Fed with the posterior
+    draws of a fit, the result is the posterior predictive distribution
+    of the motion, without measurement error.
+
+    Parameters
+    ----------
+    dists : array_like of shape `(N,)`
+        Heliocentric distances in kpc.
+    coord : tuple of float
+        Galactic coordinates ``(l, b)`` in degrees.
+    feh, loga : array_like of shape `(N,)`
+        [Fe/H] and log10(age / yr) at each distance.
+    rstate : `~numpy.random.Generator`
+        Random number generator.
+    **kwargs
+        Keywords of `logp_galactic_structure`, including the observed
+        ``pm``, ``pm_cov``, ``rv`` and ``rv_err``.
+
+    Returns
+    -------
+    motions : `~numpy.ndarray` of shape `(N, 3)`
+        Predicted ``(mu_l*, mu_b)`` in mas/yr and ``v_r`` in km/s.
+
+    Notes
+    -----
+    The thin disk draws from the ellipsoid of the label age rather than
+    from the true-age nodes of the prior, which spread the age by its
+    systematic error. The outlier ellipsoid of the kinematic term is a
+    tolerance for bad measurements and is not drawn.
+    """
+    dists = np.asarray(dists, dtype=float)
+    if dists.ndim != 1:
+        raise ValueError(f"`dists` must be 1D; got shape {dists.shape}.")
+    feh = np.broadcast_to(np.asarray(feh, dtype=float), dists.shape)
+    loga = np.broadcast_to(np.asarray(loga, dtype=float), dists.shape)
+    _, comps = logp_galactic_structure(
+        dists, coord, feh=feh, loga=loga, return_components=True, **kwargs
+    )
+    ln_c = sum(np.array(term) for term in comps.values())
+    p = np.exp(ln_c - ln_c.max(axis=0))
+    cdf = np.cumsum(p / p.sum(axis=0), axis=0)
+    comp = (rstate.uniform(size=len(dists)) > cdf[:-1]).sum(axis=0)
+
+    def arg(name):
+        return kwargs.get(name, _NORMALIZATION_DEFAULTS[name])
+
+    ell, b = float(coord[0]), float(coord[1])
+    R_solar = arg("R_solar")
+    R, Z = galactic_to_galactocentric_cyl(dists, ell, b, R_solar, arg("Z_solar"))[:2]
+    shared = dict(R_solar=R_solar, v_circ_solar=arg("v_circ_solar"))
+    mean, cov = np.zeros((len(dists), 3)), np.zeros((len(dists), 3, 3))
+    s = comp == 0
+    mean[s], cov[s] = thin_disk_velocity_moments(
+        R[s],
+        Z[s],
+        10.0 ** (loga[s] - 9.0),
+        feh[s],
+        R_scale=arg("R_thin"),
+        R_smooth=arg("Rs_thin"),
+        **shared,
+    )
+    s = comp == 1
+    mean[s], cov[s] = thick_disk_velocity_moments(
+        R[s],
+        (THICK_DISK_SIGMA[0], THICK_DISK_SIGMA[1], arg("thick_sigma_z")),
+        R_scale=arg("R_thick"),
+        R_smooth=arg("Rs_thick"),
+        **shared,
+    )
+    s = np.where(comp == 2)[0]
+    weight, halo_mean, halo_cov = halo_velocity_moments(R[s], Z[s])
+    lobe = (rstate.uniform(size=len(s))[:, None] > np.cumsum(weight, 1)[:, :-1]).sum(1)
+    mean[s], cov[s] = (
+        halo_mean[np.arange(len(s)), lobe],
+        halo_cov[np.arange(len(s)), lobe],
+    )
+    s = comp == 3
+    mean[s], cov[s] = bulge_velocity_moments(R[s], Z[s], **shared)
+    velocity = mean + np.einsum(
+        "nij,nj->ni", np.linalg.cholesky(cov), rstate.standard_normal((len(dists), 3))
+    )
+    return velocity_to_observables(
+        dists, (ell, b), velocity, np.zeros_like(cov), R_solar=R_solar
+    )[0]
 
 
 def galactic_prior_summary(**kwargs):

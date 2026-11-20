@@ -98,6 +98,8 @@ fitter.fit(
 .. autofunction:: logp_galactic_structure
 
 .. autofunction:: galactic_prior_summary
+
+.. autofunction:: sample_motions
 ```
 
 ```{eval-rst}

@@ -2575,3 +2575,25 @@ class TestFitWithProperMotions:
 
         with pytest.raises(ValueError, match="keyword `pm`"):
             self._fit(mock_fitter, tmp_path, "bad", lngalprior=prior, **self.PM)
+
+    def test_motion_draws_follow_the_fit_without_changing_it(
+        self, mock_fitter, tmp_path
+    ):
+        plain = self._fit(mock_fitter, tmp_path, "plain", **self.PM)
+        drawn = self._fit(
+            mock_fitter, tmp_path, "drawn", save_motion_draws=True, **self.PM
+        )
+        for k in plain:
+            np.testing.assert_array_equal(plain[k], drawn[k], err_msg=k)
+        assert drawn["samps_motion"].shape == (self.NDATA, 10, 3)
+        assert np.all(np.isfinite(drawn["samps_motion"]))
+
+    def test_motion_draws_need_the_distance_draws(self, mock_fitter, tmp_path):
+        with pytest.raises(ValueError, match="save_dar_draws"):
+            self._fit(
+                mock_fitter,
+                tmp_path,
+                "bad",
+                save_motion_draws=True,
+                save_dar_draws=False,
+            )

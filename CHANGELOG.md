@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without it. A custom `lngalprior` must accept the kinematic keywords,
   or the fit raises an error naming the missing one.
   `brutus.utils.galactic_to_icrs` converts Galactic coordinates to ICRS.
+- **Posterior predictive motions.** `brutus.priors.sample_motions` draws
+  the proper motion and radial velocity that the Galactic prior predicts
+  at given distances and labels, and `fit(save_motion_draws=True)` saves
+  one for each posterior draw as `samps_motion`.
 - **`bulge_velocity_moments`** gives the velocity ellipsoid of the bulge,
   from the bulge disc of Binney & Vasiliev (2024), now tabulated in
   `bv24_tables.npz`.

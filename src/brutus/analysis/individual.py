@@ -65,7 +65,7 @@ from ..core import StarGrid
 from ..core.sed_utils import _get_seds, _model_array, get_seds
 from ..priors.astrometric import logp_parallax
 from ..priors.extinction import logp_extinction
-from ..priors.galactic import PM_OUTLIER, logp_galactic_structure
+from ..priors.galactic import PM_OUTLIER, logp_galactic_structure, sample_motions
 from ..priors.stellar import logp_imf, logp_ps1_luminosity_function
 from ..utils.math import AVLIM, LOG_ZERO, R_SOLAR, RVLIM, Z_SOLAR, galactic_to_icrs
 from ..utils.math import inverse3 as _inverse3
@@ -1961,6 +1961,7 @@ class BruteForce:
         apply_pm_prior=True,
         pm_outlier=PM_OUTLIER,
         pm_floor=0.0,
+        save_motion_draws=False,
     ):
         """
         Fit all input models to the input data to compute log-posteriors.
@@ -2091,6 +2092,13 @@ class BruteForce:
             The outlier share and the proper-motion error floor in mas/yr of
             `~brutus.priors.logp_galactic_structure`. Defaults are 0.01 and 0.
 
+        save_motion_draws : bool, optional
+            Whether to save ``samps_motion``, a posterior predictive draw of
+            ``(mu_l*, mu_b, v_r)`` for each draw, from
+            `~brutus.priors.sample_motions` with the observed motion of the
+            kinematic term. It needs `data_coords`, the default Galactic
+            prior and ``save_dar_draws=True``. Default is False.
+
         logl_dim_prior : bool, optional
             Whether to apply dimensional correction to log-likelihood.
             Default is True.
@@ -2200,6 +2208,10 @@ class BruteForce:
         - ``samps_dred``: R(V) draws (Ndata, Ndraws)
         - ``samps_logp``: Log-weights for draws (Ndata, Ndraws)
 
+        If save_motion_draws=True, also includes ``samps_motion``, the
+        predicted ``(mu_l*, mu_b)`` in mas/yr and ``v_r`` in km/s of each
+        draw, without measurement error (Ndata, Ndraws, 3).
+
         Examples
         --------
         >>> from brutus.analysis import BruteForce
@@ -2246,6 +2258,13 @@ class BruteForce:
         _check_threshold("logl_initthresh", logl_initthresh)
         _check_positive("ltol", ltol)
         _check_max_models(max_models)
+        if save_motion_draws and not (
+            save_dar_draws and lngalprior is None and data_coords is not None
+        ):
+            raise ValueError(
+                "save_motion_draws=True needs data_coords, the default "
+                "Galactic prior (lngalprior=None) and save_dar_draws=True."
+            )
         motions = _motions(
             Ndata,
             data_coords,
@@ -2325,6 +2344,9 @@ class BruteForce:
             for name in ["samps_dist", "samps_red", "samps_dred", "samps_logp"]:
                 fields[name] = ((Ndraws,), "float32", 1.0)
         fields["mc_ess"] = ((Ndraws,), "float32", 0.0)
+        fit_fields = list(fields)
+        if save_motion_draws:
+            fields["samps_motion"] = ((Ndraws, 3), "float32", np.nan)
 
         # An object with no valid bands is written as not fitted.
         unfitted = dict.fromkeys(fields, np.nan) | {"model_idx": -99, "obj_Nbands": 0}
@@ -2389,7 +2411,7 @@ class BruteForce:
                         Z_solar=Z_solar,
                         motion=motions[i],
                     )
-                    row = dict(zip(fields, results, strict=True))
+                    row = dict(zip(fit_fields, results, strict=True))
 
                 for name, value in row.items():
                     store[name][i] = value
@@ -2423,6 +2445,22 @@ class BruteForce:
                     f"total: {t:.3f} s)    \n"
                 )
                 sys.stderr.flush()
+
+            # Drawn after every fit, so the fitted fields do not depend on
+            # save_motion_draws.
+            if save_motion_draws:
+                for i in np.flatnonzero(nbands_valid):
+                    idx = store["model_idx"][i]
+                    store["samps_motion"][i] = sample_motions(
+                        store["samps_dist"][i],
+                        data_coords[i],
+                        self.models_labels["feh"][idx],
+                        self.models_labels["loga"][idx],
+                        rstate,
+                        R_solar=R_solar,
+                        Z_solar=Z_solar,
+                        **(motions[i] or {}),
+                    )
 
             # Dump results to disk if using batch mode
             if not running_io:
