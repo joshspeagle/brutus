@@ -870,13 +870,9 @@ class TestColumnsAndNormalization:
                 + stats.truncnorm.logpdf(age[i], -8.0, 1.8 / 1.5, 12.0, 1.5)
             )
             np.testing.assert_allclose(got[:3, i], [thin, thick, halo], atol=5e-4)
-            rho_bar = _tapered_bar_reference(*_bar_frame(d[i], *coord))
-            if rho_bar > 0:
-                ln_bar = np.log(rho_bar / 0.030e9)
-                ln_bar += _ln_bar_labels(feh[i], age[i], 0.0, 0.0)
-                np.testing.assert_allclose(got[3, i], ln_bar, atol=5e-4)
-            else:  # beyond the bar's taper
-                assert got[3, i] <= gal.LOG_ZERO / 2
+            # The sightline stays 7.4 kpc or more from the centre, beyond the
+            # bulge's taper; the bulge tests below cover its density.
+            assert got[3, i] <= gal.LOG_ZERO / 2
 
     def test_disks_keep_their_density_inside_the_inner_radius(self):
         # Inside DISK_INNER_RADIUS - DISK_EDGE both disks have the density of
@@ -1271,8 +1267,9 @@ class TestThinDiskLabels:
 
     def test_age_shift_table_matches_the_direct_sums_over_feh(self):
         # Off the table nodes in sqrt(age) and R, up to the last age of star
-        # formation, and extrapolated beyond the table.
-        sig_birth = 1.4
+        # formation, and extrapolated beyond the table. The default spread
+        # shares the cached tables.
+        sig_birth = _THIN_KEY[-1]
         ln_mass = gal._thin_disk_mass_table(sig_birth)
         ln_norm = gal._thin_disk_norm_table(sig_birth)
         for age in [0.003, 0.37, 2.9, 7.95, 8.6, 11.97]:

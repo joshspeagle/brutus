@@ -180,19 +180,21 @@ def _dln_dlnR(f, R, h=1e-5):
 
 
 def test_thin_disk_dispersions_use_the_mean_angular_momentum():
-    # Sharma et al. (2021): sigma = sigma_0 f_L(L_z) at 10 Gyr, [Fe/H] = 0
-    # and z = 0, with sigma_z joined to its floor, with L_z the population's mean R v_phi (to 0.3%).
-    # Near the edges of THIN_DISK_R_RANGE the fixed point once oscillated.
+    # Sharma et al. (2021): sigma = sigma_0 f_tau f_L(L_z) at 10 Gyr,
+    # [Fe/H] = 0 and z = 0, with sigma_z joined to its floor and L_z the
+    # population's mean R v_phi (to 0.3%). Near the edges of
+    # THIN_DISK_R_RANGE the fixed point once oscillated.
     R = np.array([3.05, 4.0, R_SOLAR, 14.0, 19.95])
     mean, cov = _thin(R, age=10.0)
     vc = _vc(R)
     L_solar, L_clamp = kin._thin_disk_L_refs(R_SOLAR, _vc_solar())
+    # At 10 Gyr the age factor ((age + 0.1) / 10.1)^beta is 1.
+    sigma0 = np.array(kin.THIN_DISK_SIGMA0)
+    sigma0[1] = (sigma0[1] ** 4 + kin.THIN_DISK_SIGZ_FLOOR**4) ** 0.25
     for i in range(len(R)):
         f_R, f_z, _ = kin._thin_disk_fL(R[i] * mean[i, 1], L_solar, L_clamp)
         np.testing.assert_allclose(
-            np.sqrt(cov[i, [0, 2], [0, 2]]),
-            np.multiply(kin._thin_disk_sigma0(10.0, 0.0), (f_R, f_z)),
-            rtol=2e-3,
+            np.sqrt(cov[i, [0, 2], [0, 2]]), sigma0 * (f_R, f_z), rtol=2e-3
         )
         # Away from the clamp, the circular L_z = R v_c gives other
         # dispersions; near the edges the clamp flattens f_L, so the two
