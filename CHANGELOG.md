@@ -35,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of the bar's shape, so the metal-poor share of the bulge rises away from
   the plane as Zoccali et al. (2017) find, and bulge labels depend on
   position. Over 23 of their fields the rms difference in the metal-poor
-  share falls from 0.18 to 0.12. `return_components` keeps four entries;
+  share falls from 0.18 to 0.11. `return_components` keeps four entries;
   the fourth holds the bar and the spheroid.
 - **The thin-disk sigma_z has a floor of 8 km/s, and 2% of thin-disk
   stars have a broad [Fe/H] at birth** *(output-changing)*. Extrapolated
