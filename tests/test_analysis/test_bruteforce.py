@@ -6,7 +6,7 @@ import pytest
 import scipy.stats
 from conftest import split_labels
 
-from brutus.analysis.individual import BruteForce
+from brutus.analysis.individual import PRIOR_INTERP_TOL, BruteForce
 from brutus.core.individual import StarGrid
 from brutus.priors.galactic import logp_galactic_structure
 from brutus.utils import inv_magnitude
@@ -2343,7 +2343,8 @@ def test_galactic_prior_gets_each_draw_paired_with_its_model_labels(
 ):
     """Draws are flattened draw-major, so a custom prior gets the labels
     tiled, not repeated; the default prior, which gets one label per model
-    broadcast over the draws, must give the same weights."""
+    broadcast over the draws, must give the same weights: exactly with few
+    draws, and within the interpolation tolerance with many."""
     flux, flux_err, mask = observation
     like = fitter.loglike_grid(flux, flux_err, mask, return_vals=True)
     seen = {}
@@ -2366,7 +2367,10 @@ def test_galactic_prior_gets_each_draw_paired_with_its_model_labels(
     )
 
     default = fitter.logpost_grid(like, rstate=np.random.RandomState(5), **kwargs)
-    np.testing.assert_array_equal(default[6], lnp_mc)
+    if Nmc <= 5:
+        np.testing.assert_array_equal(default[6], lnp_mc)
+    else:
+        np.testing.assert_allclose(default[6], lnp_mc, rtol=0, atol=PRIOR_INTERP_TOL)
 
 
 def test_plain_dlabels_with_the_default_galactic_prior_raise(fitter, observation):
