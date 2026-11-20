@@ -888,6 +888,7 @@ class TestColumnsAndNormalization:
                 *gal._NO_LABELS,
                 *tables,
                 np.empty((0, 0, 0)),
+                np.empty(0),
             )[:2]
 
         for Z in (0.0, 0.3, 1.5):
@@ -944,6 +945,7 @@ class TestColumnsAndNormalization:
                 ln_fz2,
                 jeans,
                 ln_mass,
+                np.empty(0),
             )
             ref -= ln_norm_R
             fl = gal._label_index(feh, 0.0, True, labels, table)
@@ -998,7 +1000,10 @@ class TestColumnsAndNormalization:
             nodes = gal._thin_disk_feh_ages(feh, ages, ln_w, sig_birth)
             for got, ln_f in [
                 (gal._ln_sum_nu(*populations, ln_fz2, jeans), by_age),
-                (gal._thin_disk_ln_feh_sum(nodes, R_feh, R_age, *args), joint),
+                (
+                    gal._thin_disk_ln_feh_sum(nodes, R_feh, R_age, *args, np.empty(0)),
+                    joint,
+                ),
             ]:
                 # 16 true ages; the third position is e^-23 for age 0.07.
                 assert np.isclose(got, logsumexp(ln_k + ln_f), atol=0.015)

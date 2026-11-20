@@ -527,6 +527,13 @@ def _truncnorm_lognorm_scalar(lo, hi):
 
 
 @jit(nopython=True, cache=True)
+def _ln_add(a, b):
+    """Return ln(e^a + e^b), or LOG_ZERO when both are LOG_ZERO."""
+    hi, lo = max(a, b), min(a, b)
+    return hi + log1p(exp(lo - hi)) if hi > LOG_ZERO else LOG_ZERO
+
+
+@jit(nopython=True, cache=True)
 def _catmull_rom(p0, p1, p2, p3, t):
     """Return the Catmull-Rom cubic between p1 (t = 0) and p2 (t = 1)."""
     return p1 + 0.5 * t * (

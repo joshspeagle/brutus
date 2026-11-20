@@ -16,6 +16,7 @@ from .galactic import (
     logp_galactic_structure,
 )
 from .kinematic import (
+    bulge_velocity_moments,
     halo_velocity_moments,
     solar_velocity,
     thick_disk_velocity_moments,
@@ -38,6 +39,7 @@ __all__ = [
     "thin_disk_velocity_moments",
     "thick_disk_velocity_moments",
     "halo_velocity_moments",
+    "bulge_velocity_moments",
     "velocity_to_observables",
     "logp_extinction",
 ]

@@ -129,6 +129,10 @@ The Galactic prior uses the disk vertical dispersions. The fit does not use the 
 ```
 
 ```{eval-rst}
+.. autofunction:: bulge_velocity_moments
+```
+
+```{eval-rst}
 .. autofunction:: velocity_to_observables
 ```
 

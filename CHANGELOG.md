@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Galactic prior can use a star's proper motion and radial
+  velocity.** `logp_galactic_structure` takes `pm` and `pm_cov` in
+  Galactic components, and optionally `rv` and `rv_err`. Each component's
+  density is then multiplied by the probability of the motion under its
+  velocity ellipsoid: each thin-disk true age has its own, the halo is the
+  Lancaster et al. (2019) mixture, and the bulge takes the bulge disc of
+  Binney & Vasiliev (2024). A share `pm_outlier` (0.01) of stars follows a
+  broad 300 km/s ellipsoid instead, and `pm_floor` adds a systematic error.
+  Without a proper motion the prior is unchanged.
+- **`bulge_velocity_moments`** gives the velocity ellipsoid of the bulge,
+  from the bulge disc of Binney & Vasiliev (2024), now tabulated in
+  `bv24_tables.npz`.
 - **`brutus.priors.kinematic`** gives the velocity ellipsoids of the
   Galactic components: the thin disk with the age, angular-momentum,
   [Fe/H] and height relations of Sharma et al. (2021), the thick disk with
