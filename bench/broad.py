@@ -42,6 +42,8 @@ import h5py
 import numpy as np
 from scipy import stats
 
+from brutus.dust import Bayestar
+
 sys.path.insert(0, os.path.dirname(__file__))
 import disteq as D  # noqa: E402
 import harness as H  # noqa: E402
@@ -132,7 +134,8 @@ def run(tag, seed):
         radial_velocity=rv,
         radial_velocity_error=np.where(np.isnan(rv), np.nan, stars["rv_err"]),
     )
-    common = dict(data_coords=coords, dustfile=DUST, phot_offsets=offsets)
+    # Read the dust map once, so the times measure the fits.
+    common = dict(data_coords=coords, dustfile=Bayestar(DUST), phot_offsets=offsets)
     out = os.path.join(H.OUTDIR, f"broad_{tag}_s{seed}")
     groups = [
         (
