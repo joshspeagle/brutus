@@ -60,6 +60,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PRIOR_INTERP_TOL` (1e-3 in ln prior). The prior costs 6 to 10 times less;
   on 37 stars over 12 sightlines, each model's integrated ln prior moved
   by at most 5e-4.
+- **`loglike_grid` no longer copies the model coefficients for each star.**
+  With every band valid it reads the grid itself, and with a masked band it
+  reuses the copy for the last mask, which saves 54-104 ms per star on the
+  bench cohort. Results are bitwise identical.
 - **The bulge's metal-poor population is a spheroid** *(output-changing)*.
   The bar's metal-poor population, 0.6 of `bar_mass` (`bar_feh[0]`, 0.5
   before), now has a spherical cored power law (`SPHEROID_SHAPE`) instead

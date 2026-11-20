@@ -926,6 +926,9 @@ class BruteForce:
 
         # Generate labels mask automatically
         self.labels_mask = self._generate_labels_mask()
+        # The coefficients of the valid bands for the last band mask, which
+        # the stars of one catalogue mostly share: (grid, mask, copy).
+        self._band_coeffs = (None, None, None)
 
         if verbose:
             n_grid = sum(1 for m in self.labels_mask.values() if m)
@@ -1373,7 +1376,16 @@ class BruteForce:
 
         # Subselect only clean observations
         flux, fluxerr = data[data_mask], data_err[data_mask]
-        mcoeffs = mag_coeffs[:, data_mask, :]
+        # A boolean index copies the whole grid, about 60 MB, so every
+        # band valid reads the grid itself, and a masked band reuses the
+        # copy for the last mask.
+        if data_mask.all():
+            mcoeffs = mag_coeffs
+        else:
+            grid, mask, mcoeffs = self._band_coeffs
+            if grid is not mag_coeffs or not np.array_equal(mask, data_mask):
+                mcoeffs = mag_coeffs[:, data_mask, :]
+                self._band_coeffs = (mag_coeffs, data_mask, mcoeffs)
         tot_var = np.square(fluxerr)  # 1D: (Nfilt,)
 
         # Get started by fitting in magnitudes
