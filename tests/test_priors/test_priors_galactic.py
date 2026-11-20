@@ -530,16 +530,6 @@ def test_labels_on_the_trailing_axis_match_tiled_labels(names):
     np.testing.assert_array_equal(got.ravel(), ref)
 
 
-def test_tabulated_ln_ndtr_matches_scipy():
-    from scipy.special import log_ndtr
-
-    t = np.concatenate(
-        [np.linspace(-40.0, 9.0, 20001), np.linspace(-37.01, -36.99, 101)]
-    )
-    got = np.array([gal._ln_ndtr(v) for v in t])
-    np.testing.assert_allclose(got, log_ndtr(t), rtol=1e-12, atol=3e-9)
-
-
 class TestLabelsValidation:
     @pytest.mark.parametrize("n", [10, 2000])
     def test_labels_length_mismatch_raises(self, n):

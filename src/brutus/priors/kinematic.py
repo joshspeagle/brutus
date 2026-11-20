@@ -52,7 +52,7 @@ import numpy as np
 from numba import jit, prange
 from scipy.interpolate import BSpline
 
-from brutus.utils.math import R_SOLAR
+from brutus.utils.math import R_SOLAR, _catmull_rom, _catmull_rom_table
 
 __all__ = [
     "solar_velocity",
@@ -289,27 +289,6 @@ def _hermite(w, p0, m0, p1, m1):
         + (3.0 * w2 - 2.0 * w) * m1
     )
     return value, slope
-
-
-@jit(nopython=True, cache=True)
-def _catmull_rom(p0, p1, p2, p3, t):
-    """Return the Catmull-Rom cubic between p1 (t = 0) and p2 (t = 1)."""
-    return p1 + 0.5 * t * (
-        p2
-        - p0
-        + t * (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3 + t * (3.0 * (p1 - p2) + p3 - p0))
-    )
-
-
-@jit(nopython=True, cache=True)
-def _catmull_rom_table(f, table):
-    """Return the Catmull-Rom interpolation of the uniform 1-D ``table`` at
-    the fractional index ``f`` >= 0, mirrored about index 0 and held
-    beyond index n - 2."""
-    n = len(table)
-    f = min(f, n - 2.0)
-    i = min(int(f), n - 3)
-    return _catmull_rom(table[abs(i - 1)], table[i], table[i + 1], table[i + 2], f - i)
 
 
 @jit(nopython=True, cache=True)

@@ -42,7 +42,7 @@ from math import asinh, cos, exp, isfinite, log, log1p, pi, sin, sqrt
 
 import numpy as np
 from numba import get_num_threads, jit, prange
-from scipy.special import log_ndtr, logsumexp
+from scipy.special import logsumexp
 from scipy.stats import skewnorm
 
 from brutus.priors.kinematic import (
@@ -59,7 +59,6 @@ from brutus.priors.kinematic import (
     THICK_DISK_SIGMA,
     THIN_DISK_Z_EDGE,
     THIN_DISK_Z_MAX,
-    _catmull_rom_table,
     _check_positive,
     _circular_velocity,
     _logn_disk_dlnR,
@@ -79,7 +78,9 @@ from brutus.utils.math import (
     LOG_ZERO,
     R_SOLAR,
     Z_SOLAR,
-    _log_ndtr_tail,
+    _catmull_rom_table,
+    _ln_ndtr,
+    _ln_ndtr_diff,
     _truncnorm_lognorm_scalar,
     galactic_to_galactocentric,
 )
@@ -137,25 +138,6 @@ def _gauss_legendre_panels(edges, n):
     return (0.5 * (lo + hi) + 0.5 * (hi - lo) * nodes).ravel(), (
         0.5 * (hi - lo) * weights
     ).ravel()
-
-
-# ln Phi of the standard normal on steps of 1/128, from one step below -37
-# to past 8: Catmull-Rom cubics in it are within 3e-9 of ln Phi, at less
-# than half the cost of erfc. Outside -37 to 8, ln Phi is 0 above (to
-# within 7e-16) and the asymptotic series of `_log_ndtr_tail` below,
-# where erfc underflows.
-_NDTR_DT = 1.0 / 128.0
-_LN_NDTR = log_ndtr(-37.0 + _NDTR_DT * np.arange(-1, 5764))
-
-
-@jit(nopython=True, cache=True)
-def _ln_ndtr(t):
-    """Return ln Phi(t) of the standard normal, from _LN_NDTR."""
-    if t > 8.0:
-        return 0.0
-    if t > -37.0:
-        return _catmull_rom_table((t + 37.0) / _NDTR_DT + 1.0, _LN_NDTR)
-    return _log_ndtr_tail(t)
 
 
 @jit(nopython=True, cache=True)
@@ -413,18 +395,6 @@ def _birth_ln_at(R, all_terms, start):
     else:
         ln = LOG_ZERO
     return _ln_add(ln, ln_out)
-
-
-@jit(nopython=True, cache=True)
-def _ln_ndtr_diff(b, a):
-    """Return ln(Phi(b) - Phi(a)) for b > a, or LOG_ZERO where it
-    underflows; in the upper tail by symmetry, to keep the precision."""
-    if a > 0.0:
-        a, b = -b, -a
-    hi, lo = _ln_ndtr(b), _ln_ndtr(a)
-    if not hi > lo:
-        return LOG_ZERO
-    return hi + log1p(-exp(lo - hi))
 
 
 @jit(nopython=True, cache=True)

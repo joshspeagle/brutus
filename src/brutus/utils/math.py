@@ -526,6 +526,63 @@ def _truncnorm_lognorm_scalar(lo, hi):
     return lphi_hi + log1p(-exp(_log_ndtr_tail(lo) - lphi_hi))
 
 
+@jit(nopython=True, cache=True)
+def _catmull_rom(p0, p1, p2, p3, t):
+    """Return the Catmull-Rom cubic between p1 (t = 0) and p2 (t = 1)."""
+    return p1 + 0.5 * t * (
+        p2
+        - p0
+        + t * (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3 + t * (3.0 * (p1 - p2) + p3 - p0))
+    )
+
+
+@jit(nopython=True, cache=True)
+def _catmull_rom_table(f, table):
+    """Return the Catmull-Rom interpolation of the uniform 1-D ``table`` at
+    the fractional index ``f`` >= 0, mirrored about index 0 and held
+    beyond index n - 2."""
+    n = len(table)
+    f = min(f, n - 2.0)
+    i = min(int(f), n - 3)
+    return _catmull_rom(table[abs(i - 1)], table[i], table[i + 1], table[i + 2], f - i)
+
+
+# ln Phi of the standard normal on steps of 1/128, from one step below -37
+# to past 8: Catmull-Rom cubics in it are within 3e-9 of ln Phi, at less
+# than half the cost of erfc. Outside -37 to 8, ln Phi is 0 above (to
+# within 7e-16) and the asymptotic series of `_log_ndtr_tail` below,
+# where erfc underflows.
+_NDTR_DT = 1.0 / 128.0
+_LN_NDTR = log_ndtr(-37.0 + _NDTR_DT * np.arange(-1, 5764))
+
+
+@jit(nopython=True, cache=True)
+def _ln_ndtr(t):
+    """Return ln Phi(t) of the standard normal, from _LN_NDTR."""
+    if t > 8.0:
+        return 0.0
+    if t > -37.0:
+        return _catmull_rom_table((t + 37.0) / _NDTR_DT + 1.0, _LN_NDTR)
+    return _log_ndtr_tail(t)
+
+
+@jit(nopython=True, cache=True)
+def _ln_ndtr_diff(b, a):
+    """Return ln(Phi(b) - Phi(a)) for b > a, or LOG_ZERO where it
+    underflows; in the upper tail by symmetry, to keep the precision.
+
+    A faster `_truncnorm_lognorm_scalar` from `_ln_ndtr` (10-15% of the
+    labelled Galactic prior), for intervals wide enough that the 3e-9 of
+    the table does not matter: the error in ln of the mass is about 3e-9
+    divided by the fraction of Phi(b) inside the interval."""
+    if a > 0.0:
+        a, b = -b, -a
+    hi, lo = _ln_ndtr(b), _ln_ndtr(a)
+    if not hi > lo:
+        return LOG_ZERO
+    return hi + log1p(-exp(lo - hi))
+
+
 def truncnorm_pdf(x, a, b, loc=0.0, scale=1.0):
     """
     Compute PDF of a truncated normal distribution.
