@@ -51,7 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *(output-changing)*. The disk dispersions are held there while the
   vertical force of the potential keeps rising toward the bulge, which
   squeezed both disks threefold in height toward the centre. The disks
-  now hold 0.14e10 Msun in the bar box, against 0.32e10 before.
+  now hold 0.14e10 Msun in the bar box, against 0.32e10 before. The mean
+  rotation of both disks follows the held density, so inside 5 kpc the
+  disks lag less: the thick disk rotates at 190 km/s at 3.5 kpc, against
+  155 km/s before.
 - **Beyond 15.3 kpc the thin-disk [Fe/H] at birth stops falling, and
   beyond 14 kpc the thin-disk age mix keeps its value there**
   *(output-changing)*. The label distribution was held at its 14 kpc value

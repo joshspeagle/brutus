@@ -174,6 +174,15 @@ def _thin(R, age=5.0, feh=0.0, **kw):
     return thin_disk_velocity_moments(R, np.zeros_like(R), age, feh, **kw)
 
 
+def _held_disk(x, **density):
+    """The disk density of the Galactic prior: `logn_disk` in the midplane
+    at the radius held to 4 kpc through a quadratic blend over 3-5 kpc."""
+    x = np.asarray(x, dtype=float)
+    blend = np.abs(x - 4.0) < 1.0
+    held = np.where(blend, 4.0 + (x - 3.0) ** 2 / 4.0, np.maximum(x, 4.0))
+    return np.exp(logn_disk(held, 0.0, **density))
+
+
 def _dln_dlnR(f, R, h=1e-5):
     """Central difference of d ln f / d ln R."""
     return (np.log(f(R * (1 + h))) - np.log(f(R * (1 - h)))) / (2 * h)
@@ -240,7 +249,7 @@ def test_thick_disk_rotation_matches_the_measured_high_alpha_lag():
 
 
 @pytest.mark.parametrize("disk", ["thin", "thick"])
-def test_disk_rotation_solves_the_jeans_equation_for_the_logn_disk_density(disk):
+def test_disk_rotation_solves_the_jeans_equation_for_the_held_disk_density(disk):
     # The radii miss the ends of the edge blends (11.5 and 13.1 kpc for
     # the thick disk), where the second derivative jumps and the central
     # differences lose precision.
@@ -257,7 +266,7 @@ def test_disk_rotation_solves_the_jeans_equation_for_the_logn_disk_density(disk)
             return thick_disk_velocity_moments(R, **density)
 
     mean, cov = moments(R)
-    dlnnu = _dln_dlnR(lambda x: np.exp(logn_disk(x, 0.0, **density)), R)
+    dlnnu = _dln_dlnR(lambda x: _held_disk(x, **density), R)
     dlnvar = _dln_dlnR(lambda x: moments(x)[1][:, 0, 0], R)
     # Binney & Tremaine (2008), eq. 4.228, with no tilt term.
     rhs = cov[:, 1, 1] - cov[:, 0, 0] * (1 + dlnnu + dlnvar)
@@ -458,12 +467,14 @@ def test_thick_disk_rotation_solves_the_jeans_equation():
     R = (np.arange(8, 120, 6) + 0.5) * (kin._SIG_X[1] - kin._SIG_X[0]) * R_SOLAR
     density = dict(R_scale=2.0, R_smooth=2.0)
     mean, cov = thick_disk_velocity_moments(R, **density)
-    dlnnu = _dln_dlnR(lambda x: np.exp(logn_disk(x, 0.0, **density)), R)
+    dlnnu = _dln_dlnR(lambda x: _held_disk(x, **density), R)
     dlnvar = _dln_dlnR(
         lambda x: thick_disk_velocity_moments(x, **density)[1][:, 0, 0], R
     )
     jeans = np.sqrt(_vc(R) ** 2 - (cov[:, 1, 1] - cov[:, 0, 0] * (1 + dlnnu + dlnvar)))
-    np.testing.assert_allclose(mean[:, 1], jeans, rtol=1e-7)
+    # Inside 3 kpc the held density is flat, so the solution exceeds v_c,
+    # where `_jeans_vphi` clips it.
+    np.testing.assert_allclose(mean[:, 1], np.minimum(jeans, _vc(R)), rtol=1e-7)
 
 
 @pytest.mark.parametrize("age", [1.0, 5.0])

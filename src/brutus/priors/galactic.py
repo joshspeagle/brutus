@@ -55,6 +55,7 @@ from brutus.priors.kinematic import (
     _V_Z,
     _V_ZS,
     DISK_EDGE,
+    DISK_INNER_RADIUS,
     THICK_DISK_SIGMA,
     THIN_DISK_Z_EDGE,
     THIN_DISK_Z_MAX,
@@ -125,12 +126,6 @@ THIN_DISK_FIT_RADII = (5.0, 14.0)
 # et al. 2026, arXiv:2611.10132), where the gradient above reaches -0.49 at
 # the present day; Trentin et al. (2024) see no break out to 20 kpc.
 THIN_DISK_GRADIENT_KNEE = 15.3
-# Radius in kpc inside which both disks keep the density they have there,
-# through a blend of half-width DISK_EDGE. The dispersions are held inside
-# about 3 kpc while K_z keeps rising toward the bulge, so the Jeans profiles
-# would pinch the disks threefold toward the centre; the bar fills the
-# inner Galaxy instead.
-DISK_INNER_RADIUS = 4.0
 
 
 def _gauss_legendre_panels(edges, n):
@@ -1372,7 +1367,7 @@ def _thin_disk_fL_rows(R_solar, vc_solar, R_thin, Rs_thin):
     for r in range(rows):
         R = r * _V_DX * R_solar
         vc, dlnvc = _circular_velocity(R, R_solar, vc_solar)
-        dlnnu = _logn_disk_dlnR(R, sqrt(R * R + Rs_thin * Rs_thin), R_thin)
+        dlnnu = _logn_disk_dlnR(R, Rs_thin, R_thin)
         fade = _thin_disk_fade(R)
         for k in range(_FL_NSIG):
             sig_R0 = exp(_FL_LNSIG0 + k * _FL_DLNSIG)

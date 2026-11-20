@@ -40,10 +40,16 @@ def _vc(R):
 def _mean_L(R, age, feh):
     """Mean L_z of a thin-disk population at R in the midplane, from the
     kinematic kernels (tested in the kinematic tests), with the default
-    thin-disk density (R_scale = 2.74, R_smooth = 2)."""
+    thin-disk density (R_scale = 2.74, R_smooth = 2) held inside 4 kpc,
+    differentiated numerically."""
     vc, dlnvc = _vc(R)
     L_refs = kin._thin_disk_L_refs(*_ROT)
-    dlnnu = -R * R / (2.74 * np.hypot(R, 2.0))
+
+    def ln_n(r):
+        return logn_disk(_clamp(r, 4.0, np.inf, 1.0), 0.0)
+
+    h = 1e-5
+    dlnnu = (ln_n(R * (1 + h)) - ln_n(R * (1 - h))) / (2 * h)
     sig_R0 = kin._thin_disk_sigma0(age, feh)[0]
     fade = kin._thin_disk_fade(R)
     L = kin._thin_disk_mean_L(R, 0.0, sig_R0, vc, dlnvc, *L_refs, dlnnu, fade)

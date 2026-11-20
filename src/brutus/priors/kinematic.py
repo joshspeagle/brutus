@@ -23,7 +23,8 @@ age, angular-momentum, metallicity and height relations of Sharma et al.
 al. (2020) with the radial profiles of the high-[alpha/Fe] disk of Binney &
 Vasiliev (2024). The mean
 rotation of both disks is the radial Jeans solution for the density of
-`~brutus.priors.galactic.logn_disk`. The halo is the isotropic plus
+`~brutus.priors.galactic.logn_disk`, held inside DISK_INNER_RADIUS (4 kpc)
+as in the Galactic prior. The halo is the isotropic plus
 radially anisotropic mixture of Lancaster et al. (2019).
 
 See Also
@@ -120,6 +121,12 @@ THIN_DISK_R_RANGE = (3.0, 20.0)
 THIN_DISK_SIGZ_R_MAX = 14.0
 THIN_DISK_FEH_RANGE = (-1.0, 0.5)
 DISK_EDGE = 1.0
+# Radius in kpc inside which both disks keep the density they have there,
+# through a blend of half-width DISK_EDGE. The dispersions are held inside
+# about 3 kpc while K_z keeps rising toward the bulge, so the Jeans profiles
+# would pinch the disks threefold toward the centre; the bar fills the
+# inner Galaxy instead.
+DISK_INNER_RADIUS = 4.0
 # Greatest |z| in kpc of the Sharma et al. (2021) fit of the height term
 # (their Fig. 1), and the half-width in kpc of its quadratic blend: above
 # it, sigma_z keeps its value, so each population is isothermal there.
@@ -330,10 +337,13 @@ def _circular_velocity(R, R_solar, vc_solar):
 
 
 @jit(nopython=True, cache=True)
-def _logn_disk_dlnR(R, R_eff, R_scale):
-    """Return d ln(nu) / d ln(R) of `~brutus.priors.galactic.logn_disk`,
-    with the smoothed radius R_eff = sqrt(R^2 + R_smooth^2)."""
-    return -R * R / (R_scale * R_eff)
+def _logn_disk_dlnR(R, R_smooth, R_scale):
+    """Return d ln(nu) / d ln(R) of the disk density of
+    `~brutus.priors.galactic.logp_galactic_structure`: that of
+    `~brutus.priors.galactic.logn_disk` at the radius held inside
+    DISK_INNER_RADIUS, R_c, times dR_c / dR."""
+    R_c, dR_c = _soft_clamp(R, DISK_INNER_RADIUS, np.inf, DISK_EDGE)
+    return -R * R_c * dR_c / (R_scale * sqrt(R_c * R_c + R_smooth * R_smooth))
 
 
 @jit(nopython=True, cache=True)
@@ -644,7 +654,7 @@ def _thin_disk_array(R, Z, age, feh, R_scale, R_smooth, R_solar, vc_solar):
             dlnvc,
             L_solar,
             L_clamp,
-            _logn_disk_dlnR(R[i], sqrt(R[i] * R[i] + R_smooth * R_smooth), R_scale),
+            _logn_disk_dlnR(R[i], R_smooth, R_scale),
         )
         _store(mean[i], cov[i], 0.0, vphi, 0.0, var_R, var_phi, var_z, 0.0)
     return mean, cov
@@ -673,7 +683,7 @@ def _thick_disk_array(
             var_phi0,
             var_z0,
             R_solar,
-            _logn_disk_dlnR(R[i], sqrt(R[i] * R[i] + R_smooth * R_smooth), R_scale),
+            _logn_disk_dlnR(R[i], R_smooth, R_scale),
         )
         _store(mean[i], cov[i], 0.0, vphi, 0.0, var_R, var_phi, var_z, 0.0)
     return mean, cov
@@ -793,7 +803,8 @@ def thin_disk_velocity_moments(
 
     The mean rotation is the radial Jeans solution (Binney & Tremaine 2008,
     eq. 4.228) for a cylindrically aligned ellipsoid and the density
-    gradient of `~brutus.priors.galactic.logn_disk`:
+    gradient of `~brutus.priors.galactic.logn_disk`, held inside
+    DISK_INNER_RADIUS (4 kpc) as in the Galactic prior:
 
     .. math::
         \bar{v}_\phi^2 = v_c^2 - \sigma_\phi^2
