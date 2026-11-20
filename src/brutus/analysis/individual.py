@@ -1615,7 +1615,8 @@ class BruteForce:
 
         dustfile : str, path-like or `~brutus.dust.Bayestar`, optional
             3D dust map for the dust-map prior. A path is loaded as a
-            `~brutus.dust.Bayestar` map.
+            `~brutus.dust.Bayestar` map on every call, which takes seconds,
+            so pass a loaded map when calling this for many objects.
 
         dlabels : structured `~numpy.ndarray` of shape `(Nmodels,)` or None, optional
             Model labels passed to the Galactic prior. By default, the labels
@@ -2148,7 +2149,8 @@ class BruteForce:
             3D dust map for extinction priors. Can be a file path (string
             or `os.PathLike`, e.g. `pathlib.Path`) to a Bayestar HDF5
             file, which will be loaded automatically, or a pre-loaded
-            ``Bayestar`` object.
+            ``Bayestar`` object. Loading the map takes seconds, so pass a
+            loaded map to fit several batches of objects.
 
         apply_dlabels : bool, optional
             Whether to pass model labels to the Galactic prior. With False,
