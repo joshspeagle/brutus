@@ -763,7 +763,12 @@ def thin_disk_velocity_moments(
     :math:`\bar{v}_\phi` from the Jeans equation below (two steps of the
     fixed point from the circular :math:`L_z = R\,v_c`). The relations
     were fitted at 3 < R < 20 kpc, :math:`|z|` < 2 kpc and
-    -1 < [Fe/H] < 0.5.
+    -1 < [Fe/H] < 0.5. For :math:`\sigma_z` the product :math:`s` of
+    :math:`\sigma_{0,v}`, the age factor and the [Fe/H] factor is joined to
+    the 8 km/s of stars younger than
+    200 Myr (``THIN_DISK_SIGZ_FLOOR``; Gaia Collaboration 2021) as
+    :math:`(s^4 + 8^4)^{1/4}`, because extrapolated to age 0 it gives
+    2.8 km/s.
     In the height factor of :math:`\sigma_z`, :math:`|z|` is held at
     2 kpc (``THIN_DISK_Z_MAX``) with a quadratic blend from 1.5 kpc
     (``THIN_DISK_Z_EDGE`` = 0.5 kpc). Without the hold, the thin-disk

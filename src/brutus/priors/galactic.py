@@ -625,8 +625,9 @@ def _thin_disk_age_shift(age, R_feh, R_age, ln_mass):
     if x < edge:
         return at_age - _catmull_rom_2d(fu, x, ln_mass)
     # Far beyond the migration width, ln p(age | R) falls linearly in R with
-    # the birth profile: within 1e-4 of the direct sums of the shift, which
-    # reaches 76 at 100 kpc, for ages below the end of star formation.
+    # the birth profile: within a relative 1e-4 of the direct sums of the
+    # shift (6e-3 at 100 kpc, where it reaches 76), for ages below the end of
+    # star formation.
     last = _catmull_rom_2d(fu, edge, ln_mass)
     slope = last - _catmull_rom_2d(fu, edge - 1, ln_mass)
     return at_age - last - (x - edge) * slope
@@ -2232,11 +2233,11 @@ def logp_galactic_structure(
     components : dict, optional
         If ``return_components``: ``'number_density'``, the list of ln
         number density times :math:`d^2` of the thin disk, thick disk, halo
-        and bar; and, with labels, ``'labels'``, the list of ln p(labels) of
-        each component at that position, 0 where the component has no
-        stars (the bar beyond 6 kpc from the centre, or a component
-        switched off with 0). Their sums are the
-        terms of ``logp``.
+        and bulge (the bar and the spheroid); and, with labels,
+        ``'labels'``, the list of ln p(labels) of each component at that
+        position, 0 where the component has no stars (the bulge beyond 6
+        kpc from the centre, or a component switched off with 0). Their sums
+        are the terms of ``logp``.
 
     Raises
     ------
@@ -2249,7 +2250,8 @@ def logp_galactic_structure(
     Notes
     -----
     Each disk has an exponential surface density with scale length
-    ``R_thin`` or ``R_thick``, as in `logn_disk`. A disk population's
+    ``R_thin`` or ``R_thick``, as in `logn_disk`, and inside
+    ``DISK_INNER_RADIUS`` (4 kpc) keeps its density there. A disk population's
     density is its surface density times :math:`\nu(z) / 2H`, with
     :math:`\nu = 1` at the midplane and :math:`H` its column. The
     vertical profiles solve the vertical Jeans equation in the potential
@@ -2263,14 +2265,20 @@ def logp_galactic_structure(
     A thin-disk population of a given age and [Fe/H] takes the vertical
     dispersion of Sharma et al. (2021), which grows with height as
     :math:`f_z = 1 + \gamma_z |z|` up to 2 kpc, with its angular-momentum
-    factor held at the :math:`L_z` of a circular orbit at 14 kpc; the
+    factor held at the :math:`L_z` of a circular orbit at 14 kpc and
+    :math:`\sigma_{z,0}` joined to the 8 km/s of stars younger than 200
+    Myr (Gaia Collaboration 2021) as :math:`(\sigma^4 + 8^4)^{1/4}`; the
     thin-disk density is tapered to 0 between :math:`|z|` = 5 and 7 kpc,
     by the cosine taper of the bar, which removes those stars. Its
     ages and [Fe/H] at radius R follow the star formation, enrichment and
     radial migration model of Frankel et al. (2018), read as the
-    distribution per unit area and held outside the radii of their fit, 5
-    to 14 kpc
-    (``THIN_DISK_*`` constants). Labels not given are summed over. A
+    distribution per unit area (``THIN_DISK_*`` constants). The [Fe/H] at
+    birth stops falling beyond ``THIN_DISK_GRADIENT_KNEE`` (15.3 kpc), where
+    Cepheids flatten (Albarracin et al. 2026), and 2% of the stars have a
+    broad birth [Fe/H] (``THIN_DISK_FEH_TAIL``). The distribution is held
+    inside 5 kpc, the inner radius of their fit; beyond its outer radius,
+    14 kpc, the age mix is held while [Fe/H] at each age follows the model.
+    Labels not given are summed over. A
     thin-disk star's labelled age is a normal about its true age, of the
     age systematic and truncated to 0 to 13.8 Gyr, and its vertical
     profile is that of the true age; labelled ages above 13.8 Gyr have
@@ -2306,6 +2314,8 @@ def logp_galactic_structure(
     Portail et al. (2017), MNRAS, 465, 1621
     Wegg et al. (2015), MNRAS, 450, 4050
     Gaia Collaboration, Katz et al. (2018), A&A, 616, A11
+    Gaia Collaboration, Antoja et al. (2021), A&A, 649, A8
+    Albarracin et al. (2026), A&A (arXiv:2611.10132)
     Yu et al. (2021), ApJ (arXiv:2105.07151)
     Gonzalez et al. (2015), A&A, 584, A46
     Zoccali et al. (2017), A&A, 599, A12
