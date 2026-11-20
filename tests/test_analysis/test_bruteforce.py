@@ -1604,6 +1604,24 @@ def observation(mock_grid):
     return true_flux, flux_err, mask
 
 
+def test_loglike_grid_reuses_band_coefficients_across_band_masks(
+    mock_grid, observation
+):
+    # The fitter keeps the coefficients of the last band mask; switching
+    # masks back and forth must give what a fresh fitter gives.
+    flux, flux_err, full = observation
+    one_out = full.copy()
+    one_out[1] = False
+    reused = BruteForce(mock_grid, verbose=False)
+    for mask in (one_out, full, one_out, one_out):
+        got = reused.loglike_grid(flux, flux_err, mask, return_vals=True)
+        fresh = BruteForce(mock_grid, verbose=False).loglike_grid(
+            flux, flux_err, mask, return_vals=True
+        )
+        for a, b in zip(got, fresh):
+            np.testing.assert_array_equal(a, b)
+
+
 def _make_loglike_results(scales, cov_list, ndim=5):
     """Build a synthetic loglike_grid(return_vals=True) tuple."""
     n = len(scales)
