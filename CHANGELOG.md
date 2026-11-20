@@ -29,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The bulge's metal-poor population is a spheroid** *(output-changing)*.
+  The bar's metal-poor population, 0.6 of `bar_mass` (`bar_feh[0]`, 0.5
+  before), now has a spherical cored power law (`SPHEROID_SHAPE`) instead
+  of the bar's shape, so the metal-poor share of the bulge rises away from
+  the plane as Zoccali et al. (2017) find, and bulge labels depend on
+  position. Over 23 of their fields the rms difference in the metal-poor
+  share falls from 0.18 to 0.12. `return_components` keeps four entries;
+  the fourth holds the bar and the spheroid.
 - **The thin-disk sigma_z has a floor of 8 km/s, and 2% of thin-disk
   stars have a broad [Fe/H] at birth** *(output-changing)*. Extrapolated
   to age 0, the Sharma et al. (2021) relation gave 2.8 km/s, which piled

@@ -724,6 +724,13 @@ _THIN_TAPER = (5.0, 7.0)
 # terms hold 1.27656e10, 0.33319e10 and 0.21542e10 (Table 1: 1.28, 0.33,
 # 0.22), 1.8252e10 in all; the taper removes 0.0119e10.
 BAR_MASS = 1.8133e10
+# The bulge's metal-poor population is a spherical cored power law,
+# rho ~ (r^2 + core^2)^(-slope / 2), tapered like the bar, while the
+# metal-rich population keeps the bar's shape. Fitted to the metal-poor
+# fractions of the 26 GIBS fields (Zoccali et al. 2017, Table 3; two
+# flagged fields and one without a position left out): slope and core in
+# kpc. The metal-poor share of the bulge mass is the default bar_feh[0].
+SPHEROID_SHAPE = (2.2, 0.2)
 # Angle in degrees between the long axis and the Sun-centre line, near end
 # at l > 0 (AGAMA, after Portail et al. 2017).
 BAR_ANGLE = 25.0
@@ -831,28 +838,27 @@ def _age_spread(age, frac, floor, sd=0.0):
 @jit(nopython=True, cache=True)
 def _ln_labels(feh, age, has_feh, has_age, labels, thick_ages, halo_feh, bar_pops):
     """Return ln p of the given labels for the thick disk, the halo and the
-    bar, with ``labels``, ``thick_ages``, ``halo_feh`` and ``bar_pops`` from
+    two bulge populations (metal-poor spheroid, metal-rich bar), with
+    ``labels``, ``thick_ages``, ``halo_feh`` and ``bar_pops`` from
     `_label_args`."""
     floor = labels[2]
     thick_xi, thick_omega, thick_alpha = labels[3:6]
     age_at_floor, slope, thick_sd, thick_frac = labels[6:10]
     halo_mean, halo_sd, halo_norm = labels[10:]
     if has_age and age > MAX_AGE:
-        return LOG_ZERO, LOG_ZERO, LOG_ZERO
-    # The bar: a mixture of populations, each normal in [Fe/H] and in age.
-    bar = 0.0
+        return LOG_ZERO, LOG_ZERO, (LOG_ZERO, LOG_ZERO)
+    # The bulge populations, each normal in [Fe/H] and in age: the
+    # metal-poor spheroid, then the metal-rich bar.
+    bar = np.zeros(2)
     if has_feh or has_age:
-        mx, acc = LOG_ZERO, 0.0
-        for ln_w, feh_mean, feh_sd, age_mean, age_sd, age_norm in bar_pops:
-            v = ln_w
+        for k in range(2):
+            feh_mean, feh_sd, age_mean, age_sd, age_norm = bar_pops[k, 1:]
             if has_feh:
                 u = (feh - feh_mean) / feh_sd
-                v -= 0.5 * (u * u + _LOG_2PI) + log(feh_sd)
+                bar[k] -= 0.5 * (u * u + _LOG_2PI) + log(feh_sd)
             if has_age:
                 u = (age - age_mean) / age_sd
-                v -= 0.5 * u * u + age_norm
-            mx, acc = _accumulate(mx, acc, v)
-        bar = mx + log(acc)
+                bar[k] -= 0.5 * u * u + age_norm
     thick = 0.0
     halo = 0.0
     if has_feh:
@@ -873,7 +879,7 @@ def _ln_labels(feh, age, has_feh, has_age, labels, thick_ages, halo_feh, bar_pop
                 u = (age - thick_ages[k, 1]) / thick_ages[k, 2]
                 mx, acc = _accumulate(mx, acc, thick_ages[k, 0] - 0.5 * u * u)
             thick = mx + log(acc)
-    return thick, halo, bar
+    return thick, halo, (bar[0], bar[1])
 
 
 @jit(nopython=True, cache=True)
@@ -1133,6 +1139,26 @@ def _components(
     return thin, thick + ln_thick, hal + ln_halo
 
 
+def _spheroid_volume():
+    """Return the integral of the tapered spheroid shape in kpc^3, by
+    Gauss-Legendre quadrature in ln r below the taper and in r across it."""
+    slope, core = SPHEROID_SHAPE
+    lo, hi = _BAR_TAPER
+    x, w = np.polynomial.legendre.leggauss(64)
+    a, b = log(1e-5), log(lo)
+    r = np.exp(0.5 * (b - a) * x + 0.5 * (b + a))
+    inner = 0.5 * (b - a) * w @ (r**3 * (r * r + core * core) ** (-0.5 * slope))
+    r = 0.5 * (hi - lo) * x + 0.5 * (hi + lo)
+    taper = 0.5 * (1.0 + np.cos(np.pi * (r - lo) / (hi - lo)))
+    outer = (
+        0.5 * (hi - lo) * w @ (r * r * (r * r + core * core) ** (-0.5 * slope) * taper)
+    )
+    return 4.0 * pi * float(inner + outer)
+
+
+_SPHEROID_VOLUME = _spheroid_volume()
+
+
 @jit(nopython=True, cache=True)
 def _ln_bar_density(X, Y, Z, cos_a, sin_a):
     """Return ln of the untapered bar density in Msun/kpc^3 at the Galactocentric
@@ -1235,7 +1261,8 @@ def _galactic_prior_array(
     ``bar`` comes from `_bar_args`; unless ``bar_line`` is empty, the bar
     density is interpolated in it, `_ln_bar_density` at ln d =
     _BAR_LN_D0 + k _BAR_DLN_D along the sightline."""
-    cos_a, sin_a, ln_bar_amp = bar
+    cos_a, sin_a, ln_bar_amp, ln_sph_amp = bar
+    slope, core = SPHEROID_SHAPE
     out = np.empty(len(Z))
     no_nodes, no_ages = np.empty((0, _NODE_COLUMNS)), np.empty(0)
     for c in prange(n_labels):
@@ -1274,18 +1301,26 @@ def _galactic_prior_array(
                 by_label,
             )
             ln_d = log(dists[i] + 1e-300)
-            # Bar: by mass like the halo, tapered to 0 at _BAR_TAPER[1].
+            # Bulge: the metal-rich bar and the metal-poor spheroid, by mass
+            # like the halo, tapered to 0 at _BAR_TAPER[1].
             bar_n = LOG_ZERO
             r2 = R * R + Z[i] * Z[i]
-            if ln_bar_amp > LOG_ZERO and r2 < _BAR_TAPER[1] ** 2:
-                if len(bar_line):
-                    f = (ln_d - _BAR_LN_D0) / _BAR_DLN_D
-                    if not f > 0.0:  # below 1 pc, or NaN for a bad distance
-                        f = 0.0
-                    ln_rho = _catmull_rom_table(f, bar_line)
-                else:
-                    ln_rho = _ln_bar_density(X[i], Y[i], Z[i], cos_a, sin_a)
-                bar_n = ln_rho + _ln_taper(sqrt(r2), *_BAR_TAPER) + ln_bar_amp + ln_bar
+            if r2 < _BAR_TAPER[1] ** 2:
+                taper = _ln_taper(sqrt(r2), *_BAR_TAPER)
+                if ln_bar_amp > LOG_ZERO:
+                    if len(bar_line):
+                        f = (ln_d - _BAR_LN_D0) / _BAR_DLN_D
+                        if not f > 0.0:  # below 1 pc, or NaN for a bad distance
+                            f = 0.0
+                        ln_rho = _catmull_rom_table(f, bar_line)
+                    else:
+                        ln_rho = _ln_bar_density(X[i], Y[i], Z[i], cos_a, sin_a)
+                    bar_n = ln_rho + taper + ln_bar_amp + ln_bar[1]
+                if ln_sph_amp > LOG_ZERO:
+                    sph = -0.5 * slope * log(r2 + core * core)
+                    sph += taper + ln_sph_amp + ln_bar[0]
+                    hi, lo = max(bar_n, sph), min(bar_n, sph)
+                    bar_n = hi + log1p(exp(lo - hi)) if hi > LOG_ZERO else LOG_ZERO
             mx = max(max(thin, thick), max(hal, bar_n))
             # Components that are off add nothing; the sum keeps its order.
             acc = exp(thin - mx)
@@ -1711,17 +1746,24 @@ def _ln_amplitude(amp):
     return log(amp) if amp > 0.0 else LOG_ZERO
 
 
-def _bar_args(bar_mass, bar_angle, rho_thin_solar):
-    """Return the bar arguments of `_galactic_prior_array`: the cosine and
-    sine of ``bar_angle`` and ln of the bar amplitude relative to the thin
-    disk at the Sun (LOG_ZERO for no bar)."""
+def _bar_args(bar_mass, bar_angle, rho_thin_solar, metal_poor):
+    """Return the bulge arguments of `_galactic_prior_array`: the cosine and
+    sine of ``bar_angle`` and ln of the amplitudes, relative to the thin
+    disk at the Sun, of the metal-rich bar and of the metal-poor spheroid,
+    which share ``bar_mass`` as (1 - metal_poor) to metal_poor (LOG_ZERO
+    for a population that is off)."""
     (bar_mass,) = _floats("bar_mass", (bar_mass,), 1)
     (bar_angle,) = _floats("bar_angle", (bar_angle,), 1)
     _check_amplitudes(bar_mass=bar_mass)
     angle = np.deg2rad(bar_angle)
     # Msun/kpc^3 to Msun/pc^3.
-    amp = bar_mass / (BAR_MASS * 1e9 * float(rho_thin_solar))
-    return cos(angle), sin(angle), _ln_amplitude(amp)
+    scale = bar_mass / (1e9 * float(rho_thin_solar))
+    return (
+        cos(angle),
+        sin(angle),
+        _ln_amplitude((1.0 - metal_poor) * scale / BAR_MASS),
+        _ln_amplitude(metal_poor * scale / _SPHEROID_VOLUME),
+    )
 
 
 def _bar_table(ell, b, R_solar, Z_solar, bar):
@@ -2023,7 +2065,7 @@ def logp_galactic_structure(
     thick_age=(13.0, -4.0, 0.8),
     halo_feh=(-1.18, 0.28, -0.67, -1.95, 1.0),
     halo_age=(12.0, 1.5),
-    bar_feh=(0.5, -0.31, 0.31, 0.26, 0.20),
+    bar_feh=(0.6, -0.31, 0.31, 0.26, 0.20),
     bar_age=(11.0, 1.5, 8.0, 3.0),
     feh_systematic=(0.1, 0.15, 0.15),
     age_systematic=(0.1, 0.15, 0.15),
@@ -2094,9 +2136,10 @@ def logp_galactic_structure(
         70 kpc. Default is 7.5e8, the middle of the 6.7e8 to 8.4e8 of
         Lane et al. (2023). 0 removes the halo.
     bar_mass : float, optional
-        Stellar mass of the bar in Msun. Default is ``BAR_MASS``, 1.8133e10,
-        the integral of the tapered density of Sormani et al. (2022). 0
-        removes the bar.
+        Stellar mass of the bulge in Msun, shared by the bar and the
+        metal-poor spheroid as ``bar_feh[0]`` sets. Default is
+        ``BAR_MASS``, 1.8133e10, the integral of the tapered density of
+        Sormani et al. (2022). 0 removes both.
     bar_angle : float, optional
         Angle in degrees between the long axis of the bar and the line from
         the Sun to the Galactic centre, with the near end at l > 0. Default
@@ -2129,12 +2172,13 @@ def logp_galactic_structure(
         truncated to 0 to 13.8 Gyr. Default is (12.0, 1.5); the width
         covers the spread between age methods.
     bar_feh : tuple of 5 floats, optional
-        The bar [Fe/H] distribution, two normal populations: the fraction
-        of the metal-poor one, then the mean and standard deviation of the
-        metal-poor and of the metal-rich population. Default is
-        (0.5, -0.31, 0.31, 0.26, 0.20): the components of Gonzalez et al.
-        (2015), with a fraction between the 0.33 and 0.73 that Zoccali et
-        al. (2017) find at latitudes -3.5 and -8.5 deg.
+        The bulge [Fe/H] distribution, two normal populations: the share of
+        ``bar_mass`` in the metal-poor one, which has the spherical shape of
+        ``SPHEROID_SHAPE`` while the metal-rich one keeps the bar's, then
+        the mean and standard deviation of the metal-poor and of the
+        metal-rich population. Default is (0.6, -0.31, 0.31, 0.26, 0.20):
+        the components of Gonzalez et al. (2015), with the share and shape
+        fitted to the metal-poor fractions of Zoccali et al. (2017).
     bar_age : tuple of 4 floats, optional
         Mean and standard deviation in Gyr of the age of the metal-poor and
         of the metal-rich population, each a normal truncated to 0 to 13.8
@@ -2309,7 +2353,7 @@ def logp_galactic_structure(
         rho_thin_solar=rho_thin_solar,
         feh_systematic=feh_systematic,
     )
-    bar = _bar_args(bar_mass, bar_angle, rho_thin_solar)
+    bar = _bar_args(bar_mass, bar_angle, rho_thin_solar, float(bar_feh[0]))
     by_label = _label_table(key, feh is not None, loga is not None, label_args[0])
 
     X, Y, Z = np.broadcast_arrays(

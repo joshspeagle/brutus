@@ -128,19 +128,47 @@ def _bar_frame(d, ell, b, angle=gal.BAR_ANGLE):
     return X * np.cos(ar) - Y * np.sin(ar), X * np.sin(ar) + Y * np.cos(ar), Z
 
 
-def _ln_bar_labels(feh, age, feh_sys, age_frac, age_floor=0.0):
-    """ln p([Fe/H], age) of the default bar populations, with the given
-    systematics."""
+def _ln_bar_labels(feh, age, feh_sys, age_frac, age_floor=0.0, metal_poor=0.5):
+    """ln p([Fe/H], age) of the default bulge populations, with the given
+    systematics, where a share ``metal_poor`` of the stars is metal-poor."""
     out = []
-    for fm, fs, am, asd in ((-0.31, 0.31, 11.0, 1.5), (0.26, 0.20, 8.0, 3.0)):
+    for w, fm, fs, am, asd in (
+        (metal_poor, -0.31, 0.31, 11.0, 1.5),
+        (1 - metal_poor, 0.26, 0.20, 8.0, 3.0),
+    ):
         sf = np.hypot(fs, feh_sys)
         sa = np.sqrt(asd**2 + (age_frac * am) ** 2 + age_floor**2)
         out.append(
-            np.log(0.5)
+            np.log(w)
             + stats.norm.logpdf(feh, fm, sf)
             + stats.truncnorm.logpdf(age, -am / sa, (13.8 - am) / sa, am, sa)
         )
     return np.logaddexp(*out)
+
+
+# The bulge as the bar alone, and as the metal-poor spheroid alone.
+_BAR_ONLY = (0.0, -0.31, 0.31, 0.26, 0.20)
+_SPHEROID_ONLY = (1.0, -0.31, 0.31, 0.26, 0.20)
+
+
+def _spheroid_reference(X, Y, Z):
+    """The tapered spheroid density in Msun/kpc^3 for all of BAR_MASS, with
+    its volume integral by adaptive quadrature."""
+    slope, core = gal.SPHEROID_SHAPE
+
+    def shape(r):
+        taper = 0.5 * (1 + np.cos(np.pi * np.clip(r - 5.0, 0.0, 1.0)))
+        return (r * r + core * core) ** (-0.5 * slope) * taper
+
+    volume = (
+        4
+        * np.pi
+        * (
+            quad(lambda r: r * r * shape(r), 0.0, 5.0, epsrel=1e-12)[0]
+            + quad(lambda r: r * r * shape(r), 5.0, 6.0, epsrel=1e-12)[0]
+        )
+    )
+    return gal.BAR_MASS * shape(np.sqrt(X * X + Y * Y + Z * Z)) / volume
 
 
 # Keys of the thin-disk tables with the default parameters and systematics:
@@ -1555,8 +1583,9 @@ def test_thick_disk_has_one_near_side_peak_toward_the_galactic_centre():
 
 
 class TestBar:
-    """The bar is the Sormani et al. (2022) density, turned by bar_angle
-    and scaled to bar_mass, with position-independent labels."""
+    """The bulge: its metal-rich population is the Sormani et al. (2022)
+    density, turned by bar_angle, and its metal-poor population a spherical
+    cored power law, sharing bar_mass as (1 - bar_feh[0]) to bar_feh[0]."""
 
     def test_jitted_density_matches_the_equations_of_the_paper(self):
         rng = np.random.default_rng(5)
@@ -1584,7 +1613,11 @@ class TestBar:
         d = np.linspace(4.0, 12.0, 9)
         ell, b = np.linspace(-8.0, 8.0, 9), np.full(9, -3.0)
         _, comps = logp_galactic_structure(
-            d, (ell, b), bar_mass=2 * gal.BAR_MASS, return_components=True
+            d,
+            (ell, b),
+            bar_mass=2 * gal.BAR_MASS,
+            bar_feh=_BAR_ONLY,
+            return_components=True,
         )
         expected = np.log(
             2 * _tapered_bar_reference(*_bar_frame(d, ell, b)) / 0.030e9
@@ -1600,7 +1633,9 @@ class TestBar:
         ell, b = np.full(d.size, 20.0), np.zeros(d.size)
         if several:
             ell[-1] = 180.0
-        _, comps = logp_galactic_structure(d, (ell, b), return_components=True)
+        _, comps = logp_galactic_structure(
+            d, (ell, b), bar_feh=_BAR_ONLY, return_components=True
+        )
         bar = (comps["number_density"][3] - 2 * np.log(d))[:-1]
         xb, yb, zb = _bar_frame(d[:-1], 20.0, 0.0)
         r = np.sqrt(xb**2 + yb**2 + zb**2)
@@ -1667,23 +1702,71 @@ class TestBar:
         d = np.linspace(4.0, 13.0, 901)
         peak = {}
         for ell in (6.0, -6.0):
-            _, comps = logp_galactic_structure(d, (ell, 3.0), return_components=True)
+            _, comps = logp_galactic_structure(
+                d, (ell, 3.0), bar_feh=_BAR_ONLY, return_components=True
+            )
             peak[ell] = d[np.argmax(comps["number_density"][3])]
         assert peak[6.0] < peak[-6.0] - 0.5
 
-    def test_labels_are_the_mixture_with_the_thick_disk_systematics(self):
+    @pytest.mark.parametrize("coord, d", [((0.0, 4.0), 8.0), ((0.0, -8.0), 8.3)])
+    def test_labels_are_the_local_mixture_with_the_thick_disk_systematics(
+        self, coord, d
+    ):
+        # The share of metal-poor stars is that of the spheroid in the
+        # local bulge density, so it depends on position.
         rng = np.random.default_rng(8)
         feh = rng.uniform(-1.0, 0.5, 20)
         age = rng.uniform(1.0, 13.0, 20)
         _, comps = logp_galactic_structure(
-            np.full(20, 8.0),
-            (0.0, 4.0),
+            np.full(20, d),
+            coord,
             feh=feh,
             loga=np.log10(age * 1e9),
             return_components=True,
         )
-        expected = _ln_bar_labels(feh, age, 0.15, 0.15, 0.2)
-        np.testing.assert_allclose(comps["labels"][3], expected, atol=1e-9)
+        n_bar = 0.4 * _tapered_bar_reference(*_bar_frame(d, *coord))
+        n_sph = 0.6 * _spheroid_reference(*galactic_to_galactocentric(d, *coord))
+        expected = _ln_bar_labels(feh, age, 0.15, 0.15, 0.2, n_sph / (n_sph + n_bar))
+        # One sightline interpolates the bar density in its table, which
+        # moves the local share by up to about 1e-5.
+        np.testing.assert_allclose(comps["labels"][3], expected, atol=1e-5)
+
+    def test_spheroid_matches_its_density_scaled_by_the_bulge_mass(self):
+        # Several sightlines: the density is evaluated at each point.
+        d = np.linspace(1.0, 14.0, 27)
+        ell, b = np.linspace(-9.0, 9.0, 27), np.linspace(-8.0, 6.0, 27)
+        _, comps = logp_galactic_structure(
+            d, (ell, b), bar_feh=_SPHEROID_ONLY, return_components=True
+        )
+        rho = _spheroid_reference(*galactic_to_galactocentric(d, ell, b))
+        keep = rho > 0
+        expected = np.log(rho[keep] / 0.030e9) + 2 * np.log(d[keep])
+        np.testing.assert_allclose(
+            comps["number_density"][3][keep], expected, rtol=1e-10
+        )
+        assert np.all(comps["number_density"][3][~keep] <= gal.LOG_ZERO / 2)
+
+    def test_metal_poor_share_rises_away_from_the_plane(self):
+        # The spheroid is rounder than the bar, so the metal-poor share of
+        # the bulge near its peak density rises from 0.47 at b = -3.5 deg to
+        # 0.70 at -8 deg (GIBS: 0.33 and 0.74), instead of a fixed 0.5.
+        d = np.linspace(4.0, 13.0, 901)
+
+        def share(b):
+            n = [
+                np.exp(
+                    logp_galactic_structure(
+                        d, (0.0, b), bar_feh=f, return_components=True
+                    )[1]["number_density"][3]
+                )
+                for f in (_BAR_ONLY, _SPHEROID_ONLY)
+            ]
+            mp, total = 0.6 * n[1], 0.4 * n[0] + 0.6 * n[1]
+            w = np.abs(d - d[np.argmax(total)]) < 1.5
+            return np.trapezoid(mp[w], d[w]) / np.trapezoid(total[w], d[w])
+
+        assert share(-3.5) == pytest.approx(0.467, abs=0.005)
+        assert share(-8.0) == pytest.approx(0.696, abs=0.005)
 
     @pytest.mark.parametrize(
         "kwargs",
