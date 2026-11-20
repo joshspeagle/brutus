@@ -60,6 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scatter about [Fe/H] = -0.49 beyond the knee, where classical Cepheids
   flatten (Albarracin et al. 2026), and [Fe/H] at each age follows the
   Frankel et al. (2018) model. `THIN_DISK_GRADIENT_KNEE` sets the knee.
+  The age mix comes from a table to 39.75 kpc and a linear extrapolation
+  in radius beyond it, which moves the prior by under 3e-4 in ln there.
 - **The disk heights in the Galactic prior follow from the vertical
   Jeans equation** *(output-changing)*. `logp_galactic_structure`
   replaced the exponential scale heights (0.3 and 0.9 kpc) with profiles

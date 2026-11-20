@@ -951,7 +951,6 @@ class TestColumnsAndNormalization:
                 f_L,
                 ln_fz2,
                 jeans,
-                _THIN_KEY[-1],
                 ln_mass,
             )
             ref -= ln_norm_R
@@ -975,7 +974,7 @@ class TestColumnsAndNormalization:
         for x, z, feh in [(1.0, 0.05, 0.0), (0.83, 0.7, -0.3), (1.37, 1.6, -0.6)]:
             R_feh, R_age, ln_norm_R = gal._thin_disk_fit_radius(x * R_SOLAR, ln_norm)
             ln_fz2, jeans, _ = kin._vertical_terms(x, z)
-            args = (x, ln_phi, f_L, ln_fz2, jeans, sig_birth, ln_mass)
+            args = (x, ln_phi, f_L, ln_fz2, jeans, ln_mass)
             by_age = [
                 gal._ln_sum_nu(
                     *gal._thin_disk_age_populations(
@@ -1272,7 +1271,7 @@ class TestThinDiskLabels:
 
     def test_age_shift_table_matches_the_direct_sums_over_feh(self):
         # Off the table nodes in sqrt(age) and R, up to the last age of star
-        # formation, and by the direct sums beyond the table.
+        # formation, and extrapolated beyond the table.
         sig_birth = 1.4
         ln_mass = gal._thin_disk_mass_table(sig_birth)
         ln_norm = gal._thin_disk_norm_table(sig_birth)
@@ -1284,12 +1283,14 @@ class TestThinDiskLabels:
                 (22.7, 5e-4),
                 (39.3, 5e-4),
                 (45.0, 5e-4),
+                (100.0, 0.0),
             ]:
                 R_age = gal._thin_disk_fit_radius(R, ln_norm)[1]
                 direct = gal._thin_disk_ln_feh_mass(R_age, terms, sig_birth)
                 direct -= gal._thin_disk_ln_feh_mass(R, terms, sig_birth)
-                got = gal._thin_disk_age_shift(age, R, R_age, sig_birth, ln_mass)
-                assert got == pytest.approx(direct, abs=tol)
+                got = gal._thin_disk_age_shift(age, R, R_age, ln_mass)
+                # Beyond the table, within 1e-4 of shifts that reach 76.
+                assert got == pytest.approx(direct, abs=tol, rel=1e-4)
 
     @pytest.mark.parametrize("R", [17.0, 22.0])
     def test_young_stars_beyond_the_knee_have_the_feh_of_the_knee(self, R):
