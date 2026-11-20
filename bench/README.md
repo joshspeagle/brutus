@@ -35,7 +35,7 @@ set `NUMBA_DISABLE_JIT=1`) so the real parallel codegen is exercised.
 |------|---------|
 | `harness.py` | shared setup (loads grid + Orion data); per-object stage timings (`bench`); freeze/compare deterministic loglike outputs + posterior draws (`capture`/`compare`) |
 | `disteq.py` | distributional-equivalence tester: multi-seed posterior summaries vs the procedure's own Monte-Carlo scatter; defines the `COHORT` (Nsel = 4 … 50000-cap) |
-| `fullfit.py` | end-to-end `fit()` → HDF5, then bitwise-compare two runs (the strongest regression check; threads one RNG across objects) |
+| `fullfit.py` | end-to-end `fit()` → HDF5, then bitwise-compare two runs (the strongest regression check; threads one RNG across objects); `run <tag> pm` adds mock proper motions |
 | `mcvar.py` | direct measurement of MC-integration variance, antithetic vs plain |
 | `mcgold.py` | accuracy of antithetic vs plain against a high-`Nmc` gold standard |
 | `profile_cohort.py` | per-stage timings + aggregated `cProfile` over the cohort |
