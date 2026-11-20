@@ -148,6 +148,16 @@ Here $(\bar{\mathbf{v}}_c, \Sigma_c)$ is the component's velocity ellipsoid at t
 
 `fit()` takes the Gaia columns `pmra`, `pmdec`, `pmra_error`, `pmdec_error` and `pmra_pmdec_corr`, and optionally `radial_velocity` and `radial_velocity_error`, rotates them to Galactic components, and passes them to the prior. `apply_pm_prior=False` leaves them out, and a row with a NaN is fitted without them. With `save_motion_draws=True`, `fit()` also saves `samps_motion`, a draw of $(\mu_{\ell*}, \mu_b, v_r)$ for each posterior draw from {func}`~brutus.priors.sample_motions`, for posterior predictive checks.
 
+The kinematic term separates distance solutions whose transverse velocities differ, such as a nearby fast dwarf and a distant giant, more than it narrows a single solution. With the parallax withheld, Gaia and 2MASS photometry give these distance errors ($\log_{10}$ of the posterior median over the true distance, spread as 1.4826 times the median absolute deviation) and dwarf/giant misclassification ($\log g < 3.5$):
+
+| Sample | Spread (dex) | 68% coverage | Misclassified |
+|---|---|---|---|
+| Mock from the prior, 240 stars | 0.085 / 0.071 / 0.071 | 0.50 / 0.52 / 0.51 | 12% / 9% / 7% |
+| GeDR3mock {cite:p}`rybizki2020`, 300 stars | 0.082 / 0.081 / 0.080 | 0.31 / 0.37 / 0.35 | 6% / 4% / 4% |
+| Gaia DR3, $\varpi / \sigma_\varpi > 10$, 300 stars | 0.145 / 0.126 / 0.117 | 0.53 / 0.53 / 0.49 | 9% / 7% / 4% |
+
+Each cell gives photometry only, then with the proper motion, then with the proper motion and radial velocity. No change in coverage is significant in a paired test. The coverage below 0.68 comes from the photometric fit: in the mock, the two fields that the dust map leaves out have a true $A(V)$ of 0 at the edge of the uniform fallback prior, and the other two have 0.65 to 0.67; GeDR3mock uses PARSEC isochrones rather than MIST, and the Gaia distances are $1 / \varpi$.
+
 The default prior needs the star's coordinates: pass `data_coords`, an array of shape `(Nstars, 2)` with $(\ell, b)$ in degrees. `fit()` raises `ValueError` without them.
 
 ## Dust map
