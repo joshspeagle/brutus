@@ -887,7 +887,7 @@ class TestColumnsAndNormalization:
 
     def test_thin_disk_density_without_labels_is_the_sum_over_populations(self):
         # Off the nodes of the summed table in x and z.
-        f_L, table, ln_norm = gal._thin_disk_tables(*_THIN_KEY)
+        f_L, table, ln_norm, ln_mass = gal._thin_disk_tables(*_THIN_KEY)
         ln_phi = np.log(_PHI_SCALE)
         for x, z in [(0.3137, 0.0123), (1.0213, 0.41), (1.62, 2.3), (2.9, 7.7)]:
             R_feh, R_age, ln_norm_R = gal._thin_disk_fit_radius(x * R_SOLAR, ln_norm)
@@ -900,6 +900,7 @@ class TestColumnsAndNormalization:
                 ln_phi,
                 f_L,
                 _THIN_KEY[-1],
+                ln_mass,
             )
             ln_fz2, jeans, _ = kin._vertical_terms(x, z)
             terms = ln_w - ln_norm_R - ln_col - np.log(2) - ln_fz2
@@ -910,7 +911,7 @@ class TestColumnsAndNormalization:
 
     def test_feh_table_matches_the_sum_over_ages(self):
         # Off the nodes of the table in [Fe/H], x and z.
-        f_L, _, ln_norm = gal._thin_disk_tables(*_THIN_KEY)
+        f_L, _, ln_norm, ln_mass = gal._thin_disk_tables(*_THIN_KEY)
         table = gal._thin_disk_feh_table(*_THIN_KEY)
         labels = (_THIN_KEY[-1], 0.1, 0.2)
         ln_phi = np.log(_PHI_SCALE)
@@ -925,7 +926,16 @@ class TestColumnsAndNormalization:
             )
             ln_fz2, jeans, _ = kin._vertical_terms(x, z)
             ref = gal._thin_disk_ln_feh_sum(
-                nodes, R_feh, R_age, x, ln_phi, f_L, ln_fz2, jeans, _THIN_KEY[-1]
+                nodes,
+                R_feh,
+                R_age,
+                x,
+                ln_phi,
+                f_L,
+                ln_fz2,
+                jeans,
+                _THIN_KEY[-1],
+                ln_mass,
             )
             ref -= ln_norm_R
             fl = gal._label_index(feh, 0.0, True, labels, table)
@@ -938,7 +948,7 @@ class TestColumnsAndNormalization:
         # Both the joint density with [Fe/H] and the table by age alone,
         # against the trapezoid rule on 4001 true ages.
         frac, floor = 0.1, 0.2
-        f_L, _, ln_norm = gal._thin_disk_tables(*_THIN_KEY)
+        f_L, _, ln_norm, ln_mass = gal._thin_disk_tables(*_THIN_KEY)
         table = gal._thin_disk_age_table(*_THIN_KEY, frac, floor)
         ln_phi, sig_birth = np.log(_PHI_SCALE), _THIN_KEY[-1]
         true = np.linspace(0.0, 12.0 - 1e-9, 4001)
@@ -948,11 +958,11 @@ class TestColumnsAndNormalization:
         for x, z, feh in [(1.0, 0.05, 0.0), (0.83, 0.7, -0.3), (1.37, 1.6, -0.6)]:
             R_feh, R_age, ln_norm_R = gal._thin_disk_fit_radius(x * R_SOLAR, ln_norm)
             ln_fz2, jeans, _ = kin._vertical_terms(x, z)
-            args = (x, ln_phi, f_L, ln_fz2, jeans, sig_birth)
+            args = (x, ln_phi, f_L, ln_fz2, jeans, sig_birth, ln_mass)
             by_age = [
                 gal._ln_sum_nu(
                     *gal._thin_disk_age_populations(
-                        t, x, R_feh, R_age, ln_phi, f_L, sig_birth
+                        t, x, R_feh, R_age, ln_phi, f_L, sig_birth, ln_mass
                     ),
                     ln_fz2,
                     jeans,
@@ -975,7 +985,7 @@ class TestColumnsAndNormalization:
                 )
             ages, ln_w = gal._true_age_nodes(age, frac, floor)
             populations = gal._thin_disk_age_sum(
-                ages, ln_w, x, R_feh, R_age, ln_phi, f_L, sig_birth
+                ages, ln_w, x, R_feh, R_age, ln_phi, f_L, sig_birth, ln_mass
             )
             nodes = gal._thin_disk_feh_ages(feh, ages, ln_w, sig_birth)
             for got, ln_f in [
@@ -1228,19 +1238,34 @@ class TestThinDiskLabels:
     def test_age_mix_beyond_the_fitted_radii_is_that_at_their_edge(self, age):
         # Summed over [Fe/H], the column share of each age at 20 and 30 kpc
         # is that at 15 kpc, where the age mix is held.
-        f_L, _, ln_norm = gal._thin_disk_tables(*_THIN_KEY)
+        f_L, _, ln_norm, ln_mass = gal._thin_disk_tables(*_THIN_KEY)
         ln_phi, sig_birth = np.log(_PHI_SCALE), _THIN_KEY[-1]
 
         def ln_age_share(R):
             R_feh, R_age, _ = gal._thin_disk_fit_radius(R, ln_norm)
             ln_w = gal._thin_disk_age_populations(
-                age, R / R_SOLAR, R_feh, R_age, ln_phi, f_L, sig_birth
+                age, R / R_SOLAR, R_feh, R_age, ln_phi, f_L, sig_birth, ln_mass
             )[0]
             return logsumexp(ln_w)
 
+        # To the interpolation error of the table of `_thin_disk_age_shift`.
         ref = ln_age_share(15.0)
-        assert ln_age_share(20.0) == pytest.approx(ref, abs=1e-9)
-        assert ln_age_share(30.0) == pytest.approx(ref, abs=1e-9)
+        assert ln_age_share(20.0) == pytest.approx(ref, abs=5e-4)
+        assert ln_age_share(30.0) == pytest.approx(ref, abs=5e-4)
+
+    def test_age_shift_table_matches_the_direct_sums_over_feh(self):
+        # Off the table nodes in sqrt(age) and R, up to the last age of star
+        # formation, and by the direct sums beyond the table.
+        sig_birth = 1.4
+        ln_mass = gal._thin_disk_mass_table(sig_birth)
+        for age in [0.003, 0.37, 2.9, 7.95, 8.6, 11.97]:
+            terms = gal._thin_disk_age_terms(age)
+            for R in [13.13, 16.4, 22.7, 39.3, 45.0]:
+                R_age = gal._thin_disk_fit_radius(R, gal._thin_disk_norm_table(1.4))[1]
+                direct = gal._thin_disk_ln_feh_mass(R_age, terms, sig_birth)
+                direct -= gal._thin_disk_ln_feh_mass(R, terms, sig_birth)
+                got = gal._thin_disk_age_shift(age, R, R_age, sig_birth, ln_mass)
+                assert got == pytest.approx(direct, abs=5e-4)
 
     @pytest.mark.parametrize("R", [17.0, 22.0])
     def test_young_stars_beyond_the_knee_have_the_feh_of_the_knee(self, R):
