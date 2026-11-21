@@ -172,12 +172,35 @@ def _motions(
         rv = [np.asarray(c, dtype=float) for c in rv]
         for name, c in zip(("radial_velocity", "radial_velocity_error"), rv):
             _check_shape(name, c, (Ndata,))
+    if not 0.0 <= pm_outlier < 1.0:
+        raise ValueError(f"pm_outlier must be in [0, 1), got {pm_outlier!r}")
+    if not (np.isfinite(pm_floor) and pm_floor >= 0.0):
+        raise ValueError(f"pm_floor must be finite and non-negative, got {pm_floor!r}")
+    # Rows with a NaN are fitted without the term; the others must give a
+    # proper covariance, so that no object fails partway through the fit.
+    finite = np.all(np.isfinite(columns), axis=0)
+    for name, bad in (
+        ("pmra_error", columns[2] <= 0.0),
+        ("pmdec_error", columns[3] <= 0.0),
+        ("pmra_pmdec_corr", np.abs(columns[4]) >= 1.0),
+    ):
+        if np.any(bad & finite):
+            raise ValueError(
+                f"{name} is out of range for object {np.argmax(bad & finite)}: "
+                "errors must be positive and the correlation in (-1, 1)"
+            )
+    if rv[0] is not None:
+        bad = np.isfinite(rv[0]) & np.isfinite(rv[1]) & (rv[1] <= 0.0)
+        if np.any(bad):
+            raise ValueError(
+                f"radial_velocity_error must be positive, not for object {np.argmax(bad)}"
+            )
     if lngalprior is not None:
         keywords = ("pm", "pm_cov", "pm_outlier", "pm_floor")
         if rv[0] is not None:
             keywords += ("rv", "rv_err")
         _check_motion_keywords(lngalprior, keywords)
-    ok = np.all(np.isfinite(columns), axis=0)
+    ok = finite
     ra, dec = galactic_to_icrs(*np.asarray(data_coords, dtype=float).T)
     pm, pm_cov = pm_equatorial_to_galactic(
         ra, dec, *(np.where(ok, c, 0.0) for c in columns)
@@ -1376,9 +1399,12 @@ class BruteForce:
         flux, fluxerr = data[data_mask], data_err[data_mask]
         # A boolean index copies the whole grid, about 60 MB, so every
         # band valid reads the grid itself, and a masked band reuses the
-        # copy for the last mask.
+        # copy for the last mask (of the full grid; `indices` select a new
+        # array on every call).
         if data_mask.all():
             mcoeffs = mag_coeffs
+        elif indices is not None:
+            mcoeffs = mag_coeffs[:, data_mask, :]
         else:
             grid, mask, mcoeffs = self._band_coeffs
             if grid is not mag_coeffs or not np.array_equal(mask, data_mask):
@@ -1649,8 +1675,8 @@ class BruteForce:
             Keyword arguments of the kinematic term of the Galactic prior,
             passed to ``lngalprior``: ``pm`` and ``pm_cov``, and optionally
             ``rv``, ``rv_err``, ``pm_outlier`` and ``pm_floor``, as in
-            `~brutus.priors.logp_galactic_structure`. Default is None, no
-            kinematic term.
+            `~brutus.priors.logp_galactic_structure`. Needs ``coord``.
+            Default is None, no kinematic term.
 
         Returns
         -------
@@ -1684,13 +1710,18 @@ class BruteForce:
         ------
         ValueError
             If only one of ``parallax`` and ``parallax_err`` is given, if
-            ``dustfile`` is given with ``apply_av_prior`` but without
-            ``coord``, if ``max_models`` is neither None nor a positive
+            ``dustfile`` is given with ``apply_av_prior`` or ``motion`` is
+            given, but without ``coord``, if ``max_models`` is neither None nor a positive
             integer, or if ``lnprior`` or ``dlabels`` (with ``coord``) does
             not have one entry per model in ``results``.
         """
         # The dust-map prior is a function of sky position; without one it
         # would crash deep inside the map query with an opaque IndexError.
+        if motion and coord is None:
+            raise ValueError(
+                "`motion` needs `coord`, because the kinematic term is part of "
+                "the Galactic prior."
+            )
         if dustfile is not None and apply_av_prior and coord is None:
             raise ValueError(
                 "`dustfile` (dust-map extinction prior) requires a sky "
@@ -2260,9 +2291,13 @@ class BruteForce:
             or ``lnprior`` disagree, if
             only one of ``parallax`` and ``parallax_err`` is given, if
             ``logl_initthresh`` is not in (0, 1), if ``ltol`` is not positive,
-            if ``max_models`` is neither None nor a positive integer, or if
-            ``apply_agewt`` is True and the grid has no ``agewt`` label. These
-            checks run before the output file is created.
+            if ``max_models`` is neither None nor a positive integer, if
+            ``apply_agewt`` is True and the grid has no ``agewt`` label, if
+            the proper-motion columns are incomplete or a row without NaN has
+            a non-positive error or a correlation outside (-1, 1), if
+            ``pm_outlier`` or ``pm_floor`` is out of range, or if proper
+            motions or ``save_motion_draws`` lack what they need (see above).
+            These checks run before the output file is created.
 
         Notes
         -----
@@ -2347,12 +2382,19 @@ class BruteForce:
         _check_threshold("logl_initthresh", logl_initthresh)
         _check_positive("ltol", ltol)
         _check_max_models(max_models)
+        has_labels = apply_dlabels and {"feh", "loga"} <= set(
+            self.models_labels.dtype.names
+        )
         if save_motion_draws and not (
-            save_dar_draws and lngalprior is None and data_coords is not None
+            save_dar_draws
+            and lngalprior is None
+            and data_coords is not None
+            and has_labels
         ):
             raise ValueError(
                 "save_motion_draws=True needs data_coords, the default "
-                "Galactic prior (lngalprior=None) and save_dar_draws=True."
+                "Galactic prior (lngalprior=None), save_dar_draws=True, and "
+                "apply_dlabels=True with 'feh' and 'loga' in the grid."
             )
         motions = _motions(
             Ndata,
@@ -2369,6 +2411,12 @@ class BruteForce:
             pm_floor,
             lngalprior,
         )
+        if lngalprior is None and not has_labels and any(motions):
+            raise ValueError(
+                "proper motions need apply_dlabels=True and 'feh' and 'loga' in "
+                "the grid, because the default Galactic prior's kinematic term "
+                "depends on both labels"
+            )
 
         # Pre-process data and initialize priors
         setup_results = self._setup(

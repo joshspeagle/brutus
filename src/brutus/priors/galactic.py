@@ -2706,7 +2706,7 @@ def sample_motions(dists, coord, feh, loga, rstate, **kwargs):
         Galactic coordinates ``(l, b)`` in degrees.
     feh, loga : array_like of shape `(N,)`
         [Fe/H] and log10(age / yr) at each distance.
-    rstate : `~numpy.random.Generator`
+    rstate : `~numpy.random.Generator` or `~numpy.random.RandomState`
         Random number generator.
     **kwargs
         Keywords of `logp_galactic_structure`, including the observed
@@ -2716,6 +2716,12 @@ def sample_motions(dists, coord, feh, loga, rstate, **kwargs):
     -------
     motions : `~numpy.ndarray` of shape `(N, 3)`
         Predicted ``(mu_l*, mu_b)`` in mas/yr and ``v_r`` in km/s.
+
+    Raises
+    ------
+    ValueError
+        If ``dists`` is not 1D, or if a keyword is rejected by
+        `logp_galactic_structure`.
 
     Notes
     -----
