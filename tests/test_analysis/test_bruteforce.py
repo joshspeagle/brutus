@@ -2598,6 +2598,32 @@ class TestFitWithProperMotions:
         with pytest.raises(ValueError, match="keyword `pm`"):
             self._fit(mock_fitter, tmp_path, "bad", lngalprior=prior, **self.PM)
 
+    def test_custom_galactic_prior_needs_rv_keywords_only_with_radial_velocities(
+        self, mock_fitter, tmp_path
+    ):
+        def prior(dists, coord, labels=None, pm=None, pm_cov=None, **motion):
+            return np.zeros(np.shape(dists))
+
+        def no_rv(
+            dists,
+            coord,
+            labels=None,
+            pm=None,
+            pm_cov=None,
+            pm_outlier=None,
+            pm_floor=None,
+        ):
+            return np.zeros(np.shape(dists))
+
+        self._fit(mock_fitter, tmp_path, "pm", lngalprior=no_rv, **self.PM)
+        rv = dict(
+            radial_velocity=np.zeros(self.NDATA),
+            radial_velocity_error=np.ones(self.NDATA),
+        )
+        self._fit(mock_fitter, tmp_path, "rv", lngalprior=prior, **self.PM, **rv)
+        with pytest.raises(ValueError, match="keyword `rv`"):
+            self._fit(mock_fitter, tmp_path, "bad", lngalprior=no_rv, **self.PM, **rv)
+
     def test_motion_draws_follow_the_fit_without_changing_it(
         self, mock_fitter, tmp_path
     ):
