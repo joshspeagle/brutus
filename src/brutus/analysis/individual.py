@@ -1778,8 +1778,9 @@ class BruteForce:
         mem_lim : float, optional
             Memory limit for the draws, in MB. Default is 8000.0.
 
-        rstate : `~numpy.random.RandomState` or `~numpy.random.Generator`, optional
+        rstate : `~numpy.random.Generator` or `~numpy.random.RandomState`, optional
             Random state for the draws and the `max_models` sampling.
+            Default is a new `~numpy.random.default_rng`.
 
         apply_av_prior : bool, optional
             Whether to apply the dust-map extinction prior when ``dustfile``
@@ -1877,7 +1878,7 @@ class BruteForce:
 
         # Initialize random state
         if rstate is None:
-            rstate = np.random.RandomState()
+            rstate = np.random.default_rng()
 
         # Apply prior
         if lnprior is None:
@@ -2341,8 +2342,9 @@ class BruteForce:
         merr_max : float, optional
             Maximum allowed magnitude error. Default is 0.25.
 
-        rstate : numpy.random.RandomState, optional
-            Random state for reproducibility.
+        rstate : `~numpy.random.Generator` or `~numpy.random.RandomState`, optional
+            Random state for reproducibility. Default is a new
+            `~numpy.random.default_rng`.
 
         save_dar_draws : bool, optional
             Whether to save distance, A(V), and R(V) draws. Default is True.
@@ -2568,7 +2570,7 @@ class BruteForce:
 
         # Initialize random state
         if rstate is None:
-            rstate = np.random.RandomState()
+            rstate = np.random.default_rng()
 
         # Ensure save_file has .h5 extension
         if not save_file.endswith(".h5"):
@@ -2814,8 +2816,9 @@ class BruteForce:
             ``init_thresh`` of `loglike_grid`.
         mem_lim : float, optional
             Memory limit in MB.
-        rstate : numpy.random.RandomState, optional
-            Random state for reproducibility.
+        rstate : `~numpy.random.Generator` or `~numpy.random.RandomState`, optional
+            Random state for reproducibility. Default is a new
+            `~numpy.random.default_rng`.
         return_distreds : bool, optional
             Whether to return distance/reddening draws. Default is True.
 
@@ -2847,7 +2850,7 @@ class BruteForce:
         """
         # Initialize random state
         if rstate is None:
-            rstate = np.random.RandomState()
+            rstate = np.random.default_rng()
 
         # Compute grid likelihoods
         loglike_results = self.loglike_grid(

@@ -1667,6 +1667,29 @@ def test_capped_fit_keeps_the_evidence_of_the_uncapped_fit(fitter, observation):
     assert abs(ratio.mean() - full_ratio.mean()) < 4 * se
 
 
+@pytest.mark.parametrize("return_distreds", [True, False])
+def test_fit_with_a_seeded_generator_is_reproducible(
+    fitter, observation, return_distreds
+):
+    # The default rstate is a Generator, so every draw in _fit, including
+    # the max_models cap and the resampling, must take one.
+    flux, flux_err, mask = observation
+    kwargs = dict(Nmc_prior=5, Ndraws=20, max_models=6, wt_thresh=1e-12)
+    runs = [
+        fitter._fit(
+            flux,
+            flux_err,
+            mask,
+            rstate=np.random.default_rng(8),
+            return_distreds=return_distreds,
+            **kwargs,
+        )
+        for _ in range(2)
+    ]
+    for a, b in zip(*runs):
+        np.testing.assert_array_equal(a, b)
+
+
 @pytest.mark.parametrize("max_models", [0, -1, 2.5])
 def test_invalid_max_models_raises(fitter, observation, max_models):
     flux, flux_err, mask = observation
