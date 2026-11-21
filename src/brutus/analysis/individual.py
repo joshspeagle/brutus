@@ -937,6 +937,45 @@ def _galactic_prior_at_draws(prior, dists, eta, coord, labels, motion):
     return out
 
 
+_MC_BLOCK = 256
+
+
+@jit(nopython=True, cache=True, parallel=True)
+def _mc_summary(lnp_mc):
+    """Return, per model (column of lnp_mc, shape (Nmc, N)), the ln mean of
+    exp(lnp_mc) over its draws and the weight concentration
+    (sum w)**2 / sum w**2 of w = exp(lnp_mc). A model with no draw above
+    LOG_ZERO gets LOG_ZERO and 0."""
+    Nmc, N = lnp_mc.shape
+    lnp = np.empty(N)
+    ess = np.empty(N)
+    ln_nmc = log(Nmc)
+    for b in prange((N + _MC_BLOCK - 1) // _MC_BLOCK):
+        lo = b * _MC_BLOCK
+        hi = min(lo + _MC_BLOCK, N)
+        top = np.full(hi - lo, -np.inf)
+        s1 = np.zeros(hi - lo)
+        s2 = np.zeros(hi - lo)
+        # Rows outer, so each pass reads lnp_mc in memory order.
+        for m in range(Nmc):
+            for n in range(lo, hi):
+                top[n - lo] = max(top[n - lo], lnp_mc[m, n])
+        for m in range(Nmc):
+            for n in range(lo, hi):
+                w = exp(lnp_mc[m, n] - top[n - lo])
+                s1[n - lo] += w
+                s2[n - lo] += w * w
+        for n in range(lo, hi):
+            t = top[n - lo]
+            if t > LOG_ZERO and t < np.inf:
+                lnp[n] = t + log(s1[n - lo]) - ln_nmc
+                ess[n] = s1[n - lo] ** 2 / s2[n - lo]
+            else:
+                lnp[n] = LOG_ZERO
+                ess[n] = 0.0
+    return lnp, ess
+
+
 class _Sightline:
     """One sightline of a dust map, queried for many objects at once:
     `query` returns its profile as the map's own query would."""
@@ -2074,33 +2113,9 @@ class BruteForce:
 
         lnp_mc[outside] = LOG_ZERO
 
-        # Compute integrated posterior (VECTORIZED)
-        lnp = logsumexp(lnp_mc, axis=0) - np.log(Nmc)
-
-        # Safety check - replace non-finite values with log(0) proxy
-        lnp_mask = np.where(~np.isfinite(lnp))[0]
-        if len(lnp_mask) > 0:
-            lnp[lnp_mask] = LOG_ZERO
-
-        # Compute effective sample size (ESS) for each selected model's
-        # MC samples. ESS = 1 / sum(w_i^2) where w_i are normalized weights.
-        # VECTORIZED across all Nsel models.
-        #
-        # Note: the MC draws are generated in antithetic pairs (see the
-        # `antithetic=True` sampling call above), so the per-sample weights are
-        # not strictly independent. This formula therefore measures WEIGHT
-        # CONCENTRATION (proposal/target mismatch) rather than a literal count of
-        # independent samples, and can read up to ~2x optimistic for well-mixed
-        # models. It remains monotone and useful as a mismatch diagnostic
-        # (degenerate weights -> low value), which is how brutus uses it.
-        lw_max = np.max(lnp_mc, axis=0, keepdims=True)  # (1, Nsel)
-        w = np.exp(lnp_mc - lw_max)  # (Nmc, Nsel)
-        w_sum = w.sum(axis=0, keepdims=True)  # (1, Nsel)
-        w_normed = w / np.maximum(w_sum, 1e-300)  # (Nmc, Nsel)
-        mc_ess = 1.0 / np.sum(w_normed**2, axis=0)  # (Nsel,)
-        # A model with no draw of nonzero weight (lw_max = LOG_ZERO) gets 0;
-        # its weights above would be spuriously uniform.
-        mc_ess = np.where(lw_max.ravel() > LOG_ZERO, mc_ess, 0.0)
+        # The draws come in antithetic pairs, so mc_ess measures weight
+        # concentration rather than a count of independent draws.
+        lnp, mc_ess = _mc_summary(lnp_mc)
 
         if return_precision:
             matrices = icovs_selected

@@ -62,6 +62,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   if none is. On 12 Orion stars and 48 validation stars with and without
   proper motions, the prior takes 0.095 evaluations per draw, and each
   model's integrated ln prior is within 4.7e-4 of the exact one.
+- **`logpost_grid` summarizes each model's draws in one kernel**
+  *(output-changing)*. The integrated ln posterior and `mc_ess` come from
+  one parallel pass instead of `scipy.special.logsumexp` and separate
+  weight arrays, so they differ from before in the last bits.
 - **`loglike_grid` no longer copies the model coefficients for each star.**
   With every band valid it reads the grid itself, and with a masked band it
   reuses the copy for the last mask, which saves 54-104 ms per star on the
