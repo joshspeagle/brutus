@@ -54,14 +54,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **`fit()` interpolates the Galactic prior across each model's draws**
-  *(output-changing)*. The default prior is evaluated at 3, then 5, then 9
-  nested Chebyshev-Lobatto nodes in ln(d) over each model's Monte Carlo
-  draws. A model stops at the first stage whose interpolant is within
-  `PRIOR_INTERP_TOL` (1e-3 in ln prior, 1e-4 for the first stage) of the
-  one before at every draw, and its prior is evaluated exactly at its draws
-  if none is. On 12 Orion stars and 48 validation stars with and without
-  proper motions, the prior takes 0.095 evaluations per draw, and each
-  model's integrated ln prior is within 4.7e-4 of the exact one.
+  *(output-changing)*. The default prior is evaluated at 5, then 9 nested
+  Chebyshev-Lobatto nodes in ln(d) over each model's Monte Carlo draws. A
+  model stops at the first stage whose interpolant is within
+  `PRIOR_INTERP_TOL` (1e-3 in ln prior) of the one on every other node of
+  the stage at every draw, and its prior is evaluated exactly at its draws
+  if neither is. On 12 Orion stars and 48 validation stars with and
+  without proper motions, the prior takes 0.10 evaluations per draw, and
+  each model's integrated ln prior is within 4.7e-4 of the exact one.
 - **`logpost_grid` summarizes each model's draws in one kernel**
   *(output-changing)*. The integrated ln posterior and `mc_ess` come from
   one parallel pass instead of `scipy.special.logsumexp` and separate
