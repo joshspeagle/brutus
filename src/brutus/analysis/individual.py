@@ -131,11 +131,6 @@ def _check_threshold(name, value):
         raise ValueError(f"{name} must be a number in (0, 1), got {value!r}")
 
 
-# The kinematic keywords that a fit with proper motions passes to the
-# Galactic prior.
-_MOTION_KEYWORDS = ("pm", "pm_cov", "rv", "rv_err", "pm_outlier", "pm_floor")
-
-
 def _motions(
     Ndata,
     data_coords,
@@ -178,7 +173,10 @@ def _motions(
         for name, c in zip(("radial_velocity", "radial_velocity_error"), rv):
             _check_shape(name, c, (Ndata,))
     if lngalprior is not None:
-        _check_motion_keywords(lngalprior)
+        keywords = ("pm", "pm_cov", "pm_outlier", "pm_floor")
+        if rv[0] is not None:
+            keywords += ("rv", "rv_err")
+        _check_motion_keywords(lngalprior, keywords)
     ok = np.all(np.isfinite(columns), axis=0)
     ra, dec = galactic_to_icrs(*np.asarray(data_coords, dtype=float).T)
     pm, pm_cov = pm_equatorial_to_galactic(
@@ -202,13 +200,13 @@ def _motions(
     return motions
 
 
-def _check_motion_keywords(lngalprior):
-    """Raise ValueError naming the first kinematic keyword that a custom
-    Galactic prior does not accept."""
+def _check_motion_keywords(lngalprior, keywords):
+    """Raise ValueError naming the first of the kinematic ``keywords`` that
+    a custom Galactic prior does not accept."""
     params = inspect.signature(lngalprior).parameters
     if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
         return
-    for name in _MOTION_KEYWORDS:
+    for name in keywords:
         if name not in params:
             raise ValueError(
                 f"lngalprior must accept the keyword `{name}` to use proper "
@@ -775,9 +773,10 @@ def _interpolate_prior(eta, lo, hi, f):
     return out, err
 
 
-def _galactic_prior_at_draws(prior, dists, coord, labels, motion):
+def _galactic_prior_at_draws(prior, dists, eta, coord, labels, motion):
     """Return the default Galactic prior at the draws `dists` (Nmc, Nsel) of
-    each model, interpolated in ln(d) from 5 nodes over the model's draws.
+    each model, with ``eta`` their ln(d), interpolated in ln(d) from 5 nodes
+    over the model's draws.
 
     A model's draws span 0.01-0.03 in ln(d) for most stars, because its
     absolute magnitude fixes its distance, and the prior is smooth over
@@ -787,7 +786,6 @@ def _galactic_prior_at_draws(prior, dists, coord, labels, motion):
     """
     if len(dists) <= len(_PRIOR_NODES):
         return prior(dists, coord, **labels, **motion)
-    eta = np.log(dists)
     lo, hi = eta.min(axis=0), eta.max(axis=0)
     nodes = 0.5 * (hi + lo) + 0.5 * (hi - lo) * _PRIOR_NODES[:, None]
     f = prior(np.exp(nodes), coord, **labels, **motion)
@@ -1877,7 +1875,8 @@ class BruteForce:
         # the prior becomes pi_eta(eta) = pi_d(d) * |dd/d(eta)| = pi_d(d) * d.
         # Since logp_galactic_structure already includes the d^2 volume element,
         # the net Jacobian is just d (not d^3 as it would be in scale-space).
-        lnp_mc += np.log(dist_mc + 1e-300)
+        ln_dist = np.log(dist_mc + 1e-300)
+        lnp_mc += ln_dist
 
         # Prior evaluations - coordinate is fixed, so we can still optimize
         if coord is not None:
@@ -1908,7 +1907,7 @@ class BruteForce:
                     if name in names
                 }
                 lnp_gal = _galactic_prior_at_draws(
-                    lngalprior, dist_mc, coord, per_model, motion or {}
+                    lngalprior, dist_mc, ln_dist, coord, per_model, motion or {}
                 )
             else:
                 # Custom prior: the structured labels tiled to match the
