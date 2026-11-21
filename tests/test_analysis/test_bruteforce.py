@@ -2391,6 +2391,17 @@ def test_galactic_prior_gets_each_draw_paired_with_its_model_labels(
         np.testing.assert_allclose(default[6], lnp_mc, rtol=0, atol=PRIOR_INTERP_TOL)
 
 
+def test_motion_without_coordinates_raises(fitter, observation):
+    flux, flux_err, mask = observation
+    like = fitter.loglike_grid(flux, flux_err, mask, return_vals=True)
+    with pytest.raises(ValueError, match="`motion` needs `coord`"):
+        fitter.logpost_grid(
+            like,
+            motion={"pm": np.zeros(2), "pm_cov": np.eye(2)},
+            rstate=np.random.RandomState(5),
+        )
+
+
 def test_plain_dlabels_with_the_default_galactic_prior_raise(fitter, observation):
     flux, flux_err, mask = observation
     like = fitter.loglike_grid(flux, flux_err, mask, return_vals=True)
@@ -2578,6 +2589,42 @@ class TestFitWithProperMotions:
         kwargs = {k: v for k, v in self.PM.items() if k != drop}
         with pytest.raises(ValueError, match=match):
             self._fit(mock_fitter, tmp_path, "bad", **kwargs)
+
+    @pytest.mark.parametrize(
+        "column, value, match",
+        [
+            ("pmra_error", 0.0, "pmra_error"),
+            ("pmra_pmdec_corr", 1.0, "pmra_pmdec_corr"),
+            ("radial_velocity_error", 0.0, "radial_velocity_error"),
+        ],
+    )
+    def test_out_of_range_motion_rows_raise_before_any_fit(
+        self, mock_fitter, tmp_path, column, value, match
+    ):
+        kwargs = dict(
+            self.PM,
+            radial_velocity=np.zeros(self.NDATA),
+            radial_velocity_error=np.ones(self.NDATA),
+        )
+        kwargs[column] = kwargs[column].copy()
+        kwargs[column][1] = value
+        with pytest.raises(ValueError, match=match):
+            self._fit(mock_fitter, tmp_path, "bad", **kwargs)
+        assert not (tmp_path / "bad.h5").exists()
+
+    def test_proper_motions_and_motion_draws_need_the_model_labels(
+        self, mock_fitter, tmp_path
+    ):
+        with pytest.raises(ValueError, match="apply_dlabels"):
+            self._fit(mock_fitter, tmp_path, "bad", apply_dlabels=False, **self.PM)
+        with pytest.raises(ValueError, match="apply_dlabels"):
+            self._fit(
+                mock_fitter,
+                tmp_path,
+                "bad",
+                apply_dlabels=False,
+                save_motion_draws=True,
+            )
 
     def test_radial_velocity_needs_proper_motions(self, mock_fitter, tmp_path):
         with pytest.raises(ValueError, match="needs the proper motions"):
