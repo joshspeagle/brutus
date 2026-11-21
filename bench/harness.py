@@ -85,24 +85,32 @@ def print_setup():
     )
 
 
+def make_fitter(filters):
+    """Return a BruteForce over the MIST grid in `filters` and its offsets."""
+    from brutus.analysis import BruteForce
+    from brutus.core import StarGrid
+    from brutus.data import load_models, load_offsets
+
+    models, labels, label_mask = load_models(GRID, filters=filters, verbose=False)
+    grid_names = [n for n, g in zip(labels.dtype.names, label_mask[0]) if g]
+    pred_names = [n for n, g in zip(labels.dtype.names, label_mask[0]) if not g]
+    sg = StarGrid(models, labels[grid_names], labels[pred_names])
+    return BruteForce(sg, verbose=False), load_offsets(
+        OFFSETS, filters=filters, verbose=False
+    )
+
+
 def load_setup():
     global _SETUP
     if _SETUP is not None:
         return _SETUP
     import h5py
 
-    from brutus.analysis import BruteForce
-    from brutus.core import StarGrid
-    from brutus.data import filters, load_models, load_offsets
+    from brutus.data import filters
     from brutus.utils import inv_magnitude
 
     filt = filters.ps[:-2] + filters.tmass  # PS grizy + 2MASS JHKs (8 bands)
-    models, labels, label_mask = load_models(GRID, filters=filt, verbose=False)
-    grid_names = [n for n, g in zip(labels.dtype.names, label_mask[0]) if g]
-    pred_names = [n for n, g in zip(labels.dtype.names, label_mask[0]) if not g]
-    sg = StarGrid(models, labels[grid_names], labels[pred_names])
-    bf = BruteForce(sg, verbose=False)
-    offsets = load_offsets(OFFSETS, filters=filt, verbose=False)
+    bf, offsets = make_fitter(filt)
 
     with h5py.File(ORION, "r") as f:
         fpix = f["photometry"]["pixel 0-0"]

@@ -43,6 +43,7 @@ import numpy as np
 from scipy import stats
 
 from brutus.dust import Bayestar
+from brutus.utils import inv_magnitude
 
 sys.path.insert(0, os.path.dirname(__file__))
 import disteq as D  # noqa: E402
@@ -82,18 +83,6 @@ def build(out, samples):
     print(f"wrote {out}")
 
 
-def _validation_fitter(filters):
-    from brutus.analysis import BruteForce
-    from brutus.core import StarGrid
-    from brutus.data import load_models, load_offsets
-
-    models, labels, mask = load_models(H.GRID, filters=filters, verbose=False)
-    grid = [n for n, g in zip(labels.dtype.names, mask[0]) if g]
-    pred = [n for n, g in zip(labels.dtype.names, mask[0]) if not g]
-    bf = BruteForce(StarGrid(models, labels[grid], labels[pred]), verbose=False)
-    return bf, load_offsets(H.OFFSETS, filters=filters, verbose=False)
-
-
 def _fit_summaries(bf, path, data, **kwargs):
     """Fit, time and summarize every object of `data`."""
     t0 = time.perf_counter()
@@ -117,9 +106,8 @@ def run(tag, seed):
     ph, er = H._apply_offsets(s)
     stars = dict(np.load(STARS))
     n = len(stars["l"])
-    bf_val, offsets = _validation_fitter(list(stars["filters"]))
-    flux = 10 ** (-0.4 * stars["mag"])
-    ferr = flux * stars["mag_err"] * np.log(10) / 2.5
+    bf_val, offsets = H.make_fitter(list(stars["filters"]))
+    flux, ferr = inv_magnitude(stars["mag"], stars["mag_err"])
     mask = np.isfinite(flux) & np.isfinite(ferr)
     val = (
         np.nan_to_num(flux, nan=1.0),
@@ -205,11 +193,13 @@ def cmp(base, cand):
         p = 2 * stats.t.sf(np.abs(t), dof)
         worst = min(worst, p.min())
         print(f"-- {name}: K = {len(b)} / {len(c)} seeds, {b.shape[1]} stars")
-        tb_, tc_ = np.median(tb[name]), np.median(tc[name])
-        print(f"   time: median {tb_:.1f} s -> {tc_:.1f} s ({tc_ / tb_:.2f}x)")
+        before, after = np.median(tb[name]), np.median(tc[name])
+        print(
+            f"   time: median {before:.1f} s -> {after:.1f} s ({after / before:.2f}x)"
+        )
         for si, stat in enumerate(D.STATS):
             z = stats.norm.isf(p[:, si] / 2) * np.sign(t[:, si])  # t as a normal z
-            bias = z.mean() / np.sqrt(1.0 / len(z))
+            bias = z.mean() * np.sqrt(len(z))
             print(
                 f"   {stat:11s} p<0.01: {np.mean(p[:, si] < 0.01):.2f} (0.01 expected)"
                 f"   bias z {bias:+5.2f}   max |shift| {np.abs(shift[:, si]).max():.3e}"
