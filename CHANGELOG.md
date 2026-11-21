@@ -69,6 +69,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   200 MB per star; one fused kernel returns each model's chi2, gradient,
   scale and Fisher matrix. `loglike_grid` is 20% faster on the bench cohort
   (271 to 216 ms per star), and results are bitwise identical.
+- **The flux refinement and the parallax gate skip wasted work.** The kept
+  models are refined in flux space in one parallel kernel, without copying
+  their arrays at every step, and the parallax selection gate is computed
+  only for models that an upper bound leaves able to pass the selection.
+  On the bench cohort `loglike_grid` takes 171 instead of 248 ms per star
+  and the gate 596 instead of 1525 ms over 12 stars with parallaxes;
+  results are bitwise identical.
 - **The bulge's metal-poor population is a spheroid** *(output-changing)*.
   The bar's metal-poor population, 0.6 of `bar_mass` (`bar_feh[0]`, 0.5
   before), now has a spherical cored power law (`SPHEROID_SHAPE`) instead

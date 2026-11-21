@@ -1819,7 +1819,9 @@ class TestParallaxSelectionGate:
         # The peak far from both starts, with a negative parallax.
         cases.append((np.log(0.0067), 0.5, -0.5, 0.1))
         for mu, sig, plx, err in cases:
-            got = _lnp_parallax_gate(np.array([mu]), np.array([sig]), plx, err)[0]
+            got = _lnp_parallax_gate(
+                np.array([mu]), np.array([sig]), plx, err, np.empty(0), 0.0
+            )[0]
             ref = reference(mu, sig, plx, err)
             # The selection threshold is ln(wt_thresh) = -6.9 below the best.
             if ref > -30:

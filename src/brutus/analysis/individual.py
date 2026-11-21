@@ -443,26 +443,157 @@ def _optimize_fit_mag(
 
 
 @jit(nopython=True, cache=True, parallel=True)
-def _newton_step_flux(av, rv, grad, icov_sar, damping, avlim, rvlim):
+def _refine_flux(
+    data,
+    tot_var,
+    mag_coeffs,
+    sel,
+    av,
+    rv,
+    chi2,
+    obj,
+    grad,
+    scale,
+    icov_sar,
+    converged,
+    avlim,
+    rvlim,
+    av_gauss,
+    rv_gauss,
+    tol,
+):
     """
-    Return trial `(Av, Rv)` from one damped Gauss-Newton step with the scale
-    profiled out, and the predicted log-posterior gain of the undamped step.
+    Refine the models ``sel`` in flux space, in place: from `_flux_fit`'s
+    outputs at their magnitude-space fit, each takes damped Gauss-Newton
+    steps, `_bounded_step` on the 2x2 Schur complement of `icov_sar` onto
+    `(Av, Rv)`. A step that lowers the objective is accepted and divides
+    the damping by 10; one that does not raises it to at least 1e-3 and
+    multiplies it by 10. A model stops when the predicted gain falls below
+    `tol` or an accepted step leaves it in place, and gives up (converged
+    False) when the damping exceeds `_MAX_DAMPING` or after `_MAX_STEPS`.
+    """
+    Nfilt = mag_coeffs.shape[1]
+    inv_tot_var = 1.0 / tot_var
+    for k in prange(len(sel)):
+        i = sel[k]
+        model, rvec, drvec = np.empty(Nfilt), np.empty(Nfilt), np.empty(Nfilt)
+        trial = np.empty((3, 3))
+        damping, active = 0.0, True
+        for _ in range(_MAX_STEPS):
+            prec = icov_sar[i]
+            h_aa = prec[1, 1] - prec[0, 1] * prec[0, 1] / prec[0, 0]
+            h_ar = prec[1, 2] - prec[0, 1] * prec[0, 2] / prec[0, 0]
+            h_rr = prec[2, 2] - prec[0, 2] * prec[0, 2] / prec[0, 0]
+            av_t, rv_t, gain = _bounded_step(
+                av[i],
+                rv[i],
+                grad[i, 0],
+                grad[i, 1],
+                h_aa,
+                h_ar,
+                h_rr,
+                damping,
+                avlim,
+                rvlim,
+            )
+            if not gain >= tol:
+                active = False
+                break
+            chi2_t, obj_t, g_av, g_rv, scale_t = _flux_one(
+                data,
+                tot_var,
+                inv_tot_var,
+                mag_coeffs[i],
+                av_t,
+                rv_t,
+                av_gauss,
+                rv_gauss,
+                model,
+                rvec,
+                drvec,
+                trial,
+            )
+            improved = obj_t <= obj[i]
+            moved = av_t != av[i] or rv_t != rv[i]
+            if improved:
+                av[i], rv[i], chi2[i], obj[i] = av_t, rv_t, chi2_t, obj_t
+                grad[i, 0], grad[i, 1], scale[i] = g_av, g_rv, scale_t
+                icov_sar[i, :, :] = trial
+                damping *= 0.1
+            else:
+                damping = max(10.0 * damping, 1e-3)
+                if damping > _MAX_DAMPING:
+                    converged[i] = False
+                    active = False
+                    break
+            if improved and not moved:
+                active = False
+                break
+        if active:
+            converged[i] = False
 
-    The step is `_bounded_step` on the 2x2 Schur complement of `icov_sar`
-    onto `(Av, Rv)` and `grad` (from `_flux_fit`).
-    """
-    Nmodel = len(av)
-    av_new, rv_new, gain = np.empty(Nmodel), np.empty(Nmodel), np.empty(Nmodel)
-    for i in prange(Nmodel):
-        g_av, g_rv = grad[i, 0], grad[i, 1]
-        prec = icov_sar[i]
-        h_aa = prec[1, 1] - prec[0, 1] * prec[0, 1] / prec[0, 0]
-        h_ar = prec[1, 2] - prec[0, 1] * prec[0, 2] / prec[0, 0]
-        h_rr = prec[2, 2] - prec[0, 2] * prec[0, 2] / prec[0, 0]
-        av_new[i], rv_new[i], gain[i] = _bounded_step(
-            av[i], rv[i], g_av, g_rv, h_aa, h_ar, h_rr, damping[i], avlim, rvlim
-        )
-    return av_new, rv_new, gain
+
+@jit(nopython=True, cache=True)
+def _flux_one(
+    data,
+    tot_var,
+    inv_tot_var,
+    coeffs,
+    av,
+    rv,
+    av_gauss,
+    rv_gauss,
+    model,
+    rvec,
+    drvec,
+    icov,
+):
+    """Return `_flux_fit`'s chi2, objective, gradient and scale of one model
+    with coefficients ``coeffs`` (Nfilt, 3), and write its precision matrix
+    into ``icov`` (3, 3); ``model``, ``rvec`` and ``drvec`` are scratch."""
+    Av_mean, Av_std = av_gauss
+    Rv_mean, Rv_std = rv_gauss
+    Av_varinv, Rv_varinv = 1.0 / Av_std**2, 1.0 / Rv_std**2
+    fac = -0.4 * log(10.0)
+    # Reddened fluxes and their derivatives, as `_get_seds`.
+    s_num, s_den = 0.0, 0.0
+    for j in range(len(data)):
+        dr = coeffs[j, 2]
+        rvec[j] = coeffs[j, 1] + rv * dr
+        model[j] = exp(fac * (coeffs[j, 0] + av * rvec[j]))
+        rvec[j] *= fac * model[j]
+        drvec[j] = dr * (fac * model[j])
+        s_num += model[j] * data[j] * inv_tot_var[j]
+        s_den += model[j] * model[j] * inv_tot_var[j]
+    s = s_num / s_den
+    if s <= MIN_SCALE:
+        s = MIN_SCALE
+    sr_mix, sa_mix, ar_mix, a_den, r_den = 0.0, 0.0, 0.0, 0.0, 0.0
+    chi2 = 0.0
+    g_av = (Av_mean - av) / Av_std**2
+    g_rv = (Rv_mean - rv) / Rv_std**2
+    for j in range(len(data)):
+        m = model[j] * s
+        resid = data[j] - m
+        sr_mix += m * drvec[j] * av * inv_tot_var[j]
+        sa_mix += m * rvec[j] * inv_tot_var[j]
+        r_j = rvec[j] * s
+        d_j = drvec[j] * s
+        ar_mix += r_j * d_j * av * inv_tot_var[j]
+        a_den += r_j * r_j * inv_tot_var[j]
+        r_den += (d_j * av) ** 2 * inv_tot_var[j]
+        chi2 += resid * resid / tot_var[j]
+        weighted = resid / tot_var[j]
+        g_av += r_j * weighted
+        g_rv += av * d_j * weighted
+    a_den += Av_varinv
+    r_den += Rv_varinv
+    obj = chi2 + (((av - Av_mean) / Av_std) ** 2 + ((rv - Rv_mean) / Rv_std) ** 2)
+    icov[0, 0], icov[1, 1], icov[2, 2] = s_den, a_den, r_den
+    icov[0, 1] = icov[1, 0] = sa_mix
+    icov[0, 2] = icov[2, 0] = sr_mix
+    icov[1, 2] = icov[2, 1] = ar_mix
+    return chi2, obj, g_av, g_rv, s
 
 
 # Models per block of `_flux_fit`, which allocates its per-band scratch once
@@ -509,11 +640,7 @@ def _flux_fit(data, tot_var, mag_coeffs, av, rv, av_gauss, rv_gauss):
     icov_sar : `~numpy.ndarray` of shape `(Nmodel, 3, 3)`
         Precision matrix in `(scale, Av, Rv)`.
     """
-    Av_mean, Av_std = av_gauss
-    Rv_mean, Rv_std = rv_gauss
-    Av_varinv, Rv_varinv = 1.0 / Av_std**2, 1.0 / Rv_std**2
     Nmodel, Nfilt, _ = mag_coeffs.shape
-    fac = -0.4 * log(10.0)
     inv_tot_var = 1.0 / tot_var
     chi2, obj, scale = np.empty(Nmodel), np.empty(Nmodel), np.empty(Nmodel)
     grad = np.empty((Nmodel, 2))
@@ -521,52 +648,20 @@ def _flux_fit(data, tot_var, mag_coeffs, av, rv, av_gauss, rv_gauss):
     for block in prange((Nmodel + _FLUX_BLOCK - 1) // _FLUX_BLOCK):
         model, rvec, drvec = np.empty(Nfilt), np.empty(Nfilt), np.empty(Nfilt)
         for i in range(block * _FLUX_BLOCK, min((block + 1) * _FLUX_BLOCK, Nmodel)):
-            # Reddened fluxes and their derivatives, as `_get_seds`.
-            s_num, s_den = 0.0, 0.0
-            for j in range(Nfilt):
-                dr = mag_coeffs[i, j, 2]
-                rvec[j] = mag_coeffs[i, j, 1] + rv[i] * dr
-                model[j] = exp(fac * (mag_coeffs[i, j, 0] + av[i] * rvec[j]))
-                rvec[j] *= fac * model[j]
-                drvec[j] = dr * (fac * model[j])
-                s_num += model[j] * data[j] * inv_tot_var[j]
-                s_den += model[j] * model[j] * inv_tot_var[j]
-            s = s_num / s_den
-            if s <= MIN_SCALE:
-                s = MIN_SCALE
-            sr_mix, sa_mix, ar_mix, a_den, r_den = 0.0, 0.0, 0.0, 0.0, 0.0
-            chi2_i = 0.0
-            g_av = (Av_mean - av[i]) / Av_std**2
-            g_rv = (Rv_mean - rv[i]) / Rv_std**2
-            for j in range(Nfilt):
-                m = model[j] * s
-                resid = data[j] - m
-                sr_mix += m * drvec[j] * av[i] * inv_tot_var[j]
-                sa_mix += m * rvec[j] * inv_tot_var[j]
-                r_j = rvec[j] * s
-                d_j = drvec[j] * s
-                ar_mix += r_j * d_j * av[i] * inv_tot_var[j]
-                a_den += r_j * r_j * inv_tot_var[j]
-                r_den += (d_j * av[i]) ** 2 * inv_tot_var[j]
-                chi2_i += resid * resid / tot_var[j]
-                weighted = resid / tot_var[j]
-                g_av += r_j * weighted
-                g_rv += av[i] * d_j * weighted
-            a_den += Av_varinv
-            r_den += Rv_varinv
-            scale[i], chi2[i] = s, chi2_i
-            obj[i] = chi2_i + (
-                ((av[i] - Av_mean) / Av_std) ** 2 + ((rv[i] - Rv_mean) / Rv_std) ** 2
+            chi2[i], obj[i], grad[i, 0], grad[i, 1], scale[i] = _flux_one(
+                data,
+                tot_var,
+                inv_tot_var,
+                mag_coeffs[i],
+                av[i],
+                rv[i],
+                av_gauss,
+                rv_gauss,
+                model,
+                rvec,
+                drvec,
+                icov_sar[i],
             )
-            grad[i, 0], grad[i, 1] = g_av, g_rv
-            icov_sar[i, 0, 0], icov_sar[i, 1, 1], icov_sar[i, 2, 2] = (
-                s_den,
-                a_den,
-                r_den,
-            )
-            icov_sar[i, 0, 1] = icov_sar[i, 1, 0] = sa_mix
-            icov_sar[i, 0, 2] = icov_sar[i, 2, 0] = sr_mix
-            icov_sar[i, 1, 2] = icov_sar[i, 2, 1] = ar_mix
     return chi2, obj, grad, scale, icov_sar
 
 
@@ -575,6 +670,11 @@ _GATE_NODES, _GATE_WEIGHTS = np.polynomial.hermite.hermgauss(5)
 _GATE_LNWEIGHTS = np.log(_GATE_WEIGHTS) + _GATE_NODES**2
 #: Most Gauss-Newton steps of the gate's peak search.
 _GATE_MAX_STEPS = 50
+#: ln of the sum of the gate's ln weights as exponentials, which bounds it.
+_GATE_LNSUM = np.log(np.sum(np.exp(_GATE_LNWEIGHTS)))
+#: Models best without the gate whose gate sets the selection's lower bound.
+_GATE_TOP = 64
+_NO_BASE = np.empty(0)
 
 
 @jit(nopython=True, cache=True)
@@ -585,7 +685,7 @@ def _gate_logf(eta, mu, inv_var_eta, parallax, inv_var_plx):
 
 
 @jit(nopython=True, cache=True, parallel=True)
-def _lnp_parallax_gate(eta, eta_err, parallax, parallax_err):
+def _lnp_parallax_gate(eta, eta_err, parallax, parallax_err, base, floor):
     r"""
     Return, per model, the log of the parallax likelihood averaged over the
     model's Gaussian in log-distance:
@@ -600,13 +700,37 @@ def _lnp_parallax_gate(eta, eta_err, parallax, parallax_err):
     :math:`\hat\eta` and from :math:`-\ln \varpi`, and scales them to its
     curvature. For :math:`\sigma_\eta \le 3` it is within 0.6 of the
     exact value; photometric fits give :math:`\sigma_\eta \lesssim 0.03`.
+    Unless ``base`` is empty, a model whose ``base`` plus an upper bound on
+    its gate falls below ``floor`` is skipped and gets -inf. The exact gate
+    is at most the peak of the parallax density, and the quadrature has
+    stayed below it over 25.8 million models of 42 stars, so 1 above it
+    bounds the gate. The quadrature also sums terms exp(g + ln w) with g <= 0
+    over a width sqrt(2 / curv), and curv >= 1/eta_err^2 - parallax^2 /
+    (8 parallax_err^2), the least the curvature of the integrand can be;
+    where that is positive it gives a second bound.
     """
     inv_var_plx = 1.0 / parallax_err**2
     nstart = 2 if parallax > 0 else 1
     eta_plx = -np.log(parallax) if parallax > 0 else 0.0
     lnnorm = np.log(2.0 * np.pi * parallax_err)
     out = np.empty(len(eta))
+    peak_bound = 1.0 - 0.5 * np.log(2.0 * np.pi * parallax_err**2)
+    plx_term = (max(parallax, 0.0) / parallax_err) ** 2 / 8.0
     for i in prange(len(eta)):
+        if len(base):
+            bound = peak_bound
+            curv = 1.0 / eta_err[i] ** 2 - plx_term
+            if curv > 0.0:
+                bound = min(
+                    bound,
+                    _GATE_LNSUM
+                    + 0.5 * np.log(2.0 / curv)
+                    - np.log(eta_err[i])
+                    - lnnorm,
+                )
+            if base[i] + bound < floor:
+                out[i] = -np.inf
+                continue
         mu, inv_var_eta = eta[i], 1.0 / eta_err[i] ** 2
         peak, gpeak = mu, -np.inf
         for k in range(nstart):
@@ -641,42 +765,62 @@ def _lnp_parallax_gate(eta, eta_err, parallax, parallax_err):
     return out
 
 
-def _parallax_gate(scales, icovs_sar, parallax, parallax_err):
+@jit(nopython=True, cache=True, parallel=True)
+def _gate_inputs(scales, icovs_sar):
+    """Return each model's ln(d) and its marginal error from its (scale,
+    A(V), R(V)) fit, for `_lnp_parallax_gate`."""
+    # Use the marginal scale error because distance and extinction both dim
+    # a star, driving the scale-A(V) correlation to 0.95-0.998 for reddened
+    # stars and making the conditional error 3-16x too small. cov[0,0]
+    # follows from the cofactor identity cov[0,0] = (i11*i22 - i12^2) /
+    # det(icov). A degenerate matrix falls back to the conditional error
+    # 1/sqrt(icov[0,0]). When icov[0,0] <= 0 the error is 1e10, and the
+    # model's term is then too small to pass.
+    N = len(scales)
+    eta, eta_err = np.empty(N), np.empty(N)
+    for i in prange(N):
+        i00, i01, i02 = icovs_sar[i, 0, 0], icovs_sar[i, 0, 1], icovs_sar[i, 0, 2]
+        i11, i12, i22 = icovs_sar[i, 1, 1], icovs_sar[i, 1, 2], icovs_sar[i, 2, 2]
+        minor00 = i11 * i22 - i12 * i12
+        det = (
+            i00 * minor00
+            - i01 * (i01 * i22 - i02 * i12)
+            + i02 * (i01 * i12 - i02 * i11)
+        )
+        err = 1e10
+        var00 = minor00 / det if det != 0.0 else np.nan
+        if det > 0 and np.isfinite(var00) and var00 > 0:
+            err = np.sqrt(var00)
+        elif i00 > 0:
+            err = np.sqrt(1.0 / i00)
+        # eta = ln(d) = -0.5 ln(s), so sigma_eta = sigma_s / (2 s). Far nodes
+        # of a degenerate model overflow exp(-eta) to inf, which gives the
+        # right 0.
+        s = max(scales[i], MIN_SCALE)
+        eta[i], eta_err[i] = -0.5 * np.log(s), err / (2.0 * s)
+    return eta, eta_err
+
+
+def _parallax_gate(scales, icovs_sar, parallax, parallax_err, base=None, ln_wt=None):
     """Return the parallax term of the selection weight of each model.
 
     It is `_lnp_parallax_gate` with the model's ln(d) mean and marginal
-    error from its (scale, A(V), R(V)) fit.
+    error from its (scale, A(V), R(V)) fit. With ``base``, the other terms
+    of the selection weight, and ``ln_wt``, the log of the selection
+    threshold, it is computed only for the models that an upper bound
+    leaves able to pass ``base + gate > max(base + gate) + ln_wt``; the
+    others get -inf, which selects the same models with the same weights.
     """
-    # Use the marginal scale error because distance and extinction both dim a
-    # star, driving the scale-A(V) correlation to 0.95-0.998 for reddened stars
-    # and making the conditional error 3-16x too small. cov[0,0] follows from
-    # the cofactor identity
-    # cov[0,0] = (i11*i22 - i12^2) / det(icov). A degenerate matrix falls
-    # back to the conditional error 1/sqrt(icov[0,0]). When icov[0,0] <= 0
-    # the error is 1e10, and the model's term is then too small to pass.
-    scales_err = np.full(len(scales), 1e10)
-    i00, i01, i02 = icovs_sar[:, 0, 0], icovs_sar[:, 0, 1], icovs_sar[:, 0, 2]
-    i11, i12, i22 = icovs_sar[:, 1, 1], icovs_sar[:, 1, 2], icovs_sar[:, 2, 2]
-    minor00 = i11 * i22 - i12 * i12
-    det = i00 * minor00 - i01 * (i01 * i22 - i02 * i12) + i02 * (i01 * i12 - i02 * i11)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        var00 = minor00 / det
-        cond_var00 = 1.0 / i00
-    marg_ok = (det > 0) & np.isfinite(var00) & (var00 > 0)
-    cond_ok = ~marg_ok & (i00 > 0)
-    scales_err[marg_ok] = np.sqrt(var00[marg_ok])
-    scales_err[cond_ok] = np.sqrt(cond_var00[cond_ok])
-
-    # eta = ln(d) = -0.5 ln(s), so sigma_eta = sigma_s / (2 s). Far nodes of
-    # a degenerate model overflow exp(-eta) to inf, which gives the right 0.
-    scales = np.maximum(scales, MIN_SCALE)
-    with np.errstate(over="ignore"):
-        return _lnp_parallax_gate(
-            -0.5 * np.log(scales),
-            scales_err / (2.0 * scales),
-            float(parallax),
-            float(parallax_err),
-        )
+    eta, eta_err = _gate_inputs(scales, icovs_sar)
+    args = (float(parallax), float(parallax_err))
+    if base is None or len(base) <= _GATE_TOP:
+        return _lnp_parallax_gate(eta, eta_err, *args, _NO_BASE, 0.0)
+    # The best of the models best without the gate bounds the maximum from
+    # below; no model whose bound falls short of it can pass.
+    top = np.argpartition(-base, _GATE_TOP)[:_GATE_TOP]
+    gate_top = _lnp_parallax_gate(eta[top], eta_err[top], *args, _NO_BASE, 0.0)
+    floor = np.max(base[top] + gate_top) + ln_wt - 1e-6
+    return _lnp_parallax_gate(eta, eta_err, *args, base, floor)
 
 
 # Chebyshev-Lobatto nodes in [-1, 1] for the Galactic prior across a model's
@@ -1400,65 +1544,36 @@ class BruteForce:
         init_sel = np.where(lnl_sel)[0]
 
         # Refine the kept models in flux space, with the same stopping rules
-        # as the magnitude-space fit.
-        mcoeffs = mcoeffs[init_sel]
-        scale_new, icov_sar_new = scale[init_sel], icov_sar[init_sel]
-        av_new, rv_new = av[init_sel], rv[init_sel]
-        chi2_new, obj, grad = chi2[init_sel], obj[init_sel], grad[init_sel]
-        converged = converged[init_sel]
-        damping = np.zeros(len(init_sel))
-        active = np.arange(len(init_sel))
-        for _ in range(_MAX_STEPS):
-            av_t, rv_t, gain = _newton_step_flux(
-                av_new[active],
-                rv_new[active],
-                grad[active],
-                icov_sar_new[active],
-                damping[active],
-                avlim,
-                rvlim,
-            )
-            unconverged = gain >= ltol
-            active, av_t, rv_t = (
-                active[unconverged],
-                av_t[unconverged],
-                rv_t[unconverged],
-            )
-            if active.size == 0:
-                break
-            chi2_t, obj_t, grad_t, scale_t, icov_t = _flux_fit(
-                flux, tot_var, mcoeffs[active], av_t, rv_t, av_gauss, rv_gauss
-            )
-            improved = obj_t <= obj[active]
-            moved = (av_t != av_new[active]) | (rv_t != rv_new[active])
-            accepted = active[improved]
-            av_new[accepted], rv_new[accepted] = av_t[improved], rv_t[improved]
-            chi2_new[accepted], obj[accepted] = chi2_t[improved], obj_t[improved]
-            grad[accepted], icov_sar_new[accepted] = grad_t[improved], icov_t[improved]
-            scale_new[accepted] = scale_t[improved]
-            damping[accepted] *= 0.1
-            rejected = active[~improved]
-            damping[rejected] = np.maximum(10.0 * damping[rejected], 1e-3)
-            # A model stops when a step no longer moves it, or gives up when
-            # the damping grows past _MAX_DAMPING.
-            gave_up = ~improved & (damping[active] > _MAX_DAMPING)
-            converged[active[gave_up]] = False
-            active = active[~((improved & ~moved) | gave_up)]
-        converged[active] = False
-        if not np.all(converged):
+        # as the magnitude-space fit. Culled models keep their
+        # magnitude-space fit; the Gaussian normalization applies to every
+        # model, so that all of lnl shares one constant.
+        _refine_flux(
+            flux,
+            tot_var,
+            mcoeffs,
+            init_sel,
+            av,
+            rv,
+            chi2,
+            obj,
+            grad,
+            scale,
+            icov_sar,
+            converged,
+            avlim,
+            rvlim,
+            av_gauss,
+            rv_gauss,
+            ltol,
+        )
+        if not np.all(converged[init_sel]):
             warnings.warn(
                 "Some models stopped before their A(V), R(V) fit converged "
                 "(step or damping limit).",
                 RuntimeWarning,
                 stacklevel=2,
             )
-
-        # Insert optimized models into initial array of results. Culled models
-        # keep their magnitude-space fit; the Gaussian normalization applies to
-        # every model, so that all of lnl shares one constant.
-        lnl[init_sel], chi2[init_sel] = -0.5 * chi2_new, chi2_new
-        scale[init_sel], av[init_sel], rv[init_sel] = scale_new, av_new, rv_new
-        icov_sar[init_sel] = icov_sar_new
+        lnl[init_sel] = -0.5 * chi2[init_sel]
         lnl += -0.5 * (Ndim * np.log(2.0 * np.pi) + np.sum(np.log(tot_var)))
 
         # Apply dimensional prior
@@ -1689,7 +1804,10 @@ class BruteForce:
             # ln(d) (#297). Its width equals that of the MC step below unless
             # _inverse3 regularizes the matrix or precision_shrinkage > 0. A
             # model that this gate drops cannot come back.
-            lnprob_sel += _parallax_gate(scales, icovs_sar, parallax, parallax_err)
+            ln_wt = None if wt_thresh is None else np.log(wt_thresh)
+            lnprob_sel += _parallax_gate(
+                scales, icovs_sar, parallax, parallax_err, lnprob_base, ln_wt
+            )
 
         # Select models above threshold (using parallax-informed weights)
         if wt_thresh is not None:
