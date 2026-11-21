@@ -62,6 +62,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   if neither is. On 12 Orion stars and 48 validation stars with and
   without proper motions, the prior takes 0.10 evaluations per draw, and
   each model's integrated ln prior is within 4.7e-4 of the exact one.
+- **The labelled thin-disk prior skips the far tails of the birth radius**
+  *(output-changing)*. Where a bound of the truncated birth-radius Gaussian
+  lies beyond 8 standard deviations, it drops out of the mass and the mean
+  rather than being evaluated. The prior changes by at most 1.5e-9 in ln,
+  and a labelled point costs 14% less (1.90 to 1.63 us without proper
+  motions on 4 threads).
 - **`logpost_grid` summarizes each model's draws in one kernel**
   *(output-changing)*. The integrated ln posterior and `mc_ess` come from
   one parallel pass instead of `scipy.special.logsumexp` and separate
