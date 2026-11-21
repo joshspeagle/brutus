@@ -1193,6 +1193,57 @@ class TestThinDiskLabels:
         got = np.exp(gal._thin_disk_ln_joint(feh, R, *terms, 0.03 / 0.075))
         assert np.isclose(got, _frankel_reference(feh, age, R), rtol=rtol, atol=0)
 
+    def test_birth_term_tail_shortcuts_match_the_general_formula(self):
+        # _birth_ln_at drops a truncation bound beyond 8 standard deviations;
+        # the general formula, with scipy's log_ndtr, keeps both.
+        from scipy.special import log_ndtr
+
+        LOG_ZERO = gal.LOG_ZERO
+
+        def general(R, t, o):
+            ln = t[o]
+            if ln == LOG_ZERO:
+                return LOG_ZERO
+            knee = gal.THIN_DISK_GRADIENT_KNEE
+            d = t[o + 2] - R
+            ln -= R * t[o + 1] + 0.5 * d * d * t[o + 3]
+            ln_out = t[o + 8] - R * t[o + 1]
+            s = t[o + 7]
+            if s > 0.0:
+                m, sv = t[o + 4] * R + t[o + 5], t[o + 6]
+                a, b = -m / sv, (knee - m) / sv
+                if a > 0.0:
+                    a, b = -b, -a
+                hi, lo = log_ndtr(b), log_ndtr(a)
+                ln_mass = hi + np.log1p(-np.exp(lo - hi))
+                a, b = -m / sv, (knee - m) / sv
+                phi_a = np.exp(stats.norm.logpdf(a) - ln_mass)
+                phi_b = np.exp(stats.norm.logpdf(b) - ln_mass)
+                ln += ln_mass - log_ndtr((m + sv * (phi_a - phi_b)) / s)
+                ln_out += log_ndtr((R - t[o + 9]) / s)
+            elif R < knee:
+                ln_out = LOG_ZERO
+            else:
+                ln = LOG_ZERO
+            return np.logaddexp(ln, ln_out)
+
+        tails = set()
+        for feh in (-0.8, -0.2, 0.3):
+            for age in (0.05, 0.5, 3.0, 9.0):
+                terms = gal._thin_disk_joint_terms(
+                    feh, *gal._thin_disk_age_terms(age), 1.4
+                )
+                for R in (0.5, 4.0, 8.0, 14.0, 25.0):
+                    for o in (0, gal._BIRTH_TERMS):
+                        m = terms[o + 4] * R + terms[o + 5]
+                        a = -m / terms[o + 6]
+                        b = (gal.THIN_DISK_GRADIENT_KNEE - m) / terms[o + 6]
+                        tails.add((a < -8.0, b > 8.0))
+                        got = gal._birth_ln_at(R, np.array(terms), o)
+                        assert np.isclose(got, general(R, terms, o), atol=1e-8)
+        # Every branch is exercised.
+        assert tails == {(False, False), (True, False), (False, True), (True, True)}
+
     @pytest.mark.parametrize(
         "age, R",
         [

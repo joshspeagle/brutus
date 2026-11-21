@@ -391,13 +391,26 @@ def _birth_ln_at(R, all_terms, start):
         m = all_terms[o + 4] * R + all_terms[o + 5]
         sv = all_terms[o + 6]
         a, b = -m / sv, (knee - m) / sv
-        ln_mass = _ln_ndtr_diff(b, a)
-        if ln_mass > LOG_ZERO:
-            phi_a = exp(-0.5 * (a * a + _LOG_2PI) - ln_mass)
+        # Beyond 8 standard deviations Phi is 1 to within 7e-16, so a bound
+        # there drops out of the mass and of the truncated mean.
+        if a < -8.0 and b > 8.0:
+            ln -= _ln_ndtr(m / s)
+        elif a < -8.0:
+            ln_mass = _ln_ndtr(b)
             phi_b = exp(-0.5 * (b * b + _LOG_2PI) - ln_mass)
-            ln += ln_mass - _ln_ndtr((m + sv * (phi_a - phi_b)) / s)
+            ln += ln_mass - _ln_ndtr((m - sv * phi_b) / s)
+        elif b > 8.0:
+            ln_mass = _ln_ndtr(-a)
+            phi_a = exp(-0.5 * (a * a + _LOG_2PI) - ln_mass)
+            ln += ln_mass - _ln_ndtr((m + sv * phi_a) / s)
         else:
-            ln = LOG_ZERO
+            ln_mass = _ln_ndtr_diff(b, a)
+            if ln_mass > LOG_ZERO:
+                phi_a = exp(-0.5 * (a * a + _LOG_2PI) - ln_mass)
+                phi_b = exp(-0.5 * (b * b + _LOG_2PI) - ln_mass)
+                ln += ln_mass - _ln_ndtr((m + sv * (phi_a - phi_b)) / s)
+            else:
+                ln = LOG_ZERO
         ln_out += _ln_ndtr((R - all_terms[o + 9]) / s)
     elif R < knee:
         ln_out = LOG_ZERO
