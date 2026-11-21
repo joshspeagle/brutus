@@ -55,6 +55,7 @@ import sys
 import time
 import warnings
 from functools import partial
+from math import exp, log
 
 import h5py
 import numpy as np
@@ -62,7 +63,7 @@ from numba import jit, prange
 from scipy.special import logsumexp
 
 from ..core import StarGrid
-from ..core.sed_utils import _get_seds, _model_array, get_seds
+from ..core.sed_utils import _model_array, get_seds
 from ..priors.astrometric import logp_parallax
 from ..priors.extinction import logp_extinction
 from ..priors.galactic import PM_OUTLIER, logp_galactic_structure, sample_motions
@@ -386,8 +387,14 @@ def _optimize_fit_mag(
 
     Returns
     -------
-    models, rvecs, drvecs, scale, av, rv, icov_sar, resid
-        The outputs of `_get_sed_mle` at the fitted `(Av, Rv)`, in fluxes.
+    chi2, obj, grad, scale
+        The outputs of `_flux_fit` at the fitted `(Av, Rv)`.
+
+    av, rv : `~numpy.ndarray` of shape `(Nmodel,)`
+        The fitted `(Av, Rv)`.
+
+    icov_sar : `~numpy.ndarray` of shape `(Nmodel, 3, 3)`
+        The precision matrix of `_flux_fit`.
 
     converged : `~numpy.ndarray` of shape `(Nmodel,)`
         False for a model that stopped on the damping or step limit.
@@ -429,48 +436,10 @@ def _optimize_fit_mag(
                     break
         av[i], rv[i], converged[i] = a, r, done
 
-    models, rvecs, drvecs, scale, icov_sar, resid = _get_sed_mle(
-        data,
-        tot_var,
-        np.empty((Nmodel, Nfilt)),
-        mag_coeffs,
-        av,
-        rv,
-        av_gauss=av_gauss,
-        rv_gauss=rv_gauss,
+    chi2, obj, grad, scale, icov_sar = _flux_fit(
+        data, tot_var, mag_coeffs, av, rv, av_gauss, rv_gauss
     )
-    return models, rvecs, drvecs, scale, av, rv, icov_sar, resid, converged
-
-
-@jit(nopython=True, cache=True, parallel=True)
-def _flux_objective(av, rv, rvecs, drvecs, resid, tot_var, av_gauss, rv_gauss):
-    """
-    Return chi2, chi2 plus the prior penalties on `(Av, Rv)`, and the gradient
-    of the log-posterior in `(Av, Rv)`, from the outputs of `_get_sed_mle`.
-
-    `_get_sed_mle` returns `drvecs` as ``(1 / Av) * df/dRv``, so the R(V)
-    gradient multiplies it by `Av`.
-    """
-    Nmodel, Nfilt = resid.shape
-    Av_mean, Av_std = av_gauss
-    Rv_mean, Rv_std = rv_gauss
-    chi2, obj = np.empty(Nmodel), np.empty(Nmodel)
-    grad = np.empty((Nmodel, 2))
-    for i in prange(Nmodel):
-        chi2_i = 0.0
-        g_av = (Av_mean - av[i]) / Av_std**2
-        g_rv = (Rv_mean - rv[i]) / Rv_std**2
-        for j in range(Nfilt):
-            chi2_i += resid[i, j] * resid[i, j] / tot_var[j]
-            weighted = resid[i, j] / tot_var[j]
-            g_av += rvecs[i, j] * weighted
-            g_rv += av[i] * drvecs[i, j] * weighted
-        chi2[i] = chi2_i
-        obj[i] = chi2_i + (
-            ((av[i] - Av_mean) / Av_std) ** 2 + ((rv[i] - Rv_mean) / Rv_std) ** 2
-        )
-        grad[i, 0], grad[i, 1] = g_av, g_rv
-    return chi2, obj, grad
+    return chi2, obj, grad, scale, av, rv, icov_sar, converged
 
 
 @jit(nopython=True, cache=True, parallel=True)
@@ -480,7 +449,7 @@ def _newton_step_flux(av, rv, grad, icov_sar, damping, avlim, rvlim):
     profiled out, and the predicted log-posterior gain of the undamped step.
 
     The step is `_bounded_step` on the 2x2 Schur complement of `icov_sar`
-    onto `(Av, Rv)` and `grad` (from `_flux_objective`).
+    onto `(Av, Rv)` and `grad` (from `_flux_fit`).
     """
     Nmodel = len(av)
     av_new, rv_new, gain = np.empty(Nmodel), np.empty(Nmodel), np.empty(Nmodel)
@@ -496,146 +465,109 @@ def _newton_step_flux(av, rv, grad, icov_sar, damping, avlim, rvlim):
     return av_new, rv_new, gain
 
 
-@jit(nopython=True, cache=True, parallel=True)
-def _get_sed_mle(
-    data, tot_var, resid, mag_coeffs, av, rv, av_gauss=(0.0, 1e6), rv_gauss=(3.32, 0.18)
-):
-    """
-    Recompute model SEDs, derive the MLE scale factor, compute residuals,
-    and build the Fisher information (precision) matrix.
+# Models per block of `_flux_fit`, which allocates its per-band scratch once
+# per block rather than once per model.
+_FLUX_BLOCK = 1024
 
-    Given current `(Av, Rv)` values for each model, this function
-    regenerates the reddened SEDs from the magnitude polynomial
-    coefficients, computes the maximum-likelihood scale factor
-    (equivalently distance) for each model, forms the residuals
-    between the scaled model and data, and assembles the 3x3 Fisher
-    information (precision) matrix in `(scale, Av, Rv)` space.
+
+@jit(nopython=True, cache=True, parallel=True)
+def _flux_fit(data, tot_var, mag_coeffs, av, rv, av_gauss, rv_gauss):
+    """
+    Evaluate each model at its `(Av, Rv)` in fluxes: the MLE scale, chi2,
+    chi2 plus the prior penalties, the log-posterior gradient in `(Av, Rv)`
+    and the Fisher (precision) matrix in `(scale, Av, Rv)`.
+
+    The reddened flux of model i in band j is
+    ``f = exp(-0.4 ln(10) (m0 + Av (r0 + Rv dr)))``, and the scale is
+    ``sum(f d / var) / sum(f^2 / var)``, floored at MIN_SCALE. With the
+    scaled model ``s f``, ``df/dAv = s r f`` and ``df/dRv = Av s dr f``
+    (``r = r0 + Rv dr``, both times ``-0.4 ln 10``), and the precision
+    matrix is the Gauss-Newton ``J^T J / var`` plus the prior precisions.
+    The scale-scale term uses the unscaled models, the scale cross-terms
+    the scaled ones. Each model's bands stay in a small buffer, so the
+    full grid writes only these outputs.
 
     Parameters
     ----------
-    data : `~numpy.ndarray` of shape `(Nfilt)`
-        Observed data values.
-
-    tot_var : `~numpy.ndarray` of shape `(Nfilt,)`
-        Associated (Normal) variance on the observed flux values.
-        1D since the variance is a property of the data, not the models.
-
-    resid : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        Residuals between the data and models.
-
+    data, tot_var : `~numpy.ndarray` of shape `(Nfilt,)`
+        Observed fluxes and their variances.
     mag_coeffs : `~numpy.ndarray` of shape `(Nmodel, Nfilt, 3)`
-        Magnitude coefficients used to compute reddened photometry for a given
-        model.
-
-    av : `~numpy.ndarray` of shape `(Nmodel,)`
-        Av values of the models.
-
-    rv : `~numpy.ndarray` of shape `(Nmodel,)`
-        Rv values of the models.
-
-    av_gauss : 2-tuple, optional
-        The mean and standard deviation of the Gaussian prior that is placed
-        on A(V). The default is `(0., 1e6)`, which is designed to be
-        essentially flat over `avlim`.
-
-    rv_gauss : 2-tuple, optional
-        The mean and standard deviation of the Gaussian prior that is placed
-        on R(V). The default is `(3.32, 0.18)` based on the results from
-        Schlafly et al. (2016).
+        Magnitude coefficients `(m0, r0, dr)` of each model.
+    av, rv : `~numpy.ndarray` of shape `(Nmodel,)`
+        A(V) and R(V) of each model.
+    av_gauss, rv_gauss : 2-tuple
+        Mean and standard deviation of the Gaussian priors on A(V), R(V).
 
     Returns
     -------
-    models_new : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        New model predictions. Always returned in flux densities.
-
-    rvecs_new : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        New reddening vectors. Always returned in flux densities.
-
-    drvecs_new : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        New differential reddening vectors. Always returned in flux densities.
-
-    scale : `~numpy.ndarray` of shape `(Nmodel)`, optional
-        The best-fit scale factor.
-
-    icov_sar : `~numpy.ndarray` of shape `(Nmodel, 3, 3)`, optional
-        The precision (inverse covariance) matrices expanded around
-        `(s_ML, Av_ML, Rv_ML)`.
-
-    resid : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        Residuals between the data and models.
-
+    chi2, obj : `~numpy.ndarray` of shape `(Nmodel,)`
+        chi2, and chi2 plus the prior penalties.
+    grad : `~numpy.ndarray` of shape `(Nmodel, 2)`
+        Gradient of the log-posterior in `(Av, Rv)`.
+    scale : `~numpy.ndarray` of shape `(Nmodel,)`
+        MLE scale factor.
+    icov_sar : `~numpy.ndarray` of shape `(Nmodel, 3, 3)`
+        Precision matrix in `(scale, Av, Rv)`.
     """
     Av_mean, Av_std = av_gauss
     Rv_mean, Rv_std = rv_gauss
-
-    # Recompute models with new Rv.
-    models, rvecs, drvecs = _get_seds(mag_coeffs, av, rv, return_flux=True)
-    Nmodel, Nfilt = models.shape
-
-    # Precompute reciprocal of flux variance (1D, same for all models).
-    inv_tot_var = 1.0 / tot_var
-
-    # Derive scale-factors (`scale`) between data and models.
-    s_num, s_den, scale = np.zeros(Nmodel), np.zeros(Nmodel), np.zeros(Nmodel)
-    for i in prange(Nmodel):
-        for j in range(Nfilt):
-            s_num[i] += models[i][j] * data[j] * inv_tot_var[j]
-            s_den[i] += models[i][j] * models[i][j] * inv_tot_var[j]
-        scale[i] = s_num[i] / s_den[i]  # MLE scalefactor
-        if scale[i] <= MIN_SCALE:
-            scale[i] = MIN_SCALE
-
-    # Derive reddening terms.
-    sr_mix, sa_mix = np.zeros(Nmodel), np.zeros(Nmodel)
-    a_den, r_den = np.zeros(Nmodel), np.zeros(Nmodel)
-    ar_mix = np.zeros(Nmodel)
     Av_varinv, Rv_varinv = 1.0 / Av_std**2, 1.0 / Rv_std**2
-    for i in prange(Nmodel):
-        for j in range(Nfilt):
-            # Rescale models.
-            models[i][j] = models[i][j] * scale[i]
-
-            # Compute residuals.
-            resid[i][j] = data[j] - models[i][j]
-
-            # Derive scale cross-terms.
-            # Note: drvecs = dR/dRv * fac * flux, so the true
-            # ∂f/∂Rv = Av * drvecs. We must include Av for correct
-            # Fisher information in R(V)-related terms.
-            sr_mix[i] += models[i][j] * drvecs[i][j] * av[i] * inv_tot_var[j]
-            sa_mix[i] += models[i][j] * rvecs[i][j] * inv_tot_var[j]
-
-            # Rescale reddening quantities.
-            rvecs[i][j] = rvecs[i][j] * scale[i]
-            drvecs[i][j] = drvecs[i][j] * scale[i]
-
-            # Derive reddening (cross-)terms
-            # ar_mix: Gauss-Newton cross-term (∂f/∂Av)(∂f/∂Rv) / var
-            # where ∂f/∂Av = rvecs (already scaled) and
-            # ∂f/∂Rv = Av * drvecs (already scaled).
-            ar_mix[i] += rvecs[i][j] * drvecs[i][j] * av[i] * inv_tot_var[j]
-            a_den[i] += rvecs[i][j] * rvecs[i][j] * inv_tot_var[j]
-            r_den[i] += (drvecs[i][j] * av[i]) ** 2 * inv_tot_var[j]
-
-        # Add in priors.
-        a_den[i] += Av_varinv
-        r_den[i] += Rv_varinv
-
-    # Construct precision matrices (inverse covariances). All nine entries are
-    # assigned below, so allocation can skip zero-initialization.
+    Nmodel, Nfilt, _ = mag_coeffs.shape
+    fac = -0.4 * log(10.0)
+    inv_tot_var = 1.0 / tot_var
+    chi2, obj, scale = np.empty(Nmodel), np.empty(Nmodel), np.empty(Nmodel)
+    grad = np.empty((Nmodel, 2))
     icov_sar = np.empty((Nmodel, 3, 3))
-    for i in prange(Nmodel):
-        icov_sar[i][0][0] = s_den[i]  # scale
-        icov_sar[i][1][1] = a_den[i]  # Av
-        icov_sar[i][2][2] = r_den[i]  # Rv
-        icov_sar[i][0][1] = sa_mix[i]  # scale-Av cross-term
-        icov_sar[i][1][0] = sa_mix[i]  # scale-Av cross-term
-        icov_sar[i][0][2] = sr_mix[i]  # scale-Rv cross-term
-        icov_sar[i][2][0] = sr_mix[i]  # scale-Rv cross-term
-        icov_sar[i][1][2] = ar_mix[i]  # Av-Rv cross-term
-        icov_sar[i][2][1] = ar_mix[i]  # Av-Rv cross-term
-
-    return models, rvecs, drvecs, scale, icov_sar, resid
+    for block in prange((Nmodel + _FLUX_BLOCK - 1) // _FLUX_BLOCK):
+        model, rvec, drvec = np.empty(Nfilt), np.empty(Nfilt), np.empty(Nfilt)
+        for i in range(block * _FLUX_BLOCK, min((block + 1) * _FLUX_BLOCK, Nmodel)):
+            # Reddened fluxes and their derivatives, as `_get_seds`.
+            s_num, s_den = 0.0, 0.0
+            for j in range(Nfilt):
+                dr = mag_coeffs[i, j, 2]
+                rvec[j] = mag_coeffs[i, j, 1] + rv[i] * dr
+                model[j] = exp(fac * (mag_coeffs[i, j, 0] + av[i] * rvec[j]))
+                rvec[j] *= fac * model[j]
+                drvec[j] = dr * (fac * model[j])
+                s_num += model[j] * data[j] * inv_tot_var[j]
+                s_den += model[j] * model[j] * inv_tot_var[j]
+            s = s_num / s_den
+            if s <= MIN_SCALE:
+                s = MIN_SCALE
+            sr_mix, sa_mix, ar_mix, a_den, r_den = 0.0, 0.0, 0.0, 0.0, 0.0
+            chi2_i = 0.0
+            g_av = (Av_mean - av[i]) / Av_std**2
+            g_rv = (Rv_mean - rv[i]) / Rv_std**2
+            for j in range(Nfilt):
+                m = model[j] * s
+                resid = data[j] - m
+                sr_mix += m * drvec[j] * av[i] * inv_tot_var[j]
+                sa_mix += m * rvec[j] * inv_tot_var[j]
+                r_j = rvec[j] * s
+                d_j = drvec[j] * s
+                ar_mix += r_j * d_j * av[i] * inv_tot_var[j]
+                a_den += r_j * r_j * inv_tot_var[j]
+                r_den += (d_j * av[i]) ** 2 * inv_tot_var[j]
+                chi2_i += resid * resid / tot_var[j]
+                weighted = resid / tot_var[j]
+                g_av += r_j * weighted
+                g_rv += av[i] * d_j * weighted
+            a_den += Av_varinv
+            r_den += Rv_varinv
+            scale[i], chi2[i] = s, chi2_i
+            obj[i] = chi2_i + (
+                ((av[i] - Av_mean) / Av_std) ** 2 + ((rv[i] - Rv_mean) / Rv_std) ** 2
+            )
+            grad[i, 0], grad[i, 1] = g_av, g_rv
+            icov_sar[i, 0, 0], icov_sar[i, 1, 1], icov_sar[i, 2, 2] = (
+                s_den,
+                a_den,
+                r_den,
+            )
+            icov_sar[i, 0, 1] = icov_sar[i, 1, 0] = sa_mix
+            icov_sar[i, 0, 2] = icov_sar[i, 2, 0] = sr_mix
+            icov_sar[i, 1, 2] = icov_sar[i, 2, 1] = ar_mix
+    return chi2, obj, grad, scale, icov_sar
 
 
 #: Gauss-Hermite nodes x of the parallax selection gate, and ln(w) + x**2.
@@ -1423,7 +1355,7 @@ class BruteForce:
         # Set default Gaussian priors if not provided
         # These defaults are essentially flat over the allowed range.
         # Default flow: fit(av_gauss=None) -> _fit(av_gauss=(0.0, 1e6))
-        # -> loglike_grid(av_gauss=(0.0, 1e6)) -> _get_sed_mle internal
+        # -> loglike_grid(av_gauss=(0.0, 1e6)) -> _flux_fit internal
         # default (0.0, 1e6). The large std (1e6) makes the prior
         # effectively flat over the allowed A(V) range.
         if av_gauss is None:
@@ -1436,7 +1368,7 @@ class BruteForce:
 
         av_init = _model_array(av_init, av_gauss[0], Nmodels, "av_init")
         rv_init = _model_array(rv_init, rv_gauss[0], Nmodels, "rv_init")
-        _, rvecs, drvecs, scale, av, rv, icov_sar, resid, converged = _optimize_fit_mag(
+        chi2, obj, grad, scale, av, rv, icov_sar, converged = _optimize_fit_mag(
             flux,
             tot_var,
             mcoeffs,
@@ -1452,9 +1384,6 @@ class BruteForce:
         )
 
         # Cull initial bad fits before moving on
-        chi2, obj, grad = _flux_objective(
-            av, rv, rvecs, drvecs, resid, tot_var, av_gauss, rv_gauss
-        )
         lnl = -0.5 * chi2
 
         # Add parallax to log-likelihood
@@ -1497,18 +1426,8 @@ class BruteForce:
             )
             if active.size == 0:
                 break
-            _, rvecs_t, drvecs_t, scale_t, icov_t, resid_t = _get_sed_mle(
-                flux,
-                tot_var,
-                np.empty((active.size, Ndim)),
-                mcoeffs[active],
-                av_t,
-                rv_t,
-                av_gauss=av_gauss,
-                rv_gauss=rv_gauss,
-            )
-            chi2_t, obj_t, grad_t = _flux_objective(
-                av_t, rv_t, rvecs_t, drvecs_t, resid_t, tot_var, av_gauss, rv_gauss
+            chi2_t, obj_t, grad_t, scale_t, icov_t = _flux_fit(
+                flux, tot_var, mcoeffs[active], av_t, rv_t, av_gauss, rv_gauss
             )
             improved = obj_t <= obj[active]
             moved = (av_t != av_new[active]) | (rv_t != rv_new[active])
