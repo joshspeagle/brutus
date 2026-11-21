@@ -897,6 +897,17 @@ def _galactic_prior_at_draws(prior, dists, eta, coord, labels, motion):
     return out
 
 
+class _Sightline:
+    """One sightline of a dust map, queried for many objects at once:
+    `query` returns its profile as the map's own query would."""
+
+    def __init__(self, distances, av_mean, av_std):
+        self._profile = (distances, av_mean, av_std)
+
+    def query(self, coord):
+        return tuple(a.copy() for a in self._profile)
+
+
 def _inclusion_probabilities(weights, size):
     """Return inclusion probabilities ``min(1, c * weights)`` that sum to `size`.
 
@@ -2485,10 +2496,20 @@ class BruteForce:
 
         # Load dust map from file path (str or os.PathLike) if needed
         # (once for all objects), after _setup has checked the inputs
-        if dustfile is not None and isinstance(dustfile, (str, os.PathLike)):
-            from ..dust import Bayestar
+        from ..dust import Bayestar
 
+        if dustfile is not None and isinstance(dustfile, (str, os.PathLike)):
             dustfile = Bayestar(dustfile=dustfile)
+        # The default dust prior reads one sightline of a Bayestar map per
+        # object; one query for all of them replaces a query per object.
+        sightlines = None
+        if isinstance(dustfile, Bayestar) and lndustprior is None:
+            distances, av_mean, av_std = dustfile.query(
+                np.asarray(data_coords, dtype=float)
+            )
+            sightlines = [
+                _Sightline(distances, av_mean[i], av_std[i]) for i in range(Ndata)
+            ]
 
         # Initialize random state
         if rstate is None:
@@ -2571,7 +2592,7 @@ class BruteForce:
                         Ndraws=Ndraws,
                         lngalprior=lngalprior_proc,
                         lndustprior=lndustprior_proc,
-                        dustfile=dustfile,
+                        dustfile=dustfile if sightlines is None else sightlines[i],
                         dlabels=dlabels,
                         logl_dim_prior=logl_dim_prior,
                         ltol=ltol,
