@@ -76,6 +76,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   On the bench cohort `loglike_grid` takes 171 instead of 248 ms per star
   and the gate 596 instead of 1525 ms over 12 stars with parallaxes;
   results are bitwise identical.
+- **`fit()` queries a Bayestar dust map once for all objects** with the
+  default dust prior, instead of once per object (5-15 ms each). Results
+  are bitwise identical.
 - **The bulge's metal-poor population is a spheroid** *(output-changing)*.
   The bar's metal-poor population, 0.6 of `bar_mass` (`bar_feh[0]`, 0.5
   before), now has a spherical cored power law (`SPHEROID_SHAPE`) instead

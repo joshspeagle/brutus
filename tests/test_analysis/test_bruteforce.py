@@ -2638,6 +2638,40 @@ class TestFitWithProperMotions:
                 radial_velocity_error=np.ones(self.NDATA),
             )
 
+    def test_dust_map_is_queried_once_and_each_object_gets_its_sightline(
+        self, mock_fitter, tmp_path, monkeypatch
+    ):
+        import brutus.analysis.individual as ind
+        import brutus.dust as dust_mod
+
+        queries = []
+
+        class FakeMap(dust_mod.Bayestar):
+            def __init__(self):
+                pass
+
+            def query(self, coords):
+                coords = np.asarray(coords, dtype=float)
+                queries.append(coords.shape)
+                # Each sightline's A(V) profile is its longitude.
+                return (
+                    np.linspace(0.1, 10.0, 5),
+                    coords[:, :1] * np.ones(5),
+                    (np.ones((len(coords), 5))),
+                )
+
+        seen = []
+
+        def prior(avs, dustmap, coord, distance=None, avlim=None):
+            seen.append((coord[0], dustmap.query(coord)[1][0]))
+            return np.zeros(len(avs))
+
+        monkeypatch.setattr(ind, "logp_extinction", prior)
+        self._fit(mock_fitter, tmp_path, "dust", dustfile=FakeMap())
+        assert queries == [(self.NDATA, 2)]
+        for ell, av in seen:
+            assert av == ell
+
     def test_custom_galactic_prior_must_take_the_kinematic_keywords(
         self, mock_fitter, tmp_path
     ):
