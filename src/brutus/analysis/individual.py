@@ -825,10 +825,10 @@ def _parallax_gate(scales, icovs_sar, parallax, parallax_err, base=None, ln_wt=N
 
 # The 9 Chebyshev-Lobatto nodes of the Galactic prior across a model's draws.
 # They nest: the stages use the nodes at these indices, and each stage's
-# interpolant is checked against the one of the stage before (the first
-# against the line through the end nodes).
+# interpolant is checked against the one on every other node of the stage
+# (the first against the 3 nodes of its ends and middle).
 _PRIOR_NODES = np.cos(np.pi * np.arange(9) / 8)
-_PRIOR_STAGES = ((0, 4, 8), (0, 2, 4, 6, 8), tuple(range(9)))
+_PRIOR_STAGES = ((0, 2, 4, 6, 8), tuple(range(9)))
 # Largest difference in ln prior between a stage's interpolant and the one
 # before at a draw before the model goes on to the next stage, and after the
 # last to the exact prior at its draws.
@@ -893,18 +893,18 @@ def _galactic_prior_at_draws(prior, dists, eta, coord, labels, motion):
 
     A model's draws span 0.01-0.03 in ln(d) for most stars, because its
     absolute magnitude fixes its distance, and the prior is smooth over
-    that range. It is evaluated at 3, then 5, then 9 nested
-    Chebyshev-Lobatto nodes over the draws: a model stays at the first
-    stage whose interpolant is within PRIOR_INTERP_TOL (a tenth of it for
-    the first stage) of the one before at every draw, and its prior is evaluated at its draws if none is, or if a
-    node is at zero probability.
+    that range. It is evaluated at 5, then 9 nested Chebyshev-Lobatto
+    nodes over the draws: a model stays at the first stage whose
+    interpolant is within PRIOR_INTERP_TOL of the one on every other node
+    of the stage at every draw. Its prior is evaluated at its draws if
+    neither stage passes, or if a node is at zero probability.
     """
     if len(dists) <= len(_PRIOR_NODES):
         return prior(dists, coord, **labels, **motion)
     lo, hi = eta.min(axis=0), eta.max(axis=0)
     out = np.empty(dists.shape)
     f = np.empty((len(_PRIOR_NODES), dists.shape[1]))
-    todo, done, prev = np.arange(dists.shape[1]), [], (0, len(_PRIOR_NODES) - 1)
+    todo, done, prev = np.arange(dists.shape[1]), [], (0, 4, 8)
     for stage in _PRIOR_STAGES:
         new = [k for k in stage if k not in done]
         nodes = 0.5 * (hi[todo] + lo[todo]) + 0.5 * (hi[todo] - lo[todo]) * (
@@ -922,11 +922,7 @@ def _galactic_prior_at_draws(prior, dists, eta, coord, labels, motion):
             _lobatto_weights(len(stage)),
             sub,
         )
-        # The first check, against the line through the end nodes, cannot
-        # see an odd cubic part of the prior. A tenth of the tolerance keeps
-        # the measured error of the first stage to that of the later ones.
-        tol = PRIOR_INTERP_TOL / (10.0 if len(prev) == 2 else 1.0)
-        ok = err <= tol
+        ok = err <= PRIOR_INTERP_TOL
         out[:, todo[ok]] = p[:, ok]
         todo, done, prev = todo[~ok], done + new, stage
         if not len(todo):

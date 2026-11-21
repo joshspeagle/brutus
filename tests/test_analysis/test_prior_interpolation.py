@@ -90,11 +90,11 @@ def test_few_draws_use_the_exact_prior():
 
 
 def test_each_model_stops_at_the_first_stage_that_passes_its_check():
-    # A prior linear in ln(d) passes the 3-node stage, a quartic needs 9
-    # nodes, and a step goes on to the exact prior at the draws.
+    # A quadratic in ln(d) passes the 5-node stage, a quartic needs 9 nodes,
+    # and a step goes on to the exact prior at the draws.
     eta = np.tile(np.linspace(-0.2, 0.2, 50)[:, None], 3)
     shape = [
-        lambda u: 2.0 * u,
+        lambda u: 2.0 * u**2,
         lambda u: 50.0 * u**4,
         lambda u: np.where(u > 0, 1.0, 0.0),
     ]
@@ -108,8 +108,8 @@ def test_each_model_stops_at_the_first_stage_that_passes_its_check():
     out = _galactic_prior_at_draws(
         prior, np.exp(eta), eta, None, {"kind": np.arange(3)}, {}
     )
-    # 3 nodes for all, 2 more and 4 more for the quartic and the step, then
-    # the step's 50 draws.
-    assert calls == [9, 4, 8, 50]
+    # 5 nodes for all, 4 more for the quartic and the step, then the step's
+    # 50 draws.
+    assert calls == [15, 8, 50]
     np.testing.assert_allclose(out[:, :2], prior(np.exp(eta[:, :2]), None, [0, 1]))
     np.testing.assert_array_equal(out[:, 2], shape[2](eta[:, 2]))
