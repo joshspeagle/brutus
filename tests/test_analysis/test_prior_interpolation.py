@@ -7,6 +7,7 @@ from brutus.analysis.individual import (
     PRIOR_INTERP_TOL,
     _galactic_prior_at_draws,
     _interpolate_prior,
+    _lobatto_weights,
 )
 from brutus.priors import logp_galactic_structure
 from brutus.utils.math import LOG_ZERO
@@ -16,9 +17,8 @@ def test_quartic_in_ln_distance_is_interpolated_exactly_and_flagged_by_its_error
     rng = np.random.default_rng(1)
     eta = rng.normal(0.0, 0.1, (50, 3))
     lo, hi = eta.min(0), eta.max(0)
-    nodes = (
-        0.5 * (hi + lo) + 0.5 * (hi - lo) * np.cos(np.pi * np.arange(5) / 4)[:, None]
-    )
+    nodes5 = np.cos(np.pi * np.arange(5) / 4)
+    nodes = 0.5 * (hi + lo) + 0.5 * (hi - lo) * nodes5[:, None]
     poly = np.array(
         [[1.0, -2.0, 0.5, 3.0, 4.0], [0.0, 0.0, 1.0, 2.0, 0.0], [0.0, 0, 0, 0, 5.0]]
     )
@@ -27,7 +27,9 @@ def test_quartic_in_ln_distance_is_interpolated_exactly_and_flagged_by_its_error
         return np.polyval(poly[k], x)
 
     values = np.array([f(nodes[:, k], k) for k in range(3)]).T
-    out, err = _interpolate_prior(eta, lo, hi, values)
+    out, err = _interpolate_prior(
+        eta, lo, hi, values, nodes5, _lobatto_weights(5), np.array([0, 2, 4])
+    )
     expect = np.array([f(eta[:, k], k) for k in range(3)]).T
     np.testing.assert_allclose(out, expect, rtol=1e-10, atol=1e-12)
     # A quadratic and a constant are exact in the 3-node interpolant too,
@@ -41,7 +43,10 @@ def test_node_at_zero_probability_sends_the_model_to_the_exact_prior():
     eta = np.linspace(-0.1, 0.1, 50)[:, None]
     values = np.zeros((5, 1))
     values[3] = LOG_ZERO
-    _, err = _interpolate_prior(eta, eta.min(0), eta.max(0), values)
+    x = np.cos(np.pi * np.arange(5) / 4)
+    _, err = _interpolate_prior(
+        eta, eta.min(0), eta.max(0), values, x, _lobatto_weights(5), np.array([0, 2, 4])
+    )
     assert np.isinf(err[0])
 
 
@@ -70,7 +75,7 @@ def test_interpolated_prior_matches_the_exact_one_at_the_draws(
     )
     finite = exact > LOG_ZERO / 2
     np.testing.assert_array_equal(approx[~finite], exact[~finite])
-    # The 3-node estimate bounds the 5-node error, which is far smaller.
+    # Each stage's error estimate bounds the error of its interpolant.
     assert np.max(np.abs(approx - exact)[finite]) < PRIOR_INTERP_TOL
 
 
@@ -82,3 +87,29 @@ def test_few_draws_use_the_exact_prior():
         logp_galactic_structure, dists, np.log(dists), (90.0, 30.0), labels, {}
     )
     np.testing.assert_array_equal(approx, exact)
+
+
+def test_each_model_stops_at_the_first_stage_that_passes_its_check():
+    # A prior linear in ln(d) passes the 3-node stage, a quartic needs 9
+    # nodes, and a step goes on to the exact prior at the draws.
+    eta = np.tile(np.linspace(-0.2, 0.2, 50)[:, None], 3)
+    shape = [
+        lambda u: 2.0 * u,
+        lambda u: 50.0 * u**4,
+        lambda u: np.where(u > 0, 1.0, 0.0),
+    ]
+    calls = []
+
+    def prior(d, coord, kind):
+        calls.append(d.size)
+        u = np.log(d)
+        return np.array([shape[k](u[:, i]) for i, k in enumerate(kind)]).T
+
+    out = _galactic_prior_at_draws(
+        prior, np.exp(eta), eta, None, {"kind": np.arange(3)}, {}
+    )
+    # 3 nodes for all, 2 more and 4 more for the quartic and the step, then
+    # the step's 50 draws.
+    assert calls == [9, 4, 8, 50]
+    np.testing.assert_allclose(out[:, :2], prior(np.exp(eta[:, :2]), None, [0, 1]))
+    np.testing.assert_array_equal(out[:, 2], shape[2](eta[:, 2]))

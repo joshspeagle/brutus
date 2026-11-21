@@ -54,12 +54,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **`fit()` interpolates the Galactic prior across each model's draws**
-  *(output-changing)*. The default prior is evaluated at 5 nodes in ln(d)
-  over each model's Monte Carlo draws and interpolated at the draws, and
-  exactly where the 3-node interpolant differs by more than
-  `PRIOR_INTERP_TOL` (1e-3 in ln prior). The prior costs 6 to 10 times less;
-  on 37 stars over 12 sightlines, each model's integrated ln prior moved
-  by at most 5e-4.
+  *(output-changing)*. The default prior is evaluated at 3, then 5, then 9
+  nested Chebyshev-Lobatto nodes in ln(d) over each model's Monte Carlo
+  draws. A model stops at the first stage whose interpolant is within
+  `PRIOR_INTERP_TOL` (1e-3 in ln prior, 1e-4 for the first stage) of the
+  one before at every draw, and its prior is evaluated exactly at its draws
+  if none is. On 12 Orion stars and 48 validation stars with and without
+  proper motions, the prior takes 0.095 evaluations per draw, and each
+  model's integrated ln prior is within 4.7e-4 of the exact one.
 - **`loglike_grid` no longer copies the model coefficients for each star.**
   With every band valid it reads the grid itself, and with a masked band it
   reuses the copy for the last mask, which saves 54-104 ms per star on the
