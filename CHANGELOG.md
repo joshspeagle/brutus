@@ -66,6 +66,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *(output-changing)*. The integrated ln posterior and `mc_ess` come from
   one parallel pass instead of `scipy.special.logsumexp` and separate
   weight arrays, so they differ from before in the last bits.
+- **`fit` and `logpost_grid` default to `numpy.random.default_rng()`**
+  *(output-changing)* when `rstate` is not given, instead of
+  `numpy.random.RandomState()`, because its normal draws are faster. A
+  `RandomState` passed as `rstate` gives the same results as before.
 - **`loglike_grid` no longer copies the model coefficients for each star.**
   With every band valid it reads the grid itself, and with a masked band it
   reuses the copy for the last mask, which saves 54-104 ms per star on the
