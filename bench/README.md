@@ -35,13 +35,15 @@ set `NUMBA_DISABLE_JIT=1`) so the real parallel codegen is exercised.
 |------|---------|
 | `harness.py` | shared setup (loads grid + Orion data); per-object stage timings (`bench`); freeze/compare deterministic loglike outputs + posterior draws (`capture`/`compare`) |
 | `disteq.py` | distributional-equivalence tester: multi-seed posterior summaries vs the procedure's own Monte-Carlo scatter; defines the `COHORT` (Nsel = 4 … 50000-cap) |
-| `fullfit.py` | end-to-end `fit()` → HDF5, then bitwise-compare two runs (the strongest regression check; threads one RNG across objects) |
+| `fullfit.py` | end-to-end `fit()` → HDF5, then bitwise-compare two runs (the strongest regression check; threads one RNG across objects); `run <tag> pm` adds mock proper motions |
+| `broad.py` | accuracy and speed of `fit()` on 108 fits over a broad star set: the Orion cohort plus Gaia DR3, GeDR3mock and prior-mock stars on 4 sightlines each, with and without proper motions and the dust prior; summaries compared in units of the seed-to-seed standard error |
 | `mcvar.py` | direct measurement of MC-integration variance, antithetic vs plain |
 | `mcgold.py` | accuracy of antithetic vs plain against a high-`Nmc` gold standard |
 | `profile_cohort.py` | per-stage timings + aggregated `cProfile` over the cohort |
 | `bench_populations.py` | stage timings, scaling with star count, and EEP / SMF grid convergence of the isochrone population likelihood |
 | `ab.sh` | A/B stage timings (`harness.benchmark`) of the current **working tree** against committed `HEAD` |
 | `fullfit_ab.sh` | A/B `fullfit.py` runs of the working tree against `HEAD`, then `cmp` |
+| `broad_ab.sh` | A/B `broad.py` runs of the working tree against `$BASE_REF`, alternating sides for `$ROUNDS` seeds, then `cmp` |
 | `verify_cohort.sh` | A/B `capture` + `disteq.run` on the cohort against `HEAD`, then `compare` + `disteq.cmp` |
 | `RESULTS.md` | the dated findings record: methodology, per-change results, and the investigated-but-deferred ideas |
 | `artifacts/` | generated outputs (git-ignored) |

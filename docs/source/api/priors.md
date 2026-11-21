@@ -98,6 +98,8 @@ fitter.fit(
 .. autofunction:: logp_galactic_structure
 
 .. autofunction:: galactic_prior_summary
+
+.. autofunction:: sample_motions
 ```
 
 ```{eval-rst}
@@ -126,6 +128,10 @@ The Galactic prior uses the disk vertical dispersions. The fit does not use the 
 
 ```{eval-rst}
 .. autofunction:: halo_velocity_moments
+```
+
+```{eval-rst}
+.. autofunction:: bulge_velocity_moments
 ```
 
 ```{eval-rst}

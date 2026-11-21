@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Galactic prior can use a star's proper motion and radial
+  velocity.** `logp_galactic_structure` takes `pm` and `pm_cov` in
+  Galactic components, and optionally `rv` and `rv_err`. Each component's
+  density is then multiplied by the probability of the motion under its
+  velocity ellipsoid: each thin-disk true age has its own, the halo is the
+  Lancaster et al. (2019) mixture, and the bulge takes the bulge disc of
+  Binney & Vasiliev (2024). A share `pm_outlier` (0.01) of stars follows a
+  broad 300 km/s ellipsoid instead, and `pm_floor` adds a systematic error.
+  Without a proper motion the prior is unchanged.
+- **`BruteForce.fit` takes Gaia proper motions and radial velocities.**
+  `pmra`, `pmdec`, `pmra_error`, `pmdec_error` and `pmra_pmdec_corr`, and
+  optionally `radial_velocity` and `radial_velocity_error`, are rotated to
+  Galactic components and enter the Galactic prior's kinematic term;
+  `apply_pm_prior=False` turns it off, and rows with NaN are fitted
+  without it. A custom `lngalprior` must accept the kinematic keywords,
+  or the fit raises an error naming the missing one.
+  `brutus.utils.galactic_to_icrs` converts Galactic coordinates to ICRS.
+- **Posterior predictive motions.** `brutus.priors.sample_motions` draws
+  the proper motion and radial velocity that the Galactic prior predicts
+  at given distances and labels, and `fit(save_motion_draws=True)` saves
+  one for each posterior draw as `samps_motion`.
+- **`bulge_velocity_moments`** gives the velocity ellipsoid of the bulge,
+  from the bulge disc of Binney & Vasiliev (2024), now tabulated in
+  `bv24_tables.npz`.
 - **`brutus.priors.kinematic`** gives the velocity ellipsoids of the
   Galactic components: the thin disk with the age, angular-momentum,
   [Fe/H] and height relations of Sharma et al. (2021), the thick disk with
@@ -29,6 +53,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`fit()` interpolates the Galactic prior across each model's draws**
+  *(output-changing)*. The default prior is evaluated at 5, then 9 nested
+  Chebyshev-Lobatto nodes in ln(d) over each model's Monte Carlo draws. A
+  model stops at the first stage whose interpolant is within
+  `PRIOR_INTERP_TOL` (1e-3 in ln prior) of the one on every other node of
+  the stage at every draw, and its prior is evaluated exactly at its draws
+  if neither is. On 12 Orion stars and 48 validation stars with and
+  without proper motions, the prior takes 0.10 evaluations per draw, and
+  each model's integrated ln prior is within 4.7e-4 of the exact one.
+- **The labelled thin-disk prior skips the far tails of the birth radius**
+  *(output-changing)*. Where a bound of the truncated birth-radius Gaussian
+  lies beyond 8 standard deviations, it drops out of the mass and the mean
+  rather than being evaluated. The prior changes by at most 1.5e-9 in ln,
+  and a labelled point costs 14% less (1.90 to 1.63 us without proper
+  motions on 4 threads).
+- **`logpost_grid` summarizes each model's draws in one kernel**
+  *(output-changing)*. The integrated ln posterior and `mc_ess` come from
+  one parallel pass instead of `scipy.special.logsumexp` and separate
+  weight arrays, so they differ from before in the last bits.
+- **`fit` and `logpost_grid` default to `numpy.random.default_rng()`**
+  *(output-changing)* when `rstate` is not given, instead of
+  `numpy.random.RandomState()`, because its normal draws are faster. A
+  `RandomState` passed as `rstate` gives the same results as before.
+- **`loglike_grid` no longer copies the model coefficients for each star.**
+  With every band valid it reads the grid itself, and with a masked band it
+  reuses the copy for the last mask, which saves 54-104 ms per star on the
+  bench cohort. Results are bitwise identical.
+- **`loglike_grid` evaluates each model's fluxes in one pass.** The full
+  grid no longer writes per-band model, reddening and residual arrays, about
+  200 MB per star; one fused kernel returns each model's chi2, gradient,
+  scale and Fisher matrix. `loglike_grid` is 20% faster on the bench cohort
+  (271 to 216 ms per star), and results are bitwise identical.
+- **The flux refinement and the parallax gate skip wasted work.** The kept
+  models are refined in flux space in one parallel kernel, without copying
+  their arrays at every step, and the parallax selection gate is computed
+  only for models that an upper bound leaves able to pass the selection.
+  On the bench cohort `loglike_grid` takes 171 instead of 248 ms per star
+  and the gate 596 instead of 1525 ms over 12 stars with parallaxes;
+  results are bitwise identical.
+- **`fit()` queries a Bayestar dust map once for all objects** with the
+  default dust prior, instead of once per object (5-15 ms each). Results
+  are bitwise identical.
 - **The bulge's metal-poor population is a spheroid** *(output-changing)*.
   The bar's metal-poor population, 0.6 of `bar_mass` (`bar_feh[0]`, 0.5
   before), now has a spherical cored power law (`SPHEROID_SHAPE`) instead

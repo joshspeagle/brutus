@@ -122,6 +122,7 @@ q16, q50, q84 = quantile(data, [0.16, 0.5, 0.84], weights=weights)
 ```{eval-rst}
 .. autofunction:: galactic_to_galactocentric
 .. autofunction:: galactic_to_galactocentric_cyl
+.. autofunction:: galactic_to_icrs
 ```
 
 ```{eval-rst}

@@ -50,6 +50,7 @@ _DBL_MIN = 2.2250738585072014e-308  # smallest normal float64
 
 __all__ = [
     "galactic_to_galactocentric",
+    "galactic_to_icrs",
     "galactic_to_galactocentric_cyl",
     "pm_equatorial_to_galactic",
     "inverse3",
@@ -527,6 +528,13 @@ def _truncnorm_lognorm_scalar(lo, hi):
 
 
 @jit(nopython=True, cache=True)
+def _ln_add(a, b):
+    """Return ln(e^a + e^b), or LOG_ZERO when both are LOG_ZERO."""
+    hi, lo = max(a, b), min(a, b)
+    return hi + log1p(exp(lo - hi)) if hi > LOG_ZERO else LOG_ZERO
+
+
+@jit(nopython=True, cache=True)
 def _catmull_rom(p0, p1, p2, p3, t):
     """Return the Catmull-Rom cubic between p1 (t = 0) and p2 (t = 1)."""
     return p1 + 0.5 * t * (
@@ -784,6 +792,41 @@ def galactic_to_galactocentric_cyl(dists, ell, b, R_solar=R_SOLAR, Z_solar=Z_SOL
 # North Galactic pole in ICRS, in degrees (Hipparcos convention, as Gaia).
 _RA_NGP = 192.85948
 _DEC_NGP = 27.12825
+# Galactic longitude of the north celestial pole, in degrees (the same
+# convention).
+_L_NCP = 122.93192
+
+
+def galactic_to_icrs(ell, b):
+    r"""
+    Convert Galactic coordinates to ICRS right ascension and declination.
+
+    With the north Galactic pole at :math:`(\alpha_G, \delta_G)` and the
+    north celestial pole at Galactic longitude :math:`l_N`:
+
+    .. math::
+        \sin\delta = \sin\delta_G \sin b + \cos\delta_G \cos b
+        \cos(l_N - l), \qquad
+        \tan(\alpha - \alpha_G) = \frac{\cos b \sin(l_N - l)}
+        {\cos\delta_G \sin b - \sin\delta_G \cos b \cos(l_N - l)}
+
+    Parameters
+    ----------
+    ell, b : array_like
+        Galactic longitude and latitude in degrees.
+
+    Returns
+    -------
+    ra, dec : `~numpy.ndarray`
+        ICRS right ascension in [0, 360) and declination in degrees.
+    """
+    ell, b = np.radians(ell), np.radians(b)
+    dec_g, dl = np.radians(_DEC_NGP), np.radians(_L_NCP) - ell
+    sin_dec = np.sin(dec_g) * np.sin(b) + np.cos(dec_g) * np.cos(b) * np.cos(dl)
+    y = np.cos(b) * np.sin(dl)
+    x = np.cos(dec_g) * np.sin(b) - np.sin(dec_g) * np.cos(b) * np.cos(dl)
+    ra = (np.degrees(np.arctan2(y, x)) + _RA_NGP) % 360.0
+    return ra, np.degrees(np.arcsin(np.clip(sin_dec, -1.0, 1.0)))
 
 
 def pm_equatorial_to_galactic(

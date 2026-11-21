@@ -46,6 +46,7 @@ from scipy.special import logsumexp
 from scipy.stats import skewnorm
 
 from brutus.priors.kinematic import (
+    _LOG_2PI,
     _V_DPHI,
     _V_DU,
     _V_DX,
@@ -59,33 +60,48 @@ from brutus.priors.kinematic import (
     THICK_DISK_SIGMA,
     THIN_DISK_Z_EDGE,
     THIN_DISK_Z_MAX,
+    _bulge_moments,
     _check_positive,
     _circular_velocity,
+    _ln_halo_motion,
+    _ln_motion,
     _logn_disk_dlnR,
+    _motion_geometry,
+    _sightline,
     _soft_clamp,
     _thick_disk_ln_var,
+    _thick_disk_moments,
     _thin_disk_fade,
     _thin_disk_fL,
     _thin_disk_fz,
     _thin_disk_L_refs,
     _thin_disk_mean_L,
+    _thin_disk_moments,
     _thin_disk_sigma0,
     _vc_solar,
     _vertical_row,
     _vertical_terms,
+    bulge_velocity_moments,
+    halo_velocity_moments,
+    solar_velocity,
+    thick_disk_velocity_moments,
+    thin_disk_velocity_moments,
+    velocity_to_observables,
 )
 from brutus.utils.math import (
     LOG_ZERO,
     R_SOLAR,
     Z_SOLAR,
     _catmull_rom_table,
+    _ln_add,
     _ln_ndtr,
     _ln_ndtr_diff,
     _truncnorm_lognorm_scalar,
     galactic_to_galactocentric,
+    galactic_to_galactocentric_cyl,
 )
+from brutus.utils.sampling import sample_multivariate_normal
 
-_LOG_2PI = log(2.0 * pi)
 _LN2 = log(2.0)
 
 # Stellar ages are capped at the age of the Universe, in Gyr.
@@ -356,13 +372,6 @@ def _thin_disk_ln_at(R, terms):
 
 
 @jit(nopython=True, cache=True)
-def _ln_add(a, b):
-    """Return ln(e^a + e^b), or LOG_ZERO when both are LOG_ZERO."""
-    hi, lo = max(a, b), min(a, b)
-    return hi + log1p(exp(lo - hi)) if hi > LOG_ZERO else LOG_ZERO
-
-
-@jit(nopython=True, cache=True)
 def _birth_ln_at(R, all_terms, start):
     """Return ln p([Fe/H], age, R) at R of one birth [Fe/H] component, from
     its terms of `_birth_terms` at ``start`` in ``all_terms``."""
@@ -382,13 +391,26 @@ def _birth_ln_at(R, all_terms, start):
         m = all_terms[o + 4] * R + all_terms[o + 5]
         sv = all_terms[o + 6]
         a, b = -m / sv, (knee - m) / sv
-        ln_mass = _ln_ndtr_diff(b, a)
-        if ln_mass > LOG_ZERO:
-            phi_a = exp(-0.5 * (a * a + _LOG_2PI) - ln_mass)
+        # Beyond 8 standard deviations Phi is 1 to within 7e-16, so a bound
+        # there drops out of the mass and of the truncated mean.
+        if a < -8.0 and b > 8.0:
+            ln -= _ln_ndtr(m / s)
+        elif a < -8.0:
+            ln_mass = _ln_ndtr(b)
             phi_b = exp(-0.5 * (b * b + _LOG_2PI) - ln_mass)
-            ln += ln_mass - _ln_ndtr((m + sv * (phi_a - phi_b)) / s)
+            ln += ln_mass - _ln_ndtr((m - sv * phi_b) / s)
+        elif b > 8.0:
+            ln_mass = _ln_ndtr(-a)
+            phi_a = exp(-0.5 * (a * a + _LOG_2PI) - ln_mass)
+            ln += ln_mass - _ln_ndtr((m + sv * phi_a) / s)
         else:
-            ln = LOG_ZERO
+            ln_mass = _ln_ndtr_diff(b, a)
+            if ln_mass > LOG_ZERO:
+                phi_a = exp(-0.5 * (a * a + _LOG_2PI) - ln_mass)
+                phi_b = exp(-0.5 * (b * b + _LOG_2PI) - ln_mass)
+                ln += ln_mass - _ln_ndtr((m + sv * (phi_a - phi_b)) / s)
+            else:
+                ln = LOG_ZERO
         ln_out += _ln_ndtr((R - all_terms[o + 9]) / s)
     elif R < knee:
         ln_out = LOG_ZERO
@@ -703,6 +725,12 @@ BAR_MASS = 1.8133e10
 # flagged fields and one without a position left out): slope and core in
 # kpc. The metal-poor share of the bulge mass is the default bar_feh[0].
 SPHEROID_SHAPE = (2.2, 0.2)
+# Kinematic term: the default share of stars whose motion follows a broad
+# outlier ellipsoid instead of their component's (unresolved binaries, bad
+# astrometry, streams), and that ellipsoid's dispersion in km/s on each
+# axis, about zero Galactocentric velocity.
+PM_OUTLIER = 0.01
+PM_OUTLIER_SIGMA = 300.0
 # Angle in degrees between the long axis and the Sun-centre line, near end
 # at l > 0 (AGAMA, after Portail et al. 2017).
 BAR_ANGLE = 25.0
@@ -971,16 +999,21 @@ def _thin_disk_feh_ages(feh, ages, ln_w, sig_birth):
 
 
 @jit(nopython=True, cache=True)
-def _thin_disk_ln_feh_sum(nodes, R_feh, R_age, x, ln_phi, f_L, ln_fz2, jeans, ln_mass):
+def _thin_disk_ln_feh_sum(
+    nodes, R_feh, R_age, x, ln_phi, f_L, ln_fz2, jeans, ln_mass, extra
+):
     """Return ln of the sum over the true ages of `_thin_disk_feh_ages` of
     p([Fe/H], true age | R) nu / (2 H), each with the vertical profile of
-    its true age, with the label radii of `_thin_disk_fit_radius`."""
+    its true age, with the label radii of `_thin_disk_fit_radius`. Unless
+    ``extra`` is empty, node k also takes ``extra[k]`` in ln."""
     mx, acc = LOG_ZERO, 0.0
     for k in range(len(nodes)):
         ln_s = _thin_disk_ln_s(nodes[k, -3], nodes[k, -2], x, ln_phi, f_L)
         v = nodes[k, 0] + _thin_disk_ln_at(R_feh, nodes[k, 1 : 1 + _JOINT_TERMS])
         v += _thin_disk_age_shift(nodes[k, -1], R_feh, R_age, ln_mass)
         v += _thin_disk_ln_nu(ln_s, _ln_column(x, ln_s, _THIN_COLUMN), ln_fz2, jeans)
+        if len(extra):
+            v += extra[k]
         mx, acc = _accumulate(mx, acc, v)
     return mx + log(acc) if acc > 0.0 else LOG_ZERO
 
@@ -1054,13 +1087,15 @@ def _components(
     ln_norm,
     ln_mass,
     by_label,
+    thin_extra,
 ):
     """Return ln n of the thin disk, thick disk and halo at (R, Z), relative
     to the thin disk at the Sun, with the given labels, or summed over
     those not given. ``disk``, ``halo`` and the tables ``f_L``,
     ``marginal``, ``ln_norm`` and ``ln_mass`` come from `_normalizations`, ``by_label``
     from `_label_table`, ``labels`` from `_label_args` and ``label_terms``
-    from `_label_terms`."""
+    from `_label_terms`. Unless ``thin_extra`` is empty, each true-age node
+    of the thin disk with both labels also takes its entry, in ln."""
     if not (isfinite(R) and isfinite(Z)):
         return np.nan, np.nan, np.nan
     R_solar, ln_phi, R_thin, Rs_thin, R_thick, Rs_thick = disk[:6]
@@ -1086,7 +1121,7 @@ def _components(
         R_feh, R_age, ln_norm_R = _thin_disk_fit_radius(x * R_solar, ln_norm)
         if has_feh:
             thin += _thin_disk_ln_feh_sum(
-                nodes, R_feh, R_age, x, ln_phi, f_L, ln_fz2, jeans, ln_mass
+                nodes, R_feh, R_age, x, ln_phi, f_L, ln_fz2, jeans, ln_mass, thin_extra
             )
         else:
             populations = _thin_disk_age_sum(
@@ -1204,6 +1239,19 @@ def _label_terms(
     return (ln_thick, ln_halo, fl, nodes, ages, ln_w), ln_bar
 
 
+@jit(nopython=True, cache=True)
+def _ln_kept_motion(
+    geometry, obs, obs_cov, n_obs, ln_keep, ln_out, vphi, var_R, var_phi, var_z
+):
+    """Return ln of the observed motion's probability under an ellipsoid of
+    mean (0, vphi, 0) and diagonal (var_R, var_phi, var_z), mixed with the
+    outlier term ``ln_out``, with ``ln_keep`` = ln(1 - pm_outlier)."""
+    ln_m = _ln_motion(
+        geometry, obs, obs_cov, n_obs, 0.0, vphi, 0.0, var_R, var_phi, var_z, 0.0
+    )
+    return _ln_add(ln_keep + ln_m, ln_out)
+
+
 @jit(nopython=True, parallel=True, cache=True)
 def _galactic_prior_array(
     dists,
@@ -1228,6 +1276,7 @@ def _galactic_prior_array(
     ln_norm,
     ln_mass,
     by_label,
+    kin,
     comps,
 ):
     """Return ln of the summed number density, with the volume factor d^2,
@@ -1236,11 +1285,18 @@ def _galactic_prior_array(
     i % n_labels of ``feh`` and ``loga``, whose terms are computed once.
     ``bar`` comes from `_bar_args`; unless ``bar_line`` is empty, the bar
     density is interpolated in it, `_ln_bar_density` at ln d =
-    _BAR_LN_D0 + k _BAR_DLN_D along the sightline."""
+    _BAR_LN_D0 + k _BAR_DLN_D along the sightline. Unless its first entry
+    is 0, ``kin`` from `_kinematic_args` multiplies each component by the
+    probability of the observed motion, each thin-disk true age by its own."""
     cos_a, sin_a, ln_bar_amp, ln_sph_amp = bar
     slope, core = SPHEROID_SHAPE
+    R_solar, _, R_thin, Rs_thin, R_thick, Rs_thick = disk[:6]
+    n_obs, obs, obs_cov, E, sun, vc_solar, L_solar, L_clamp = kin[:8]
+    thick_var, ln_keep, ln_out_w = kin[8:]
+    v_scale = vc_solar / _V_VC0
+    out_var = PM_OUTLIER_SIGMA**2
     out = np.empty(len(Z))
-    no_nodes, no_ages = np.empty((0, _NODE_COLUMNS)), np.empty(0)
+    no_nodes, no_ages, no_extra = np.empty((0, _NODE_COLUMNS)), np.empty(0), np.empty(0)
     for c in prange(n_labels):
         feh_c = feh[c] if has_feh else 0.0
         age_c = 10.0 ** loga[c] / 1e9 if has_age else 0.0
@@ -1257,8 +1313,49 @@ def _galactic_prior_array(
             no_nodes,
             no_ages,
         )
+        nodes = label_terms[3]
         for i in range(c, len(Z), n_labels):
             R = sqrt(X[i] * X[i] + Y[i] * Y[i])
+            abs_z = abs(Z[i])
+            thin_extra = no_extra
+            if n_obs:
+                geometry = _motion_geometry(dists[i], E, sun, R_solar)
+                # The broad outlier ellipsoid, the same for every component.
+                ln_out = ln_out_w + _ln_motion(
+                    geometry,
+                    obs,
+                    obs_cov,
+                    n_obs,
+                    0.0,
+                    0.0,
+                    0.0,
+                    out_var,
+                    out_var,
+                    out_var,
+                    0.0,
+                )
+                vc, dlnvc = _circular_velocity(R, R_solar, vc_solar)
+                if abs_z < _THIN_TAPER[1]:
+                    dlnnu = _logn_disk_dlnR(R, Rs_thin, R_thin)
+                    fade, fz = _thin_disk_fade(R), _thin_disk_fz(abs_z)
+                    thin_extra = np.empty(len(nodes))
+                    for k in range(len(nodes)):
+                        moments = _thin_disk_moments(
+                            R,
+                            abs_z,
+                            exp(nodes[k, -3]),
+                            exp(nodes[k, -2]),
+                            vc,
+                            dlnvc,
+                            L_solar,
+                            L_clamp,
+                            dlnnu,
+                            fade,
+                            fz,
+                        )
+                        thin_extra[k] = _ln_kept_motion(
+                            geometry, obs, obs_cov, n_obs, ln_keep, ln_out, *moments
+                        )
             thin, thick, hal = _components(
                 R,
                 Z[i],
@@ -1275,6 +1372,7 @@ def _galactic_prior_array(
                 ln_norm,
                 ln_mass,
                 by_label,
+                thin_extra,
             )
             ln_d = log(dists[i] + 1e-300)
             # Bulge: the metal-rich bar and the metal-poor spheroid, by mass
@@ -1296,6 +1394,38 @@ def _galactic_prior_array(
                     sph = -0.5 * slope * log(r2 + core * core)
                     sph += taper + ln_sph_amp + ln_bar[0]
                     bar_n = _ln_add(bar_n, sph)
+            if n_obs:
+                if thick > LOG_ZERO:
+                    thick += _ln_kept_motion(
+                        geometry,
+                        obs,
+                        obs_cov,
+                        n_obs,
+                        ln_keep,
+                        ln_out,
+                        *_thick_disk_moments(
+                            R,
+                            vc,
+                            thick_var[0],
+                            thick_var[1],
+                            thick_var[2],
+                            R_solar,
+                            _logn_disk_dlnR(R, Rs_thick, R_thick),
+                        ),
+                    )
+                if hal > LOG_ZERO:
+                    ln_m = _ln_halo_motion(R, Z[i], geometry, obs, obs_cov, n_obs)
+                    hal += _ln_add(ln_keep + ln_m, ln_out)
+                if bar_n > LOG_ZERO:
+                    bar_n += _ln_kept_motion(
+                        geometry,
+                        obs,
+                        obs_cov,
+                        n_obs,
+                        ln_keep,
+                        ln_out,
+                        *_bulge_moments(R, abs_z, R_solar, v_scale),
+                    )
             mx = max(max(thin, thick), max(hal, bar_n))
             # Components that are off add nothing; the sum keeps its order.
             acc = exp(thin - mx)
@@ -1772,6 +1902,98 @@ _NO_LABELS = (
 )
 
 
+# The kinematic arguments of `_galactic_prior_array` when no motion is given.
+_NO_KINEMATICS = (
+    0,
+    np.zeros(3),
+    np.zeros((3, 3)),
+    np.zeros((3, 3)),
+    np.zeros(3),
+    1.0,
+    1.0,
+    (1.0, 1.0, 1.0, 1.0),
+    (1.0, 1.0, 1.0),
+    0.0,
+    LOG_ZERO,
+)
+
+
+def _kinematic_args(
+    pm,
+    pm_cov,
+    rv,
+    rv_err,
+    pm_outlier,
+    pm_floor,
+    ell,
+    b,
+    R_solar,
+    v_circ_solar,
+    thick_sigma_z,
+):
+    """Return the kinematic arguments of `_galactic_prior_array`, after
+    checking them: the number of observables, the observed motion and its
+    covariance, the sightline of `_sightline`, v_c at the Sun, the L_z
+    references of `_thin_disk_L_refs`, the thick-disk variances at the Sun,
+    ln of the kept and outlier shares, the velocity scale of the bulge and
+    the outlier variance."""
+    if pm is None:
+        if rv is not None or rv_err is not None:
+            raise ValueError("`rv` and `rv_err` need `pm`.")
+        return _NO_KINEMATICS
+    pm = np.asarray(pm, dtype=np.float64)
+    if pm.shape != (2,) or not np.all(np.isfinite(pm)):
+        raise ValueError(f"`pm` must be 2 finite proper motions in mas/yr, got {pm}.")
+    if pm_cov is None:
+        raise ValueError("`pm` needs `pm_cov`.")
+    pm_cov = np.asarray(pm_cov, dtype=np.float64)
+    if not (
+        pm_cov.shape == (2, 2)
+        and np.all(np.isfinite(pm_cov))
+        and pm_cov[0, 1] == pm_cov[1, 0]
+        and pm_cov[0, 0] > 0
+        and np.linalg.det(pm_cov) > 0
+    ):
+        raise ValueError(
+            f"`pm_cov` must be a finite, symmetric, positive-definite 2x2 matrix, got {pm_cov}."
+        )
+    if not 0.0 <= pm_outlier < 1.0:
+        raise ValueError(f"`pm_outlier` must be in [0, 1), got {pm_outlier}.")
+    if not (np.isfinite(pm_floor) and pm_floor >= 0.0):
+        raise ValueError(f"`pm_floor` must be finite and non-negative, got {pm_floor}.")
+    if np.ndim(ell) or np.ndim(b):
+        raise ValueError(
+            "A proper motion needs one sightline: `coord` must be one (l, b)."
+        )
+    obs, obs_cov = np.zeros(3), np.zeros((3, 3))
+    obs[:2], obs_cov[:2, :2] = pm, pm_cov + pm_floor**2 * np.eye(2)
+    n_obs = 2
+    if (rv is None) != (rv_err is None):
+        raise ValueError("`rv` and `rv_err` go together.")
+    if rv is not None:
+        if not (np.isfinite(rv) and np.isfinite(rv_err) and rv_err > 0):
+            raise ValueError(
+                f"`rv` must be finite and `rv_err` positive, got {rv} and {rv_err}."
+            )
+        obs[2], obs_cov[2, 2], n_obs = rv, rv_err**2, 3
+    vc_solar = _vc_solar(v_circ_solar, R_solar)
+    E, sun = _sightline((float(ell), float(b)), solar_velocity(R_solar))
+    L_solar, L_clamp = _thin_disk_L_refs(float(R_solar), vc_solar)
+    return (
+        n_obs,
+        obs,
+        obs_cov,
+        E,
+        sun,
+        vc_solar,
+        L_solar,
+        L_clamp,
+        (THICK_DISK_SIGMA[0] ** 2, THICK_DISK_SIGMA[1] ** 2, float(thick_sigma_z) ** 2),
+        log1p(-pm_outlier),
+        log(pm_outlier) if pm_outlier > 0 else LOG_ZERO,
+    )
+
+
 def _normalizations(
     R_solar,
     Z_solar,
@@ -1851,6 +2073,7 @@ def _normalizations(
         *_NO_LABELS,
         *tables,
         np.empty((0, 0, 0)),
+        np.empty(0),
     )
     summary = dict(
         thin_column_height=0.5 * exp(-ln_d0),
@@ -1867,6 +2090,7 @@ __all__ = [
     "logn_halo",
     "logp_galactic_structure",
     "galactic_prior_summary",
+    "sample_motions",
 ]
 
 
@@ -2047,6 +2271,12 @@ def logp_galactic_structure(
     age_floor=0.2,
     v_circ_solar=None,
     thick_sigma_z=THICK_DISK_SIGMA[2],
+    pm=None,
+    pm_cov=None,
+    rv=None,
+    rv_err=None,
+    pm_outlier=PM_OUTLIER,
+    pm_floor=0.0,
     return_components=False,
 ):
     r"""
@@ -2187,6 +2417,24 @@ def logp_galactic_structure(
     thick_sigma_z : float, optional
         Vertical dispersion of the thick disk at the Sun in km/s. Default
         is ``brutus.priors.kinematic.THICK_DISK_SIGMA[2]``.
+    pm : array_like of shape `(2,)`, optional
+        Observed proper motion ``(mu_l*, mu_b)`` of the star in mas/yr, in
+        Galactic coordinates (`~brutus.utils.pm_equatorial_to_galactic`
+        converts Gaia's). With it, each component's density is multiplied
+        by the probability of the motion under its velocity ellipsoid (see
+        Notes), which needs ``feh`` and ``loga`` and one sightline.
+    pm_cov : array_like of shape `(2, 2)`, optional
+        Covariance of ``pm`` in (mas/yr)^2. Required with ``pm``.
+    rv, rv_err : float, optional
+        Observed heliocentric radial velocity and its error in km/s, which
+        add the third observable. Need ``pm``.
+    pm_outlier : float, optional
+        Share in [0, 1) of stars whose motion follows a broad ellipsoid of
+        ``PM_OUTLIER_SIGMA`` km/s about zero Galactocentric velocity
+        instead of their component's. Default is ``PM_OUTLIER``, 0.01.
+    pm_floor : float, optional
+        Systematic error in mas/yr added in quadrature to each proper
+        motion's variance. Default is 0.
     return_components : bool, optional
         Whether to return the components. Default is False.
 
@@ -2339,6 +2587,19 @@ def logp_galactic_structure(
         rho_thin_solar=rho_thin_solar,
         feh_systematic=feh_systematic,
     )
+    kin = _kinematic_args(
+        pm,
+        pm_cov,
+        rv,
+        rv_err,
+        pm_outlier,
+        pm_floor,
+        ell,
+        b,
+        R_solar,
+        v_circ_solar,
+        thick_sigma_z,
+    )
     bar = _bar_args(bar_mass, bar_angle, rho_thin_solar, float(bar_feh[0]))
     by_label = _label_table(key, feh is not None, loga is not None, label_args[0])
 
@@ -2371,20 +2632,34 @@ def logp_galactic_structure(
         int(np.prod(label_shape)),
     )
     has = (feh is not None, loga is not None)
+    if kin[0] and not all(has):
+        raise ValueError("A proper motion needs both `feh` and `loga`.")
     rest = (disk, halo, bar, bar_line) + label_args + tables + (by_label,)
     if not return_components:
-        return _galactic_prior_array(*args, *has, *rest, np.empty((0, 0))).reshape(
+        return _galactic_prior_array(*args, *has, *rest, kin, np.empty((0, 0))).reshape(
             X.shape
         )
     joint = np.empty((4, X.size))
-    logp = _galactic_prior_array(*args, *has, *rest, joint).reshape(X.shape)
+    logp = _galactic_prior_array(*args, *has, *rest, kin, joint).reshape(X.shape)
+
+    def split(v):
+        return list(v.reshape((4,) + X.shape))
+
     if not any(has):
-        return logp, {"number_density": list(joint.reshape((4,) + X.shape))}
+        return logp, {"number_density": split(joint)}
     density = np.empty_like(joint)
-    _galactic_prior_array(*args, False, False, *rest, density)
+    _galactic_prior_array(*args, False, False, *rest, _NO_KINEMATICS, density)
+    if not kin[0]:
+        return logp, {
+            "number_density": split(density),
+            "labels": split(joint - density),
+        }
+    labelled = np.empty_like(joint)
+    _galactic_prior_array(*args, *has, *rest, _NO_KINEMATICS, labelled)
     return logp, {
-        "number_density": list(density.reshape((4,) + X.shape)),
-        "labels": list((joint - density).reshape((4,) + X.shape)),
+        "number_density": split(density),
+        "labels": split(labelled - density),
+        "kinematics": split(joint - labelled),
     }
 
 
@@ -2421,6 +2696,105 @@ def _label_array(name, value, dists_shape):
     if dists_shape[len(dists_shape) - value.ndim :] != value.shape:
         value = value.reshape(dists_shape)
     return value
+
+
+def sample_motions(dists, coord, feh, loga, rstate, **kwargs):
+    r"""
+    Draw the proper motion and radial velocity predicted at each distance.
+
+    Each point draws its component with probability proportional to the
+    terms of `logp_galactic_structure`: the number density, the
+    probability of its labels and, when ``kwargs`` holds an observed
+    proper motion, its kinematic likelihood. It then draws a velocity
+    from that component's ellipsoid (the halo from its mixture) and
+    projects it with `velocity_to_observables`. Fed with the posterior
+    draws of a fit, the result is the posterior predictive distribution
+    of the motion, without measurement error.
+
+    Parameters
+    ----------
+    dists : array_like of shape `(N,)`
+        Heliocentric distances in kpc.
+    coord : tuple of float
+        Galactic coordinates ``(l, b)`` in degrees.
+    feh, loga : array_like of shape `(N,)`
+        [Fe/H] and log10(age / yr) at each distance.
+    rstate : `~numpy.random.Generator` or `~numpy.random.RandomState`
+        Random number generator.
+    **kwargs
+        Keywords of `logp_galactic_structure`, including the observed
+        ``pm``, ``pm_cov``, ``rv`` and ``rv_err``.
+
+    Returns
+    -------
+    motions : `~numpy.ndarray` of shape `(N, 3)`
+        Predicted ``(mu_l*, mu_b)`` in mas/yr and ``v_r`` in km/s.
+
+    Raises
+    ------
+    ValueError
+        If ``dists`` is not 1D, or if a keyword is rejected by
+        `logp_galactic_structure`.
+
+    Notes
+    -----
+    The thin disk draws from the ellipsoid of the label age rather than
+    from the true-age nodes of the prior, which spread the age by its
+    systematic error. The outlier ellipsoid of the kinematic term is a
+    tolerance for bad measurements and is not drawn.
+    """
+    dists = np.asarray(dists, dtype=float)
+    if dists.ndim != 1:
+        raise ValueError(f"`dists` must be 1D; got shape {dists.shape}.")
+    feh = np.broadcast_to(np.asarray(feh, dtype=float), dists.shape)
+    loga = np.broadcast_to(np.asarray(loga, dtype=float), dists.shape)
+    _, comps = logp_galactic_structure(
+        dists, coord, feh=feh, loga=loga, return_components=True, **kwargs
+    )
+    ln_c = sum(np.array(term) for term in comps.values())
+    p = np.exp(ln_c - ln_c.max(axis=0))
+    cdf = np.cumsum(p / p.sum(axis=0), axis=0)
+    comp = (rstate.uniform(size=len(dists)) > cdf[:-1]).sum(axis=0)
+
+    def arg(name):
+        return kwargs.get(name, _NORMALIZATION_DEFAULTS[name])
+
+    ell, b = float(coord[0]), float(coord[1])
+    R_solar = arg("R_solar")
+    R, Z = galactic_to_galactocentric_cyl(dists, ell, b, R_solar, arg("Z_solar"))[:2]
+    shared = dict(R_solar=R_solar, v_circ_solar=arg("v_circ_solar"))
+    mean, cov = np.zeros((len(dists), 3)), np.zeros((len(dists), 3, 3))
+    s = comp == 0
+    mean[s], cov[s] = thin_disk_velocity_moments(
+        R[s],
+        Z[s],
+        10.0 ** (loga[s] - 9.0),
+        feh[s],
+        R_scale=arg("R_thin"),
+        R_smooth=arg("Rs_thin"),
+        **shared,
+    )
+    s = comp == 1
+    mean[s], cov[s] = thick_disk_velocity_moments(
+        R[s],
+        (THICK_DISK_SIGMA[0], THICK_DISK_SIGMA[1], arg("thick_sigma_z")),
+        R_scale=arg("R_thick"),
+        R_smooth=arg("Rs_thick"),
+        **shared,
+    )
+    s = comp == 2
+    weight, halo_mean, halo_cov = halo_velocity_moments(R[s], Z[s])
+    rows = np.arange(len(weight))
+    lobe = (rstate.uniform(size=len(rows))[:, None] > np.cumsum(weight, 1)[:, :-1]).sum(
+        1
+    )
+    mean[s], cov[s] = halo_mean[rows, lobe], halo_cov[rows, lobe]
+    s = comp == 3
+    mean[s], cov[s] = bulge_velocity_moments(R[s], Z[s], **shared)
+    velocity = sample_multivariate_normal(mean, cov, rstate=rstate)[:, 0].T
+    return velocity_to_observables(
+        dists, (ell, b), velocity, np.zeros_like(cov), R_solar=R_solar
+    )[0]
 
 
 def galactic_prior_summary(**kwargs):
