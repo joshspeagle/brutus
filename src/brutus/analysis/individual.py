@@ -823,14 +823,15 @@ def _parallax_gate(scales, icovs_sar, parallax, parallax_err, base=None, ln_wt=N
     return _lnp_parallax_gate(eta, eta_err, *args, base, floor)
 
 
-# Chebyshev-Lobatto nodes in [-1, 1] for the Galactic prior across a model's
-# draws, and their barycentric weights; the even nodes form the 3-node set
-# whose interpolant estimates the error of the 5-node one.
-_PRIOR_NODES = np.cos(np.pi * np.arange(5) / 4)
-_PRIOR_WEIGHTS = np.array([0.5, -1.0, 1.0, -1.0, 0.5])
-_PRIOR_WEIGHTS3 = np.array([0.5, -1.0, 0.5])
-# Largest difference in ln prior between the two interpolants at a draw
-# before the model's prior is evaluated exactly.
+# The 9 Chebyshev-Lobatto nodes of the Galactic prior across a model's draws.
+# They nest: the stages use the nodes at these indices, and each stage's
+# interpolant is checked against the one of the stage before (the first
+# against the line through the end nodes).
+_PRIOR_NODES = np.cos(np.pi * np.arange(9) / 8)
+_PRIOR_STAGES = ((0, 4, 8), (0, 2, 4, 6, 8), tuple(range(9)))
+# Largest difference in ln prior between a stage's interpolant and the one
+# before at a draw before the model goes on to the next stage, and after the
+# last to the exact prior at its draws.
 PRIOR_INTERP_TOL = 1e-3
 
 
@@ -848,52 +849,91 @@ def _barycentric(u, x, w, f):
     return num / den
 
 
+@jit(nopython=True, cache=True)
+def _lobatto_weights(n):
+    """Return the barycentric weights of n Chebyshev-Lobatto nodes."""
+    w = np.empty(n)
+    for k in range(n):
+        w[k] = 1.0 if k % 2 == 0 else -1.0
+    w[0] *= 0.5
+    w[n - 1] *= 0.5
+    return w
+
+
 @jit(nopython=True, cache=True, parallel=True)
-def _interpolate_prior(eta, lo, hi, f):
-    """Interpolate the prior f, given at the nodes of each model's range
-    [lo, hi] in ln(d), at its draws eta. Return the values and, per model,
-    the largest difference from the 3-node interpolant (inf where a node is
-    at zero probability)."""
+def _interpolate_prior(eta, lo, hi, f, x, w, sub):
+    """Interpolate the prior f, given at the nodes x (weights w) of each
+    model's range [lo, hi] in ln(d), at its draws eta. Return the values
+    and, per model, the largest difference from the interpolant on the
+    nodes ``sub`` (indices into x), or inf where a node is at zero
+    probability."""
     Nmc, N = eta.shape
     out = np.empty((Nmc, N))
     err = np.zeros(N)
-    x3 = _PRIOR_NODES[::2]
+    xs = x[sub]
+    ws = _lobatto_weights(len(sub))
     for n in prange(N):
         fn = f[:, n].copy()
-        f3 = fn[::2].copy()
+        fs = fn[sub]
         if fn.min() <= LOG_ZERO / 2:
             err[n] = np.inf
         mid, half = 0.5 * (hi[n] + lo[n]), 0.5 * (hi[n] - lo[n])
         for m in range(Nmc):
             u = (eta[m, n] - mid) / half if half > 0.0 else 0.0
-            p = _barycentric(u, _PRIOR_NODES, _PRIOR_WEIGHTS, fn)
+            p = _barycentric(u, x, w, fn)
             out[m, n] = p
-            err[n] = max(err[n], abs(p - _barycentric(u, x3, _PRIOR_WEIGHTS3, f3)))
+            err[n] = max(err[n], abs(p - _barycentric(u, xs, ws, fs)))
     return out, err
 
 
 def _galactic_prior_at_draws(prior, dists, eta, coord, labels, motion):
     """Return the default Galactic prior at the draws `dists` (Nmc, Nsel) of
-    each model, with ``eta`` their ln(d), interpolated in ln(d) from 5 nodes
-    over the model's draws.
+    each model, with ``eta`` their ln(d), interpolated in ln(d) across the
+    model's draws.
 
     A model's draws span 0.01-0.03 in ln(d) for most stars, because its
     absolute magnitude fixes its distance, and the prior is smooth over
-    that range. Where the 3-node interpolant differs from the 5-node one by
-    more than PRIOR_INTERP_TOL, or a node is at zero probability, the
-    model's prior is evaluated at its draws.
+    that range. It is evaluated at 3, then 5, then 9 nested
+    Chebyshev-Lobatto nodes over the draws: a model stays at the first
+    stage whose interpolant is within PRIOR_INTERP_TOL (a tenth of it for
+    the first stage) of the one before at every draw, and its prior is evaluated at its draws if none is, or if a
+    node is at zero probability.
     """
     if len(dists) <= len(_PRIOR_NODES):
         return prior(dists, coord, **labels, **motion)
     lo, hi = eta.min(axis=0), eta.max(axis=0)
-    nodes = 0.5 * (hi + lo) + 0.5 * (hi - lo) * _PRIOR_NODES[:, None]
-    f = prior(np.exp(nodes), coord, **labels, **motion)
-    out, err = _interpolate_prior(eta, lo, hi, f)
-    exact = np.flatnonzero(err > PRIOR_INTERP_TOL)
-    if len(exact):
-        out[:, exact] = prior(
-            dists[:, exact], coord, **{k: v[exact] for k, v in labels.items()}, **motion
+    out = np.empty(dists.shape)
+    f = np.empty((len(_PRIOR_NODES), dists.shape[1]))
+    todo, done, prev = np.arange(dists.shape[1]), [], (0, len(_PRIOR_NODES) - 1)
+    for stage in _PRIOR_STAGES:
+        new = [k for k in stage if k not in done]
+        nodes = 0.5 * (hi[todo] + lo[todo]) + 0.5 * (hi[todo] - lo[todo]) * (
+            _PRIOR_NODES[new, None]
         )
+        part = {k: v[todo] for k, v in labels.items()}
+        f[np.ix_(new, todo)] = prior(np.exp(nodes), coord, **part, **motion)
+        sub = np.array([stage.index(k) for k in prev])
+        p, err = _interpolate_prior(
+            eta[:, todo],
+            lo[todo],
+            hi[todo],
+            f[np.ix_(stage, todo)],
+            _PRIOR_NODES[list(stage)],
+            _lobatto_weights(len(stage)),
+            sub,
+        )
+        # The first check, against the line through the end nodes, cannot
+        # see an odd cubic part of the prior. A tenth of the tolerance keeps
+        # the measured error of the first stage to that of the later ones.
+        tol = PRIOR_INTERP_TOL / (10.0 if len(prev) == 2 else 1.0)
+        ok = err <= tol
+        out[:, todo[ok]] = p[:, ok]
+        todo, done, prev = todo[~ok], done + new, stage
+        if not len(todo):
+            return out
+    out[:, todo] = prior(
+        dists[:, todo], coord, **{k: v[todo] for k, v in labels.items()}, **motion
+    )
     return out
 
 
