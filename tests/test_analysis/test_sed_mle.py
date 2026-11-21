@@ -6,7 +6,7 @@ Tests for Fisher information matrix computation, log-distance reparameterization
 diagonal preconditioning, and the Monte Carlo draws of ``logpost_grid``.
 
 These tests validate the numerical correctness of the precision matrix
-(inverse covariance) computed in ``_get_sed_mle``, the (ln d, Av, Rv) draws,
+(inverse covariance) computed in ``_flux_fit``, the (ln d, Av, Rv) draws,
 weights and effective sample size of ``BruteForce.logpost_grid``, the
 ``inverse3`` utility with regularization, the flux-space refinement and the
 jitted helpers of ``loglike_grid``.
@@ -20,8 +20,7 @@ import scipy.stats
 
 from brutus.analysis.individual import (
     BruteForce,
-    _flux_objective,
-    _get_sed_mle,
+    _flux_fit,
     _inclusion_probabilities,
     _newton_step_flux,
     _optimize_fit_mag,
@@ -79,7 +78,7 @@ def _make_synthetic_data(mag_coeffs, av_true, rv_true, scale_true, snr=100.0):
     Helper: create synthetic observed flux from mag_coeffs at given
     (scale, Av, Rv), with Gaussian noise at the specified SNR.
 
-    Returns (data, tot_var, resid_placeholder) ready for ``_get_sed_mle``.
+    Returns (data, tot_var, resid_placeholder); ``_flux_fit`` takes the first two.
     """
     Nmodels, Nbands = mag_coeffs.shape[0], mag_coeffs.shape[1]
     av_arr = np.full(Nmodels, av_true)
@@ -108,7 +107,7 @@ def _make_synthetic_data(mag_coeffs, av_true, rv_true, scale_true, snr=100.0):
 
 
 class TestFisherInformation:
-    """Test the Fisher information matrix computed in _get_sed_mle."""
+    """Test the Fisher information matrix computed in _flux_fit."""
 
     def test_ar_mix_matches_finite_difference(self, simple_mag_coeffs):
         """
@@ -131,15 +130,14 @@ class TestFisherInformation:
         av_gauss = (0.0, 1e6)
         rv_gauss = (3.32, 1e6)
 
-        _, _, _, scale_ml, icov_sar, _ = _get_sed_mle(
+        _, _, _, scale_ml, icov_sar = _flux_fit(
             data,
             tot_var,
-            resid.copy(),
             simple_mag_coeffs,
             av_arr.copy(),
             rv_arr.copy(),
-            av_gauss=av_gauss,
-            rv_gauss=rv_gauss,
+            av_gauss,
+            rv_gauss,
         )
 
         # The analytic ar_mix from icov_sar
@@ -185,15 +183,14 @@ class TestFisherInformation:
         av_gauss = (0.0, 1e6)
         rv_gauss = (3.32, 1e6)
 
-        _, _, _, scale_ml, icov_sar, _ = _get_sed_mle(
+        _, _, _, scale_ml, icov_sar = _flux_fit(
             data,
             tot_var,
-            resid.copy(),
             simple_mag_coeffs,
             av_arr.copy(),
             rv_arr.copy(),
-            av_gauss=av_gauss,
-            rv_gauss=rv_gauss,
+            av_gauss,
+            rv_gauss,
         )
         s_ml = scale_ml[0]
 
@@ -280,13 +277,14 @@ class TestFisherInformation:
         av_arr = np.array([av_val])
         rv_arr = np.array([rv_val])
 
-        _, _, _, _, icov_sar, _ = _get_sed_mle(
+        _, _, _, _, icov_sar = _flux_fit(
             data,
             tot_var,
-            resid.copy(),
             simple_mag_coeffs,
             av_arr.copy(),
             rv_arr.copy(),
+            (0.0, 1e6),
+            (3.32, 0.18),
         )
 
         P = icov_sar[0]
@@ -310,16 +308,14 @@ class TestFisherInformation:
         av_arr = np.array([av_true])
         rv_arr = np.array([rv_true])
 
-        # Run _get_sed_mle (which scales models internally)
-        _, _, _, scale_ml, icov_sar, _ = _get_sed_mle(
+        _, _, _, scale_ml, icov_sar = _flux_fit(
             data,
             tot_var,
-            resid.copy(),
             simple_mag_coeffs,
             av_arr.copy(),
             rv_arr.copy(),
-            av_gauss=(0.0, 1e6),
-            rv_gauss=(3.32, 0.18),
+            (0.0, 1e6),
+            (3.32, 0.18),
         )
 
         # Recompute s_den manually from unscaled flux models
@@ -342,31 +338,18 @@ class TestFisherInformation:
         av_arr = np.array([av_true])
         rv_arr = np.array([rv_true])
 
-        models_out, rvecs_out, _, scale_ml, icov_sar, _ = _get_sed_mle(
+        _, _, _, scale_ml, icov_sar = _flux_fit(
             data,
             tot_var,
-            resid.copy(),
             simple_mag_coeffs,
             av_arr.copy(),
             rv_arr.copy(),
-            av_gauss=(0.0, 1e6),
-            rv_gauss=(3.32, 0.18),
+            (0.0, 1e6),
+            (3.32, 0.18),
         )
 
-        # After _get_sed_mle, models_out are already scaled (models[i][j] *= scale[i]).
-        # sa_mix is computed BEFORE scaling using models[i][j] (unscaled) and
-        # rvecs[i][j] (unscaled). But looking at the code:
-        #   sa_mix[i] += models[i][j] * rvecs[i][j] * inv_tot_var[j]
-        # This is computed at lines 667 *before* the rescaling at line 670.
-        # So sa_mix uses the unscaled models and unscaled rvecs.
-        #
-        # Actually, looking more carefully at the code:
-        #   Line 657: models[i][j] = models[i][j] * scale[i]  (scales the model)
-        #   Line 667: sa_mix uses models[i][j] (already scaled!)
-        #   Line 670: rvecs[i][j] = rvecs[i][j] * scale[i] (scales rvec)
-        #
-        # So sa_mix = sum( (scale * model_unscaled) * rvec_unscaled / var )
-
+        # The scale cross-term pairs the scaled model with the unscaled
+        # reddening vector: sum(s * f_j * r_j / var_j).
         seds_flux, rvecs_flux, _ = _get_seds(
             simple_mag_coeffs, av_arr, rv_arr, return_flux=True
         )
@@ -661,18 +644,16 @@ class TestDiagonalPreconditioning:
 
 
 # ============================================================================
-# Part 4 -- Integration: _get_sed_mle with multiple models
+# Part 4 -- Integration: _flux_fit with multiple models
 # ============================================================================
 
 
-class TestGetSedMleMultiModel:
+class TestFluxFitMultiModel:
     """Integration tests using multiple models simultaneously."""
 
     def test_returns_correct_shapes(self, multi_model_mag_coeffs):
-        """Verify output shapes of _get_sed_mle."""
+        """Verify output shapes of _flux_fit."""
         Nmodels = multi_model_mag_coeffs.shape[0]
-        Nbands = multi_model_mag_coeffs.shape[1]
-
         av_true, rv_true = 0.5, 3.3
         data, tot_var, resid = _make_synthetic_data(
             multi_model_mag_coeffs, av_true, rv_true, scale_true=1.0, snr=100.0
@@ -681,21 +662,28 @@ class TestGetSedMleMultiModel:
         av_arr = np.full(Nmodels, av_true)
         rv_arr = np.full(Nmodels, rv_true)
 
-        models, rvecs, drvecs, scale, icov_sar, resid_out = _get_sed_mle(
+        _, _, _, scale, icov_sar = _flux_fit(
             data,
             tot_var,
-            resid.copy(),
             multi_model_mag_coeffs,
             av_arr.copy(),
             rv_arr.copy(),
+            (0.0, 1e6),
+            (3.32, 0.18),
         )
 
-        assert models.shape == (Nmodels, Nbands)
-        assert rvecs.shape == (Nmodels, Nbands)
-        assert drvecs.shape == (Nmodels, Nbands)
-        assert scale.shape == (Nmodels,)
+        chi2, obj, grad = _flux_fit(
+            data,
+            tot_var,
+            multi_model_mag_coeffs,
+            av_arr,
+            rv_arr,
+            (0.0, 1e6),
+            (3.32, 0.18),
+        )[:3]
+        assert chi2.shape == obj.shape == scale.shape == (Nmodels,)
+        assert grad.shape == (Nmodels, 2)
         assert icov_sar.shape == (Nmodels, 3, 3)
-        assert resid_out.shape == (Nmodels, Nbands)
 
     def test_all_precision_matrices_psd(self, multi_model_mag_coeffs):
         """All precision matrices from a multi-model run should be PSD."""
@@ -708,13 +696,14 @@ class TestGetSedMleMultiModel:
         av_arr = np.full(Nmodels, av_true)
         rv_arr = np.full(Nmodels, rv_true)
 
-        _, _, _, _, icov_sar, _ = _get_sed_mle(
+        _, _, _, _, icov_sar = _flux_fit(
             data,
             tot_var,
-            resid.copy(),
             multi_model_mag_coeffs,
             av_arr.copy(),
             rv_arr.copy(),
+            (0.0, 1e6),
+            (3.32, 0.18),
         )
 
         for i in range(Nmodels):
@@ -737,13 +726,14 @@ class TestGetSedMleMultiModel:
         av_arr = np.full(Nmodels, 0.5)
         rv_arr = np.full(Nmodels, 3.3)
 
-        _, _, _, scale, _, _ = _get_sed_mle(
+        _, _, _, scale, _ = _flux_fit(
             data,
             tot_var,
-            resid.copy(),
             multi_model_mag_coeffs,
             av_arr.copy(),
             rv_arr.copy(),
+            (0.0, 1e6),
+            (3.32, 0.18),
         )
 
         assert np.all(scale > 0), "All scale factors should be positive"
@@ -862,11 +852,8 @@ class TestFluxRefinement:
         nmodels, nbands = mag_coeffs.shape[:2]
         av, rv = np.full(nmodels, 2.0), np.full(nmodels, 3.3)
         for _ in range(8):
-            _, rvecs, drvecs, _, icov, resid = _get_sed_mle(
-                data, tot_var, np.empty((nmodels, nbands)), mag_coeffs, av, rv
-            )
-            _, _, grad = _flux_objective(
-                av, rv, rvecs, drvecs, resid, tot_var, (0.0, 1e6), (3.32, 0.18)
+            _, _, grad, _, icov = _flux_fit(
+                data, tot_var, mag_coeffs, av, rv, (0.0, 1e6), (3.32, 0.18)
             )
             av, rv, _ = _newton_step_flux(
                 av, rv, grad, icov, np.zeros(nmodels), (0.0, 20.0), (1.0, 8.0)
@@ -988,22 +975,37 @@ class TestFluxRefinement:
 class TestJittedLikelihoodHelpers:
     """Compare the jitted loglike_grid helpers with direct numpy."""
 
-    def test_flux_objective_matches_numpy(self):
-        """_flux_objective returns chi2, chi2 plus the prior penalties and the
-        log-posterior gradient, with df/dR(V) = A(V) * drvecs."""
+    def test_flux_fit_matches_numpy(self):
+        """_flux_fit returns chi2, chi2 plus the prior penalties, the
+        log-posterior gradient with df/dR(V) = A(V) * s * dr * f, the MLE
+        scale and the Gauss-Newton precision, as direct numpy gives them."""
         rng = np.random.RandomState(145)
-        resid, rvecs, drvecs = rng.normal(size=(3, 7, 5))
-        tot_var = rng.uniform(0.01, 1.0, 5)
+        coeffs = np.zeros((7, 5, 3))
+        coeffs[:, :, 0] = 15.0 + rng.normal(0, 0.3, (7, 5))
+        coeffs[:, :, 1], coeffs[:, :, 2] = RVEC, DRVEC
+        data = 10 ** (-0.4 * rng.normal(15.5, 0.2, 5))
+        tot_var = (0.05 * data) ** 2
         av, rv = rng.uniform(0.0, 3.0, 7), rng.uniform(2.0, 5.0, 7)
-        chi2, obj, grad = _flux_objective(
-            av, rv, rvecs, drvecs, resid, tot_var, (0.5, 2.0), (3.32, 0.18)
-        )
-        npt.assert_allclose(chi2, np.sum(resid**2 / tot_var, axis=1), rtol=1e-12)
+        gauss = ((0.5, 2.0), (3.32, 0.18))
+        chi2, obj, grad, scale, icov = _flux_fit(data, tot_var, coeffs, av, rv, *gauss)
+        f, r, d = _get_seds(coeffs, av, rv, return_flux=True)
+        inv = 1.0 / tot_var
+        s = np.sum(f * data * inv, axis=1) / np.sum(f * f * inv, axis=1)
+        npt.assert_allclose(scale, s, rtol=1e-12)
+        resid = data - s[:, None] * f
+        jac = np.stack(
+            [f, s[:, None] * r, av[:, None] * s[:, None] * d], axis=2
+        )  # df/d(scale, Av, Rv)
+        npt.assert_allclose(chi2, np.sum(resid**2 * inv, axis=1), rtol=1e-12)
         penalty = ((av - 0.5) / 2.0) ** 2 + ((rv - 3.32) / 0.18) ** 2
         npt.assert_allclose(obj, chi2 + penalty, rtol=1e-12)
-        g_av = np.sum(rvecs * resid / tot_var, axis=1) + (0.5 - av) / 4.0
-        g_rv = av * np.sum(drvecs * resid / tot_var, axis=1) + (3.32 - rv) / 0.18**2
-        npt.assert_allclose(grad, np.column_stack([g_av, g_rv]), rtol=1e-12)
+        g = np.einsum("mjk,mj->mk", jac[:, :, 1:], resid * inv)
+        g += np.column_stack([(0.5 - av) / 4.0, (3.32 - rv) / 0.18**2])
+        npt.assert_allclose(grad, g, rtol=1e-12)
+        prec = np.einsum("mjk,mjl,j->mkl", jac, jac, inv)
+        prec[:, 1, 1] += 1.0 / 2.0**2
+        prec[:, 2, 2] += 1.0 / 0.18**2
+        npt.assert_allclose(icov, prec, rtol=1e-11)
 
 
 # ============================================================================

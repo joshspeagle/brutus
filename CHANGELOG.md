@@ -64,6 +64,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   With every band valid it reads the grid itself, and with a masked band it
   reuses the copy for the last mask, which saves 54-104 ms per star on the
   bench cohort. Results are bitwise identical.
+- **`loglike_grid` evaluates each model's fluxes in one pass.** The full
+  grid no longer writes per-band model, reddening and residual arrays, about
+  200 MB per star; one fused kernel returns each model's chi2, gradient,
+  scale and Fisher matrix. `loglike_grid` is 20% faster on the bench cohort
+  (271 to 216 ms per star), and results are bitwise identical.
 - **The bulge's metal-poor population is a spheroid** *(output-changing)*.
   The bar's metal-poor population, 0.6 of `bar_mass` (`bar_feh[0]`, 0.5
   before), now has a spherical cored power law (`SPHEROID_SHAPE`) instead
