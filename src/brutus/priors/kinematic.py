@@ -498,7 +498,7 @@ def _thin_disk_mean_L(R, abs_z, sig_R0, vc, dlnvc, L_solar, L_clamp, dlnnu_dlnR,
 
 @jit(nopython=True, cache=True)
 def _thin_disk_moments(
-    R, abs_z, sig_R0, sig_z0, vc, dlnvc, L_solar, L_clamp, dlnnu_dlnR
+    R, abs_z, sig_R0, sig_z0, vc, dlnvc, L_solar, L_clamp, dlnnu_dlnR, fade, fz
 ):
     """Return (v_phi, var_R, var_phi, var_z) of the thin disk.
 
@@ -506,12 +506,13 @@ def _thin_disk_moments(
     dispersions take f_L at the population's mean L_z from
     ``_thin_disk_mean_L``; ``L_solar`` is R_solar v_c(R_solar), the L_z of
     a circular orbit at the Sun, and ``L_clamp`` is as in ``_thin_disk_fL``.
+    ``fade`` and ``fz`` are ``_thin_disk_fade(R)`` and ``_thin_disk_fz(abs_z)``,
+    which callers summing many populations at one point compute once.
     """
-    fade = _thin_disk_fade(R)
     args = (L_solar, L_clamp, dlnnu_dlnR, fade)
     L = _thin_disk_mean_L(R, abs_z, sig_R0, vc, dlnvc, *args)
     vphi, var_R, var_phi, f_z = _thin_disk_radial(R, abs_z, sig_R0, vc, dlnvc, L, *args)
-    sig_z = sig_z0 * f_z * _thin_disk_fz(abs_z)
+    sig_z = sig_z0 * f_z * fz
     return vphi, var_R, var_phi, sig_z * sig_z
 
 
@@ -658,6 +659,8 @@ def _thin_disk_array(R, Z, age, feh, R_scale, R_smooth, R_solar, vc_solar):
             L_solar,
             L_clamp,
             _logn_disk_dlnR(R[i], R_smooth, R_scale),
+            _thin_disk_fade(R[i]),
+            _thin_disk_fz(abs(Z[i])),
         )
         _store(mean[i], cov[i], 0.0, vphi, 0.0, var_R, var_phi, var_z, 0.0)
     return mean, cov

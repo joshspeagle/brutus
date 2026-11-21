@@ -46,6 +46,7 @@ from scipy.special import logsumexp
 from scipy.stats import skewnorm
 
 from brutus.priors.kinematic import (
+    _LOG_2PI,
     _V_DPHI,
     _V_DU,
     _V_DX,
@@ -99,8 +100,8 @@ from brutus.utils.math import (
     galactic_to_galactocentric,
     galactic_to_galactocentric_cyl,
 )
+from brutus.utils.sampling import sample_multivariate_normal
 
-_LOG_2PI = log(2.0 * pi)
 _LN2 = log(2.0)
 
 # Stellar ages are capped at the age of the Universe, in Gyr.
@@ -1225,6 +1226,19 @@ def _label_terms(
     return (ln_thick, ln_halo, fl, nodes, ages, ln_w), ln_bar
 
 
+@jit(nopython=True, cache=True)
+def _ln_kept_motion(
+    geometry, obs, obs_cov, n_obs, ln_keep, ln_out, vphi, var_R, var_phi, var_z
+):
+    """Return ln of the observed motion's probability under an ellipsoid of
+    mean (0, vphi, 0) and diagonal (var_R, var_phi, var_z), mixed with the
+    outlier term ``ln_out``, with ``ln_keep`` = ln(1 - pm_outlier)."""
+    ln_m = _ln_motion(
+        geometry, obs, obs_cov, n_obs, 0.0, vphi, 0.0, var_R, var_phi, var_z, 0.0
+    )
+    return _ln_add(ln_keep + ln_m, ln_out)
+
+
 @jit(nopython=True, parallel=True, cache=True)
 def _galactic_prior_array(
     dists,
@@ -1263,15 +1277,11 @@ def _galactic_prior_array(
     probability of the observed motion, each thin-disk true age by its own."""
     cos_a, sin_a, ln_bar_amp, ln_sph_amp = bar
     slope, core = SPHEROID_SHAPE
-    R_solar, R_thin, Rs_thin, R_thick, Rs_thick = (
-        disk[0],
-        disk[2],
-        disk[3],
-        disk[4],
-        disk[5],
-    )
+    R_solar, _, R_thin, Rs_thin, R_thick, Rs_thick = disk[:6]
     n_obs, obs, obs_cov, E, sun, vc_solar, L_solar, L_clamp = kin[:8]
-    thick_var, ln_keep, ln_out_w, v_scale, out_var = kin[8:]
+    thick_var, ln_keep, ln_out_w = kin[8:]
+    v_scale = vc_solar / _V_VC0
+    out_var = PM_OUTLIER_SIGMA**2
     out = np.empty(len(Z))
     no_nodes, no_ages, no_extra = np.empty((0, _NODE_COLUMNS)), np.empty(0), np.empty(0)
     for c in prange(n_labels):
@@ -1314,9 +1324,10 @@ def _galactic_prior_array(
                 vc, dlnvc = _circular_velocity(R, R_solar, vc_solar)
                 if abs_z < _THIN_TAPER[1]:
                     dlnnu = _logn_disk_dlnR(R, Rs_thin, R_thin)
+                    fade, fz = _thin_disk_fade(R), _thin_disk_fz(abs_z)
                     thin_extra = np.empty(len(nodes))
                     for k in range(len(nodes)):
-                        vphi, var_R, var_phi, var_z = _thin_disk_moments(
+                        moments = _thin_disk_moments(
                             R,
                             abs_z,
                             exp(nodes[k, -3]),
@@ -1326,21 +1337,12 @@ def _galactic_prior_array(
                             L_solar,
                             L_clamp,
                             dlnnu,
+                            fade,
+                            fz,
                         )
-                        ln_m = _ln_motion(
-                            geometry,
-                            obs,
-                            obs_cov,
-                            n_obs,
-                            0.0,
-                            vphi,
-                            0.0,
-                            var_R,
-                            var_phi,
-                            var_z,
-                            0.0,
+                        thin_extra[k] = _ln_kept_motion(
+                            geometry, obs, obs_cov, n_obs, ln_keep, ln_out, *moments
                         )
-                        thin_extra[k] = _ln_add(ln_keep + ln_m, ln_out)
             thin, thick, hal = _components(
                 R,
                 Z[i],
@@ -1381,50 +1383,36 @@ def _galactic_prior_array(
                     bar_n = _ln_add(bar_n, sph)
             if n_obs:
                 if thick > LOG_ZERO:
-                    vphi, var_R, var_phi, var_z = _thick_disk_moments(
-                        R,
-                        vc,
-                        thick_var[0],
-                        thick_var[1],
-                        thick_var[2],
-                        R_solar,
-                        _logn_disk_dlnR(R, Rs_thick, R_thick),
-                    )
-                    ln_m = _ln_motion(
+                    thick += _ln_kept_motion(
                         geometry,
                         obs,
                         obs_cov,
                         n_obs,
-                        0.0,
-                        vphi,
-                        0.0,
-                        var_R,
-                        var_phi,
-                        var_z,
-                        0.0,
+                        ln_keep,
+                        ln_out,
+                        *_thick_disk_moments(
+                            R,
+                            vc,
+                            thick_var[0],
+                            thick_var[1],
+                            thick_var[2],
+                            R_solar,
+                            _logn_disk_dlnR(R, Rs_thick, R_thick),
+                        ),
                     )
-                    thick += _ln_add(ln_keep + ln_m, ln_out)
                 if hal > LOG_ZERO:
                     ln_m = _ln_halo_motion(R, Z[i], geometry, obs, obs_cov, n_obs)
                     hal += _ln_add(ln_keep + ln_m, ln_out)
                 if bar_n > LOG_ZERO:
-                    vphi, var_R, var_phi, var_z = _bulge_moments(
-                        R, abs_z, R_solar, v_scale
-                    )
-                    ln_m = _ln_motion(
+                    bar_n += _ln_kept_motion(
                         geometry,
                         obs,
                         obs_cov,
                         n_obs,
-                        0.0,
-                        vphi,
-                        0.0,
-                        var_R,
-                        var_phi,
-                        var_z,
-                        0.0,
+                        ln_keep,
+                        ln_out,
+                        *_bulge_moments(R, abs_z, R_solar, v_scale),
                     )
-                    bar_n += _ln_add(ln_keep + ln_m, ln_out)
             mx = max(max(thin, thick), max(hal, bar_n))
             # Components that are off add nothing; the sum keeps its order.
             acc = exp(thin - mx)
@@ -1914,8 +1902,6 @@ _NO_KINEMATICS = (
     (1.0, 1.0, 1.0),
     0.0,
     LOG_ZERO,
-    1.0,
-    1.0,
 )
 
 
@@ -1992,8 +1978,6 @@ def _kinematic_args(
         (THICK_DISK_SIGMA[0] ** 2, THICK_DISK_SIGMA[1] ** 2, float(thick_sigma_z) ** 2),
         log1p(-pm_outlier),
         log(pm_outlier) if pm_outlier > 0 else LOG_ZERO,
-        vc_solar / _V_VC0,
-        PM_OUTLIER_SIGMA**2,
     )
 
 
@@ -2779,18 +2763,16 @@ def sample_motions(dists, coord, feh, loga, rstate, **kwargs):
         R_smooth=arg("Rs_thick"),
         **shared,
     )
-    s = np.where(comp == 2)[0]
+    s = comp == 2
     weight, halo_mean, halo_cov = halo_velocity_moments(R[s], Z[s])
-    lobe = (rstate.uniform(size=len(s))[:, None] > np.cumsum(weight, 1)[:, :-1]).sum(1)
-    mean[s], cov[s] = (
-        halo_mean[np.arange(len(s)), lobe],
-        halo_cov[np.arange(len(s)), lobe],
+    rows = np.arange(len(weight))
+    lobe = (rstate.uniform(size=len(rows))[:, None] > np.cumsum(weight, 1)[:, :-1]).sum(
+        1
     )
+    mean[s], cov[s] = halo_mean[rows, lobe], halo_cov[rows, lobe]
     s = comp == 3
     mean[s], cov[s] = bulge_velocity_moments(R[s], Z[s], **shared)
-    velocity = mean + np.einsum(
-        "nij,nj->ni", np.linalg.cholesky(cov), rstate.standard_normal((len(dists), 3))
-    )
+    velocity = sample_multivariate_normal(mean, cov, rstate=rstate)[:, 0].T
     return velocity_to_observables(
         dists, (ell, b), velocity, np.zeros_like(cov), R_solar=R_solar
     )[0]
