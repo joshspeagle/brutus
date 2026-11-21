@@ -22,8 +22,8 @@ from brutus.analysis.individual import (
     BruteForce,
     _flux_fit,
     _inclusion_probabilities,
-    _newton_step_flux,
     _optimize_fit_mag,
+    _refine_flux,
 )
 from brutus.core.individual import StarGrid
 from brutus.core.sed_utils import _get_seds
@@ -849,20 +849,43 @@ class TestFluxRefinement:
 
     def test_newton_steps_converge_to_the_direct_minimum(self, reddened_star):
         mag_coeffs, data, tot_var = reddened_star
-        nmodels, nbands = mag_coeffs.shape[:2]
+        nmodels = len(mag_coeffs)
         av, rv = np.full(nmodels, 2.0), np.full(nmodels, 3.3)
-        for _ in range(8):
-            _, _, grad, _, icov = _flux_fit(
-                data, tot_var, mag_coeffs, av, rv, (0.0, 1e6), (3.32, 0.18)
-            )
-            av, rv, _ = _newton_step_flux(
-                av, rv, grad, icov, np.zeros(nmodels), (0.0, 20.0), (1.0, 8.0)
-            )
+        gauss = ((0.0, 1e6), (3.32, 0.18))
+        chi2, obj, grad, scale, icov = _flux_fit(
+            data, tot_var, mag_coeffs, av, rv, *gauss
+        )
+        converged = np.ones(nmodels, dtype=bool)
+        # Only models 1 and 3 are refined; the others keep their start.
+        _refine_flux(
+            data,
+            tot_var,
+            mag_coeffs,
+            np.array([1, 3]),
+            av,
+            rv,
+            chi2,
+            obj,
+            grad,
+            scale,
+            icov,
+            converged,
+            (0.0, 20.0),
+            (1.0, 8.0),
+            *gauss,
+            1e-12,
+        )
         av_ref, rv_ref, _ = _direct_fit(mag_coeffs, data, tot_var, 2.0, 3.3)
-        # Newton steps converge quadratically: 8 steps leave only the
-        # tolerance of the Nelder-Mead reference.
-        npt.assert_allclose(av, av_ref, atol=1e-5)
-        npt.assert_allclose(rv, rv_ref, atol=1e-5)
+        # Newton steps converge quadratically, leaving only the tolerance of
+        # the Nelder-Mead reference.
+        npt.assert_allclose(av[[1, 3]], av_ref[[1, 3]], atol=1e-5)
+        npt.assert_allclose(rv[[1, 3]], rv_ref[[1, 3]], atol=1e-5)
+        npt.assert_array_equal(av[[0, 2]], 2.0)
+        assert converged.all()
+        # The refined outputs are those of _flux_fit at the refined (Av, Rv).
+        ref = _flux_fit(data, tot_var, mag_coeffs, av, rv, *gauss)
+        for got, want in zip((chi2, obj, grad, scale, icov), ref):
+            npt.assert_array_equal(got[[1, 3]], want[[1, 3]])
 
     def test_loglike_grid_reaches_the_direct_minimum(self, reddened_star):
         mag_coeffs, data, tot_var = reddened_star
