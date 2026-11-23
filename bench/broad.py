@@ -37,6 +37,7 @@ import glob
 import os
 import sys
 import time
+import warnings
 
 import h5py
 import numpy as np
@@ -181,16 +182,14 @@ def cmp(base, cand):
     print(f"=== broad check: {base} vs {cand} (flag p < {alpha:.1e}) ===")
     for name in sb:
         b, c = sb[name], sc[name]  # (K, Nstar, Nstat)
-        vb, vc = b.var(0, ddof=1) / len(b), c.var(0, ddof=1) / len(c)
-        se = np.sqrt(vb + vc)
         shift = c.mean(0) - b.mean(0)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            dof = se**4 / (vb**2 / (len(b) - 1) + vc**2 / (len(c) - 1))
-            t = shift / se
+        se = np.sqrt(b.var(0, ddof=1) / len(b) + c.var(0, ddof=1) / len(c))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            t, p = stats.ttest_ind(c, b, axis=0, equal_var=False)
         # chi2min does not depend on the seed: judge it by the shift alone.
         fixed = se <= 1e-9 * np.maximum(np.abs(b.mean(0)), 1e-30)
-        t, dof = np.where(fixed, 0.0, t), np.where(fixed, 1.0, dof)
-        p = 2 * stats.t.sf(np.abs(t), dof)
+        t, p = np.where(fixed, 0.0, t), np.where(fixed, 1.0, p)
         worst = min(worst, p.min())
         print(f"-- {name}: K = {len(b)} / {len(c)} seeds, {b.shape[1]} stars")
         before, after = np.median(tb[name]), np.median(tc[name])
