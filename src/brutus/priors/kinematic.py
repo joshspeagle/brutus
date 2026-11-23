@@ -621,11 +621,22 @@ def _bulge_moments(R, abs_z, R_solar, v_scale):
     fj = min(abs_z / _BULGE_STEP, n - 1.0)
     i, j = min(int(fi), n - 2), min(int(fj), n - 2)
     t, w = fi - i, fj - j
-    m = (1.0 - t) * ((1.0 - w) * _BULGE[i, j] + w * _BULGE[i, j + 1]) + t * (
-        (1.0 - w) * _BULGE[i + 1, j] + w * _BULGE[i + 1, j + 1]
-    )
     v2 = v_scale * v_scale
-    return m[0] * v_scale, m[1] * v2, m[2] * v2, m[3] * v2
+    return (
+        _bilinear(i, j, t, w, 0) * v_scale,
+        _bilinear(i, j, t, w, 1) * v2,
+        _bilinear(i, j, t, w, 2) * v2,
+        _bilinear(i, j, t, w, 3) * v2,
+    )
+
+
+@jit(nopython=True, cache=True)
+def _bilinear(i, j, t, w, k):
+    """Return entry k of `_BULGE` bilinear between (i, j) and (i + 1, j + 1),
+    without the temporary arrays of the vector form."""
+    return (1.0 - t) * ((1.0 - w) * _BULGE[i, j, k] + w * _BULGE[i, j + 1, k]) + t * (
+        (1.0 - w) * _BULGE[i + 1, j, k] + w * _BULGE[i + 1, j + 1, k]
+    )
 
 
 @jit(nopython=True, cache=True)
