@@ -982,7 +982,7 @@ class _Sightline:
         self._profile = (distances, av_mean, av_std)
 
     def query(self, coord):
-        return tuple(a.copy() for a in self._profile)
+        return self._profile
 
 
 def _inclusion_probabilities(weights, size):
