@@ -2183,6 +2183,23 @@ class TestTruncatedDraws:
         assert mc_ess[1] == 0.0 and mc_ess[0] > 0.0
         assert np.all(d_mc <= 1e6) and np.all(a_mc >= 0.0) and np.all(r_mc <= 8.0)
 
+    def test_cdf_selection_with_a_parallax_and_many_models_runs(self, fitter):
+        # The parallax gate skips models by a bound on the wt_thresh rule;
+        # with cdf_thresh instead it must evaluate every model (> _GATE_TOP).
+        n = 100
+        scales = np.exp(np.linspace(-0.5, 0.5, n))
+        like = _make_loglike_results(scales, [np.diag([1e-4, 1e-4, 1e-4])] * n)
+        sel = fitter.logpost_grid(
+            like,
+            parallax=1.0,
+            parallax_err=0.1,
+            wt_thresh=None,
+            cdf_thresh=0.9,
+            Nmc_prior=10,
+            rstate=np.random.RandomState(5),
+        )[0]
+        assert 0 < len(sel) < n
+
     def test_model_with_zero_prior_everywhere_gets_zero_ess(self, fitter):
         cov = np.diag([1e-4, 1e-4, 1e-4])
         like = _make_loglike_results([1.0, 1.0], [cov, cov])

@@ -1891,9 +1891,10 @@ class BruteForce:
             # ln(d) (#297). Its width equals that of the MC step below unless
             # _inverse3 regularizes the matrix or precision_shrinkage > 0. A
             # model that this gate drops cannot come back.
-            ln_wt = None if wt_thresh is None else np.log(wt_thresh)
+            # Its bound for skipping models holds for the wt_thresh rule only.
+            bound = () if wt_thresh is None else (lnprob_base, np.log(wt_thresh))
             lnprob_sel += _parallax_gate(
-                scales, icovs_sar, parallax, parallax_err, lnprob_base, ln_wt
+                scales, icovs_sar, parallax, parallax_err, *bound
             )
 
         # Select models above threshold (using parallax-informed weights)
