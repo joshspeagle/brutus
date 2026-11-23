@@ -1918,6 +1918,15 @@ _NO_KINEMATICS = (
 )
 
 
+def _check_motion_options(pm_outlier, pm_floor):
+    """Raise ValueError unless ``pm_outlier`` is in [0, 1) and ``pm_floor``
+    is finite and non-negative."""
+    if not 0.0 <= pm_outlier < 1.0:
+        raise ValueError(f"`pm_outlier` must be in [0, 1), got {pm_outlier}.")
+    if not (np.isfinite(pm_floor) and pm_floor >= 0.0):
+        raise ValueError(f"`pm_floor` must be finite and non-negative, got {pm_floor}.")
+
+
 def _kinematic_args(
     pm,
     pm_cov,
@@ -1956,10 +1965,7 @@ def _kinematic_args(
         raise ValueError(
             f"`pm_cov` must be a finite, symmetric, positive-definite 2x2 matrix, got {pm_cov}."
         )
-    if not 0.0 <= pm_outlier < 1.0:
-        raise ValueError(f"`pm_outlier` must be in [0, 1), got {pm_outlier}.")
-    if not (np.isfinite(pm_floor) and pm_floor >= 0.0):
-        raise ValueError(f"`pm_floor` must be finite and non-negative, got {pm_floor}.")
+    _check_motion_options(pm_outlier, pm_floor)
     if np.ndim(ell) or np.ndim(b):
         raise ValueError(
             "A proper motion needs one sightline: `coord` must be one (l, b)."

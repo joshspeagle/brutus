@@ -66,7 +66,12 @@ from ..core import StarGrid
 from ..core.sed_utils import _model_array, get_seds
 from ..priors.astrometric import logp_parallax
 from ..priors.extinction import logp_extinction
-from ..priors.galactic import PM_OUTLIER, logp_galactic_structure, sample_motions
+from ..priors.galactic import (
+    PM_OUTLIER,
+    _check_motion_options,
+    logp_galactic_structure,
+    sample_motions,
+)
 from ..priors.stellar import logp_imf, logp_ps1_luminosity_function
 from ..utils.math import AVLIM, LOG_ZERO, R_SOLAR, RVLIM, Z_SOLAR, galactic_to_icrs
 from ..utils.math import inverse3 as _inverse3
@@ -149,34 +154,29 @@ def _motions(
 ):
     """Return the ``motion`` of `BruteForce.logpost_grid` for each object,
     None where no kinematic term applies, after checking the inputs."""
+    names = ("pmra", "pmdec", "pmra_error", "pmdec_error", "pmra_pmdec_corr")
     columns = (pmra, pmdec, pmra_error, pmdec_error, pmra_pmdec_corr)
+    rv_names = ("radial_velocity", "radial_velocity_error")
     rv = (radial_velocity, radial_velocity_error)
     if all(c is None for c in columns):
         if any(c is not None for c in rv):
             raise ValueError("radial_velocity needs the proper motions")
         return [None] * Ndata
     if any(c is None for c in columns):
-        raise ValueError(
-            "pmra, pmdec, pmra_error, pmdec_error and pmra_pmdec_corr go together"
-        )
+        raise ValueError(f"{', '.join(names[:-1])} and {names[-1]} go together")
     if (rv[0] is None) != (rv[1] is None):
         raise ValueError("radial_velocity and radial_velocity_error go together")
     if not apply_pm_prior:
         return [None] * Ndata
     if data_coords is None:
         raise ValueError("proper motions need data_coords")
-    names = ("pmra", "pmdec", "pmra_error", "pmdec_error", "pmra_pmdec_corr")
-    columns = [np.asarray(c, dtype=float) for c in columns]
-    for name, c in zip(names, columns):
+    columns = tuple(np.asarray(c, dtype=float) for c in columns)
+    has_rv = rv[0] is not None
+    if has_rv:
+        rv = tuple(np.asarray(c, dtype=float) for c in rv)
+    for name, c in zip(names + rv_names, columns + (rv if has_rv else ())):
         _check_shape(name, c, (Ndata,))
-    if rv[0] is not None:
-        rv = [np.asarray(c, dtype=float) for c in rv]
-        for name, c in zip(("radial_velocity", "radial_velocity_error"), rv):
-            _check_shape(name, c, (Ndata,))
-    if not 0.0 <= pm_outlier < 1.0:
-        raise ValueError(f"pm_outlier must be in [0, 1), got {pm_outlier!r}")
-    if not (np.isfinite(pm_floor) and pm_floor >= 0.0):
-        raise ValueError(f"pm_floor must be finite and non-negative, got {pm_floor!r}")
+    _check_motion_options(pm_outlier, pm_floor)
     # Rows with a NaN are fitted without the term; the others must give a
     # proper covariance, so that no object fails partway through the fit.
     finite = np.all(np.isfinite(columns), axis=0)
@@ -190,7 +190,7 @@ def _motions(
                 f"{name} is out of range for object {np.argmax(bad & finite)}: "
                 "errors must be positive and the correlation in (-1, 1)"
             )
-    if rv[0] is not None:
+    if has_rv:
         bad = np.isfinite(rv[0]) & np.isfinite(rv[1]) & (rv[1] <= 0.0)
         if np.any(bad):
             raise ValueError(
@@ -198,15 +198,14 @@ def _motions(
             )
     if lngalprior is not None:
         keywords = ("pm", "pm_cov", "pm_outlier", "pm_floor")
-        if rv[0] is not None:
+        if has_rv:
             keywords += ("rv", "rv_err")
         _check_motion_keywords(lngalprior, keywords)
-    ok = finite
     ra, dec = galactic_to_icrs(*np.asarray(data_coords, dtype=float).T)
     pm, pm_cov = pm_equatorial_to_galactic(
-        ra, dec, *(np.where(ok, c, 0.0) for c in columns)
+        ra, dec, *(np.where(finite, c, 0.0) for c in columns)
     )
-    ok &= np.all(np.isfinite(pm), axis=1)
+    ok = finite & np.all(np.isfinite(pm), axis=1)
     motions = []
     for i in range(Ndata):
         if not ok[i]:
@@ -218,7 +217,7 @@ def _motions(
             "pm_outlier": pm_outlier,
             "pm_floor": pm_floor,
         }
-        if rv[0] is not None and np.isfinite(rv[0][i]) and np.isfinite(rv[1][i]):
+        if has_rv and np.isfinite(rv[0][i]) and np.isfinite(rv[1][i]):
             motion["rv"], motion["rv_err"] = rv[0][i], rv[1][i]
         motions.append(motion)
     return motions
