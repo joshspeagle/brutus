@@ -1584,12 +1584,7 @@ class BruteForce:
             mclean = np.isfinite(mags)
             mags[~mclean], mags_var[~mclean] = 0.0, 1e50
 
-        # Set default Gaussian priors if not provided
-        # These defaults are essentially flat over the allowed range.
-        # Default flow: fit(av_gauss=None) -> _fit(av_gauss=(0.0, 1e6))
-        # -> loglike_grid(av_gauss=(0.0, 1e6)) -> _flux_fit internal
-        # default (0.0, 1e6). The large std (1e6) makes the prior
-        # effectively flat over the allowed A(V) range.
+        # A spread of 1e6 makes the default A(V) prior flat over avlim.
         if av_gauss is None:
             av_gauss = (0.0, 1e6)
         if rv_gauss is None:

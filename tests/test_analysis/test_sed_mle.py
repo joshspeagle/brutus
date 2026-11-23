@@ -78,9 +78,9 @@ def _make_synthetic_data(mag_coeffs, av_true, rv_true, scale_true, snr=100.0):
     Helper: create synthetic observed flux from mag_coeffs at given
     (scale, Av, Rv), with Gaussian noise at the specified SNR.
 
-    Returns (data, tot_var, resid_placeholder); ``_flux_fit`` takes the first two.
+    Returns (data, tot_var).
     """
-    Nmodels, Nbands = mag_coeffs.shape[0], mag_coeffs.shape[1]
+    Nmodels = mag_coeffs.shape[0]
     av_arr = np.full(Nmodels, av_true)
     rv_arr = np.full(Nmodels, rv_true)
 
@@ -95,10 +95,7 @@ def _make_synthetic_data(mag_coeffs, av_true, rv_true, scale_true, snr=100.0):
     rng = np.random.RandomState(999)
     data = true_flux + rng.normal(0, flux_err)
 
-    tot_var = flux_err**2
-    resid = np.zeros((Nmodels, Nbands))
-
-    return data, tot_var, resid
+    return data, flux_err**2
 
 
 # ============================================================================
@@ -120,7 +117,7 @@ class TestFisherInformation:
         log-likelihood (without profiling out scale) at the MLE.
         """
         av_true, rv_true, scale_true = 1.0, 3.3, 1.0
-        data, tot_var, resid = _make_synthetic_data(
+        data, tot_var = _make_synthetic_data(
             simple_mag_coeffs, av_true, rv_true, scale_true, snr=500.0
         )
 
@@ -173,7 +170,7 @@ class TestFisherInformation:
         against numerical second derivatives of the (profiled) log-likelihood.
         """
         av_true, rv_true, scale_true = 1.0, 3.3, 1.0
-        data, tot_var, resid = _make_synthetic_data(
+        data, tot_var = _make_synthetic_data(
             simple_mag_coeffs, av_true, rv_true, scale_true, snr=500.0
         )
 
@@ -271,7 +268,7 @@ class TestFisherInformation:
         Verify the precision matrix is PSD for various (Av, Rv) combinations,
         including edge cases.
         """
-        data, tot_var, resid = _make_synthetic_data(
+        data, tot_var = _make_synthetic_data(
             simple_mag_coeffs, av_val, rv_val, scale_true=1.0, snr=100.0
         )
         av_arr = np.array([av_val])
@@ -302,7 +299,7 @@ class TestFisherInformation:
         uses the *unscaled* models: s_den = sum(model_j^2 / var_j).
         """
         av_true, rv_true = 0.5, 3.3
-        data, tot_var, resid = _make_synthetic_data(
+        data, tot_var = _make_synthetic_data(
             simple_mag_coeffs, av_true, rv_true, scale_true=1.0, snr=200.0
         )
         av_arr = np.array([av_true])
@@ -332,7 +329,7 @@ class TestFisherInformation:
         sa_mix = sum(scale*model_j * rvec_j / var_j).
         """
         av_true, rv_true = 1.0, 3.3
-        data, tot_var, resid = _make_synthetic_data(
+        data, tot_var = _make_synthetic_data(
             simple_mag_coeffs, av_true, rv_true, scale_true=1.0, snr=200.0
         )
         av_arr = np.array([av_true])
@@ -655,24 +652,14 @@ class TestFluxFitMultiModel:
         """Verify output shapes of _flux_fit."""
         Nmodels = multi_model_mag_coeffs.shape[0]
         av_true, rv_true = 0.5, 3.3
-        data, tot_var, resid = _make_synthetic_data(
+        data, tot_var = _make_synthetic_data(
             multi_model_mag_coeffs, av_true, rv_true, scale_true=1.0, snr=100.0
         )
 
         av_arr = np.full(Nmodels, av_true)
         rv_arr = np.full(Nmodels, rv_true)
 
-        _, _, _, scale, icov_sar = _flux_fit(
-            data,
-            tot_var,
-            multi_model_mag_coeffs,
-            av_arr.copy(),
-            rv_arr.copy(),
-            (0.0, 1e6),
-            (3.32, 0.18),
-        )
-
-        chi2, obj, grad = _flux_fit(
+        chi2, obj, grad, scale, icov_sar = _flux_fit(
             data,
             tot_var,
             multi_model_mag_coeffs,
@@ -680,7 +667,7 @@ class TestFluxFitMultiModel:
             rv_arr,
             (0.0, 1e6),
             (3.32, 0.18),
-        )[:3]
+        )
         assert chi2.shape == obj.shape == scale.shape == (Nmodels,)
         assert grad.shape == (Nmodels, 2)
         assert icov_sar.shape == (Nmodels, 3, 3)
@@ -689,7 +676,7 @@ class TestFluxFitMultiModel:
         """All precision matrices from a multi-model run should be PSD."""
         Nmodels = multi_model_mag_coeffs.shape[0]
         av_true, rv_true = 1.0, 3.3
-        data, tot_var, resid = _make_synthetic_data(
+        data, tot_var = _make_synthetic_data(
             multi_model_mag_coeffs, av_true, rv_true, scale_true=1.0, snr=100.0
         )
 
@@ -719,7 +706,7 @@ class TestFluxFitMultiModel:
     def test_scale_positive(self, multi_model_mag_coeffs):
         """All MLE scale factors should be positive."""
         Nmodels = multi_model_mag_coeffs.shape[0]
-        data, tot_var, resid = _make_synthetic_data(
+        data, tot_var = _make_synthetic_data(
             multi_model_mag_coeffs, 0.5, 3.3, scale_true=1.0, snr=100.0
         )
 
@@ -844,7 +831,7 @@ class TestFluxRefinement:
             [0.0, 0.1, -0.1, 0.2], [1, 0.6, 0.3, 0, -0.2]
         )
         mag_coeffs[:, :, 1], mag_coeffs[:, :, 2] = RVEC, DRVEC
-        data, tot_var, _ = _make_synthetic_data(mag_coeffs, 2.5, 2.8, 1.0, snr=50.0)
+        data, tot_var = _make_synthetic_data(mag_coeffs, 2.5, 2.8, 1.0, snr=50.0)
         return mag_coeffs, data, tot_var
 
     def test_newton_steps_converge_to_the_direct_minimum(self, reddened_star):
@@ -941,7 +928,7 @@ class TestFluxRefinement:
         mag_coeffs[0, :, 0] = 15.0
         mag_coeffs[0, :, 1], mag_coeffs[0, :, 2] = RVEC, DRVEC
         # R(V) = 0.4 lies below rvlim, so the fit stops at R(V) = 1.
-        data, tot_var, _ = _make_synthetic_data(mag_coeffs, 2.5, 0.4, 1.0, snr=50.0)
+        data, tot_var = _make_synthetic_data(mag_coeffs, 2.5, 0.4, 1.0, snr=50.0)
         _, _, chi2, _, av, rv, _ = _fitter(mag_coeffs).loglike_grid(
             data,
             np.sqrt(tot_var),
@@ -978,7 +965,7 @@ class TestFluxRefinement:
         mag_coeffs = np.zeros((60, 5, 3))
         mag_coeffs[:, :, 0] = 15.0 + rng.normal(0.0, 0.05, (60, 5))
         mag_coeffs[:, :, 1], mag_coeffs[:, :, 2] = RVEC, DRVEC
-        data, tot_var, _ = _make_synthetic_data(mag_coeffs, 2.5, 2.8, 1.0, snr=50.0)
+        data, tot_var = _make_synthetic_data(mag_coeffs, 2.5, 2.8, 1.0, snr=50.0)
         fitter = _fitter(mag_coeffs)
         args = (data, np.sqrt(tot_var), np.ones(5, dtype=bool))
         lnl_default = fitter.loglike_grid(*args)[0]
