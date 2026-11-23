@@ -1935,8 +1935,7 @@ def _kinematic_args(
     checking them: the number of observables, the observed motion and its
     covariance, the sightline of `_sightline`, v_c at the Sun, the L_z
     references of `_thin_disk_L_refs`, the thick-disk variances at the Sun,
-    ln of the kept and outlier shares, the velocity scale of the bulge and
-    the outlier variance."""
+    and ln of the kept and outlier shares."""
     if pm is None:
         if rv is not None or rv_err is not None:
             raise ValueError("`rv` and `rv_err` need `pm`.")
