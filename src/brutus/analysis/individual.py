@@ -441,6 +441,11 @@ def _optimize_fit_mag(
     return chi2, obj, grad, scale, av, rv, icov_sar, converged
 
 
+# Models per block of `_refine_flux`, which allocates its scratch once per
+# block; it refines far fewer models than `_flux_fit` evaluates.
+_REFINE_BLOCK = 64
+
+
 @jit(nopython=True, cache=True, parallel=True)
 def _refine_flux(
     data,
@@ -473,63 +478,61 @@ def _refine_flux(
     """
     Nfilt = mag_coeffs.shape[1]
     inv_tot_var = 1.0 / tot_var
-    for k in prange(len(sel)):
-        i = sel[k]
+    for b in prange((len(sel) + _REFINE_BLOCK - 1) // _REFINE_BLOCK):
         model, rvec, drvec = np.empty(Nfilt), np.empty(Nfilt), np.empty(Nfilt)
         trial = np.empty((3, 3))
-        damping, active = 0.0, True
-        for _ in range(_MAX_STEPS):
-            prec = icov_sar[i]
-            h_aa = prec[1, 1] - prec[0, 1] * prec[0, 1] / prec[0, 0]
-            h_ar = prec[1, 2] - prec[0, 1] * prec[0, 2] / prec[0, 0]
-            h_rr = prec[2, 2] - prec[0, 2] * prec[0, 2] / prec[0, 0]
-            av_t, rv_t, gain = _bounded_step(
-                av[i],
-                rv[i],
-                grad[i, 0],
-                grad[i, 1],
-                h_aa,
-                h_ar,
-                h_rr,
-                damping,
-                avlim,
-                rvlim,
-            )
-            if not gain >= tol:
-                active = False
-                break
-            chi2_t, obj_t, g_av, g_rv, scale_t = _flux_one(
-                data,
-                tot_var,
-                inv_tot_var,
-                mag_coeffs[i],
-                av_t,
-                rv_t,
-                av_gauss,
-                rv_gauss,
-                model,
-                rvec,
-                drvec,
-                trial,
-            )
-            improved = obj_t <= obj[i]
-            moved = av_t != av[i] or rv_t != rv[i]
-            if improved:
-                av[i], rv[i], chi2[i], obj[i] = av_t, rv_t, chi2_t, obj_t
-                grad[i, 0], grad[i, 1], scale[i] = g_av, g_rv, scale_t
-                icov_sar[i, :, :] = trial
-                damping *= 0.1
-            else:
-                damping = max(10.0 * damping, 1e-3)
-                if damping > _MAX_DAMPING:
-                    converged[i] = False
-                    active = False
+        for k in range(b * _REFINE_BLOCK, min((b + 1) * _REFINE_BLOCK, len(sel))):
+            i = sel[k]
+            damping = 0.0
+            for _ in range(_MAX_STEPS):
+                prec = icov_sar[i]
+                h_aa = prec[1, 1] - prec[0, 1] * prec[0, 1] / prec[0, 0]
+                h_ar = prec[1, 2] - prec[0, 1] * prec[0, 2] / prec[0, 0]
+                h_rr = prec[2, 2] - prec[0, 2] * prec[0, 2] / prec[0, 0]
+                av_t, rv_t, gain = _bounded_step(
+                    av[i],
+                    rv[i],
+                    grad[i, 0],
+                    grad[i, 1],
+                    h_aa,
+                    h_ar,
+                    h_rr,
+                    damping,
+                    avlim,
+                    rvlim,
+                )
+                if not gain >= tol:
                     break
-            if improved and not moved:
-                active = False
-                break
-        if active:
-            converged[i] = False
+                chi2_t, obj_t, g_av, g_rv, scale_t = _flux_one(
+                    data,
+                    tot_var,
+                    inv_tot_var,
+                    mag_coeffs[i],
+                    av_t,
+                    rv_t,
+                    av_gauss,
+                    rv_gauss,
+                    model,
+                    rvec,
+                    drvec,
+                    trial,
+                )
+                improved = obj_t <= obj[i]
+                moved = av_t != av[i] or rv_t != rv[i]
+                if improved:
+                    av[i], rv[i], chi2[i], obj[i] = av_t, rv_t, chi2_t, obj_t
+                    grad[i, 0], grad[i, 1], scale[i] = g_av, g_rv, scale_t
+                    icov_sar[i, :, :] = trial
+                    damping *= 0.1
+                else:
+                    damping = max(10.0 * damping, 1e-3)
+                    if damping > _MAX_DAMPING:
+                        converged[i] = False
+                        break
+                if improved and not moved:
+                    break
+            else:
+                converged[i] = False
 
 
 @jit(nopython=True, cache=True)
