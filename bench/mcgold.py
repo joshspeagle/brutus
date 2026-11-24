@@ -34,7 +34,6 @@ def lnp_for(bf, lr, s, i, Nmc, seed, force, lnprior):
         parallax_err=s["parallax_err"][i],
         coord=tuple(s["coords"][i]),
         Nmc_prior=Nmc,
-        wt_thresh=1e-3,
         lnprior=lnprior,  # same models for every seed
         max_models=None,
         rstate=np.random.RandomState(seed),

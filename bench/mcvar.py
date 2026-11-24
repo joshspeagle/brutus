@@ -75,7 +75,6 @@ def measure(M=40, Nmc=50, nobj=6):
                     parallax_err=s["parallax_err"][i],
                     coord=tuple(s["coords"][i]),
                     Nmc_prior=Nmc,
-                    wt_thresh=1e-3,
                     lnprior=lnprior,  # same models for every seed
                     max_models=None,
                     rstate=np.random.RandomState(m),

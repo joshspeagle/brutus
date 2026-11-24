@@ -7,6 +7,307 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The Galactic prior can use a star's proper motion and radial
+  velocity.** `logp_galactic_structure` takes `pm` and `pm_cov` in
+  Galactic components, and optionally `rv` and `rv_err`. Each component's
+  density is then multiplied by the probability of the motion under its
+  velocity ellipsoid: each thin-disk true age has its own, the halo is the
+  Lancaster et al. (2019) mixture, and the bulge takes the bulge disc of
+  Binney & Vasiliev (2024). A share `pm_outlier` (0.01) of stars follows a
+  broad 300 km/s ellipsoid instead, and `pm_floor` adds a systematic error.
+  Without a proper motion the prior is unchanged.
+- **`BruteForce.fit` takes Gaia proper motions and radial velocities.**
+  `pmra`, `pmdec`, `pmra_error`, `pmdec_error` and `pmra_pmdec_corr`, and
+  optionally `radial_velocity` and `radial_velocity_error`, are rotated to
+  Galactic components and enter the Galactic prior's kinematic term;
+  `apply_pm_prior=False` turns it off, and rows with NaN are fitted
+  without it. A custom `lngalprior` must accept the kinematic keywords,
+  or the fit raises an error naming the missing one.
+  `brutus.utils.galactic_to_icrs` converts Galactic coordinates to ICRS.
+- **Posterior predictive motions.** `brutus.priors.sample_motions` draws
+  the proper motion and radial velocity that the Galactic prior predicts
+  at given distances and labels, and `fit(save_motion_draws=True)` saves
+  one for each posterior draw as `samps_motion`.
+- **`bulge_velocity_moments`** gives the velocity ellipsoid of the bulge,
+  from the bulge disc of Binney & Vasiliev (2024), now tabulated in
+  `bv24_tables.npz`.
+- **`brutus.priors.kinematic`** gives the velocity ellipsoids of the
+  Galactic components: the thin disk with the age, angular-momentum,
+  [Fe/H] and height relations of Sharma et al. (2021), the thick disk with
+  the high-[alpha/Fe] dispersions of Anguiano et al. (2020), and the halo
+  mixture of Lancaster et al. (2019). The thin-disk dispersions use the
+  population's mean angular momentum. The disk rotation is the radial
+  Jeans solution for the `logn_disk` density in a smoothing spline fitted
+  to the measured rotation curves of Sofue & Kohno (2025) and Eilers et al.
+  (2019), shipped as `priors/rotation_curve.dat`. The module also gives
+  the solar velocity from the Sgr A* proper motion and the projection of
+  an ellipsoid to Galactic proper motions and radial velocity.
+  `brutus.utils.pm_equatorial_to_galactic` converts Gaia proper motions
+  and their covariance to Galactic coordinates (#275).
+- **Tutorial 4 is a guide to the Galactic prior.** It draws each
+  component edge-on, face-on, along sightlines and across the sky; the
+  bulge's bar and spheroid; the [Fe/H] and age at each place; how a
+  star's labels and proper motion move its distance prior; the velocity
+  ellipsoids; and the prior with components switched off. It ends with
+  fits of mock stars with and without the prior, and with and without
+  proper motions. The documentation's priors page gains a section on the
+  velocities (#329).
+- **`brutus.utils.galactic_to_galactocentric`** converts distance and
+  (l, b) to Galactocentric Cartesian positions;
+  `galactic_to_galactocentric_cyl` now builds on it (#299).
+
+### Changed
+
+- **`fit()` interpolates the Galactic prior across each model's draws**
+  *(output-changing)*. The default prior is evaluated at 5, then 9 nested
+  Chebyshev-Lobatto nodes in ln(d) over each model's Monte Carlo draws. A
+  model stops at the first stage whose interpolant is within
+  `PRIOR_INTERP_TOL` (1e-3 in ln prior) of the one on every other node of
+  the stage at every draw, and its prior is evaluated exactly at its draws
+  if neither is. On 12 Orion stars and 48 validation stars with and
+  without proper motions, the prior takes 0.10 evaluations per draw, and
+  each model's integrated ln prior is within 4.7e-4 of the exact one.
+- **The labelled thin-disk prior skips the far tails of the birth radius**
+  *(output-changing)*. Where a bound of the truncated birth-radius Gaussian
+  lies beyond 8 standard deviations, it drops out of the mass and the mean
+  rather than being evaluated. The prior changes by at most 1.5e-9 in ln,
+  and a labelled point costs 14% less (1.90 to 1.63 us without proper
+  motions on 4 threads).
+- **`logpost_grid` summarizes each model's draws in one kernel**
+  *(output-changing)*. The integrated ln posterior and `mc_ess` come from
+  one parallel pass instead of `scipy.special.logsumexp` and separate
+  weight arrays, so they differ from before in the last bits.
+- **`fit` and `logpost_grid` default to `numpy.random.default_rng()`**
+  *(output-changing)* when `rstate` is not given, instead of
+  `numpy.random.RandomState()`, because its normal draws are faster. A
+  `RandomState` passed as `rstate` gives the same results as before.
+- **`loglike_grid` no longer copies the model coefficients for each star.**
+  With every band valid it reads the grid itself, and with a masked band it
+  reuses the copy for the last mask, which saves 54-104 ms per star on the
+  bench cohort. Results are bitwise identical.
+- **`loglike_grid` evaluates each model's fluxes in one pass.** The full
+  grid no longer writes per-band model, reddening and residual arrays, about
+  200 MB per star; one fused kernel returns each model's chi2, gradient,
+  scale and Fisher matrix. `loglike_grid` is 20% faster on the bench cohort
+  (271 to 216 ms per star), and results are bitwise identical.
+- **The flux refinement skips wasted work.** The kept models are refined
+  in flux space in one parallel kernel, without copying their arrays at
+  every step. On the bench cohort `loglike_grid` takes 171 instead of
+  248 ms per star; results are bitwise identical.
+- **`fit()` queries a Bayestar dust map once per 4096 objects** with the
+  default dust prior, instead of once per object (5-15 ms each). Results
+  are bitwise identical.
+- **The bulge's metal-poor population is a spheroid** *(output-changing)*.
+  The bar's metal-poor population, 0.6 of `bar_mass` (`bar_feh[0]`, 0.5
+  before), now has a spherical cored power law (`SPHEROID_SHAPE`) instead
+  of the bar's shape, so the metal-poor share of the bulge rises away from
+  the plane as Zoccali et al. (2017) find, and bulge labels depend on
+  position. Over 23 of their fields the rms difference in the metal-poor
+  share falls from 0.18 to 0.11. `return_components` keeps four entries;
+  the fourth holds the bar and the spheroid.
+- **The thin-disk sigma_z has a floor of 8 km/s, and 2% of thin-disk
+  stars have a broad [Fe/H] at birth** *(output-changing)*. Extrapolated
+  to age 0, the Sharma et al. (2021) relation gave 2.8 km/s, which piled
+  the youngest stars into a thin midplane layer; stars younger than 200
+  Myr have about 8 km/s (Gaia Collaboration 2021). The floor raises the
+  thin-disk column height at the Sun from 0.33 to 0.35 kpc and the
+  thick-disk ratio there from 0.046 to 0.050. The [Fe/H] tail
+  (`THIN_DISK_FEH_TAIL`, 0.3 dex) keeps stars far from the gas [Fe/H] of
+  their radius, such as young solar-[Fe/H] stars at 20 kpc, at about
+  1e-3 of the peak density instead of 1e-5 or less.
+- **Inside 4 kpc each Galactic disk keeps the density it has at 4 kpc**
+  *(output-changing)*. The disk dispersions are held there while the
+  vertical force of the potential keeps rising toward the bulge, which
+  squeezed both disks threefold in height toward the centre. The disks
+  now hold 0.14e10 Msun in the bar box, against 0.32e10 before. The mean
+  rotation of both disks follows the held density, so inside 5 kpc the
+  disks lag less: the thick disk rotates at 190 km/s at 3.5 kpc, against
+  155 km/s before.
+- **Beyond 15.3 kpc the thin-disk [Fe/H] at birth stops falling, and
+  beyond 14 kpc the thin-disk age mix keeps its value there**
+  *(output-changing)*. The label distribution was held at its 14 kpc value
+  beyond 14 kpc, which put the distance prior of every star with [Fe/H]
+  below -0.5 toward the anticentre at the same 14.9 kpc. Young stars now
+  scatter about [Fe/H] = -0.49 beyond the knee, where classical Cepheids
+  flatten (Albarracin et al. 2026), and [Fe/H] at each age follows the
+  Frankel et al. (2018) model. `THIN_DISK_GRADIENT_KNEE` sets the knee.
+  The age mix comes from a table to 39.75 kpc and a linear extrapolation
+  in radius beyond it, within 3e-4 in ln of direct sums to 45 kpc and
+  6e-3 to 100 kpc.
+- **The disk heights in the Galactic prior follow from the vertical
+  Jeans equation** *(output-changing)*. `logp_galactic_structure`
+  replaced the exponential scale heights (0.3 and 0.9 kpc) with profiles
+  in one vertical potential fitted to Bovy & Rix (2013) and McKee et al.
+  (2015). The thin disk takes the vertical dispersion of the star's age
+  and [Fe/H] (Sharma et al. 2021), so a 1 Gyr star lies closer to the
+  midplane than a 10 Gyr star. Without an age, it averages over the
+  thin-disk age prior; the star's [Fe/H] enters with or without an age.
+  The thick disk is isothermal. In the plane of the Sun the prior does
+  not change; above it, the age-averaged thin disk falls by e in
+  0.33 kpc and the thick disk in 0.99 kpc. `Z_thin` and `Z_thick` are
+  removed. The new keyword `thick_sigma_z` sets the thick disk, and
+  `v_circ_solar` scales the rotation curve. To change the thick disk height, pass a smaller `thick_sigma_z`
+  instead of `Z_thick`. The thin-disk dispersions, here and in
+  `thin_disk_velocity_moments`, hold [Fe/H] at -1 or 0.5 outside that
+  range, where Sharma et al. (2021) fitted them. A non-finite `feh` or
+  `loga` now raises `ValueError` (#283).
+- **The thick disk is normalized by its surface density**
+  *(output-changing)*. `logp_galactic_structure` replaces `f_thick`, the
+  thick- to thin-disk density ratio at the Sun (0.04), with
+  `f_thick_surface`, their surface density ratio, 0.18 by default
+  (Mackereth et al. 2017). It derives the ratio at the Sun from the
+  column heights of the two vertical profiles, 0.054 with the defaults,
+  so a change to `thick_sigma_z` or `feh_thin` keeps the surface ratio.
+  Passing `f_thick` raises `TypeError`. `f_thick_surface=0` removes the
+  thick disk, as `halo_mass=0` removes the halo and `bar_mass=0` the bar,
+  and a component that is off is not evaluated (#326). The new
+  `brutus.priors.galactic_prior_summary` returns the derived
+  normalizations (#288).
+- **The disk scale lengths are those of the surface density**
+  *(output-changing)*. A disk's density at the Sun's height is its
+  exponential surface density divided by the column height of its
+  vertical profile, so a flaring disk spreads its stars over a greater
+  height instead of gaining stars. The scale lengths are 2.74 kpc for
+  the thin disk (Imig et al. 2025) and 1.9 kpc for the thick disk
+  (Mackereth et al. 2017), in `logp_galactic_structure`, `logn_disk` and
+  the disk velocity moments. At b = 30 deg the prior now peaks at
+  18.1 kpc, not 22.8 kpc. With the thick-disk dispersions held beyond
+  1.5 R_solar, the thick disk's mean rotation reaches 0 beyond about
+  29 kpc (#292).
+- **The disk vertical potential and the thick-disk dispersion profiles
+  come from Binney & Vasiliev (2024)** *(output-changing)*. The
+  Kuijken & Gilmore potential, whose disk term was clamped to 4-9 kpc,
+  is replaced by tables of the vertical potential of the Milky Way model
+  of Binney & Vasiliev (2024), rebuilt with AGAMA and scaled to the
+  rotation curve at the Sun (as v_c^2). The thick-disk column height no
+  longer bends at 4 and 9 kpc; it rises smoothly from 0.93 kpc at 4 kpc
+  to 1.29 kpc at the Sun and 2.43 kpc at 16 kpc. The thick-disk
+  dispersions keep the values of Anguiano et al. (2020) at the Sun and
+  follow the radial profiles of the model's high-alpha disk, one for each
+  of sigma_R, sigma_phi and sigma_z, out to 1.5 R_solar, where that disk
+  ends; beyond, they keep their values there. The thin-disk sigma_z stops growing
+  with height above 2 kpc, the top of the heights Sharma et al. (2021)
+  fitted, so the thin disk no longer falls only as |z|^-2 at large
+  heights. Its angular-momentum factor keeps its value at the L_z of a
+  circular orbit at 14 kpc, and the thin-disk density is tapered to 0
+  between |z| = 5 and 7 kpc, so the flared outer disk no longer spreads
+  like a halo: its column height at 20 kpc is 1.46 kpc, from 2.14 kpc
+  (#320). `thick_R_sigma` in
+  `logp_galactic_structure` and `R_sigma` in
+  `thick_disk_velocity_moments` are removed, and so are the constants of
+  `brutus.priors.kinematic` that set the old potential and dispersion
+  profile: `THICK_DISK_R_SIGMA`, `THICK_DISK_R_RANGE` and `VERTICAL_*`
+  (#292).
+- **The Sun is at R = 8.275 kpc and Z = 20.8 pc by default**
+  *(output-changing)*. The defaults were 8.2 kpc and 25 pc. They now
+  follow GRAVITY Collaboration (2021) and Bennett & Bovy (2019), and
+  `brutus.utils.math` exports them as `R_SOLAR` and `Z_SOLAR`. All
+  `R_solar` and `Z_solar` defaults use them. The circular speed at the
+  Sun becomes 239.25 km/s, from 236.97 km/s (#294).
+- **The thick-disk dispersions are held inside 3 kpc**
+  *(output-changing)*. The inner edge of `THICK_DISK_X_RANGE` moves from
+  0.15 to 0.36 R_solar. Inside 3 kpc the high-alpha disk of Binney &
+  Vasiliev (2024) has sigma_z up to 119 km/s, which put two more peaks of
+  thick-disk density kiloparsecs above the Galactic centre. The hold also
+  sets the thick-disk velocity ellipsoid of
+  `thick_disk_velocity_moments` inside 3 kpc (#294).
+- **The Galactic prior's [Fe/H] and age distributions come from
+  measurements** *(output-changing)*. The thin disk follows the star
+  formation, enrichment and radial migration model of Frankel et al.
+  (2018): its labels depend on radius, held outside 5 to 14 kpc, with a
+  0.03 dex birth scatter, and its star formation fades beyond 8 Gyr and
+  ends at 12 Gyr. The thick disk has a skew-normal [Fe/H] (mean -0.45,
+  standard deviation 0.22, skewness -0.5) and ages on the old sequence of
+  Xiang & Rix (2022). The halo [Fe/H] has a skew-normal core through the
+  percentiles of Naidu et al. (2020) and a 10^[Fe/H] tail below -1.95
+  (Youakim et al. 2020); its ages are 12 +/- 1.5 Gyr. The labels are
+  blurred by the systematics between scales, `feh_systematic` (0.1, 0.15
+  and 0.15 dex for the thin disk, thick disk and halo), `age_systematic`
+  (10%, 15% and 15%) and `age_floor` (0.2 Gyr). Each thin-disk
+  population now has its own vertical profile and column, and labels not
+  given are summed over. At the Sun, [Fe/H] is -0.03 +/- 0.23, against
+  -0.23 +/- 0.33 before. Labelled ages above 13.8 Gyr have zero prior in
+  every component.
+  `thick_feh`, `thick_age`, `halo_feh` and `halo_age` replace
+  `feh_thin`, `feh_thin_sigma`, `feh_thick`, `feh_thick_sigma`,
+  `feh_halo`, `feh_halo_sigma`, `max_age`, `min_age`, `feh_age_ctr`,
+  `feh_age_scale`, `nsigma_from_max_age`, `max_sigma` and `min_sigma`.
+  `logp_feh` and `logp_age_from_feh` are removed. With
+  `return_components`, the `'feh'` and `'age'` entries are replaced by
+  `'labels'`, and `'number_density'` no longer depends on the labels.
+  Labels may span only the trailing axes of `dists`, and broadcast over
+  the leading ones: `logpost_grid` passes one label per model with
+  distances of shape (Nmc, Nmodels), so the terms of each model's labels
+  are computed once (#294).
+- **The Galactic prior has a bar** *(output-changing)*.
+  `logp_galactic_structure` adds the analytic bar of Sormani et al.
+  (2022), a fit to the dynamical model of Portail et al. (2017), as a
+  fourth component, on by default. Its density is tapered to 0 between
+  5 and 6 kpc from the Galactic centre, beyond the end of the bar. It is
+  normalized by `bar_mass`, 1.8133e10 Msun, the mass of the tapered
+  density (0 removes it), and turned by `bar_angle`, 25 deg. Its
+  [Fe/H] mixes the two bulge components of Gonzalez et al. (2015) in
+  equal parts, with ages of 11 +/- 1.5 and 8 +/- 3 Gyr (`bar_feh`,
+  `bar_age`). Toward the bulge, the prior now peaks at the bar instead of
+  being almost flat from 5 to 13 kpc: at (l, b) = (0, 4 deg) the bar
+  holds 89% of the prior. With `return_components`, each list has a
+  fourth entry, the bar. `BAR_MASS` and `BAR_ANGLE` hold the defaults
+  (#299, #321).
+- **The halo is a broken power law normalized by its mass**
+  *(output-changing)*. `logn_halo` and the halo of
+  `logp_galactic_structure` follow Amarante et al. (2024): slopes 2.85
+  and 4.55 either side of 19.1 kpc and a flattening of 0.77, with the
+  2 kpc core. This replaces the slope of 4.2 and the flattening that
+  rose from 0.2 to 0.8. `halo_mass`, 7.5e8 Msun between 2 and 70 kpc
+  (Lane et al. 2023), and `rho_thin_solar`, 0.030 Msun/pc^3, replace
+  `f_halo` (0.005); the derived halo to thin-disk ratio at the Sun is
+  0.0018. `eta_halo`, `q_halo_ctr`, `q_halo_inf` and `r_q_halo` are
+  replaced by `eta_halo_inner`, `eta_halo_outer`, `r_break_halo` and
+  `q_halo`, and `galactic_prior_summary` reports `halo_density_solar`
+  and `f_halo_solar` (#290).
+
+- **Fits keep a random sample of 5,000 models, chosen with the distance
+  priors** *(output-changing)*. `logpost_grid` used to keep the models
+  whose likelihood times model prior was within `wt_thresh` (1e-3) of the
+  best, before the Galactic and dust priors and the distance Jacobian were
+  applied. Toward the bulge, without a parallax, that dropped a median of
+  82% of the posterior weight, mostly distant giants. Each model's
+  selection weight now includes those priors at its best fit; the default
+  Galactic prior is interpolated from a table along the sightline. Then
+  `max_models` (now 5,000, was 50,000) models are kept at random, each
+  with a probability proportional to its selection weight, and the
+  evidence and draws divide by it. Pass `max_models` to set the cost, or
+  `max_models=None` to keep every model (#307).
+
+### Deprecated
+
+- **`wt_thresh` and `cdf_thresh` of `fit` and `logpost_grid`** now
+  default to None, no cut. A value still cuts the selection weight before
+  the `max_models` sampling and raises a `FutureWarning`; a cut drops
+  posterior weight that the sampling keeps. They will be removed (#307).
+
+### Fixed
+
+- **Model weights include the volume of each model's fit**
+  *(output-changing)*. A model's posterior weight is now its likelihood
+  times `|2 pi Sigma|^(1/2)`, the volume of its Gaussian in (ln d, A(V),
+  R(V)), times the average of the priors over its draws. This is the
+  Laplace approximation of the integral over distance and dust. The factor was
+  missing, so models with less constrained fits weighed too little. In
+  the tutorial 4 mock, it moves 1.7% of the model weight (median). A model
+  whose precision matrix is not positive definite now gets zero weight.
+  Since the precision matrices include the `av_gauss` and `rv_gauss`
+  priors, the `lnl` of `loglike_grid` now adds their normalized
+  log-density at the fit, so the R(V) prior enters the model weights
+  (#331).
+- **A custom A(V) prior no longer needs a dust map** *(output-changing)*.
+  `BruteForce.fit` and `logpost_grid` ignored `lndustprior` unless
+  `dustfile` was also given. They now apply it whenever it is given, with
+  `dustmap=None` when there is no `dustfile`. `lndustprior=logp_extinction`
+  without `dustfile` raises `ValueError` (#329).
+
 ## [2.0.0] - 2026-10-29
 
 This release collects the pull requests merged since 1.2.0, #71 to #306,

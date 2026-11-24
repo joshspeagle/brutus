@@ -85,24 +85,32 @@ def print_setup():
     )
 
 
+def make_fitter(filters):
+    """Return a BruteForce over the MIST grid in `filters` and its offsets."""
+    from brutus.analysis import BruteForce
+    from brutus.core import StarGrid
+    from brutus.data import load_models, load_offsets
+
+    models, labels, label_mask = load_models(GRID, filters=filters, verbose=False)
+    grid_names = [n for n, g in zip(labels.dtype.names, label_mask[0]) if g]
+    pred_names = [n for n, g in zip(labels.dtype.names, label_mask[0]) if not g]
+    sg = StarGrid(models, labels[grid_names], labels[pred_names])
+    return BruteForce(sg, verbose=False), load_offsets(
+        OFFSETS, filters=filters, verbose=False
+    )
+
+
 def load_setup():
     global _SETUP
     if _SETUP is not None:
         return _SETUP
     import h5py
 
-    from brutus.analysis import BruteForce
-    from brutus.core import StarGrid
-    from brutus.data import filters, load_models, load_offsets
+    from brutus.data import filters
     from brutus.utils import inv_magnitude
 
     filt = filters.ps[:-2] + filters.tmass  # PS grizy + 2MASS JHKs (8 bands)
-    models, labels, label_mask = load_models(GRID, filters=filt, verbose=False)
-    grid_names = [n for n, g in zip(labels.dtype.names, label_mask[0]) if g]
-    pred_names = [n for n, g in zip(labels.dtype.names, label_mask[0]) if not g]
-    sg = StarGrid(models, labels[grid_names], labels[pred_names])
-    bf = BruteForce(sg, verbose=False)
-    offsets = load_offsets(OFFSETS, filters=filt, verbose=False)
+    bf, offsets = make_fitter(filt)
 
     with h5py.File(ORION, "r") as f:
         fpix = f["photometry"]["pixel 0-0"]
@@ -151,7 +159,6 @@ def _warmup(bf, phot, err, mask, par, parerr, coord):
         parallax_err=parerr,
         coord=coord,
         Nmc_prior=50,
-        wt_thresh=1e-3,
         rstate=np.random.RandomState(0),
     )
     bf._fit(
@@ -163,7 +170,6 @@ def _warmup(bf, phot, err, mask, par, parerr, coord):
         coord=coord,
         Nmc_prior=50,
         Ndraws=250,
-        wt_thresh=1e-3,
         rstate=np.random.RandomState(0),
     )
 
@@ -183,7 +189,6 @@ def fixed_models_lnprior(bf, lr, s, i):
         parallax_err=s["parallax_err"][i],
         coord=tuple(s["coords"][i]),
         Nmc_prior=1,
-        wt_thresh=1e-3,
         rstate=np.random.RandomState(0),
     )[0]
     lnprior = np.full(len(lr[0]), LOG_ZERO)
@@ -191,7 +196,7 @@ def fixed_models_lnprior(bf, lr, s, i):
     return lnprior
 
 
-def benchmark(obj_idx=None, repeats=5, Nmc_prior=50, Ndraws=250, wt_thresh=1e-3):
+def benchmark(obj_idx=None, repeats=5, Nmc_prior=50, Ndraws=250):
     """Per-object timings using a median-of-repeats estimator per object.
 
     We time each object `repeats` times and keep the median per object, then
@@ -233,7 +238,6 @@ def benchmark(obj_idx=None, repeats=5, Nmc_prior=50, Ndraws=250, wt_thresh=1e-3)
                 parallax_err=pe,
                 coord=co,
                 Nmc_prior=Nmc_prior,
-                wt_thresh=wt_thresh,
                 rstate=np.random.RandomState(i),
             )
             lp[i].append(time.perf_counter() - t)
@@ -247,7 +251,6 @@ def benchmark(obj_idx=None, repeats=5, Nmc_prior=50, Ndraws=250, wt_thresh=1e-3)
                 coord=co,
                 Nmc_prior=Nmc_prior,
                 Ndraws=Ndraws,
-                wt_thresh=wt_thresh,
                 rstate=np.random.RandomState(i),
             )
             ft[i].append(time.perf_counter() - t)
@@ -259,7 +262,7 @@ def benchmark(obj_idx=None, repeats=5, Nmc_prior=50, Ndraws=250, wt_thresh=1e-3)
     )
 
 
-def capture(tag, obj_idx=None, Nmc_prior=50, Ndraws=250, wt_thresh=1e-3):
+def capture(tag, obj_idx=None, Nmc_prior=50, Ndraws=250):
     """Freeze deterministic loglike arrays + posterior draws for comparison."""
     s = load_setup()
     bf = s["bf"]
@@ -302,7 +305,6 @@ def capture(tag, obj_idx=None, Nmc_prior=50, Ndraws=250, wt_thresh=1e-3):
             coord=co,
             Nmc_prior=Nmc_prior,
             Ndraws=Ndraws,
-            wt_thresh=wt_thresh,
             rstate=np.random.RandomState(1000 + i),
             return_distreds=True,
         )

@@ -102,7 +102,7 @@ The options of {meth}`~brutus.analysis.BruteForce.fit` that set the cost:
 |---|---|---|
 | `Nmc_prior` | 50 | Monte Carlo draws per kept model |
 | `Ndraws` | 250 | posterior draws saved per star |
-| `max_models` | 50,000 | most models kept after selection |
+| `max_models` | 5,000 | models kept at random for the Monte Carlo step |
 | `mem_lim` | 8000 | memory for the Monte Carlo draws, in MB; `Nmc_prior` is reduced to fit |
 | `running_io` | `True` | write each star when it is done, so an interrupted run keeps its results |
 | `rstate` | `None` | a `numpy.random.Generator` for reproducible draws |

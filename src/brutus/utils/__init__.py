@@ -4,9 +4,12 @@ Mathematical, photometric, and statistical sampling utilities.
 
 from .math import (
     chisquare_logpdf,
+    galactic_to_galactocentric,
     galactic_to_galactocentric_cyl,
+    galactic_to_icrs,
     inverse3,
     isPSD,
+    pm_equatorial_to_galactic,
     truncnorm_logpdf,
     truncnorm_pdf,
 )
@@ -31,7 +34,10 @@ __all__ = [
     "phot_loglike",
     "chisquare_outlier_loglike",
     "uniform_outlier_loglike",
+    "galactic_to_galactocentric",
     "galactic_to_galactocentric_cyl",
+    "galactic_to_icrs",
+    "pm_equatorial_to_galactic",
     "inverse3",
     "isPSD",
     "chisquare_logpdf",

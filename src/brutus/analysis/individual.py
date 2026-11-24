@@ -48,12 +48,14 @@ Basic usage with grid-based fitting:
 ... )
 """
 
+import inspect
 import numbers
 import os
 import sys
 import time
 import warnings
 from functools import partial
+from math import exp, isfinite, log
 
 import h5py
 import numpy as np
@@ -61,13 +63,29 @@ from numba import jit, prange
 from scipy.special import logsumexp
 
 from ..core import StarGrid
-from ..core.sed_utils import _get_seds, _model_array, get_seds
+from ..core.sed_utils import _model_array, get_seds
 from ..priors.astrometric import logp_parallax
 from ..priors.extinction import logp_extinction
-from ..priors.galactic import logp_galactic_structure
+from ..priors.galactic import (
+    PM_OUTLIER,
+    _check_motion_options,
+    _tabulated_galactic_prior,
+    logp_galactic_structure,
+    sample_motions,
+)
 from ..priors.stellar import logp_imf, logp_ps1_luminosity_function
-from ..utils.math import AVLIM, LOG_ZERO, RVLIM
+from ..utils.math import (
+    AVLIM,
+    LOG_ZERO,
+    R_SOLAR,
+    RVLIM,
+    SINGULAR_DET,
+    SINGULAR_SHIFT,
+    Z_SOLAR,
+    galactic_to_icrs,
+)
 from ..utils.math import inverse3 as _inverse3
+from ..utils.math import pm_equatorial_to_galactic
 from ..utils.photometry import magnitude
 from ..utils.sampling import sample_multivariate_normal
 
@@ -85,6 +103,8 @@ _MAX_DAMPING = 1e6
 
 # Minimum allowed scale factor to prevent division by zero or log(0).
 MIN_SCALE = 1e-20
+#: Support of the distance, in kpc. Draws outside it get zero weight.
+_DIST_LIM = (0.001, 1e6)
 
 
 class _GridLabels:
@@ -129,12 +149,132 @@ def _check_threshold(name, value):
         raise ValueError(f"{name} must be a number in (0, 1), got {value!r}")
 
 
+def _motions(
+    Ndata,
+    data_coords,
+    pmra,
+    pmdec,
+    pmra_error,
+    pmdec_error,
+    pmra_pmdec_corr,
+    radial_velocity,
+    radial_velocity_error,
+    apply_pm_prior,
+    pm_outlier,
+    pm_floor,
+    lngalprior,
+):
+    """Return the kinematic keywords of the Galactic prior for each object,
+    None where no kinematic term applies, after checking the inputs."""
+    names = ("pmra", "pmdec", "pmra_error", "pmdec_error", "pmra_pmdec_corr")
+    columns = (pmra, pmdec, pmra_error, pmdec_error, pmra_pmdec_corr)
+    rv_names = ("radial_velocity", "radial_velocity_error")
+    rv = (radial_velocity, radial_velocity_error)
+    if all(c is None for c in columns):
+        if any(c is not None for c in rv):
+            raise ValueError("radial_velocity needs the proper motions")
+        return [None] * Ndata
+    if any(c is None for c in columns):
+        raise ValueError(f"{', '.join(names[:-1])} and {names[-1]} go together")
+    if (rv[0] is None) != (rv[1] is None):
+        raise ValueError("radial_velocity and radial_velocity_error go together")
+    if not apply_pm_prior:
+        return [None] * Ndata
+    if data_coords is None:
+        raise ValueError("proper motions need data_coords")
+    columns = tuple(np.asarray(c, dtype=float) for c in columns)
+    has_rv = rv[0] is not None
+    if has_rv:
+        rv = tuple(np.asarray(c, dtype=float) for c in rv)
+    for name, c in zip(names + rv_names, columns + (rv if has_rv else ())):
+        _check_shape(name, c, (Ndata,))
+    _check_motion_options(pm_outlier, pm_floor)
+    # Rows with a NaN are fitted without the term; the others must give a
+    # proper covariance, so that no object fails partway through the fit.
+    finite = np.all(np.isfinite(columns), axis=0)
+    for name, bad in (
+        ("pmra_error", columns[2] <= 0.0),
+        ("pmdec_error", columns[3] <= 0.0),
+        ("pmra_pmdec_corr", np.abs(columns[4]) >= 1.0),
+    ):
+        if np.any(bad & finite):
+            raise ValueError(
+                f"{name} is out of range for object {np.argmax(bad & finite)}: "
+                "errors must be positive and the correlation in (-1, 1)"
+            )
+    if has_rv:
+        bad = np.isfinite(rv[0]) & np.isfinite(rv[1]) & (rv[1] <= 0.0)
+        if np.any(bad):
+            raise ValueError(
+                f"radial_velocity_error must be positive, not for object {np.argmax(bad)}"
+            )
+    if lngalprior is not None:
+        keywords = ("pm", "pm_cov", "pm_outlier", "pm_floor")
+        if has_rv:
+            keywords += ("rv", "rv_err")
+        _check_motion_keywords(lngalprior, keywords)
+    ell, b = np.asarray(data_coords, dtype=float).T
+    finite &= np.isfinite(ell) & (np.abs(b) <= 90.0)
+    ra, dec = galactic_to_icrs(np.where(finite, ell, 0.0), np.where(finite, b, 0.0))
+    pm, pm_cov = pm_equatorial_to_galactic(
+        ra, dec, *(np.where(finite, c, 0.0) for c in columns)
+    )
+    ok = finite & np.all(np.isfinite(pm), axis=1)
+    motions = []
+    for i in range(Ndata):
+        if not ok[i]:
+            motions.append(None)
+            continue
+        motion = {
+            "pm": pm[i],
+            "pm_cov": pm_cov[i],
+            "pm_outlier": pm_outlier,
+            "pm_floor": pm_floor,
+        }
+        if has_rv and np.isfinite(rv[0][i]) and np.isfinite(rv[1][i]):
+            motion["rv"], motion["rv_err"] = rv[0][i], rv[1][i]
+        motions.append(motion)
+    return motions
+
+
+def _check_motion_keywords(lngalprior, keywords):
+    """Raise ValueError naming the first of the kinematic ``keywords`` that
+    a custom Galactic prior does not accept."""
+    params = inspect.signature(lngalprior).parameters
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return
+    for name in keywords:
+        if name not in params:
+            raise ValueError(
+                f"lngalprior must accept the keyword `{name}` to use proper "
+                "motions; pass apply_pm_prior=False to fit without them"
+            )
+
+
 def _check_max_models(value):
     """Raise ValueError unless `value` is None or a positive integer."""
     if value is not None and not (isinstance(value, numbers.Integral) and value > 0):
         raise ValueError(
             f"max_models must be None or a positive integer, got {value!r}"
         )
+
+
+def _dust_prior(lndustprior, dustfile):
+    """Return the A(V) prior to apply: `logp_extinction` by default with a
+    dust map. Raise ValueError for `logp_extinction` without a map."""
+    if lndustprior is None and dustfile is not None:
+        return logp_extinction
+    if dustfile is None and _is_logp_extinction(lndustprior):
+        raise ValueError(
+            "`lndustprior` is `logp_extinction`, which reads a dust map: "
+            "pass `dustfile`."
+        )
+    return lndustprior
+
+
+def _is_logp_extinction(prior):
+    """Whether `prior` is `logp_extinction` or a `functools.partial` of it."""
+    return prior is logp_extinction or getattr(prior, "func", None) is logp_extinction
 
 
 def _check_positive(name, value):
@@ -278,8 +418,14 @@ def _optimize_fit_mag(
 
     Returns
     -------
-    models, rvecs, drvecs, scale, av, rv, icov_sar, resid
-        The outputs of `_get_sed_mle` at the fitted `(Av, Rv)`, in fluxes.
+    chi2, obj, grad, scale
+        The outputs of `_flux_fit` at the fitted `(Av, Rv)`.
+
+    av, rv : `~numpy.ndarray` of shape `(Nmodel,)`
+        The fitted `(Av, Rv)`.
+
+    icov_sar : `~numpy.ndarray` of shape `(Nmodel, 3, 3)`
+        The precision matrix of `_flux_fit`.
 
     converged : `~numpy.ndarray` of shape `(Nmodel,)`
         False for a model that stopped on the damping or step limit.
@@ -321,213 +467,236 @@ def _optimize_fit_mag(
                     break
         av[i], rv[i], converged[i] = a, r, done
 
-    models, rvecs, drvecs, scale, icov_sar, resid = _get_sed_mle(
-        data,
-        tot_var,
-        np.empty((Nmodel, Nfilt)),
-        mag_coeffs,
-        av,
-        rv,
-        av_gauss=av_gauss,
-        rv_gauss=rv_gauss,
+    chi2, obj, grad, scale, icov_sar = _flux_fit(
+        data, tot_var, mag_coeffs, av, rv, av_gauss, rv_gauss
     )
-    return models, rvecs, drvecs, scale, av, rv, icov_sar, resid, converged
+    return chi2, obj, grad, scale, av, rv, icov_sar, converged
+
+
+# Models per block of `_refine_flux`, which allocates its scratch once per
+# block; it refines far fewer models than `_flux_fit` evaluates.
+_REFINE_BLOCK = 64
 
 
 @jit(nopython=True, cache=True, parallel=True)
-def _flux_objective(av, rv, rvecs, drvecs, resid, tot_var, av_gauss, rv_gauss):
-    """
-    Return chi2, chi2 plus the prior penalties on `(Av, Rv)`, and the gradient
-    of the log-posterior in `(Av, Rv)`, from the outputs of `_get_sed_mle`.
-
-    `_get_sed_mle` returns `drvecs` as ``(1 / Av) * df/dRv``, so the R(V)
-    gradient multiplies it by `Av`.
-    """
-    Nmodel, Nfilt = resid.shape
-    Av_mean, Av_std = av_gauss
-    Rv_mean, Rv_std = rv_gauss
-    chi2, obj = np.empty(Nmodel), np.empty(Nmodel)
-    grad = np.empty((Nmodel, 2))
-    for i in prange(Nmodel):
-        chi2_i = 0.0
-        g_av = (Av_mean - av[i]) / Av_std**2
-        g_rv = (Rv_mean - rv[i]) / Rv_std**2
-        for j in range(Nfilt):
-            chi2_i += resid[i, j] * resid[i, j] / tot_var[j]
-            weighted = resid[i, j] / tot_var[j]
-            g_av += rvecs[i, j] * weighted
-            g_rv += av[i] * drvecs[i, j] * weighted
-        chi2[i] = chi2_i
-        obj[i] = chi2_i + (
-            ((av[i] - Av_mean) / Av_std) ** 2 + ((rv[i] - Rv_mean) / Rv_std) ** 2
-        )
-        grad[i, 0], grad[i, 1] = g_av, g_rv
-    return chi2, obj, grad
-
-
-@jit(nopython=True, cache=True, parallel=True)
-def _newton_step_flux(av, rv, grad, icov_sar, damping, avlim, rvlim):
-    """
-    Return trial `(Av, Rv)` from one damped Gauss-Newton step with the scale
-    profiled out, and the predicted log-posterior gain of the undamped step.
-
-    The step is `_bounded_step` on the 2x2 Schur complement of `icov_sar`
-    onto `(Av, Rv)` and `grad` (from `_flux_objective`).
-    """
-    Nmodel = len(av)
-    av_new, rv_new, gain = np.empty(Nmodel), np.empty(Nmodel), np.empty(Nmodel)
-    for i in prange(Nmodel):
-        g_av, g_rv = grad[i, 0], grad[i, 1]
-        prec = icov_sar[i]
-        h_aa = prec[1, 1] - prec[0, 1] * prec[0, 1] / prec[0, 0]
-        h_ar = prec[1, 2] - prec[0, 1] * prec[0, 2] / prec[0, 0]
-        h_rr = prec[2, 2] - prec[0, 2] * prec[0, 2] / prec[0, 0]
-        av_new[i], rv_new[i], gain[i] = _bounded_step(
-            av[i], rv[i], g_av, g_rv, h_aa, h_ar, h_rr, damping[i], avlim, rvlim
-        )
-    return av_new, rv_new, gain
-
-
-@jit(nopython=True, cache=True, parallel=True)
-def _get_sed_mle(
-    data, tot_var, resid, mag_coeffs, av, rv, av_gauss=(0.0, 1e6), rv_gauss=(3.32, 0.18)
+def _refine_flux(
+    data,
+    tot_var,
+    mag_coeffs,
+    sel,
+    av,
+    rv,
+    chi2,
+    obj,
+    grad,
+    scale,
+    icov_sar,
+    converged,
+    avlim,
+    rvlim,
+    av_gauss,
+    rv_gauss,
+    tol,
 ):
     """
-    Recompute model SEDs, derive the MLE scale factor, compute residuals,
-    and build the Fisher information (precision) matrix.
+    Refine the models ``sel`` in flux space, in place: from `_flux_fit`'s
+    outputs at their magnitude-space fit, each takes damped Gauss-Newton
+    steps, `_bounded_step` on the 2x2 Schur complement of `icov_sar` onto
+    `(Av, Rv)`. A step that lowers the objective is accepted and divides
+    the damping by 10; one that does not raises it to at least 1e-3 and
+    multiplies it by 10. A model stops when the predicted gain falls below
+    `tol` or an accepted step leaves it in place, and gives up (converged
+    False) when the damping exceeds `_MAX_DAMPING` or after `_MAX_STEPS`.
+    """
+    Nfilt = mag_coeffs.shape[1]
+    inv_tot_var = 1.0 / tot_var
+    for b in prange((len(sel) + _REFINE_BLOCK - 1) // _REFINE_BLOCK):
+        model, rvec, drvec = np.empty(Nfilt), np.empty(Nfilt), np.empty(Nfilt)
+        trial = np.empty((3, 3))
+        for k in range(b * _REFINE_BLOCK, min((b + 1) * _REFINE_BLOCK, len(sel))):
+            i = sel[k]
+            damping = 0.0
+            for _ in range(_MAX_STEPS):
+                prec = icov_sar[i]
+                h_aa = prec[1, 1] - prec[0, 1] * prec[0, 1] / prec[0, 0]
+                h_ar = prec[1, 2] - prec[0, 1] * prec[0, 2] / prec[0, 0]
+                h_rr = prec[2, 2] - prec[0, 2] * prec[0, 2] / prec[0, 0]
+                av_t, rv_t, gain = _bounded_step(
+                    av[i],
+                    rv[i],
+                    grad[i, 0],
+                    grad[i, 1],
+                    h_aa,
+                    h_ar,
+                    h_rr,
+                    damping,
+                    avlim,
+                    rvlim,
+                )
+                if not gain >= tol:
+                    break
+                chi2_t, obj_t, g_av, g_rv, scale_t = _flux_one(
+                    data,
+                    tot_var,
+                    inv_tot_var,
+                    mag_coeffs[i],
+                    av_t,
+                    rv_t,
+                    av_gauss,
+                    rv_gauss,
+                    model,
+                    rvec,
+                    drvec,
+                    trial,
+                )
+                improved = obj_t <= obj[i]
+                moved = av_t != av[i] or rv_t != rv[i]
+                if improved:
+                    av[i], rv[i], chi2[i], obj[i] = av_t, rv_t, chi2_t, obj_t
+                    grad[i, 0], grad[i, 1], scale[i] = g_av, g_rv, scale_t
+                    icov_sar[i, :, :] = trial
+                    damping *= 0.1
+                else:
+                    damping = max(10.0 * damping, 1e-3)
+                    if damping > _MAX_DAMPING:
+                        converged[i] = False
+                        break
+                if improved and not moved:
+                    break
+            else:
+                converged[i] = False
 
-    Given current `(Av, Rv)` values for each model, this function
-    regenerates the reddened SEDs from the magnitude polynomial
-    coefficients, computes the maximum-likelihood scale factor
-    (equivalently distance) for each model, forms the residuals
-    between the scaled model and data, and assembles the 3x3 Fisher
-    information (precision) matrix in `(scale, Av, Rv)` space.
+
+@jit(nopython=True, cache=True)
+def _flux_one(
+    data,
+    tot_var,
+    inv_tot_var,
+    coeffs,
+    av,
+    rv,
+    av_gauss,
+    rv_gauss,
+    model,
+    rvec,
+    drvec,
+    icov,
+):
+    """Return `_flux_fit`'s chi2, objective, gradient and scale of one model
+    with coefficients ``coeffs`` (Nfilt, 3), and write its precision matrix
+    into ``icov`` (3, 3); ``model``, ``rvec`` and ``drvec`` are scratch."""
+    Av_mean, Av_std = av_gauss
+    Rv_mean, Rv_std = rv_gauss
+    Av_varinv, Rv_varinv = 1.0 / Av_std**2, 1.0 / Rv_std**2
+    fac = -0.4 * log(10.0)
+    # Reddened fluxes and their derivatives, as `_get_seds`.
+    s_num, s_den = 0.0, 0.0
+    for j in range(len(data)):
+        dr = coeffs[j, 2]
+        rvec[j] = coeffs[j, 1] + rv * dr
+        model[j] = exp(fac * (coeffs[j, 0] + av * rvec[j]))
+        rvec[j] *= fac * model[j]
+        drvec[j] = dr * (fac * model[j])
+        s_num += model[j] * data[j] * inv_tot_var[j]
+        s_den += model[j] * model[j] * inv_tot_var[j]
+    s = s_num / s_den
+    if s <= MIN_SCALE:
+        s = MIN_SCALE
+    sr_mix, sa_mix, ar_mix, a_den, r_den = 0.0, 0.0, 0.0, 0.0, 0.0
+    chi2 = 0.0
+    g_av = (Av_mean - av) / Av_std**2
+    g_rv = (Rv_mean - rv) / Rv_std**2
+    for j in range(len(data)):
+        m = model[j] * s
+        resid = data[j] - m
+        sr_mix += m * drvec[j] * av * inv_tot_var[j]
+        sa_mix += m * rvec[j] * inv_tot_var[j]
+        r_j = rvec[j] * s
+        d_j = drvec[j] * s
+        ar_mix += r_j * d_j * av * inv_tot_var[j]
+        a_den += r_j * r_j * inv_tot_var[j]
+        r_den += (d_j * av) ** 2 * inv_tot_var[j]
+        chi2 += resid * resid / tot_var[j]
+        weighted = resid / tot_var[j]
+        g_av += r_j * weighted
+        g_rv += av * d_j * weighted
+    a_den += Av_varinv
+    r_den += Rv_varinv
+    obj = chi2 + (((av - Av_mean) / Av_std) ** 2 + ((rv - Rv_mean) / Rv_std) ** 2)
+    icov[0, 0], icov[1, 1], icov[2, 2] = s_den, a_den, r_den
+    icov[0, 1] = icov[1, 0] = sa_mix
+    icov[0, 2] = icov[2, 0] = sr_mix
+    icov[1, 2] = icov[2, 1] = ar_mix
+    return chi2, obj, g_av, g_rv, s
+
+
+# Models per block of `_flux_fit`, which allocates its per-band scratch once
+# per block rather than once per model.
+_FLUX_BLOCK = 1024
+
+
+@jit(nopython=True, cache=True, parallel=True)
+def _flux_fit(data, tot_var, mag_coeffs, av, rv, av_gauss, rv_gauss):
+    """
+    Evaluate each model at its `(Av, Rv)` in fluxes: the MLE scale, chi2,
+    chi2 plus the prior penalties, the log-posterior gradient in `(Av, Rv)`
+    and the Fisher (precision) matrix in `(scale, Av, Rv)`.
+
+    The reddened flux of model i in band j is
+    ``f = exp(-0.4 ln(10) (m0 + Av (r0 + Rv dr)))``, and the scale is
+    ``sum(f d / var) / sum(f^2 / var)``, floored at MIN_SCALE. With the
+    scaled model ``s f``, ``df/dAv = s r f`` and ``df/dRv = Av s dr f``
+    (``r = r0 + Rv dr``, both times ``-0.4 ln 10``), and the precision
+    matrix is the Gauss-Newton ``J^T J / var`` plus the prior precisions.
+    The scale-scale term uses the unscaled models, the scale cross-terms
+    the scaled ones. Each model's bands stay in a small buffer, so the
+    full grid writes only these outputs.
 
     Parameters
     ----------
-    data : `~numpy.ndarray` of shape `(Nfilt)`
-        Observed data values.
-
-    tot_var : `~numpy.ndarray` of shape `(Nfilt,)`
-        Associated (Normal) variance on the observed flux values.
-        1D since the variance is a property of the data, not the models.
-
-    resid : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        Residuals between the data and models.
-
+    data, tot_var : `~numpy.ndarray` of shape `(Nfilt,)`
+        Observed fluxes and their variances.
     mag_coeffs : `~numpy.ndarray` of shape `(Nmodel, Nfilt, 3)`
-        Magnitude coefficients used to compute reddened photometry for a given
-        model.
-
-    av : `~numpy.ndarray` of shape `(Nmodel,)`
-        Av values of the models.
-
-    rv : `~numpy.ndarray` of shape `(Nmodel,)`
-        Rv values of the models.
-
-    av_gauss : 2-tuple, optional
-        The mean and standard deviation of the Gaussian prior that is placed
-        on A(V). The default is `(0., 1e6)`, which is designed to be
-        essentially flat over `avlim`.
-
-    rv_gauss : 2-tuple, optional
-        The mean and standard deviation of the Gaussian prior that is placed
-        on R(V). The default is `(3.32, 0.18)` based on the results from
-        Schlafly et al. (2016).
+        Magnitude coefficients `(m0, r0, dr)` of each model.
+    av, rv : `~numpy.ndarray` of shape `(Nmodel,)`
+        A(V) and R(V) of each model.
+    av_gauss, rv_gauss : 2-tuple
+        Mean and standard deviation of the Gaussian priors on A(V), R(V).
 
     Returns
     -------
-    models_new : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        New model predictions. Always returned in flux densities.
-
-    rvecs_new : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        New reddening vectors. Always returned in flux densities.
-
-    drvecs_new : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        New differential reddening vectors. Always returned in flux densities.
-
-    scale : `~numpy.ndarray` of shape `(Nmodel)`, optional
-        The best-fit scale factor.
-
-    icov_sar : `~numpy.ndarray` of shape `(Nmodel, 3, 3)`, optional
-        The precision (inverse covariance) matrices expanded around
-        `(s_ML, Av_ML, Rv_ML)`.
-
-    resid : `~numpy.ndarray` of shape `(Nmodel, Nfilt)`
-        Residuals between the data and models.
-
+    chi2, obj : `~numpy.ndarray` of shape `(Nmodel,)`
+        chi2, and chi2 plus the prior penalties.
+    grad : `~numpy.ndarray` of shape `(Nmodel, 2)`
+        Gradient of the log-posterior in `(Av, Rv)`.
+    scale : `~numpy.ndarray` of shape `(Nmodel,)`
+        MLE scale factor.
+    icov_sar : `~numpy.ndarray` of shape `(Nmodel, 3, 3)`
+        Precision matrix in `(scale, Av, Rv)`.
     """
-    Av_mean, Av_std = av_gauss
-    Rv_mean, Rv_std = rv_gauss
-
-    # Recompute models with new Rv.
-    models, rvecs, drvecs = _get_seds(mag_coeffs, av, rv, return_flux=True)
-    Nmodel, Nfilt = models.shape
-
-    # Precompute reciprocal of flux variance (1D, same for all models).
+    Nmodel, Nfilt, _ = mag_coeffs.shape
     inv_tot_var = 1.0 / tot_var
-
-    # Derive scale-factors (`scale`) between data and models.
-    s_num, s_den, scale = np.zeros(Nmodel), np.zeros(Nmodel), np.zeros(Nmodel)
-    for i in prange(Nmodel):
-        for j in range(Nfilt):
-            s_num[i] += models[i][j] * data[j] * inv_tot_var[j]
-            s_den[i] += models[i][j] * models[i][j] * inv_tot_var[j]
-        scale[i] = s_num[i] / s_den[i]  # MLE scalefactor
-        if scale[i] <= MIN_SCALE:
-            scale[i] = MIN_SCALE
-
-    # Derive reddening terms.
-    sr_mix, sa_mix = np.zeros(Nmodel), np.zeros(Nmodel)
-    a_den, r_den = np.zeros(Nmodel), np.zeros(Nmodel)
-    ar_mix = np.zeros(Nmodel)
-    Av_varinv, Rv_varinv = 1.0 / Av_std**2, 1.0 / Rv_std**2
-    for i in prange(Nmodel):
-        for j in range(Nfilt):
-            # Rescale models.
-            models[i][j] = models[i][j] * scale[i]
-
-            # Compute residuals.
-            resid[i][j] = data[j] - models[i][j]
-
-            # Derive scale cross-terms.
-            # Note: drvecs = dR/dRv * fac * flux, so the true
-            # ∂f/∂Rv = Av * drvecs. We must include Av for correct
-            # Fisher information in R(V)-related terms.
-            sr_mix[i] += models[i][j] * drvecs[i][j] * av[i] * inv_tot_var[j]
-            sa_mix[i] += models[i][j] * rvecs[i][j] * inv_tot_var[j]
-
-            # Rescale reddening quantities.
-            rvecs[i][j] = rvecs[i][j] * scale[i]
-            drvecs[i][j] = drvecs[i][j] * scale[i]
-
-            # Derive reddening (cross-)terms
-            # ar_mix: Gauss-Newton cross-term (∂f/∂Av)(∂f/∂Rv) / var
-            # where ∂f/∂Av = rvecs (already scaled) and
-            # ∂f/∂Rv = Av * drvecs (already scaled).
-            ar_mix[i] += rvecs[i][j] * drvecs[i][j] * av[i] * inv_tot_var[j]
-            a_den[i] += rvecs[i][j] * rvecs[i][j] * inv_tot_var[j]
-            r_den[i] += (drvecs[i][j] * av[i]) ** 2 * inv_tot_var[j]
-
-        # Add in priors.
-        a_den[i] += Av_varinv
-        r_den[i] += Rv_varinv
-
-    # Construct precision matrices (inverse covariances). All nine entries are
-    # assigned below, so allocation can skip zero-initialization.
+    chi2, obj, scale = np.empty(Nmodel), np.empty(Nmodel), np.empty(Nmodel)
+    grad = np.empty((Nmodel, 2))
     icov_sar = np.empty((Nmodel, 3, 3))
-    for i in prange(Nmodel):
-        icov_sar[i][0][0] = s_den[i]  # scale
-        icov_sar[i][1][1] = a_den[i]  # Av
-        icov_sar[i][2][2] = r_den[i]  # Rv
-        icov_sar[i][0][1] = sa_mix[i]  # scale-Av cross-term
-        icov_sar[i][1][0] = sa_mix[i]  # scale-Av cross-term
-        icov_sar[i][0][2] = sr_mix[i]  # scale-Rv cross-term
-        icov_sar[i][2][0] = sr_mix[i]  # scale-Rv cross-term
-        icov_sar[i][1][2] = ar_mix[i]  # Av-Rv cross-term
-        icov_sar[i][2][1] = ar_mix[i]  # Av-Rv cross-term
-
-    return models, rvecs, drvecs, scale, icov_sar, resid
+    for block in prange((Nmodel + _FLUX_BLOCK - 1) // _FLUX_BLOCK):
+        model, rvec, drvec = np.empty(Nfilt), np.empty(Nfilt), np.empty(Nfilt)
+        for i in range(block * _FLUX_BLOCK, min((block + 1) * _FLUX_BLOCK, Nmodel)):
+            chi2[i], obj[i], grad[i, 0], grad[i, 1], scale[i] = _flux_one(
+                data,
+                tot_var,
+                inv_tot_var,
+                mag_coeffs[i],
+                av[i],
+                rv[i],
+                av_gauss,
+                rv_gauss,
+                model,
+                rvec,
+                drvec,
+                icov_sar[i],
+            )
+    return chi2, obj, grad, scale, icov_sar
 
 
 #: Gauss-Hermite nodes x of the parallax selection gate, and ln(w) + x**2.
@@ -601,42 +770,214 @@ def _lnp_parallax_gate(eta, eta_err, parallax, parallax_err):
     return out
 
 
-def _parallax_gate(scales, icovs_sar, parallax, parallax_err):
-    """Return the parallax term of the selection weight of each model.
+@jit(nopython=True, cache=True, parallel=True)
+def _eta_gaussians(scales, icovs_sar):
+    """Return the ln(d) mean, marginal ln(d) error and ``0.5 ln|2 pi Sigma|``
+    of each model's Gaussian in (ln d, A(V), R(V)).
 
-    It is `_lnp_parallax_gate` with the model's ln(d) mean and marginal
-    error from its (scale, A(V), R(V)) fit.
+    Sigma is the inverse of the (scale, A(V), R(V)) precision mapped to
+    ln(d), regularized as `~brutus.utils.math.inverse3` regularizes the
+    Monte Carlo draws' matrix before inverting it. The last term is the
+    Laplace volume of the model's fit (#331). It is LOG_ZERO where the
+    precision is not positive definite, since the model has no finite
+    volume. The error of such a model is 1.
     """
-    # Use the marginal scale error because distance and extinction both dim a
-    # star, driving the scale-A(V) correlation to 0.95-0.998 for reddened stars
-    # and making the conditional error 3-16x too small. cov[0,0] follows from
-    # the cofactor identity
-    # cov[0,0] = (i11*i22 - i12^2) / det(icov). A degenerate matrix falls
-    # back to the conditional error 1/sqrt(icov[0,0]). When icov[0,0] <= 0
-    # the error is 1e10, and the model's term is then too small to pass.
-    scales_err = np.full(len(scales), 1e10)
-    i00, i01, i02 = icovs_sar[:, 0, 0], icovs_sar[:, 0, 1], icovs_sar[:, 0, 2]
-    i11, i12, i22 = icovs_sar[:, 1, 1], icovs_sar[:, 1, 2], icovs_sar[:, 2, 2]
-    minor00 = i11 * i22 - i12 * i12
-    det = i00 * minor00 - i01 * (i01 * i22 - i02 * i12) + i02 * (i01 * i12 - i02 * i11)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        var00 = minor00 / det
-        cond_var00 = 1.0 / i00
-    marg_ok = (det > 0) & np.isfinite(var00) & (var00 > 0)
-    cond_ok = ~marg_ok & (i00 > 0)
-    scales_err[marg_ok] = np.sqrt(var00[marg_ok])
-    scales_err[cond_ok] = np.sqrt(cond_var00[cond_ok])
+    N = len(scales)
+    eta, eta_err, half_logdet = np.empty(N), np.empty(N), np.empty(N)
+    for i in prange(N):
+        i00, i11, i22 = icovs_sar[i, 0, 0], icovs_sar[i, 1, 1], icovs_sar[i, 2, 2]
+        log_s = np.log(max(scales[i], MIN_SCALE))
+        eta[i], eta_err[i], half_logdet[i] = -0.5 * log_s, 1.0, LOG_ZERO
+        if not (i00 > 0 and i11 > 0 and i22 > 0):
+            continue
+        c01 = icovs_sar[i, 0, 1] / np.sqrt(i00 * i11)
+        c02 = icovs_sar[i, 0, 2] / np.sqrt(i00 * i22)
+        c12 = icovs_sar[i, 1, 2] / np.sqrt(i11 * i22)
+        # The determinant of the correlation form, with the diagonal shift
+        # of inverse3 where it is singular.
+        cross = 2.0 * c01 * c02 * c12
+        squares = c01**2 + c02**2 + c12**2
+        one = 1.0
+        if abs(1.0 + cross - squares) < SINGULAR_DET:
+            one += SINGULAR_SHIFT
+        det = one**3 + cross - one * squares
+        # Sylvester's criterion.
+        if not (one**2 - c01**2 > 0 and det > 0):
+            continue
+        # eta = ln(d) = -0.5 ln(s), so sigma_eta = sigma_s / (2 s) and
+        # |Sigma_eta| = |Sigma_sar| / (2 s)^2. The marginal scale variance is
+        # cov[0,0] = minor00 / det: distance and extinction both dim a star,
+        # so the conditional error is 3-16x too small for reddened stars.
+        var00 = (one**2 - c12**2) / (det * i00)
+        eta_err[i] = 0.5 * np.sqrt(var00) * np.exp(-log_s)
+        logdet = np.log(i00) + np.log(i11) + np.log(i22) + np.log(det)
+        half_logdet[i] = 1.5 * np.log(2.0 * np.pi) - 0.5 * logdet - np.log(2.0) - log_s
+    return eta, eta_err, half_logdet
 
-    # eta = ln(d) = -0.5 ln(s), so sigma_eta = sigma_s / (2 s). Far nodes of
-    # a degenerate model overflow exp(-eta) to inf, which gives the right 0.
-    scales = np.maximum(scales, MIN_SCALE)
-    with np.errstate(over="ignore"):
-        return _lnp_parallax_gate(
-            -0.5 * np.log(scales),
-            scales_err / (2.0 * scales),
-            float(parallax),
-            float(parallax_err),
+
+# The 9 Chebyshev-Lobatto nodes of the Galactic prior across a model's draws.
+# They nest: the stages use the nodes at these indices, and each stage's
+# interpolant is checked against the one on every other node of the stage
+# (the first against the 3 nodes of its ends and middle).
+_PRIOR_NODES = np.cos(np.pi * np.arange(9) / 8)
+_PRIOR_STAGES = ((0, 2, 4, 6, 8), tuple(range(9)))
+# Largest difference in ln prior between a stage's interpolant and the one
+# before at a draw before the model goes on to the next stage, and after the
+# last to the exact prior at its draws.
+PRIOR_INTERP_TOL = 1e-3
+
+
+@jit(nopython=True, cache=True)
+def _barycentric(u, x, w, f):
+    """Return the polynomial through (x, f) at u, from weights w."""
+    num, den = 0.0, 0.0
+    for k in range(len(x)):
+        diff = u - x[k]
+        if diff == 0.0:
+            return f[k]
+        q = w[k] / diff
+        num += q * f[k]
+        den += q
+    return num / den
+
+
+@jit(nopython=True, cache=True)
+def _lobatto_weights(n):
+    """Return the barycentric weights of n Chebyshev-Lobatto nodes."""
+    w = np.empty(n)
+    for k in range(n):
+        w[k] = 1.0 if k % 2 == 0 else -1.0
+    w[0] *= 0.5
+    w[n - 1] *= 0.5
+    return w
+
+
+@jit(nopython=True, cache=True, parallel=True)
+def _interpolate_prior(eta, lo, hi, f, x, w, sub):
+    """Interpolate the prior f, given at the nodes x (weights w) of each
+    model's range [lo, hi] in ln(d), at its draws eta. Return the values
+    and, per model, the largest difference from the interpolant on the
+    nodes ``sub`` (indices into x), or inf where a node is at zero
+    probability."""
+    Nmc, N = eta.shape
+    out = np.empty((Nmc, N))
+    err = np.zeros(N)
+    xs = x[sub]
+    ws = _lobatto_weights(len(sub))
+    for n in prange(N):
+        fn = f[:, n].copy()
+        fs = fn[sub]
+        if fn.min() <= LOG_ZERO / 2:
+            err[n] = np.inf
+        mid, half = 0.5 * (hi[n] + lo[n]), 0.5 * (hi[n] - lo[n])
+        for m in range(Nmc):
+            u = (eta[m, n] - mid) / half if half > 0.0 else 0.0
+            p = _barycentric(u, x, w, fn)
+            out[m, n] = p
+            err[n] = max(err[n], abs(p - _barycentric(u, xs, ws, fs)))
+    return out, err
+
+
+def _galactic_prior_at_draws(prior, dists, eta, coord, labels):
+    """Return the default Galactic prior at the draws `dists` (Nmc, Nsel) of
+    each model, with ``eta`` their ln(d), interpolated in ln(d) across the
+    model's draws.
+
+    A model's draws span 0.01-0.03 in ln(d) for most stars, because its
+    absolute magnitude fixes its distance, and the prior is smooth over
+    that range. It is evaluated at 5, then 9 nested Chebyshev-Lobatto
+    nodes over the draws: a model stays at the first stage whose
+    interpolant is within PRIOR_INTERP_TOL of the one on every other node
+    of the stage at every draw. Its prior is evaluated at its draws if
+    neither stage passes, or if a node is at zero probability.
+    """
+    if len(dists) <= len(_PRIOR_NODES):
+        return prior(dists, coord, **labels)
+    lo, hi = eta.min(axis=0), eta.max(axis=0)
+    out = np.empty(dists.shape)
+    f = np.empty((len(_PRIOR_NODES), dists.shape[1]))
+    todo, done, prev = np.arange(dists.shape[1]), [], (0, 4, 8)
+    for stage in _PRIOR_STAGES:
+        new = [k for k in stage if k not in done]
+        nodes = 0.5 * (hi[todo] + lo[todo]) + 0.5 * (hi[todo] - lo[todo]) * (
+            _PRIOR_NODES[new, None]
         )
+        part = {k: v[todo] for k, v in labels.items()}
+        f[np.ix_(new, todo)] = prior(np.exp(nodes), coord, **part)
+        sub = np.array([stage.index(k) for k in prev])
+        p, err = _interpolate_prior(
+            eta[:, todo],
+            lo[todo],
+            hi[todo],
+            f[np.ix_(stage, todo)],
+            _PRIOR_NODES[list(stage)],
+            _lobatto_weights(len(stage)),
+            sub,
+        )
+        ok = err <= PRIOR_INTERP_TOL
+        out[:, todo[ok]] = p[:, ok]
+        todo, done, prev = todo[~ok], done + new, stage
+        if not len(todo):
+            return out
+    out[:, todo] = prior(
+        dists[:, todo], coord, **{k: v[todo] for k, v in labels.items()}
+    )
+    return out
+
+
+_MC_BLOCK = 256
+
+
+@jit(nopython=True, cache=True, parallel=True)
+def _mc_summary(lnp_mc):
+    """Return, per model (column of lnp_mc, shape (Nmc, N)), the ln mean of
+    exp(lnp_mc) over its draws and the weight concentration
+    (sum w)**2 / sum w**2 of w = exp(lnp_mc). A model with no draw above
+    LOG_ZERO, or with a non-finite result, gets LOG_ZERO and 0."""
+    Nmc, N = lnp_mc.shape
+    lnp = np.empty(N)
+    ess = np.empty(N)
+    ln_nmc = log(Nmc)
+    for b in prange((N + _MC_BLOCK - 1) // _MC_BLOCK):
+        lo = b * _MC_BLOCK
+        hi = min(lo + _MC_BLOCK, N)
+        top = np.full(hi - lo, -np.inf)
+        s1 = np.zeros(hi - lo)
+        s2 = np.zeros(hi - lo)
+        # Rows outer, so each pass reads lnp_mc in memory order.
+        for m in range(Nmc):
+            for n in range(lo, hi):
+                top[n - lo] = max(top[n - lo], lnp_mc[m, n])
+        for m in range(Nmc):
+            for n in range(lo, hi):
+                if LOG_ZERO < top[n - lo] < np.inf:
+                    w = exp(lnp_mc[m, n] - top[n - lo])
+                    s1[n - lo] += w
+                    s2[n - lo] += w * w
+        for n in range(lo, hi):
+            lnp[n], ess[n] = LOG_ZERO, 0.0
+            # A NaN draw makes the sums NaN; such a model, like one with no
+            # draw above LOG_ZERO, gets zero weight.
+            if s1[n - lo] > 0.0 and isfinite(s1[n - lo]):
+                lnp[n] = top[n - lo] + log(s1[n - lo]) - ln_nmc
+                ess[n] = s1[n - lo] ** 2 / s2[n - lo]
+    return lnp, ess
+
+
+# Objects per Bayestar query in `fit`: one query for many objects is much
+# faster than one per object, and chunks bound its memory for large catalogues.
+_DUST_CHUNK = 4096
+
+
+class _Sightline:
+    """One sightline of a dust map, queried for many objects at once:
+    `query` returns its profile as the map's own query would."""
+
+    def __init__(self, distances, av_mean, av_std):
+        self._profile = (distances, av_mean, av_std)
+
+    def query(self, coord):
+        return self._profile
 
 
 def _inclusion_probabilities(weights, size):
@@ -765,6 +1106,9 @@ class BruteForce:
 
         # Generate labels mask automatically
         self.labels_mask = self._generate_labels_mask()
+        # The coefficients of the valid bands for the last band mask, which
+        # the stars of one catalogue mostly share: (grid, mask, copy).
+        self._band_coeffs = (None, None, None)
 
         if verbose:
             n_grid = sum(1 for m in self.labels_mask.values() if m)
@@ -911,8 +1255,8 @@ class BruteForce:
         data_coords=None,
         mag_max=50.0,
         merr_max=0.25,
-        R_solar=8.2,
-        Z_solar=0.025,
+        R_solar=R_SOLAR,
+        Z_solar=Z_SOLAR,
     ):
         """
         Pre-process data and initialize priors for fitting.
@@ -1019,8 +1363,7 @@ class BruteForce:
                 "`data_coords` must be provided when using a dust-map "
                 "extinction prior (`dustfile`)."
             )
-        if lndustprior is None and dustfile is not None:
-            lndustprior = logp_extinction
+        lndustprior = _dust_prior(lndustprior, dustfile)
 
         return (data, data_err, data_mask, lnprior, lngalprior, lndustprior)
 
@@ -1111,8 +1454,9 @@ class BruteForce:
         -------
         lnl : `~numpy.ndarray` of shape `(Nmodels,)`
             Log-likelihood of each model at its fit, with the Gaussian
-            normalization and, if `dim_prior`, the dimensional term. It does
-            not include the parallax.
+            normalization and, if `dim_prior`, the dimensional term, plus the
+            log-density of the `av_gauss` and `rv_gauss` priors at the fit.
+            It does not include the parallax.
         Ndim : int
             Number of valid bands.
         chi2 : `~numpy.ndarray` of shape `(Nmodels,)`
@@ -1212,7 +1556,19 @@ class BruteForce:
 
         # Subselect only clean observations
         flux, fluxerr = data[data_mask], data_err[data_mask]
-        mcoeffs = mag_coeffs[:, data_mask, :]
+        # A boolean index copies the whole grid, about 60 MB, so every
+        # band valid reads the grid itself, and a masked band reuses the
+        # copy for the last mask (of the full grid; `indices` select a new
+        # array on every call).
+        if data_mask.all():
+            mcoeffs = mag_coeffs
+        elif indices is not None:
+            mcoeffs = mag_coeffs[:, data_mask, :]
+        else:
+            grid, mask, mcoeffs = self._band_coeffs
+            if grid is not mag_coeffs or not np.array_equal(mask, data_mask):
+                mcoeffs = mag_coeffs[:, data_mask, :]
+                self._band_coeffs = (mag_coeffs, data_mask, mcoeffs)
         tot_var = np.square(fluxerr)  # 1D: (Nfilt,)
 
         # Get started by fitting in magnitudes
@@ -1223,12 +1579,7 @@ class BruteForce:
             mclean = np.isfinite(mags)
             mags[~mclean], mags_var[~mclean] = 0.0, 1e50
 
-        # Set default Gaussian priors if not provided
-        # These defaults are essentially flat over the allowed range.
-        # Default flow: fit(av_gauss=None) -> _fit(av_gauss=(0.0, 1e6))
-        # -> loglike_grid(av_gauss=(0.0, 1e6)) -> _get_sed_mle internal
-        # default (0.0, 1e6). The large std (1e6) makes the prior
-        # effectively flat over the allowed A(V) range.
+        # A spread of 1e6 makes the default A(V) prior flat over avlim.
         if av_gauss is None:
             av_gauss = (0.0, 1e6)
         if rv_gauss is None:
@@ -1239,7 +1590,7 @@ class BruteForce:
 
         av_init = _model_array(av_init, av_gauss[0], Nmodels, "av_init")
         rv_init = _model_array(rv_init, rv_gauss[0], Nmodels, "rv_init")
-        _, rvecs, drvecs, scale, av, rv, icov_sar, resid, converged = _optimize_fit_mag(
+        chi2, obj, grad, scale, av, rv, icov_sar, converged = _optimize_fit_mag(
             flux,
             tot_var,
             mcoeffs,
@@ -1255,9 +1606,6 @@ class BruteForce:
         )
 
         # Cull initial bad fits before moving on
-        chi2, obj, grad = _flux_objective(
-            av, rv, rvecs, drvecs, resid, tot_var, av_gauss, rv_gauss
-        )
         lnl = -0.5 * chi2
 
         # Add parallax to log-likelihood
@@ -1274,80 +1622,48 @@ class BruteForce:
         init_sel = np.where(lnl_sel)[0]
 
         # Refine the kept models in flux space, with the same stopping rules
-        # as the magnitude-space fit.
-        mcoeffs = mcoeffs[init_sel]
-        scale_new, icov_sar_new = scale[init_sel], icov_sar[init_sel]
-        av_new, rv_new = av[init_sel], rv[init_sel]
-        chi2_new, obj, grad = chi2[init_sel], obj[init_sel], grad[init_sel]
-        converged = converged[init_sel]
-        damping = np.zeros(len(init_sel))
-        active = np.arange(len(init_sel))
-        for _ in range(_MAX_STEPS):
-            av_t, rv_t, gain = _newton_step_flux(
-                av_new[active],
-                rv_new[active],
-                grad[active],
-                icov_sar_new[active],
-                damping[active],
-                avlim,
-                rvlim,
-            )
-            unconverged = gain >= ltol
-            active, av_t, rv_t = (
-                active[unconverged],
-                av_t[unconverged],
-                rv_t[unconverged],
-            )
-            if active.size == 0:
-                break
-            _, rvecs_t, drvecs_t, scale_t, icov_t, resid_t = _get_sed_mle(
-                flux,
-                tot_var,
-                np.empty((active.size, Ndim)),
-                mcoeffs[active],
-                av_t,
-                rv_t,
-                av_gauss=av_gauss,
-                rv_gauss=rv_gauss,
-            )
-            chi2_t, obj_t, grad_t = _flux_objective(
-                av_t, rv_t, rvecs_t, drvecs_t, resid_t, tot_var, av_gauss, rv_gauss
-            )
-            improved = obj_t <= obj[active]
-            moved = (av_t != av_new[active]) | (rv_t != rv_new[active])
-            accepted = active[improved]
-            av_new[accepted], rv_new[accepted] = av_t[improved], rv_t[improved]
-            chi2_new[accepted], obj[accepted] = chi2_t[improved], obj_t[improved]
-            grad[accepted], icov_sar_new[accepted] = grad_t[improved], icov_t[improved]
-            scale_new[accepted] = scale_t[improved]
-            damping[accepted] *= 0.1
-            rejected = active[~improved]
-            damping[rejected] = np.maximum(10.0 * damping[rejected], 1e-3)
-            # A model stops when a step no longer moves it, or gives up when
-            # the damping grows past _MAX_DAMPING.
-            gave_up = ~improved & (damping[active] > _MAX_DAMPING)
-            converged[active[gave_up]] = False
-            active = active[~((improved & ~moved) | gave_up)]
-        converged[active] = False
-        if not np.all(converged):
+        # as the magnitude-space fit. Culled models keep their
+        # magnitude-space fit; the Gaussian normalization applies to every
+        # model, so that all of lnl shares one constant.
+        _refine_flux(
+            flux,
+            tot_var,
+            mcoeffs,
+            init_sel,
+            av,
+            rv,
+            chi2,
+            obj,
+            grad,
+            scale,
+            icov_sar,
+            converged,
+            avlim,
+            rvlim,
+            av_gauss,
+            rv_gauss,
+            ltol,
+        )
+        if not np.all(converged[init_sel]):
             warnings.warn(
                 "Some models stopped before their A(V), R(V) fit converged "
                 "(step or damping limit).",
                 RuntimeWarning,
                 stacklevel=2,
             )
-
-        # Insert optimized models into initial array of results. Culled models
-        # keep their magnitude-space fit; the Gaussian normalization applies to
-        # every model, so that all of lnl shares one constant.
-        lnl[init_sel], chi2[init_sel] = -0.5 * chi2_new, chi2_new
-        scale[init_sel], av[init_sel], rv[init_sel] = scale_new, av_new, rv_new
-        icov_sar[init_sel] = icov_sar_new
+        lnl[init_sel] = -0.5 * chi2[init_sel]
         lnl += -0.5 * (Ndim * np.log(2.0 * np.pi) + np.sum(np.log(tot_var)))
 
         # Apply dimensional prior
         if dim_prior:
             lnl -= 0.5 * (3.0 - Ndim) * np.log(Ndim)
+
+        # The fit maximizes the likelihood times the A(V) and R(V) priors, and
+        # icov_sar includes their precision, so lnl takes their normalized
+        # height at the fit: logpost_grid's Laplace weight integrates that
+        # product.
+        for value, (mean, std) in ((av, av_gauss), (rv, rv_gauss)):
+            lnl -= 0.5 * ((value - mean) / std) ** 2 + np.log(np.sqrt(2 * np.pi) * std)
 
         if return_vals:
             return lnl, Ndim, chi2, scale, av, rv, icov_sar
@@ -1362,9 +1678,9 @@ class BruteForce:
         coord=None,
         Nmc_prior=100,
         lnprior=None,
-        wt_thresh=1e-3,
-        cdf_thresh=2e-3,
-        max_models=50000,
+        wt_thresh=None,
+        cdf_thresh=None,
+        max_models=5000,
         precision_shrinkage=0.0,
         lngalprior=None,
         lndustprior=None,
@@ -1375,8 +1691,8 @@ class BruteForce:
         mem_lim=8000.0,
         rstate=None,
         apply_av_prior=True,
-        R_solar=8.2,
-        Z_solar=0.025,
+        R_solar=R_SOLAR,
+        Z_solar=Z_SOLAR,
         return_precision=False,
     ):
         """
@@ -1410,20 +1726,24 @@ class BruteForce:
         lnprior : `~numpy.ndarray` of shape `(Nmodels,)`, optional
             Log-prior of each model. Default is 0 for every model.
 
-        wt_thresh : float or None, optional
-            Keep the models whose selection weight is above `wt_thresh`
-            times the largest. Default is 1e-3.
-
-        cdf_thresh : float or None, optional
-            Used only if `wt_thresh` is None: keep the models of highest
-            weight that hold ``1 - cdf_thresh`` of the total. If both are
-            None, every model is kept. Default is 2e-3.
+        wt_thresh, cdf_thresh : float or None, optional
+            Deprecated; will be removed. A hard cut applied to the selection
+            weight before the sampling. It keeps the models whose weight is
+            above `wt_thresh` times the largest, or, if `wt_thresh` is None,
+            the models of highest weight that hold ``1 - cdf_thresh`` of the
+            total. A cut drops posterior weight that the sampling would keep
+            (#307). Default is None for both, which makes no cut.
 
         max_models : int or None, optional
-            Most models kept after the threshold. Above it, models are kept
-            by systematic sampling with probability proportional to their
-            selection weight, and ``ln_incl`` holds the log-probabilities.
-            None sets no limit. Default is 50000.
+            Number of models kept for the Monte Carlo step. Models are kept
+            by systematic sampling with probability ``min(1, c w)``, where
+            ``w`` is the selection weight and ``c`` makes the probabilities
+            sum to `max_models`; ``ln_incl`` holds their logarithms. The
+            selection weight is the model's weight with the Galactic, dust
+            and log-distance terms at its best fit, and the parallax
+            likelihood averaged over its Gaussian in ln(d). A model whose
+            priors are zero at its best fit is never kept. None keeps every
+            model whose fit has a finite volume. Default is 5000.
 
         precision_shrinkage : float, optional
             Fraction by which the off-diagonal terms of each (scale, A(V),
@@ -1431,17 +1751,30 @@ class BruteForce:
 
         lngalprior : callable, optional
             Galactic prior ``f(dists, coord, labels=...)``, with ``dists`` in
-            kpc. Default is `~brutus.priors.logp_galactic_structure` with
-            `R_solar` and `Z_solar`.
+            kpc. It returns the log-prior per unit distance, including the
+            volume element: a uniform space density is ``2 ln d``, and 0 is
+            flat in distance. Default is
+            `~brutus.priors.logp_galactic_structure` with `R_solar` and
+            `Z_solar`. For its kinematic term, bind the object's motion:
+            ``functools.partial(logp_galactic_structure, pm=..., pm_cov=...)``.
+            The selection weight interpolates it, or a `functools.partial` of
+            it, from a table along the sightline; any other prior is called
+            once on every model, then on the draws.
 
         lndustprior : callable, optional
-            Dust-map prior ``f(avs, dustmap, coord, distance=...)``. Default
-            is `~brutus.priors.logp_extinction`, given `avlim` unless it is a
+            A(V) prior ``f(avs, dustmap, coord, distance=...)``, applied
+            when it or ``dustfile`` is given and ``apply_av_prior`` is True.
+            Without ``dustfile``, ``dustmap`` is None, and without
+            ``coord``, ``coord`` is None. Default with ``dustfile`` is
+            `~brutus.priors.logp_extinction`, given `avlim` unless it is a
             `functools.partial` that binds its own.
 
         dustfile : str, path-like or `~brutus.dust.Bayestar`, optional
-            3D dust map for the dust-map prior. A path is loaded as a
-            `~brutus.dust.Bayestar` map.
+            3D dust map for the A(V) prior. A path is loaded as a
+            `~brutus.dust.Bayestar` map on every call, which takes seconds,
+            so pass a loaded map when calling this for many objects. Any
+            object with the ``query`` method of `~brutus.dust.Bayestar` also
+            works.
 
         dlabels : structured `~numpy.ndarray` of shape `(Nmodels,)` or None, optional
             Model labels passed to the Galactic prior. By default, the labels
@@ -1455,16 +1788,18 @@ class BruteForce:
         mem_lim : float, optional
             Memory limit for the draws, in MB. Default is 8000.0.
 
-        rstate : `~numpy.random.RandomState` or `~numpy.random.Generator`, optional
+        rstate : `~numpy.random.Generator` or `~numpy.random.RandomState`, optional
             Random state for the draws and the `max_models` sampling.
+            Default is a new `~numpy.random.default_rng`.
 
         apply_av_prior : bool, optional
-            Whether to apply the dust-map extinction prior when ``dustfile``
-            is provided. Default is True.
+            Whether to apply the A(V) prior when ``dustfile`` or
+            ``lndustprior`` is given. Default is True.
 
         R_solar, Z_solar : float, optional
             Galactocentric radius and height of the Sun, in kpc, for the
-            default Galactic prior. Defaults are 8.2 and 0.025.
+            default Galactic prior. Defaults are ``R_SOLAR`` and ``Z_SOLAR``
+            (8.275 and 0.0208).
 
         return_precision : bool, optional
             Return the (scale, A(V), R(V)) precision matrices of the selected
@@ -1485,9 +1820,11 @@ class BruteForce:
         a_mc, r_mc : `~numpy.ndarray` of shape `(Nsel, Nmc)`
             Monte Carlo A(V) and R(V) draws.
         lnp_mc : `~numpy.ndarray` of shape `(Nsel, Nmc)`
-            Log-posterior weight of each draw: the model's log-likelihood and
-            ``lnprior``, the log-distance Jacobian, and the Galactic, dust and
-            parallax terms at the draw. To pool draws across models, subtract
+            Log-posterior weight of each draw: the model's log-likelihood,
+            ``lnprior`` and Laplace volume ``0.5 ln|2 pi Sigma|`` (Sigma is the
+            covariance of its Gaussian in (ln d, A(V), R(V))), the
+            log-distance Jacobian, and the Galactic, dust and parallax terms
+            at the draw. To pool draws across models, subtract
             ``ln_incl[:, None]``.
         mc_ess : `~numpy.ndarray` of shape `(Nsel,)`
             ``1 / sum(w**2)`` of the normalized weights of each model's draws.
@@ -1504,7 +1841,8 @@ class BruteForce:
         ValueError
             If only one of ``parallax`` and ``parallax_err`` is given, if
             ``dustfile`` is given with ``apply_av_prior`` but without
-            ``coord``, if ``max_models`` is neither None nor a positive
+            ``coord``, if ``lndustprior`` is `~brutus.priors.logp_extinction`
+            without ``dustfile``, if ``max_models`` is neither None nor a positive
             integer, or if ``lnprior`` or ``dlabels`` (with ``coord``) does
             not have one entry per model in ``results``.
         """
@@ -1516,6 +1854,7 @@ class BruteForce:
                 "position: pass `coord` to logpost_grid (or `data_coords` "
                 "to fit())."
             )
+        lndustprior = _dust_prior(lndustprior, dustfile)
 
         if (parallax is None) != (parallax_err is None):
             raise ValueError("parallax and parallax_err must be given together")
@@ -1541,54 +1880,127 @@ class BruteForce:
 
         # Initialize random state
         if rstate is None:
-            rstate = np.random.RandomState()
+            rstate = np.random.default_rng()
 
         # Apply prior
         if lnprior is None:
             lnprior = np.zeros(Nmodels)
 
-        # Initial posterior, without the parallax, which the MC step applies.
-        lnprob_base = lnlike + lnprior
+        # Defaults of the priors, shared by the selection and the MC step.
+        gal_is_default = False
+        if coord is not None:
+            if lngalprior is None:
+                lngalprior = partial(
+                    logp_galactic_structure, R_solar=R_solar, Z_solar=Z_solar
+                )
+            gal_is_default = lngalprior is logp_galactic_structure or (
+                getattr(lngalprior, "func", None) is logp_galactic_structure
+            )
+            if gal_is_default:
+                if dlabels is not None and dlabels.dtype.names is None:
+                    raise ValueError(
+                        "`dlabels` must be a structured array for the default "
+                        "Galactic prior, which reads its 'feh' and 'loga' fields."
+                    )
+                names = () if dlabels is None else dlabels.dtype.names
+                # Per-model float labels for the table and for the draws,
+                # whose prior computes each model's label terms once.
+                label_arrays = {
+                    name: dlabels[name].astype(np.float64, copy=False)
+                    for name in ("feh", "loga")
+                    if name in names
+                }
+                for name, x in label_arrays.items():
+                    if not np.all(np.isfinite(x)):
+                        raise ValueError(
+                            f"`dlabels` field '{name}' must be finite for the "
+                            "default Galactic prior."
+                        )
+        apply_dust = apply_av_prior and lndustprior is not None
+        if apply_dust:
+            if isinstance(dustfile, (str, os.PathLike)):
+                from ..dust import Bayestar
 
-        # Add the parallax to the weight that selects the models, but not to
-        # the MC weights, which apply the exact parallax likelihood below.
-        lnprob_sel = lnprob_base.copy()
+                dustfile = Bayestar(dustfile=dustfile)
+            # The built-in prior, bare or a partial that leaves avlim free,
+            # normalizes over the fitted A(V) support; custom priors keep the
+            # documented 4-argument signature.
+            builtin = _is_logp_extinction(lndustprior) and "avlim" not in getattr(
+                lndustprior, "keywords", {}
+            )
+            dust_kw = {"avlim": avlim} if builtin else {}
+
+        # The weight of each model before the distance priors, with the
+        # Laplace volume of its likelihood.
+        eta_hat, eta_err, half_logdet = _eta_gaussians(scales, icovs_sar)
+        lnprob_base = lnlike + lnprior + half_logdet
+
+        # The selection weight adds the priors that the MC step averages, at
+        # the model's best fit (#307). Without them the model prior, which
+        # favours near dwarfs, drops distant giants that the Galactic volume
+        # favours.
+        eta_fit = np.clip(eta_hat, *np.log(_DIST_LIM))
+        lnprob_sel = lnprob_base + eta_fit
+        if apply_dust:
+            lnprob_sel += lndustprior(
+                np.clip(avs, avlim[0], avlim[1]),
+                dustfile,
+                coord,
+                distance=np.exp(eta_fit),
+                **dust_kw,
+            )
         if _has_parallax(parallax, parallax_err):
             # The parallax likelihood averaged over the model's Gaussian in
-            # ln(d) (#297). Its width equals that of the MC step below unless
-            # _inverse3 regularizes the matrix or precision_shrinkage > 0. A
-            # model that this gate drops cannot come back.
-            lnprob_sel += _parallax_gate(scales, icovs_sar, parallax, parallax_err)
+            # ln(d) (#297).
+            lnprob_sel += _lnp_parallax_gate(
+                eta_hat, eta_err, float(parallax), float(parallax_err)
+            )
+        # A prior that returns NaN or inf for some model gives it no weight.
+        lnprob_sel[~np.isfinite(lnprob_sel)] = LOG_ZERO
+        if coord is not None:
+            if gal_is_default:
+                # A table along the sightline, spanning the models within
+                # e^-60 of the best weight so far.
+                span = lnprob_sel >= np.max(lnprob_sel) - 60.0
+                lnprob_sel += _tabulated_galactic_prior(
+                    lngalprior, eta_fit, coord, label_arrays, span
+                )
+            else:
+                lnprob_sel += lngalprior(np.exp(eta_fit), coord, labels=dlabels)
+            lnprob_sel[~np.isfinite(lnprob_sel)] = LOG_ZERO
 
-        # Select models above threshold (using parallax-informed weights)
-        if wt_thresh is not None:
-            sel = np.where(lnprob_sel > np.max(lnprob_sel) + np.log(wt_thresh))[0]
-        elif cdf_thresh is not None:
-            idx_sort = np.argsort(lnprob_sel)[::-1]
-            cdf = np.cumsum(np.exp(lnprob_sel[idx_sort] - np.max(lnprob_sel)))
-            cdf /= cdf[-1]
-            Nsel = np.searchsorted(cdf, 1.0 - cdf_thresh) + 1
-            sel = idx_sort[:Nsel]
-        else:
-            sel = np.arange(Nmodels)
-
+        # Keep max_models models by systematic sampling with probability
+        # proportional to their selection weight (Horvitz-Thompson), and
+        # divide their weights by that probability: the evidence and the
+        # draws stay unbiased for any selection weight that is nonzero where
+        # the posterior is. A model whose priors are zero at its best fit
+        # therefore has no chance of being kept, unless max_models is None,
+        # which keeps every model of finite volume.
+        w = np.exp(lnprob_sel - np.max(lnprob_sel))
+        sel = np.flatnonzero(
+            w > 0 if max_models is not None else lnprob_base > LOG_ZERO / 2
+        )
+        if wt_thresh is not None or cdf_thresh is not None:
+            warnings.warn(
+                "`wt_thresh` and `cdf_thresh` are deprecated and will be "
+                "removed, because a cut drops posterior weight that the "
+                "max_models sampling keeps (#307).",
+                FutureWarning,
+                stacklevel=2,
+            )
+            if wt_thresh is not None:
+                sel = sel[w[sel] > wt_thresh]
+            else:
+                sel = sel[np.argsort(w[sel])[::-1]]
+                cdf = np.cumsum(w[sel])
+                sel = sel[: np.searchsorted(cdf / cdf[-1], 1.0 - cdf_thresh) + 1]
+        ln_incl = np.zeros(len(sel))
+        if max_models is not None and len(sel) > max_models:
+            pi = _inclusion_probabilities(w[sel], max_models)
+            edges = np.concatenate(([0.0], np.cumsum(pi))) - rstate.uniform()
+            kept = np.diff(np.floor(edges)) > 0
+            sel, ln_incl = sel[kept], np.log(pi[kept])
         Nsel = len(sel)
-
-        # Above max_models, keep models by systematic sampling with
-        # probability proportional to their selection weight
-        # (Horvitz-Thompson). Models of zero weight are dropped first.
-        ln_incl = np.zeros(Nsel)
-        if max_models is not None and Nsel > max_models:
-            lnprob_selected = lnprob_sel[sel]
-            w = np.exp(lnprob_selected - lnprob_selected.max())
-            sel, w = sel[w > 0], w[w > 0]
-            ln_incl = np.zeros(len(sel))
-            if len(sel) > max_models:
-                pi = _inclusion_probabilities(w, max_models)
-                edges = np.concatenate(([0.0], np.cumsum(pi))) - rstate.uniform()
-                kept = np.diff(np.floor(edges)) > 0
-                sel, ln_incl = sel[kept], np.log(pi[kept])
-            Nsel = len(sel)
 
         # Select precision matrices for the chosen models.
         icovs_selected = icovs_sar[sel]  # Shape: (Nsel, 3, 3)
@@ -1645,8 +2057,7 @@ class BruteForce:
         cov_lnd = _inverse3(icov_lnd, regularize=True)
 
         # Prepare means in (ln d, Av, Rv) space
-        eta_sel = -0.5 * np.log(s_sel)  # ln(d) = -0.5*ln(s)
-        means = np.column_stack([eta_sel, avs[sel], rvs[sel]])  # Shape: (Nsel, 3)
+        means = np.column_stack([eta_hat[sel], avs[sel], rvs[sel]])  # (Nsel, 3)
 
         # BATCH SAMPLING in (ln d, Av, Rv) space.
         # Antithetic pairs (z, -z) reduce the variance of the MC prior integral
@@ -1677,7 +2088,7 @@ class BruteForce:
         # clamped to MIN_SCALE gives ln(d) draws that overflow to inf here.
         with np.errstate(over="ignore"):
             dist_raw = np.exp(eta_samples)
-        dist_mc = np.clip(dist_raw, 0.001, 1e6)
+        dist_mc = np.clip(dist_raw, *_DIST_LIM)
         outside = dist_mc != dist_raw
         a_clip = np.clip(a_mc, avlim[0], avlim[1])
         outside |= a_clip != a_mc
@@ -1685,7 +2096,7 @@ class BruteForce:
         outside |= r_clip != r_mc
         a_mc, r_mc = a_clip, r_clip
 
-        # Initialize log-posterior from base (without parallax scale approx).
+        # Each draw starts from the model's weight before the distance priors.
         # The exact parallax likelihood is added below via logp_parallax.
         lnp_mc = np.tile(lnprob_base[sel], (Nmc, 1))  # Shape: (Nmc, Nsel)
 
@@ -1694,87 +2105,31 @@ class BruteForce:
         # the prior becomes pi_eta(eta) = pi_d(d) * |dd/d(eta)| = pi_d(d) * d.
         # Since logp_galactic_structure already includes the d^2 volume element,
         # the net Jacobian is just d (not d^3 as it would be in scale-space).
-        lnp_mc += np.log(dist_mc + 1e-300)
+        ln_dist = np.log(dist_mc + 1e-300)
+        lnp_mc += ln_dist
 
-        # Prior evaluations - coordinate is fixed, so we can still optimize
+        # Galactic prior at every (draw, model) pair. dist_mc has shape
+        # (Nmc, Nsel); the labels of a model are the same for its draws.
         if coord is not None:
-            if lngalprior is None:
-                lngalprior = partial(
-                    logp_galactic_structure, R_solar=R_solar, Z_solar=Z_solar
+            if gal_is_default:
+                per_model = {name: x[sel] for name, x in label_arrays.items()}
+                lnp_mc += _galactic_prior_at_draws(
+                    lngalprior, dist_mc, ln_dist, coord, per_model
                 )
-
-            # Galactic prior evaluation (FULLY VECTORIZED).
-            # dist_mc has shape (Nmc, Nsel); we evaluate the prior for every
-            # (MC sample, model) pair. The labels (feh/loga) repeat across the
-            # Nmc samples of a given model, so they must be broadcast to match
-            # dist_mc.ravel() (row-major: [model0..modelN]*Nmc).
-            dist_flat = dist_mc.ravel()
-
-            # Detect the default galactic-structure prior (bare or partial). For
-            # it we pass the per-point feh/loga as plain float64 arrays, which
-            # is bitwise-identical to passing a structured `labels` array while
-            # avoiding a structured-dtype np.tile (~100x slower than a float64
-            # tile, ~200 ms at Nsel=50000). Casting before the
-            # tile spares the prior a second full-size copy.
-            gal_is_default = lngalprior is logp_galactic_structure or (
-                getattr(lngalprior, "func", None) is logp_galactic_structure
-            )
-
-            if dlabels is None:
-                # No labels - evaluate once for all distances
-                lnp_gal_flat = lngalprior(dist_flat, coord, labels=None)
-            elif gal_is_default:
-                if dlabels.dtype.names is None:
-                    raise ValueError(
-                        "`dlabels` must be a structured array for the default "
-                        "Galactic prior, which reads its 'feh' and 'loga' fields."
-                    )
-                tiled = {
-                    name: np.tile(
-                        dlabels[name][sel].astype(np.float64, copy=False), Nmc
-                    )
-                    for name in ("feh", "loga")
-                    if name in dlabels.dtype.names
-                }
-                lnp_gal_flat = lngalprior(dist_flat, coord, **tiled)
             else:
-                # Custom prior: tile the full structured label array to match
-                # the flattened distances.
-                labels_flat = np.tile(dlabels[sel], Nmc)
-                lnp_gal_flat = lngalprior(dist_flat, coord, labels=labels_flat)
+                # Custom prior: the structured labels tiled to match the
+                # flattened distances.
+                labels_flat = None if dlabels is None else np.tile(dlabels[sel], Nmc)
+                lnp_mc += lngalprior(
+                    dist_mc.ravel(), coord, labels=labels_flat
+                ).reshape(Nmc, Nsel)
 
-            # Reshape back to (Nmc, Nsel)
-            lnp_gal_reshaped = lnp_gal_flat.reshape(Nmc, Nsel)
-            lnp_mc += lnp_gal_reshaped
-
-        if dustfile is not None and apply_av_prior:
-            # Load dust map from file path (str or os.PathLike) if needed
-            if isinstance(dustfile, (str, os.PathLike)):
-                from ..dust import Bayestar
-
-                dustfile = Bayestar(dustfile=dustfile)
-
-            if lndustprior is None:
-                lndustprior = logp_extinction
-
-            # Dust prior evaluation (VECTORIZED)
-            # For 3D dust maps, pass distances so the prior can interpolate
-            # the extinction profile to each star's distance
-            av_flat = a_mc.ravel()  # Shape: (Nmc * Nsel,)
-            dist_flat = dist_mc.ravel()  # Shape: (Nmc * Nsel,)
-            # The built-in prior, bare or a partial that leaves avlim free,
-            # normalizes over the fitted A(V) support; custom priors keep the
-            # documented 4-argument signature.
-            builtin = lndustprior is logp_extinction or (
-                getattr(lndustprior, "func", None) is logp_extinction
-                and "avlim" not in lndustprior.keywords
-            )
-            dust_kw = {"avlim": avlim} if builtin else {}
-            lnp_dust_flat = lndustprior(
-                av_flat, dustfile, coord, distance=dist_flat, **dust_kw
-            )
-            lnp_dust_reshaped = lnp_dust_flat.reshape(Nmc, Nsel)  # Shape: (Nmc, Nsel)
-            lnp_mc += lnp_dust_reshaped
+        if apply_dust:
+            # For 3D dust maps, the prior interpolates the extinction profile
+            # to each draw's distance.
+            lnp_mc += lndustprior(
+                a_mc.ravel(), dustfile, coord, distance=dist_mc.ravel(), **dust_kw
+            ).reshape(Nmc, Nsel)
 
         # Parallax prior (FULLY VECTORIZED)
         if parallax is not None and parallax_err is not None:
@@ -1784,33 +2139,9 @@ class BruteForce:
 
         lnp_mc[outside] = LOG_ZERO
 
-        # Compute integrated posterior (VECTORIZED)
-        lnp = logsumexp(lnp_mc, axis=0) - np.log(Nmc)
-
-        # Safety check - replace non-finite values with log(0) proxy
-        lnp_mask = np.where(~np.isfinite(lnp))[0]
-        if len(lnp_mask) > 0:
-            lnp[lnp_mask] = LOG_ZERO
-
-        # Compute effective sample size (ESS) for each selected model's
-        # MC samples. ESS = 1 / sum(w_i^2) where w_i are normalized weights.
-        # VECTORIZED across all Nsel models.
-        #
-        # Note: the MC draws are generated in antithetic pairs (see the
-        # `antithetic=True` sampling call above), so the per-sample weights are
-        # not strictly independent. This formula therefore measures WEIGHT
-        # CONCENTRATION (proposal/target mismatch) rather than a literal count of
-        # independent samples, and can read up to ~2x optimistic for well-mixed
-        # models. It remains monotone and useful as a mismatch diagnostic
-        # (degenerate weights -> low value), which is how brutus uses it.
-        lw_max = np.max(lnp_mc, axis=0, keepdims=True)  # (1, Nsel)
-        w = np.exp(lnp_mc - lw_max)  # (Nmc, Nsel)
-        w_sum = w.sum(axis=0, keepdims=True)  # (1, Nsel)
-        w_normed = w / np.maximum(w_sum, 1e-300)  # (Nmc, Nsel)
-        mc_ess = 1.0 / np.sum(w_normed**2, axis=0)  # (Nsel,)
-        # A model with no draw of nonzero weight (lw_max = LOG_ZERO) gets 0;
-        # its weights above would be spuriously uniform.
-        mc_ess = np.where(lw_max.ravel() > LOG_ZERO, mc_ess, 0.0)
+        # The draws come in antithetic pairs, so mc_ess measures weight
+        # concentration rather than a count of independent draws.
+        lnp, mc_ess = _mc_summary(lnp_mc)
 
         if return_precision:
             matrices = icovs_selected
@@ -1844,8 +2175,8 @@ class BruteForce:
         rvlim=RVLIM,
         rv_gauss=(3.32, 0.18),
         lnprior=None,
-        wt_thresh=1e-3,
-        cdf_thresh=2e-3,
+        wt_thresh=None,
+        cdf_thresh=None,
         Ndraws=250,
         apply_agewt=True,
         apply_grad=True,
@@ -1863,11 +2194,22 @@ class BruteForce:
         save_dar_draws=True,
         running_io=True,
         mem_lim=8000.0,
-        max_models=50000,
+        max_models=5000,
         precision_shrinkage=0.0,
         verbose=True,
-        R_solar=8.2,
-        Z_solar=0.025,
+        R_solar=R_SOLAR,
+        Z_solar=Z_SOLAR,
+        pmra=None,
+        pmdec=None,
+        pmra_error=None,
+        pmdec_error=None,
+        pmra_pmdec_corr=None,
+        radial_velocity=None,
+        radial_velocity_error=None,
+        apply_pm_prior=True,
+        pm_outlier=PM_OUTLIER,
+        pm_floor=0.0,
+        save_motion_draws=False,
     ):
         """
         Fit all input models to the input data to compute log-posteriors.
@@ -1916,9 +2258,9 @@ class BruteForce:
             (mean, std) for a Gaussian prior on A(V) applied during the
             per-model likelihood optimization. Default is None, which maps
             to the essentially-flat `(0.0, 1e6)`. Note this is applied in
-            *addition* to any dust-map prior from ``dustfile`` (they are
-            not exclusive), so passing an informative ``av_gauss`` together
-            with ``dustfile`` counts the A(V) constraint twice.
+            *addition* to any A(V) prior from ``lndustprior`` or ``dustfile``
+            (they are not exclusive), so passing an informative ``av_gauss``
+            together with either counts the A(V) constraint twice.
 
         rvlim : tuple, optional
             (min, max) bounds on R(V). Default is `RVLIM`, (1, 8).
@@ -1932,13 +2274,9 @@ class BruteForce:
             prior on initial mass (for MIST models) or PS1 luminosity function
             prior (for Bayestar models).
 
-        wt_thresh : float, optional
-            Threshold `wt_thresh * max(weight)` for model selection.
-            Default is 1e-3.
-
-        cdf_thresh : float, optional
-            CDF threshold for model selection (used if wt_thresh is None).
-            Default is 2e-3.
+        wt_thresh, cdf_thresh : float or None, optional
+            Deprecated hard cuts on the selection weight; see `logpost_grid`.
+            Default is None for both, which makes no cut.
 
         Ndraws : int, optional
             Number of posterior draws to save per object. Default is 250.
@@ -1953,20 +2291,26 @@ class BruteForce:
 
         lngalprior : callable, optional
             Galactic structure prior function with signature
-            ``f(dists, coord, labels=None)``. If not provided, uses
-            `~brutus.priors.logp_galactic_structure`. Applied only when
-            ``data_coords`` is given.
+            ``f(dists, coord, labels=None)``. It returns the log-prior per
+            unit distance, including the volume element: a uniform space
+            density is ``2 ln d``, and 0 is flat in distance. If not
+            provided, uses `~brutus.priors.logp_galactic_structure`.
+            Applied only when ``data_coords`` is given.
 
         lndustprior : callable, optional
-            Dust prior function with signature
-            ``f(avs, dustmap, coord, distance=None)``. If not provided
-            and dustfile is given, uses ``logp_extinction``.
+            A(V) prior function with signature
+            ``f(avs, dustmap, coord, distance=None)``, applied when it or
+            ``dustfile`` is given. Without ``dustfile``, ``dustmap`` is
+            None, and without ``data_coords``, ``coord`` is None. If not
+            provided and dustfile is given, uses ``logp_extinction``, which
+            needs ``dustfile``.
 
         dustfile : str, path-like, or `~brutus.dust.Bayestar`, optional
             3D dust map for extinction priors. Can be a file path (string
             or `os.PathLike`, e.g. `pathlib.Path`) to a Bayestar HDF5
             file, which will be loaded automatically, or a pre-loaded
-            ``Bayestar`` object.
+            ``Bayestar`` object. Loading the map takes seconds, so pass a
+            loaded map to fit several batches of objects.
 
         apply_dlabels : bool, optional
             Whether to pass model labels to the Galactic prior. With False,
@@ -1975,6 +2319,35 @@ class BruteForce:
         data_coords : numpy.ndarray of shape (Ndata, 2), optional
             Galactic (l, b) coordinates for each object in degrees.
             Required if using default Galactic prior.
+
+        pmra, pmdec, pmra_error, pmdec_error, pmra_pmdec_corr : numpy.ndarray of shape (Ndata,), optional
+            Gaia proper motions in mas/yr (``pmra`` is mu_alpha cos(delta)),
+            their errors and correlation, as in the Gaia catalogue. All
+            five go together and need ``data_coords``. Each is rotated to
+            Galactic components with
+            `~brutus.utils.pm_equatorial_to_galactic` and enters the
+            Galactic prior's kinematic term. An object with a NaN entry is
+            fitted without it.
+
+        radial_velocity, radial_velocity_error : numpy.ndarray of shape (Ndata,), optional
+            Heliocentric radial velocities and errors in km/s, which add to
+            the proper motions. NaN entries are left out.
+
+        apply_pm_prior : bool, optional
+            Whether to apply the kinematic term when proper motions are
+            given. Default is True. With False, or without proper motions,
+            the fit is the same as without them, at the same cost.
+
+        pm_outlier, pm_floor : float, optional
+            The outlier share and the proper-motion error floor in mas/yr of
+            `~brutus.priors.logp_galactic_structure`. Defaults are 0.01 and 0.
+
+        save_motion_draws : bool, optional
+            Whether to save ``samps_motion``, a posterior predictive draw of
+            ``(mu_l*, mu_b, v_r)`` for each draw, from
+            `~brutus.priors.sample_motions` with the observed motion of the
+            kinematic term. It needs `data_coords`, the default Galactic
+            prior and ``save_dar_draws=True``. Default is False.
 
         logl_dim_prior : bool, optional
             Whether to apply dimensional correction to log-likelihood.
@@ -1995,8 +2368,9 @@ class BruteForce:
         merr_max : float, optional
             Maximum allowed magnitude error. Default is 0.25.
 
-        rstate : numpy.random.RandomState, optional
-            Random state for reproducibility.
+        rstate : `~numpy.random.Generator` or `~numpy.random.RandomState`, optional
+            Random state for reproducibility. Default is a new
+            `~numpy.random.default_rng`.
 
         save_dar_draws : bool, optional
             Whether to save distance, A(V), and R(V) draws. Default is True.
@@ -2012,13 +2386,13 @@ class BruteForce:
         verbose : bool, optional
             Whether to print progress to stderr. Default is True.
 
-        max_models : int, optional
-            When more models than this are selected for an object, about
-            `max_models` of them are kept at random, each with a probability
-            proportional to its weight (at most 1), to bound memory and
-            runtime. The evidence and the posterior draws divide each kept
-            model's weight by that probability, so they stay unbiased. None
-            keeps every selected model. Default is 50000.
+        max_models : int or None, optional
+            Number of models kept per object for the Monte Carlo step, at
+            random, each with a probability proportional to its selection
+            weight (at most 1); see `logpost_grid`. The evidence and the
+            posterior draws divide each kept model's weight by that
+            probability, so they stay unbiased. None keeps every model whose
+            fit has a finite volume. Default is 5000.
 
         precision_shrinkage : float, optional
             Fractional shrinkage applied to the off-diagonal terms of the 3x3
@@ -2028,11 +2402,12 @@ class BruteForce:
 
         R_solar : float, optional
             Solar galactocentric radius in kpc, used by the Galactic structure
-            prior. Default is 8.2.
+            prior. Default is ``R_SOLAR``, 8.275 (GRAVITY Collaboration 2021).
 
         Z_solar : float, optional
             Solar height above the Galactic midplane in kpc, used by the
-            Galactic structure prior. Default is 0.025.
+            Galactic structure prior.
+            Default is ``Z_SOLAR``, 0.0208 (Bennett & Bovy 2019).
 
         Returns
         -------
@@ -2047,9 +2422,14 @@ class BruteForce:
             or ``lnprior`` disagree, if
             only one of ``parallax`` and ``parallax_err`` is given, if
             ``logl_initthresh`` is not in (0, 1), if ``ltol`` is not positive,
-            if ``max_models`` is neither None nor a positive integer, or if
-            ``apply_agewt`` is True and the grid has no ``agewt`` label. These
-            checks run before the output file is created.
+            if ``max_models`` is neither None nor a positive integer, if
+            ``lndustprior`` is `~brutus.priors.logp_extinction` without
+            ``dustfile``, if ``apply_agewt`` is True and the grid has no
+            ``agewt`` label, if the proper-motion columns are incomplete or a
+            row without NaN has a non-positive error or a correlation outside
+            (-1, 1), if ``pm_outlier`` or ``pm_floor`` is out of range, or if
+            proper motions or ``save_motion_draws`` lack what they need (see
+            above). These checks run before the output file is created.
 
         Notes
         -----
@@ -2083,6 +2463,10 @@ class BruteForce:
         - ``samps_red``: A(V) draws (Ndata, Ndraws)
         - ``samps_dred``: R(V) draws (Ndata, Ndraws)
         - ``samps_logp``: Log-weights for draws (Ndata, Ndraws)
+
+        If save_motion_draws=True, also includes ``samps_motion``, the
+        predicted ``(mu_l*, mu_b)`` in mas/yr and ``v_r`` in km/s of each
+        draw, without measurement error (Ndata, Ndraws, 3).
 
         Examples
         --------
@@ -2130,6 +2514,41 @@ class BruteForce:
         _check_threshold("logl_initthresh", logl_initthresh)
         _check_positive("ltol", ltol)
         _check_max_models(max_models)
+        has_labels = apply_dlabels and {"feh", "loga"} <= set(
+            self.models_labels.dtype.names
+        )
+        if save_motion_draws and not (
+            save_dar_draws
+            and lngalprior is None
+            and data_coords is not None
+            and has_labels
+        ):
+            raise ValueError(
+                "save_motion_draws=True needs data_coords, the default "
+                "Galactic prior (lngalprior=None), save_dar_draws=True, and "
+                "apply_dlabels=True with 'feh' and 'loga' in the grid."
+            )
+        motions = _motions(
+            Ndata,
+            data_coords,
+            pmra,
+            pmdec,
+            pmra_error,
+            pmdec_error,
+            pmra_pmdec_corr,
+            radial_velocity,
+            radial_velocity_error,
+            apply_pm_prior,
+            pm_outlier,
+            pm_floor,
+            lngalprior,
+        )
+        if lngalprior is None and not has_labels and any(motions):
+            raise ValueError(
+                "proper motions need apply_dlabels=True and 'feh' and 'loga' in "
+                "the grid, because the default Galactic prior's kinematic term "
+                "depends on both labels"
+            )
 
         # Pre-process data and initialize priors
         setup_results = self._setup(
@@ -2161,14 +2580,17 @@ class BruteForce:
 
         # Load dust map from file path (str or os.PathLike) if needed
         # (once for all objects), after _setup has checked the inputs
-        if dustfile is not None and isinstance(dustfile, (str, os.PathLike)):
-            from ..dust import Bayestar
+        from ..dust import Bayestar
 
+        if dustfile is not None and isinstance(dustfile, (str, os.PathLike)):
             dustfile = Bayestar(dustfile=dustfile)
+        # The default dust prior reads one sightline of a Bayestar map per
+        # object; one query per _DUST_CHUNK objects replaces a query per object.
+        batched = isinstance(dustfile, Bayestar) and lndustprior is None
 
         # Initialize random state
         if rstate is None:
-            rstate = np.random.RandomState()
+            rstate = np.random.default_rng()
 
         # Ensure save_file has .h5 extension
         if not save_file.endswith(".h5"):
@@ -2194,6 +2616,9 @@ class BruteForce:
             for name in ["samps_dist", "samps_red", "samps_dred", "samps_logp"]:
                 fields[name] = ((Ndraws,), "float32", 1.0)
         fields["mc_ess"] = ((Ndraws,), "float32", 0.0)
+        fit_fields = list(fields)
+        if save_motion_draws:
+            fields["samps_motion"] = ((Ndraws, 3), "float32", np.nan)
 
         # An object with no valid bands is written as not fitted.
         unfitted = dict.fromkeys(fields, np.nan) | {"model_idx": -99, "obj_Nbands": 0}
@@ -2223,6 +2648,11 @@ class BruteForce:
                 sys.stderr.flush()
 
             for i in range(Ndata):
+                k = i % _DUST_CHUNK
+                if batched and k == 0:
+                    profiles = dustfile.query(
+                        np.asarray(data_coords[i : i + _DUST_CHUNK], dtype=float)
+                    )
                 if nbands_valid[i] == 0:
                     row = unfitted
                 else:
@@ -2239,12 +2669,20 @@ class BruteForce:
                         rvlim=rvlim,
                         rv_gauss=rv_gauss,
                         lnprior=lnprior_proc,
-                        wt_thresh=wt_thresh,
-                        cdf_thresh=cdf_thresh,
                         Ndraws=Ndraws,
-                        lngalprior=lngalprior_proc,
+                        # The kinematic term takes each object's motion as
+                        # keywords of the Galactic prior.
+                        lngalprior=(
+                            lngalprior_proc
+                            if motions[i] is None
+                            else partial(lngalprior_proc, **motions[i])
+                        ),
                         lndustprior=lndustprior_proc,
-                        dustfile=dustfile,
+                        dustfile=(
+                            _Sightline(profiles[0], profiles[1][k], profiles[2][k])
+                            if batched
+                            else dustfile
+                        ),
                         dlabels=dlabels,
                         logl_dim_prior=logl_dim_prior,
                         ltol=ltol,
@@ -2252,12 +2690,14 @@ class BruteForce:
                         mem_lim=mem_lim,
                         precision_shrinkage=precision_shrinkage,
                         max_models=max_models,
+                        wt_thresh=wt_thresh,
+                        cdf_thresh=cdf_thresh,
                         rstate=rstate,
                         return_distreds=save_dar_draws,
                         R_solar=R_solar,
                         Z_solar=Z_solar,
                     )
-                    row = dict(zip(fields, results, strict=True))
+                    row = dict(zip(fit_fields, results, strict=True))
 
                 for name, value in row.items():
                     store[name][i] = value
@@ -2292,6 +2732,22 @@ class BruteForce:
                 )
                 sys.stderr.flush()
 
+            # Drawn after every fit, so the fitted fields do not depend on
+            # save_motion_draws.
+            if save_motion_draws:
+                for i in np.flatnonzero(nbands_valid):
+                    idx = store["model_idx"][i]
+                    store["samps_motion"][i] = sample_motions(
+                        store["samps_dist"][i],
+                        data_coords[i],
+                        self.models_labels["feh"][idx],
+                        self.models_labels["loga"][idx],
+                        rstate,
+                        R_solar=R_solar,
+                        Z_solar=Z_solar,
+                        **(motions[i] or {}),
+                    )
+
             # Dump results to disk if using batch mode
             if not running_io:
                 for name, arr in store.items():
@@ -2322,8 +2778,8 @@ class BruteForce:
         rvlim=RVLIM,
         rv_gauss=(3.32, 0.18),
         lnprior=None,
-        wt_thresh=1e-3,
-        cdf_thresh=2e-3,
+        wt_thresh=None,
+        cdf_thresh=None,
         Ndraws=250,
         lngalprior=None,
         lndustprior=None,
@@ -2333,12 +2789,12 @@ class BruteForce:
         ltol=1e-3,
         logl_initthresh=1e-6,
         mem_lim=8000.0,
-        max_models=50000,
+        max_models=5000,
         precision_shrinkage=0.0,
         rstate=None,
         return_distreds=True,
-        R_solar=8.2,
-        Z_solar=0.025,
+        R_solar=R_SOLAR,
+        Z_solar=Z_SOLAR,
     ):
         """
         Perform internal fitting for a single object.
@@ -2369,16 +2825,12 @@ class BruteForce:
             (mean, std) for Gaussian prior on R(V).
         lnprior : numpy.ndarray, optional
             Log-prior for each model.
-        wt_thresh : float, optional
-            Threshold for weight-based model selection.
-        cdf_thresh : float, optional
-            CDF threshold for model selection.
         Ndraws : int, optional
             Number of posterior draws to return.
         lngalprior : callable, optional
-            Galactic structure prior function.
+            Galactic structure prior function, as in `logpost_grid`.
         lndustprior : callable, optional
-            Dust prior function.
+            A(V) prior function, as in `logpost_grid`.
         dustfile : str, path-like, or `~brutus.dust.Bayestar`, optional
             Path to a 3D dust map file (loaded automatically), or a
             pre-loaded ``Bayestar`` object.
@@ -2393,8 +2845,9 @@ class BruteForce:
             ``init_thresh`` of `loglike_grid`.
         mem_lim : float, optional
             Memory limit in MB.
-        rstate : numpy.random.RandomState, optional
-            Random state for reproducibility.
+        rstate : `~numpy.random.Generator` or `~numpy.random.RandomState`, optional
+            Random state for reproducibility. Default is a new
+            `~numpy.random.default_rng`.
         return_distreds : bool, optional
             Whether to return distance/reddening draws. Default is True.
 
@@ -2426,7 +2879,7 @@ class BruteForce:
         """
         # Initialize random state
         if rstate is None:
-            rstate = np.random.RandomState()
+            rstate = np.random.default_rng()
 
         # Compute grid likelihoods
         loglike_results = self.loglike_grid(
@@ -2458,8 +2911,6 @@ class BruteForce:
             coord=coord,
             Nmc_prior=Nmc_prior,
             lnprior=lnprior,
-            wt_thresh=wt_thresh,
-            cdf_thresh=cdf_thresh,
             lngalprior=lngalprior,
             lndustprior=lndustprior,
             dustfile=dustfile,
@@ -2469,6 +2920,8 @@ class BruteForce:
             mem_lim=mem_lim,
             precision_shrinkage=precision_shrinkage,
             max_models=max_models,
+            wt_thresh=wt_thresh,
+            cdf_thresh=cdf_thresh,
             rstate=rstate,
             R_solar=R_solar,
             Z_solar=Z_solar,

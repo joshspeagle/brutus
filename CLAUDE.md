@@ -11,7 +11,7 @@ This file is the canonical repository instruction set shared across Claude Code 
 - `tutorials/`: Jupyter notebooks numbered 00 to 11. They need downloaded model data. The docs build copies them into `docs/source/tutorials/`.
 - `docs/source/`: the documentation site (Sphinx with the Furo theme, Markdown pages through MyST). `_static/brutus.css` holds the brutus style; the theme colours are in `conf.py`. Read the Docs builds it at https://brutus.readthedocs.io, the address that `README.md` and `pyproject.toml` give; the docs workflow also deploys it to GitHub Pages from `main`.
 - `bench/`: manual benchmark and verification tools for the `BruteForce` hot path, described in `bench/README.md`. Not packaged, not run in CI.
-- `.github/scripts/fetch_test_data.py`: downloads the data the CI tests use.
+- `.github/scripts/fetch_test_data.py`: downloads the data the CI tests use. `.github/scripts/make_bv24_tables.py` rebuilds the Binney & Vasiliev (2024) potential tables in `src/brutus/priors/bv24_tables.npz`; it needs AGAMA, a development tool only.
 - `CHANGELOG.md`: user-visible changes, in Keep a Changelog format.
 
 ## Commands
@@ -93,7 +93,7 @@ This file is the canonical repository instruction set shared across Claude Code 
 - Units: fluxes are maggies, `10**(-0.4 * mag)` in the survey's native system, with no zero-point offset. Model magnitudes are defined at 1 kpc, so `m = m_model + 5 * log10(d_kpc)` and `scale = 1 / d_kpc**2`. Parallaxes are in mas (multiply arcseconds by 1000), and $A(V)$ is in mag. `brutus` takes linear fluxes rather than magnitudes (`brutus.utils.inv_magnitude` converts).
 - Fitting evaluates every grid model. For each model it finds the best `(scale, A(V), R(V))` by Gauss-Newton iteration and forms their $3 \times 3$ Fisher matrix. Monte Carlo draws from that Gaussian in log-distance `eta = ln(d)` with the Jacobian `exp(eta)` in the weights integrate the priors, because sampling directly in `scale` biases distances by $1 / d^3$.
 - The prior draws are antithetic pairs `(z, -z)` (`sample_multivariate_normal(..., antithetic=True)`). The saved `mc_ess` (`1 / sum(w**2)`) therefore measures weight concentration rather than a count of independent draws.
-- In `_get_sed_mle`, `drvecs = (1 / A(V)) * df/dR(V)`. The Fisher terms that involve $R(V)$, including the $A(V)$-$R(V)$ cross-term, multiply by `av` to recover `df/dR(V)` because omitting `av` leaves the precision matrix singular when $A(V)$ varies.
+- In `_flux_one`, `drvec = (1 / A(V)) * df/dR(V)`. The Fisher terms that involve $R(V)$, including the $A(V)$-$R(V)$ cross-term, multiply by `av` to recover `df/dR(V)` because omitting `av` leaves the precision matrix singular when $A(V)$ varies.
 - The $3 \times 3$ precision matrix is inverted with diagonal preconditioning by scaling to a correlation matrix, inverting, and scaling back.
 - Clamp the scale to `MIN_SCALE = 1e-20` (`analysis/individual.py`) before `log(scale)`. Use `LOG_ZERO = -1e300` for a zero probability rather than `-np.inf`.
 - A fit needs at least 4 valid bands because each model has 3 free continuous parameters (`scale`, $A(V)$, $R(V)$) and requires at least 1 degree of freedom.
