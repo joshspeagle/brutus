@@ -45,8 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the solar velocity from the Sgr A* proper motion and the projection of
   an ellipsoid to Galactic proper motions and radial velocity.
   `brutus.utils.pm_equatorial_to_galactic` converts Gaia proper motions
-  and their covariance to Galactic coordinates. The fit does not use them
-  yet (#275).
+  and their covariance to Galactic coordinates.
 - **Tutorial 4 is a guide to the Galactic prior.** It draws each
   component edge-on, face-on, along sightlines and across the sky; the
   [Fe/H] and age at each place; how a star's labels move its distance

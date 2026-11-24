@@ -164,11 +164,12 @@ The default prior needs the star's coordinates: pass `data_coords`, an array of 
 
 ## Velocities
 
-{mod}`brutus.priors.kinematic` gives the velocity ellipsoid of the thin disk, thick disk and halo at any position: the mean and covariance of $(v_R, v_\phi, v_z)$. Fits do not use it yet, and the bar has no velocity model.
+{mod}`brutus.priors.kinematic` gives the velocity ellipsoid of each component at any position: the mean and covariance of $(v_R, v_\phi, v_z)$. The kinematic term above uses them.
 
 - **Thin disk.** The radial and vertical dispersions follow the relations of {cite:t}`sharma2021` in age, angular momentum, [Fe/H] and height, fitted at $3 < R < 20$ kpc and held at their edge values outside. The angular-momentum factor of $\sigma_z$ alone is held at the $L_z$ of a circular orbit at 14 kpc, as in the density above. The azimuthal dispersion follows from $\sigma_R$ by the epicyclic ratio.
 - **Thick disk.** The dispersions at the Sun are the high-[α/Fe] values of {cite:t}`anguiano2020`, with the radial profiles of the high-α disk of {cite:t}`binney2024`.
 - **Halo.** The halo is the mixture of {cite:t}`lancaster2019`: an isotropic component and two radial lobes, the debris of Gaia-Enceladus. Its net rotation is a few km/s.
+- **Bulge.** The bar and the spheroid share the axisymmetric bulge disc of {cite:t}`binney2024`, scaled with `R_solar` and `v_circ_solar`.
 
 The mean rotation of each disk solves the radial Jeans equation for its density, so older populations lag the circular speed more. {func}`~brutus.priors.solar_velocity` gives the Sun's velocity from the proper motion of Sgr A* {cite:p}`reid2020` and the solar motion of {cite:t}`schonrich2010`. {func}`~brutus.priors.velocity_to_observables` projects an ellipsoid onto the proper motions $(\mu_{\ell*}, \mu_b)$ in mas/yr and the radial velocity in km/s.
 
