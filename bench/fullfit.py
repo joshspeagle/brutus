@@ -62,7 +62,6 @@ def run(tag, pm=False):
         data_coords=coords,
         Nmc_prior=50,
         Ndraws=250,
-        wt_thresh=1e-3,
         save_dar_draws=True,
         running_io=True,
         verbose=False,

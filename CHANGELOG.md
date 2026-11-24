@@ -92,13 +92,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   200 MB per star; one fused kernel returns each model's chi2, gradient,
   scale and Fisher matrix. `loglike_grid` is 20% faster on the bench cohort
   (271 to 216 ms per star), and results are bitwise identical.
-- **The flux refinement and the parallax gate skip wasted work.** The kept
-  models are refined in flux space in one parallel kernel, without copying
-  their arrays at every step, and the parallax selection gate is computed
-  only for models that an upper bound leaves able to pass the selection.
-  On the bench cohort `loglike_grid` takes 171 instead of 248 ms per star
-  and the gate 596 instead of 1525 ms over 12 stars with parallaxes;
-  results are bitwise identical.
+- **The flux refinement skips wasted work.** The kept models are refined
+  in flux space in one parallel kernel, without copying their arrays at
+  every step. On the bench cohort `loglike_grid` takes 171 instead of
+  248 ms per star; results are bitwise identical.
 - **`fit()` queries a Bayestar dust map once per 4096 objects** with the
   default dust prior, instead of once per object (5-15 ms each). Results
   are bitwise identical.
@@ -271,8 +268,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `q_halo`, and `galactic_prior_summary` reports `halo_density_solar`
   and `f_halo_solar` (#290).
 
+- **Fits keep a random sample of 5,000 models, chosen with the distance
+  priors** *(output-changing)*. `logpost_grid` used to keep the models
+  whose likelihood times model prior was within `wt_thresh` (1e-3) of the
+  best, before the Galactic and dust priors and the distance Jacobian were
+  applied. Toward the bulge, without a parallax, that dropped a median of
+  82% of the posterior weight, mostly distant giants. Each model's
+  selection weight now includes those priors at its best fit; the default
+  Galactic prior is interpolated from a table along the sightline. Then
+  `max_models` (now 5,000, was 50,000) models are kept at random, each
+  with a probability proportional to its selection weight, and the
+  evidence and draws divide by it. Pass `max_models` to set the cost, or
+  `max_models=None` to keep every model (#307).
+
+### Deprecated
+
+- **`wt_thresh` and `cdf_thresh` of `fit` and `logpost_grid`** now
+  default to None, no cut. A value still cuts the selection weight before
+  the `max_models` sampling and raises a `FutureWarning`; a cut drops
+  posterior weight that the sampling keeps. They will be removed (#307).
+
 ### Fixed
 
+- **Model weights include the volume of each model's fit**
+  *(output-changing)*. A model's posterior weight is now its likelihood
+  times `|2 pi Sigma|^(1/2)`, the volume of its Gaussian in (ln d, A(V),
+  R(V)), times the average of the priors over its draws. This is the
+  Laplace approximation of the integral over distance and dust. The factor was
+  missing, so models with less constrained fits weighed too little. In
+  the tutorial 4 mock, it moves 1.7% of the model weight (median). A model
+  whose precision matrix is not positive definite now gets zero weight.
+  Since the precision matrices include the `av_gauss` and `rv_gauss`
+  priors, the `lnl` of `loglike_grid` now adds their normalized
+  log-density at the fit, so the R(V) prior enters the model weights
+  (#331).
 - **A custom A(V) prior no longer needs a dust map** *(output-changing)*.
   `BruteForce.fit` and `logpost_grid` ignored `lndustprior` unless
   `dustfile` was also given. They now apply it whenever it is given, with

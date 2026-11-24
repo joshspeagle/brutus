@@ -69,11 +69,21 @@ from ..priors.extinction import logp_extinction
 from ..priors.galactic import (
     PM_OUTLIER,
     _check_motion_options,
+    _tabulated_galactic_prior,
     logp_galactic_structure,
     sample_motions,
 )
 from ..priors.stellar import logp_imf, logp_ps1_luminosity_function
-from ..utils.math import AVLIM, LOG_ZERO, R_SOLAR, RVLIM, Z_SOLAR, galactic_to_icrs
+from ..utils.math import (
+    AVLIM,
+    LOG_ZERO,
+    R_SOLAR,
+    RVLIM,
+    SINGULAR_DET,
+    SINGULAR_SHIFT,
+    Z_SOLAR,
+    galactic_to_icrs,
+)
 from ..utils.math import inverse3 as _inverse3
 from ..utils.math import pm_equatorial_to_galactic
 from ..utils.photometry import magnitude
@@ -93,6 +103,8 @@ _MAX_DAMPING = 1e6
 
 # Minimum allowed scale factor to prevent division by zero or log(0).
 MIN_SCALE = 1e-20
+#: Support of the distance, in kpc. Draws outside it get zero weight.
+_DIST_LIM = (0.001, 1e6)
 
 
 class _GridLabels:
@@ -692,11 +704,6 @@ _GATE_NODES, _GATE_WEIGHTS = np.polynomial.hermite.hermgauss(5)
 _GATE_LNWEIGHTS = np.log(_GATE_WEIGHTS) + _GATE_NODES**2
 #: Most Gauss-Newton steps of the gate's peak search.
 _GATE_MAX_STEPS = 50
-#: ln of the sum of the gate's ln weights as exponentials, which bounds it.
-_GATE_LNSUM = np.log(np.sum(np.exp(_GATE_LNWEIGHTS)))
-#: Models best without the gate whose gate sets the selection's lower bound.
-_GATE_TOP = 64
-_NO_BASE = np.empty(0)
 
 
 @jit(nopython=True, cache=True)
@@ -707,7 +714,7 @@ def _gate_logf(eta, mu, inv_var_eta, parallax, inv_var_plx):
 
 
 @jit(nopython=True, cache=True, parallel=True)
-def _lnp_parallax_gate(eta, eta_err, parallax, parallax_err, base, floor):
+def _lnp_parallax_gate(eta, eta_err, parallax, parallax_err):
     r"""
     Return, per model, the log of the parallax likelihood averaged over the
     model's Gaussian in log-distance:
@@ -722,37 +729,13 @@ def _lnp_parallax_gate(eta, eta_err, parallax, parallax_err, base, floor):
     :math:`\hat\eta` and from :math:`-\ln \varpi`, and scales them to its
     curvature. For :math:`\sigma_\eta \le 3` it is within 0.6 of the
     exact value; photometric fits give :math:`\sigma_\eta \lesssim 0.03`.
-    Unless ``base`` is empty, a model whose ``base`` plus an upper bound on
-    its gate falls below ``floor`` is skipped and gets -inf. The exact gate
-    is at most the peak of the parallax density, and the quadrature has
-    stayed below it over 25.8 million models of 42 stars, so 1 above it
-    bounds the gate. The quadrature also sums terms exp(g + ln w) with g <= 0
-    over a width sqrt(2 / curv), and curv >= 1/eta_err^2 - parallax^2 /
-    (8 parallax_err^2), the least the curvature of the integrand can be;
-    where that is positive it gives a second bound.
     """
     inv_var_plx = 1.0 / parallax_err**2
     nstart = 2 if parallax > 0 else 1
     eta_plx = -np.log(parallax) if parallax > 0 else 0.0
     lnnorm = np.log(2.0 * np.pi * parallax_err)
     out = np.empty(len(eta))
-    peak_bound = 1.0 - 0.5 * np.log(2.0 * np.pi * parallax_err**2)
-    plx_term = (max(parallax, 0.0) / parallax_err) ** 2 / 8.0
     for i in prange(len(eta)):
-        if len(base):
-            bound = peak_bound
-            curv = 1.0 / eta_err[i] ** 2 - plx_term
-            if curv > 0.0:
-                bound = min(
-                    bound,
-                    _GATE_LNSUM
-                    + 0.5 * np.log(2.0 / curv)
-                    - np.log(eta_err[i])
-                    - lnnorm,
-                )
-            if base[i] + bound < floor:
-                out[i] = -np.inf
-                continue
         mu, inv_var_eta = eta[i], 1.0 / eta_err[i] ** 2
         peak, gpeak = mu, -np.inf
         for k in range(nstart):
@@ -788,61 +771,48 @@ def _lnp_parallax_gate(eta, eta_err, parallax, parallax_err, base, floor):
 
 
 @jit(nopython=True, cache=True, parallel=True)
-def _gate_inputs(scales, icovs_sar):
-    """Return each model's ln(d) and its marginal error from its (scale,
-    A(V), R(V)) fit, for `_lnp_parallax_gate`."""
-    # Use the marginal scale error because distance and extinction both dim
-    # a star, driving the scale-A(V) correlation to 0.95-0.998 for reddened
-    # stars and making the conditional error 3-16x too small. cov[0,0]
-    # follows from the cofactor identity cov[0,0] = (i11*i22 - i12^2) /
-    # det(icov). A degenerate matrix falls back to the conditional error
-    # 1/sqrt(icov[0,0]). When icov[0,0] <= 0 the error is 1e10, and the
-    # model's term is then too small to pass.
-    N = len(scales)
-    eta, eta_err = np.empty(N), np.empty(N)
-    for i in prange(N):
-        i00, i01, i02 = icovs_sar[i, 0, 0], icovs_sar[i, 0, 1], icovs_sar[i, 0, 2]
-        i11, i12, i22 = icovs_sar[i, 1, 1], icovs_sar[i, 1, 2], icovs_sar[i, 2, 2]
-        minor00 = i11 * i22 - i12 * i12
-        det = (
-            i00 * minor00
-            - i01 * (i01 * i22 - i02 * i12)
-            + i02 * (i01 * i12 - i02 * i11)
-        )
-        err = 1e10
-        var00 = minor00 / det if det != 0.0 else np.nan
-        if det > 0 and np.isfinite(var00) and var00 > 0:
-            err = np.sqrt(var00)
-        elif i00 > 0:
-            err = np.sqrt(1.0 / i00)
-        # eta = ln(d) = -0.5 ln(s), so sigma_eta = sigma_s / (2 s). Far nodes
-        # of a degenerate model overflow exp(-eta) to inf, which gives the
-        # right 0.
-        s = max(scales[i], MIN_SCALE)
-        eta[i], eta_err[i] = -0.5 * np.log(s), err / (2.0 * s)
-    return eta, eta_err
+def _eta_gaussians(scales, icovs_sar):
+    """Return the ln(d) mean, marginal ln(d) error and ``0.5 ln|2 pi Sigma|``
+    of each model's Gaussian in (ln d, A(V), R(V)).
 
-
-def _parallax_gate(scales, icovs_sar, parallax, parallax_err, base=None, ln_wt=None):
-    """Return the parallax term of the selection weight of each model.
-
-    It is `_lnp_parallax_gate` with the model's ln(d) mean and marginal
-    error from its (scale, A(V), R(V)) fit. With ``base``, the other terms
-    of the selection weight, and ``ln_wt``, the log of the selection
-    threshold, it is computed only for the models that an upper bound
-    leaves able to pass ``base + gate > max(base + gate) + ln_wt``; the
-    others get -inf, which selects the same models with the same weights.
+    Sigma is the inverse of the (scale, A(V), R(V)) precision mapped to
+    ln(d), regularized as `~brutus.utils.math.inverse3` regularizes the
+    Monte Carlo draws' matrix before inverting it. The last term is the
+    Laplace volume of the model's fit (#331). It is LOG_ZERO where the
+    precision is not positive definite, since the model has no finite
+    volume. The error of such a model is 1.
     """
-    eta, eta_err = _gate_inputs(scales, icovs_sar)
-    args = (float(parallax), float(parallax_err))
-    if base is None or len(base) <= _GATE_TOP:
-        return _lnp_parallax_gate(eta, eta_err, *args, _NO_BASE, 0.0)
-    # The best of the models best without the gate bounds the maximum from
-    # below; no model whose bound falls short of it can pass.
-    top = np.argpartition(-base, _GATE_TOP)[:_GATE_TOP]
-    gate_top = _lnp_parallax_gate(eta[top], eta_err[top], *args, _NO_BASE, 0.0)
-    floor = np.max(base[top] + gate_top) + ln_wt - 1e-6
-    return _lnp_parallax_gate(eta, eta_err, *args, base, floor)
+    N = len(scales)
+    eta, eta_err, half_logdet = np.empty(N), np.empty(N), np.empty(N)
+    for i in prange(N):
+        i00, i11, i22 = icovs_sar[i, 0, 0], icovs_sar[i, 1, 1], icovs_sar[i, 2, 2]
+        log_s = np.log(max(scales[i], MIN_SCALE))
+        eta[i], eta_err[i], half_logdet[i] = -0.5 * log_s, 1.0, LOG_ZERO
+        if not (i00 > 0 and i11 > 0 and i22 > 0):
+            continue
+        c01 = icovs_sar[i, 0, 1] / np.sqrt(i00 * i11)
+        c02 = icovs_sar[i, 0, 2] / np.sqrt(i00 * i22)
+        c12 = icovs_sar[i, 1, 2] / np.sqrt(i11 * i22)
+        # The determinant of the correlation form, with the diagonal shift
+        # of inverse3 where it is singular.
+        cross = 2.0 * c01 * c02 * c12
+        squares = c01**2 + c02**2 + c12**2
+        one = 1.0
+        if abs(1.0 + cross - squares) < SINGULAR_DET:
+            one += SINGULAR_SHIFT
+        det = one**3 + cross - one * squares
+        # Sylvester's criterion.
+        if not (one**2 - c01**2 > 0 and det > 0):
+            continue
+        # eta = ln(d) = -0.5 ln(s), so sigma_eta = sigma_s / (2 s) and
+        # |Sigma_eta| = |Sigma_sar| / (2 s)^2. The marginal scale variance is
+        # cov[0,0] = minor00 / det: distance and extinction both dim a star,
+        # so the conditional error is 3-16x too small for reddened stars.
+        var00 = (one**2 - c12**2) / (det * i00)
+        eta_err[i] = 0.5 * np.sqrt(var00) * np.exp(-log_s)
+        logdet = np.log(i00) + np.log(i11) + np.log(i22) + np.log(det)
+        half_logdet[i] = 1.5 * np.log(2.0 * np.pi) - 0.5 * logdet - np.log(2.0) - log_s
+    return eta, eta_err, half_logdet
 
 
 # The 9 Chebyshev-Lobatto nodes of the Galactic prior across a model's draws.
@@ -1484,8 +1454,9 @@ class BruteForce:
         -------
         lnl : `~numpy.ndarray` of shape `(Nmodels,)`
             Log-likelihood of each model at its fit, with the Gaussian
-            normalization and, if `dim_prior`, the dimensional term. It does
-            not include the parallax.
+            normalization and, if `dim_prior`, the dimensional term, plus the
+            log-density of the `av_gauss` and `rv_gauss` priors at the fit.
+            It does not include the parallax.
         Ndim : int
             Number of valid bands.
         chi2 : `~numpy.ndarray` of shape `(Nmodels,)`
@@ -1687,6 +1658,13 @@ class BruteForce:
         if dim_prior:
             lnl -= 0.5 * (3.0 - Ndim) * np.log(Ndim)
 
+        # The fit maximizes the likelihood times the A(V) and R(V) priors, and
+        # icov_sar includes their precision, so lnl takes their normalized
+        # height at the fit: logpost_grid's Laplace weight integrates that
+        # product.
+        for value, (mean, std) in ((av, av_gauss), (rv, rv_gauss)):
+            lnl -= 0.5 * ((value - mean) / std) ** 2 + np.log(np.sqrt(2 * np.pi) * std)
+
         if return_vals:
             return lnl, Ndim, chi2, scale, av, rv, icov_sar
         else:
@@ -1700,9 +1678,9 @@ class BruteForce:
         coord=None,
         Nmc_prior=100,
         lnprior=None,
-        wt_thresh=1e-3,
-        cdf_thresh=2e-3,
-        max_models=50000,
+        wt_thresh=None,
+        cdf_thresh=None,
+        max_models=5000,
         precision_shrinkage=0.0,
         lngalprior=None,
         lndustprior=None,
@@ -1748,20 +1726,24 @@ class BruteForce:
         lnprior : `~numpy.ndarray` of shape `(Nmodels,)`, optional
             Log-prior of each model. Default is 0 for every model.
 
-        wt_thresh : float or None, optional
-            Keep the models whose selection weight is above `wt_thresh`
-            times the largest. Default is 1e-3.
-
-        cdf_thresh : float or None, optional
-            Used only if `wt_thresh` is None: keep the models of highest
-            weight that hold ``1 - cdf_thresh`` of the total. If both are
-            None, every model is kept. Default is 2e-3.
+        wt_thresh, cdf_thresh : float or None, optional
+            Deprecated; will be removed. A hard cut applied to the selection
+            weight before the sampling. It keeps the models whose weight is
+            above `wt_thresh` times the largest, or, if `wt_thresh` is None,
+            the models of highest weight that hold ``1 - cdf_thresh`` of the
+            total. A cut drops posterior weight that the sampling would keep
+            (#307). Default is None for both, which makes no cut.
 
         max_models : int or None, optional
-            Most models kept after the threshold. Above it, models are kept
-            by systematic sampling with probability proportional to their
-            selection weight, and ``ln_incl`` holds the log-probabilities.
-            None sets no limit. Default is 50000.
+            Number of models kept for the Monte Carlo step. Models are kept
+            by systematic sampling with probability ``min(1, c w)``, where
+            ``w`` is the selection weight and ``c`` makes the probabilities
+            sum to `max_models`; ``ln_incl`` holds their logarithms. The
+            selection weight is the model's weight with the Galactic, dust
+            and log-distance terms at its best fit, and the parallax
+            likelihood averaged over its Gaussian in ln(d). A model whose
+            priors are zero at its best fit is never kept. None keeps every
+            model whose fit has a finite volume. Default is 5000.
 
         precision_shrinkage : float, optional
             Fraction by which the off-diagonal terms of each (scale, A(V),
@@ -1775,6 +1757,9 @@ class BruteForce:
             `~brutus.priors.logp_galactic_structure` with `R_solar` and
             `Z_solar`. For its kinematic term, bind the object's motion:
             ``functools.partial(logp_galactic_structure, pm=..., pm_cov=...)``.
+            The selection weight interpolates it, or a `functools.partial` of
+            it, from a table along the sightline; any other prior is called
+            once on every model, then on the draws.
 
         lndustprior : callable, optional
             A(V) prior ``f(avs, dustmap, coord, distance=...)``, applied
@@ -1835,9 +1820,11 @@ class BruteForce:
         a_mc, r_mc : `~numpy.ndarray` of shape `(Nsel, Nmc)`
             Monte Carlo A(V) and R(V) draws.
         lnp_mc : `~numpy.ndarray` of shape `(Nsel, Nmc)`
-            Log-posterior weight of each draw: the model's log-likelihood and
-            ``lnprior``, the log-distance Jacobian, and the Galactic, dust and
-            parallax terms at the draw. To pool draws across models, subtract
+            Log-posterior weight of each draw: the model's log-likelihood,
+            ``lnprior`` and Laplace volume ``0.5 ln|2 pi Sigma|`` (Sigma is the
+            covariance of its Gaussian in (ln d, A(V), R(V))), the
+            log-distance Jacobian, and the Galactic, dust and parallax terms
+            at the draw. To pool draws across models, subtract
             ``ln_incl[:, None]``.
         mc_ess : `~numpy.ndarray` of shape `(Nsel,)`
             ``1 / sum(w**2)`` of the normalized weights of each model's draws.
@@ -1899,52 +1886,121 @@ class BruteForce:
         if lnprior is None:
             lnprior = np.zeros(Nmodels)
 
-        # Initial posterior, without the parallax, which the MC step applies.
-        lnprob_base = lnlike + lnprior
+        # Defaults of the priors, shared by the selection and the MC step.
+        gal_is_default = False
+        if coord is not None:
+            if lngalprior is None:
+                lngalprior = partial(
+                    logp_galactic_structure, R_solar=R_solar, Z_solar=Z_solar
+                )
+            gal_is_default = lngalprior is logp_galactic_structure or (
+                getattr(lngalprior, "func", None) is logp_galactic_structure
+            )
+            if gal_is_default:
+                if dlabels is not None and dlabels.dtype.names is None:
+                    raise ValueError(
+                        "`dlabels` must be a structured array for the default "
+                        "Galactic prior, which reads its 'feh' and 'loga' fields."
+                    )
+                names = () if dlabels is None else dlabels.dtype.names
+                # Per-model float labels for the table and for the draws,
+                # whose prior computes each model's label terms once.
+                label_arrays = {
+                    name: dlabels[name].astype(np.float64, copy=False)
+                    for name in ("feh", "loga")
+                    if name in names
+                }
+                for name, x in label_arrays.items():
+                    if not np.all(np.isfinite(x)):
+                        raise ValueError(
+                            f"`dlabels` field '{name}' must be finite for the "
+                            "default Galactic prior."
+                        )
+        apply_dust = apply_av_prior and lndustprior is not None
+        if apply_dust:
+            if isinstance(dustfile, (str, os.PathLike)):
+                from ..dust import Bayestar
 
-        # Add the parallax to the weight that selects the models, but not to
-        # the MC weights, which apply the exact parallax likelihood below.
-        lnprob_sel = lnprob_base.copy()
+                dustfile = Bayestar(dustfile=dustfile)
+            # The built-in prior, bare or a partial that leaves avlim free,
+            # normalizes over the fitted A(V) support; custom priors keep the
+            # documented 4-argument signature.
+            builtin = _is_logp_extinction(lndustprior) and "avlim" not in getattr(
+                lndustprior, "keywords", {}
+            )
+            dust_kw = {"avlim": avlim} if builtin else {}
+
+        # The weight of each model before the distance priors, with the
+        # Laplace volume of its likelihood.
+        eta_hat, eta_err, half_logdet = _eta_gaussians(scales, icovs_sar)
+        lnprob_base = lnlike + lnprior + half_logdet
+
+        # The selection weight adds the priors that the MC step averages, at
+        # the model's best fit (#307). Without them the model prior, which
+        # favours near dwarfs, drops distant giants that the Galactic volume
+        # favours.
+        eta_fit = np.clip(eta_hat, *np.log(_DIST_LIM))
+        lnprob_sel = lnprob_base + eta_fit
+        if apply_dust:
+            lnprob_sel += lndustprior(
+                np.clip(avs, avlim[0], avlim[1]),
+                dustfile,
+                coord,
+                distance=np.exp(eta_fit),
+                **dust_kw,
+            )
         if _has_parallax(parallax, parallax_err):
             # The parallax likelihood averaged over the model's Gaussian in
-            # ln(d) (#297). Its width equals that of the MC step below unless
-            # _inverse3 regularizes the matrix or precision_shrinkage > 0. A
-            # model that this gate drops cannot come back.
-            # Its bound for skipping models holds for the wt_thresh rule only.
-            bound = () if wt_thresh is None else (lnprob_base, np.log(wt_thresh))
-            lnprob_sel += _parallax_gate(
-                scales, icovs_sar, parallax, parallax_err, *bound
+            # ln(d) (#297).
+            lnprob_sel += _lnp_parallax_gate(
+                eta_hat, eta_err, float(parallax), float(parallax_err)
             )
+        # A prior that returns NaN or inf for some model gives it no weight.
+        lnprob_sel[~np.isfinite(lnprob_sel)] = LOG_ZERO
+        if coord is not None:
+            if gal_is_default:
+                # A table along the sightline, spanning the models within
+                # e^-60 of the best weight so far.
+                span = lnprob_sel >= np.max(lnprob_sel) - 60.0
+                lnprob_sel += _tabulated_galactic_prior(
+                    lngalprior, eta_fit, coord, label_arrays, span
+                )
+            else:
+                lnprob_sel += lngalprior(np.exp(eta_fit), coord, labels=dlabels)
+            lnprob_sel[~np.isfinite(lnprob_sel)] = LOG_ZERO
 
-        # Select models above threshold (using parallax-informed weights)
-        if wt_thresh is not None:
-            sel = np.where(lnprob_sel > np.max(lnprob_sel) + np.log(wt_thresh))[0]
-        elif cdf_thresh is not None:
-            idx_sort = np.argsort(lnprob_sel)[::-1]
-            cdf = np.cumsum(np.exp(lnprob_sel[idx_sort] - np.max(lnprob_sel)))
-            cdf /= cdf[-1]
-            Nsel = np.searchsorted(cdf, 1.0 - cdf_thresh) + 1
-            sel = idx_sort[:Nsel]
-        else:
-            sel = np.arange(Nmodels)
-
+        # Keep max_models models by systematic sampling with probability
+        # proportional to their selection weight (Horvitz-Thompson), and
+        # divide their weights by that probability: the evidence and the
+        # draws stay unbiased for any selection weight that is nonzero where
+        # the posterior is. A model whose priors are zero at its best fit
+        # therefore has no chance of being kept, unless max_models is None,
+        # which keeps every model of finite volume.
+        w = np.exp(lnprob_sel - np.max(lnprob_sel))
+        sel = np.flatnonzero(
+            w > 0 if max_models is not None else lnprob_base > LOG_ZERO / 2
+        )
+        if wt_thresh is not None or cdf_thresh is not None:
+            warnings.warn(
+                "`wt_thresh` and `cdf_thresh` are deprecated and will be "
+                "removed, because a cut drops posterior weight that the "
+                "max_models sampling keeps (#307).",
+                FutureWarning,
+                stacklevel=2,
+            )
+            if wt_thresh is not None:
+                sel = sel[w[sel] > wt_thresh]
+            else:
+                sel = sel[np.argsort(w[sel])[::-1]]
+                cdf = np.cumsum(w[sel])
+                sel = sel[: np.searchsorted(cdf / cdf[-1], 1.0 - cdf_thresh) + 1]
+        ln_incl = np.zeros(len(sel))
+        if max_models is not None and len(sel) > max_models:
+            pi = _inclusion_probabilities(w[sel], max_models)
+            edges = np.concatenate(([0.0], np.cumsum(pi))) - rstate.uniform()
+            kept = np.diff(np.floor(edges)) > 0
+            sel, ln_incl = sel[kept], np.log(pi[kept])
         Nsel = len(sel)
-
-        # Above max_models, keep models by systematic sampling with
-        # probability proportional to their selection weight
-        # (Horvitz-Thompson). Models of zero weight are dropped first.
-        ln_incl = np.zeros(Nsel)
-        if max_models is not None and Nsel > max_models:
-            lnprob_selected = lnprob_sel[sel]
-            w = np.exp(lnprob_selected - lnprob_selected.max())
-            sel, w = sel[w > 0], w[w > 0]
-            ln_incl = np.zeros(len(sel))
-            if len(sel) > max_models:
-                pi = _inclusion_probabilities(w, max_models)
-                edges = np.concatenate(([0.0], np.cumsum(pi))) - rstate.uniform()
-                kept = np.diff(np.floor(edges)) > 0
-                sel, ln_incl = sel[kept], np.log(pi[kept])
-            Nsel = len(sel)
 
         # Select precision matrices for the chosen models.
         icovs_selected = icovs_sar[sel]  # Shape: (Nsel, 3, 3)
@@ -2001,8 +2057,7 @@ class BruteForce:
         cov_lnd = _inverse3(icov_lnd, regularize=True)
 
         # Prepare means in (ln d, Av, Rv) space
-        eta_sel = -0.5 * np.log(s_sel)  # ln(d) = -0.5*ln(s)
-        means = np.column_stack([eta_sel, avs[sel], rvs[sel]])  # Shape: (Nsel, 3)
+        means = np.column_stack([eta_hat[sel], avs[sel], rvs[sel]])  # (Nsel, 3)
 
         # BATCH SAMPLING in (ln d, Av, Rv) space.
         # Antithetic pairs (z, -z) reduce the variance of the MC prior integral
@@ -2033,7 +2088,7 @@ class BruteForce:
         # clamped to MIN_SCALE gives ln(d) draws that overflow to inf here.
         with np.errstate(over="ignore"):
             dist_raw = np.exp(eta_samples)
-        dist_mc = np.clip(dist_raw, 0.001, 1e6)
+        dist_mc = np.clip(dist_raw, *_DIST_LIM)
         outside = dist_mc != dist_raw
         a_clip = np.clip(a_mc, avlim[0], avlim[1])
         outside |= a_clip != a_mc
@@ -2041,7 +2096,7 @@ class BruteForce:
         outside |= r_clip != r_mc
         a_mc, r_mc = a_clip, r_clip
 
-        # Initialize log-posterior from base (without parallax scale approx).
+        # Each draw starts from the model's weight before the distance priors.
         # The exact parallax likelihood is added below via logp_parallax.
         lnp_mc = np.tile(lnprob_base[sel], (Nmc, 1))  # Shape: (Nmc, Nsel)
 
@@ -2053,70 +2108,28 @@ class BruteForce:
         ln_dist = np.log(dist_mc + 1e-300)
         lnp_mc += ln_dist
 
-        # Prior evaluations - coordinate is fixed, so we can still optimize
+        # Galactic prior at every (draw, model) pair. dist_mc has shape
+        # (Nmc, Nsel); the labels of a model are the same for its draws.
         if coord is not None:
-            if lngalprior is None:
-                lngalprior = partial(
-                    logp_galactic_structure, R_solar=R_solar, Z_solar=Z_solar
-                )
-
-            # Galactic prior evaluation for every (MC sample, model) pair.
-            # dist_mc has shape (Nmc, Nsel); the labels (feh/loga) of a model
-            # are the same for its Nmc samples.
-            gal_is_default = lngalprior is logp_galactic_structure or (
-                getattr(lngalprior, "func", None) is logp_galactic_structure
-            )
-
             if gal_is_default:
-                if dlabels is not None and dlabels.dtype.names is None:
-                    raise ValueError(
-                        "`dlabels` must be a structured array for the default "
-                        "Galactic prior, which reads its 'feh' and 'loga' fields."
-                    )
-                # Per-model float arrays broadcast over the samples, so the
-                # prior computes each model's label terms once.
-                names = () if dlabels is None else dlabels.dtype.names
-                per_model = {
-                    name: dlabels[name][sel].astype(np.float64, copy=False)
-                    for name in ("feh", "loga")
-                    if name in names
-                }
-                lnp_gal = _galactic_prior_at_draws(
+                per_model = {name: x[sel] for name, x in label_arrays.items()}
+                lnp_mc += _galactic_prior_at_draws(
                     lngalprior, dist_mc, ln_dist, coord, per_model
                 )
             else:
                 # Custom prior: the structured labels tiled to match the
                 # flattened distances.
                 labels_flat = None if dlabels is None else np.tile(dlabels[sel], Nmc)
-                lnp_gal = lngalprior(
+                lnp_mc += lngalprior(
                     dist_mc.ravel(), coord, labels=labels_flat
                 ).reshape(Nmc, Nsel)
-            lnp_mc += lnp_gal
 
-        if apply_av_prior and lndustprior is not None:
-            # Load dust map from file path (str or os.PathLike) if needed
-            if isinstance(dustfile, (str, os.PathLike)):
-                from ..dust import Bayestar
-
-                dustfile = Bayestar(dustfile=dustfile)
-
-            # Dust prior evaluation (VECTORIZED)
-            # For 3D dust maps, pass distances so the prior can interpolate
-            # the extinction profile to each star's distance
-            av_flat = a_mc.ravel()  # Shape: (Nmc * Nsel,)
-            dist_flat = dist_mc.ravel()  # Shape: (Nmc * Nsel,)
-            # The built-in prior, bare or a partial that leaves avlim free,
-            # normalizes over the fitted A(V) support; custom priors keep the
-            # documented 4-argument signature.
-            builtin = _is_logp_extinction(lndustprior) and "avlim" not in getattr(
-                lndustprior, "keywords", {}
-            )
-            dust_kw = {"avlim": avlim} if builtin else {}
-            lnp_dust_flat = lndustprior(
-                av_flat, dustfile, coord, distance=dist_flat, **dust_kw
-            )
-            lnp_dust_reshaped = lnp_dust_flat.reshape(Nmc, Nsel)  # Shape: (Nmc, Nsel)
-            lnp_mc += lnp_dust_reshaped
+        if apply_dust:
+            # For 3D dust maps, the prior interpolates the extinction profile
+            # to each draw's distance.
+            lnp_mc += lndustprior(
+                a_mc.ravel(), dustfile, coord, distance=dist_mc.ravel(), **dust_kw
+            ).reshape(Nmc, Nsel)
 
         # Parallax prior (FULLY VECTORIZED)
         if parallax is not None and parallax_err is not None:
@@ -2162,8 +2175,8 @@ class BruteForce:
         rvlim=RVLIM,
         rv_gauss=(3.32, 0.18),
         lnprior=None,
-        wt_thresh=1e-3,
-        cdf_thresh=2e-3,
+        wt_thresh=None,
+        cdf_thresh=None,
         Ndraws=250,
         apply_agewt=True,
         apply_grad=True,
@@ -2181,7 +2194,7 @@ class BruteForce:
         save_dar_draws=True,
         running_io=True,
         mem_lim=8000.0,
-        max_models=50000,
+        max_models=5000,
         precision_shrinkage=0.0,
         verbose=True,
         R_solar=R_SOLAR,
@@ -2261,13 +2274,9 @@ class BruteForce:
             prior on initial mass (for MIST models) or PS1 luminosity function
             prior (for Bayestar models).
 
-        wt_thresh : float, optional
-            Threshold `wt_thresh * max(weight)` for model selection.
-            Default is 1e-3.
-
-        cdf_thresh : float, optional
-            CDF threshold for model selection (used if wt_thresh is None).
-            Default is 2e-3.
+        wt_thresh, cdf_thresh : float or None, optional
+            Deprecated hard cuts on the selection weight; see `logpost_grid`.
+            Default is None for both, which makes no cut.
 
         Ndraws : int, optional
             Number of posterior draws to save per object. Default is 250.
@@ -2377,13 +2386,13 @@ class BruteForce:
         verbose : bool, optional
             Whether to print progress to stderr. Default is True.
 
-        max_models : int, optional
-            When more models than this are selected for an object, about
-            `max_models` of them are kept at random, each with a probability
-            proportional to its weight (at most 1), to bound memory and
-            runtime. The evidence and the posterior draws divide each kept
-            model's weight by that probability, so they stay unbiased. None
-            keeps every selected model. Default is 50000.
+        max_models : int or None, optional
+            Number of models kept per object for the Monte Carlo step, at
+            random, each with a probability proportional to its selection
+            weight (at most 1); see `logpost_grid`. The evidence and the
+            posterior draws divide each kept model's weight by that
+            probability, so they stay unbiased. None keeps every model whose
+            fit has a finite volume. Default is 5000.
 
         precision_shrinkage : float, optional
             Fractional shrinkage applied to the off-diagonal terms of the 3x3
@@ -2660,8 +2669,6 @@ class BruteForce:
                         rvlim=rvlim,
                         rv_gauss=rv_gauss,
                         lnprior=lnprior_proc,
-                        wt_thresh=wt_thresh,
-                        cdf_thresh=cdf_thresh,
                         Ndraws=Ndraws,
                         # The kinematic term takes each object's motion as
                         # keywords of the Galactic prior.
@@ -2683,6 +2690,8 @@ class BruteForce:
                         mem_lim=mem_lim,
                         precision_shrinkage=precision_shrinkage,
                         max_models=max_models,
+                        wt_thresh=wt_thresh,
+                        cdf_thresh=cdf_thresh,
                         rstate=rstate,
                         return_distreds=save_dar_draws,
                         R_solar=R_solar,
@@ -2769,8 +2778,8 @@ class BruteForce:
         rvlim=RVLIM,
         rv_gauss=(3.32, 0.18),
         lnprior=None,
-        wt_thresh=1e-3,
-        cdf_thresh=2e-3,
+        wt_thresh=None,
+        cdf_thresh=None,
         Ndraws=250,
         lngalprior=None,
         lndustprior=None,
@@ -2780,7 +2789,7 @@ class BruteForce:
         ltol=1e-3,
         logl_initthresh=1e-6,
         mem_lim=8000.0,
-        max_models=50000,
+        max_models=5000,
         precision_shrinkage=0.0,
         rstate=None,
         return_distreds=True,
@@ -2816,10 +2825,6 @@ class BruteForce:
             (mean, std) for Gaussian prior on R(V).
         lnprior : numpy.ndarray, optional
             Log-prior for each model.
-        wt_thresh : float, optional
-            Threshold for weight-based model selection.
-        cdf_thresh : float, optional
-            CDF threshold for model selection.
         Ndraws : int, optional
             Number of posterior draws to return.
         lngalprior : callable, optional
@@ -2906,8 +2911,6 @@ class BruteForce:
             coord=coord,
             Nmc_prior=Nmc_prior,
             lnprior=lnprior,
-            wt_thresh=wt_thresh,
-            cdf_thresh=cdf_thresh,
             lngalprior=lngalprior,
             lndustprior=lndustprior,
             dustfile=dustfile,
@@ -2917,6 +2920,8 @@ class BruteForce:
             mem_lim=mem_lim,
             precision_shrinkage=precision_shrinkage,
             max_models=max_models,
+            wt_thresh=wt_thresh,
+            cdf_thresh=cdf_thresh,
             rstate=rstate,
             R_solar=R_solar,
             Z_solar=Z_solar,

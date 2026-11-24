@@ -159,7 +159,6 @@ def _warmup(bf, phot, err, mask, par, parerr, coord):
         parallax_err=parerr,
         coord=coord,
         Nmc_prior=50,
-        wt_thresh=1e-3,
         rstate=np.random.RandomState(0),
     )
     bf._fit(
@@ -171,7 +170,6 @@ def _warmup(bf, phot, err, mask, par, parerr, coord):
         coord=coord,
         Nmc_prior=50,
         Ndraws=250,
-        wt_thresh=1e-3,
         rstate=np.random.RandomState(0),
     )
 
@@ -191,7 +189,6 @@ def fixed_models_lnprior(bf, lr, s, i):
         parallax_err=s["parallax_err"][i],
         coord=tuple(s["coords"][i]),
         Nmc_prior=1,
-        wt_thresh=1e-3,
         rstate=np.random.RandomState(0),
     )[0]
     lnprior = np.full(len(lr[0]), LOG_ZERO)
@@ -199,7 +196,7 @@ def fixed_models_lnprior(bf, lr, s, i):
     return lnprior
 
 
-def benchmark(obj_idx=None, repeats=5, Nmc_prior=50, Ndraws=250, wt_thresh=1e-3):
+def benchmark(obj_idx=None, repeats=5, Nmc_prior=50, Ndraws=250):
     """Per-object timings using a median-of-repeats estimator per object.
 
     We time each object `repeats` times and keep the median per object, then
@@ -241,7 +238,6 @@ def benchmark(obj_idx=None, repeats=5, Nmc_prior=50, Ndraws=250, wt_thresh=1e-3)
                 parallax_err=pe,
                 coord=co,
                 Nmc_prior=Nmc_prior,
-                wt_thresh=wt_thresh,
                 rstate=np.random.RandomState(i),
             )
             lp[i].append(time.perf_counter() - t)
@@ -255,7 +251,6 @@ def benchmark(obj_idx=None, repeats=5, Nmc_prior=50, Ndraws=250, wt_thresh=1e-3)
                 coord=co,
                 Nmc_prior=Nmc_prior,
                 Ndraws=Ndraws,
-                wt_thresh=wt_thresh,
                 rstate=np.random.RandomState(i),
             )
             ft[i].append(time.perf_counter() - t)
@@ -267,7 +262,7 @@ def benchmark(obj_idx=None, repeats=5, Nmc_prior=50, Ndraws=250, wt_thresh=1e-3)
     )
 
 
-def capture(tag, obj_idx=None, Nmc_prior=50, Ndraws=250, wt_thresh=1e-3):
+def capture(tag, obj_idx=None, Nmc_prior=50, Ndraws=250):
     """Freeze deterministic loglike arrays + posterior draws for comparison."""
     s = load_setup()
     bf = s["bf"]
@@ -310,7 +305,6 @@ def capture(tag, obj_idx=None, Nmc_prior=50, Ndraws=250, wt_thresh=1e-3):
             coord=co,
             Nmc_prior=Nmc_prior,
             Ndraws=Ndraws,
-            wt_thresh=wt_thresh,
             rstate=np.random.RandomState(1000 + i),
             return_distreds=True,
         )

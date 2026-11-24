@@ -24,7 +24,7 @@ Each row is one star, in the order of the input. $N_d$ is the number of draws (`
 
 The `samps_*` fields are written only with `save_dar_draws=True` (the default). {doc}`scientific_background` describes how the draws are made.
 
-The draws are already drawn from the posterior: give each one equal weight. Do not reweight them by `samps_logp` or `obj_log_post`. When more than `max_models` models pass the selection, `obj_log_post` is still each model's own log-posterior; the draws and `obj_log_evid` already include the correction for the models that were left out.
+The draws are already drawn from the posterior: give each one equal weight. Do not reweight them by `samps_logp` or `obj_log_post`. The fit keeps a random sample of `max_models` models. `obj_log_post` is still each model's own log-posterior; the draws and `obj_log_evid` already divide each model's weight by its probability of being kept.
 
 With `running_io=True` (the default), each star is written as soon as it is fitted; rows not yet fitted hold `model_idx = -99`.
 

@@ -87,9 +87,7 @@ def build(out, samples):
 def _fit_summaries(bf, path, data, **kwargs):
     """Fit, time and summarize every object of `data`."""
     t0 = time.perf_counter()
-    bf.fit(
-        *data, path, Nmc_prior=50, Ndraws=250, wt_thresh=1e-3, verbose=False, **kwargs
-    )
+    bf.fit(*data, path, Nmc_prior=50, Ndraws=250, verbose=False, **kwargs)
     dt = time.perf_counter() - t0
     with h5py.File(path + ".h5", "r") as f:
         cols = [f[k][()] for k in ("samps_dist", "samps_red", "samps_dred")]

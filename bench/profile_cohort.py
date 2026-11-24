@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Full profiling run over the Nsel cohort (tiny .. 50000-cap), current code.
+Full profiling run over the 12-object Orion cohort of disteq.py, current code.
 
 Reports, per cohort object:
   - Nsel (selected models), and per-stage wall time (median of repeats, to suppress the
@@ -58,7 +58,6 @@ def stage_timings(repeats=3):
                 parallax_err=pe,
                 coord=co,
                 Nmc_prior=50,
-                wt_thresh=1e-3,
                 rstate=np.random.RandomState(i),
             )
             lp.append(time.perf_counter() - t)
@@ -73,7 +72,6 @@ def stage_timings(repeats=3):
                 coord=co,
                 Nmc_prior=50,
                 Ndraws=250,
-                wt_thresh=1e-3,
                 rstate=np.random.RandomState(i),
             )
             ft.append(time.perf_counter() - t)
@@ -114,7 +112,6 @@ def aggregate_profile():
                 coord=tuple(s["coords"][i]),
                 Nmc_prior=50,
                 Ndraws=250,
-                wt_thresh=1e-3,
                 rstate=np.random.RandomState(i),
             )
 

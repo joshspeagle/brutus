@@ -67,10 +67,8 @@ def _summarize(dists, reds, dreds, levid, chi2min):
     )
 
 
-# Deliberate cohort spanning the selected-model-count (Nsel) range so that BOTH
-# the tiny-Nsel edge cases (Nsel < Ndraws) and the large-Nsel path that triggers
-# max_models=50000 subsampling are exercised. Indices are into the
-# full-coverage+parallax object set of the Orion field.
+# Twelve objects of the full-coverage+parallax object set of the Orion
+# field, by index.
 COHORT = [13, 14, 25, 60, 0, 2, 3, 5, 9, 29, 39, 52]
 
 
@@ -108,7 +106,6 @@ def run(tag, K=8, Nobj=24, seed0=0, objs=None):
                 coord=co,
                 Nmc_prior=50,
                 Ndraws=250,
-                wt_thresh=1e-3,
                 rstate=np.random.RandomState(7919 * (t + seed0) + i),
                 return_distreds=True,
             )
