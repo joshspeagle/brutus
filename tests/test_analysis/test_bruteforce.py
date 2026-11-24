@@ -2712,6 +2712,29 @@ class TestFitWithProperMotions:
         for ell, av in seen:
             assert av == ell
 
+    def test_object_with_non_finite_coordinates_gets_no_kinematic_term(self):
+        from brutus.analysis.individual import _motions
+
+        n = 3
+        coords = np.array([[10.0, 20.0], [np.nan, np.nan], [200.0, -95.0]])
+        motions = _motions(
+            n,
+            coords,
+            np.ones(n),
+            np.ones(n),
+            np.full(n, 0.1),
+            np.full(n, 0.1),
+            np.zeros(n),
+            None,
+            None,
+            True,
+            0.01,
+            0.0,
+            None,
+        )
+        assert motions[0] is not None
+        assert motions[1] is None and motions[2] is None
+
     def test_custom_galactic_prior_must_take_the_kinematic_keywords(
         self, mock_fitter, tmp_path
     ):

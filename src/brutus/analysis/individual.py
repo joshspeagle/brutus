@@ -201,7 +201,9 @@ def _motions(
         if has_rv:
             keywords += ("rv", "rv_err")
         _check_motion_keywords(lngalprior, keywords)
-    ra, dec = galactic_to_icrs(*np.asarray(data_coords, dtype=float).T)
+    ell, b = np.asarray(data_coords, dtype=float).T
+    finite &= np.isfinite(ell) & (np.abs(b) <= 90.0)
+    ra, dec = galactic_to_icrs(np.where(finite, ell, 0.0), np.where(finite, b, 0.0))
     pm, pm_cov = pm_equatorial_to_galactic(
         ra, dec, *(np.where(finite, c, 0.0) for c in columns)
     )
