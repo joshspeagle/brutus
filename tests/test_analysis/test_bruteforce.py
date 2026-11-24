@@ -1,5 +1,7 @@
 """Tests of BruteForce in brutus.analysis.individual."""
 
+from functools import partial
+
 import h5py
 import numpy as np
 import pytest
@@ -2433,15 +2435,32 @@ def test_galactic_prior_gets_each_draw_paired_with_its_model_labels(
         np.testing.assert_allclose(default[6], lnp_mc, rtol=0, atol=PRIOR_INTERP_TOL)
 
 
-def test_motion_without_coordinates_raises(fitter, observation):
+def test_default_prior_with_a_bound_motion_is_interpolated(
+    fitter, observation, monkeypatch
+):
+    # fit() binds each object's motion into the default prior with
+    # functools.partial; the default must still take the interpolated path.
+    import brutus.analysis.individual as ind
+
+    calls = []
+    real = ind._galactic_prior_at_draws
+
+    def spy(*args):
+        calls.append(args[0])
+        return real(*args)
+
+    monkeypatch.setattr(ind, "_galactic_prior_at_draws", spy)
     flux, flux_err, mask = observation
     like = fitter.loglike_grid(flux, flux_err, mask, return_vals=True)
-    with pytest.raises(ValueError, match="`motion` needs `coord`"):
-        fitter.logpost_grid(
-            like,
-            motion={"pm": np.zeros(2), "pm_cov": np.eye(2)},
-            rstate=np.random.RandomState(5),
-        )
+    prior = partial(logp_galactic_structure, R_solar=8.2)
+    fitter.logpost_grid(
+        like,
+        coord=(120.0, 45.0),
+        lngalprior=partial(prior, pm=np.zeros(2), pm_cov=np.eye(2)),
+        dlabels=fitter.models_labels,
+        rstate=np.random.RandomState(5),
+    )
+    assert len(calls) == 1 and calls[0].keywords["pm_cov"].shape == (2, 2)
 
 
 def test_plain_dlabels_with_the_default_galactic_prior_raise(fitter, observation):

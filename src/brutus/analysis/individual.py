@@ -152,7 +152,7 @@ def _motions(
     pm_floor,
     lngalprior,
 ):
-    """Return the ``motion`` of `BruteForce.logpost_grid` for each object,
+    """Return the kinematic keywords of the Galactic prior for each object,
     None where no kinematic term applies, after checking the inputs."""
     names = ("pmra", "pmdec", "pmra_error", "pmdec_error", "pmra_pmdec_corr")
     columns = (pmra, pmdec, pmra_error, pmdec_error, pmra_pmdec_corr)
@@ -890,7 +890,7 @@ def _interpolate_prior(eta, lo, hi, f, x, w, sub):
     return out, err
 
 
-def _galactic_prior_at_draws(prior, dists, eta, coord, labels, motion):
+def _galactic_prior_at_draws(prior, dists, eta, coord, labels):
     """Return the default Galactic prior at the draws `dists` (Nmc, Nsel) of
     each model, with ``eta`` their ln(d), interpolated in ln(d) across the
     model's draws.
@@ -904,7 +904,7 @@ def _galactic_prior_at_draws(prior, dists, eta, coord, labels, motion):
     neither stage passes, or if a node is at zero probability.
     """
     if len(dists) <= len(_PRIOR_NODES):
-        return prior(dists, coord, **labels, **motion)
+        return prior(dists, coord, **labels)
     lo, hi = eta.min(axis=0), eta.max(axis=0)
     out = np.empty(dists.shape)
     f = np.empty((len(_PRIOR_NODES), dists.shape[1]))
@@ -915,7 +915,7 @@ def _galactic_prior_at_draws(prior, dists, eta, coord, labels, motion):
             _PRIOR_NODES[new, None]
         )
         part = {k: v[todo] for k, v in labels.items()}
-        f[np.ix_(new, todo)] = prior(np.exp(nodes), coord, **part, **motion)
+        f[np.ix_(new, todo)] = prior(np.exp(nodes), coord, **part)
         sub = np.array([stage.index(k) for k in prev])
         p, err = _interpolate_prior(
             eta[:, todo],
@@ -932,7 +932,7 @@ def _galactic_prior_at_draws(prior, dists, eta, coord, labels, motion):
         if not len(todo):
             return out
     out[:, todo] = prior(
-        dists[:, todo], coord, **{k: v[todo] for k, v in labels.items()}, **motion
+        dists[:, todo], coord, **{k: v[todo] for k, v in labels.items()}
     )
     return out
 
@@ -1699,7 +1699,6 @@ class BruteForce:
         R_solar=R_SOLAR,
         Z_solar=Z_SOLAR,
         return_precision=False,
-        motion=None,
     ):
         """
         Compute log-posterior over the stellar model grid.
@@ -1754,7 +1753,9 @@ class BruteForce:
         lngalprior : callable, optional
             Galactic prior ``f(dists, coord, labels=...)``, with ``dists`` in
             kpc. Default is `~brutus.priors.logp_galactic_structure` with
-            `R_solar` and `Z_solar`.
+            `R_solar` and `Z_solar`. For its kinematic term, bind the
+            object's motion: ``functools.partial(logp_galactic_structure,
+            pm=..., pm_cov=...)``.
 
         lndustprior : callable, optional
             Dust-map prior ``f(avs, dustmap, coord, distance=...)``. Default
@@ -1796,13 +1797,6 @@ class BruteForce:
             models in place of their covariances, which skips the inversion.
             Default is False.
 
-        motion : dict, optional
-            Keyword arguments of the kinematic term of the Galactic prior,
-            passed to ``lngalprior``: ``pm`` and ``pm_cov``, and optionally
-            ``rv``, ``rv_err``, ``pm_outlier`` and ``pm_floor``, as in
-            `~brutus.priors.logp_galactic_structure`. Needs ``coord``.
-            Default is None, no kinematic term.
-
         Returns
         -------
         sel : `~numpy.ndarray` of shape `(Nsel,)`
@@ -1835,18 +1829,13 @@ class BruteForce:
         ------
         ValueError
             If only one of ``parallax`` and ``parallax_err`` is given, if
-            ``dustfile`` is given with ``apply_av_prior`` or ``motion`` is
-            given, but without ``coord``, if ``max_models`` is neither None nor a positive
+            ``dustfile`` is given with ``apply_av_prior`` but without
+            ``coord``, if ``max_models`` is neither None nor a positive
             integer, or if ``lnprior`` or ``dlabels`` (with ``coord``) does
             not have one entry per model in ``results``.
         """
         # The dust-map prior is a function of sky position; without one it
         # would crash deep inside the map query with an opaque IndexError.
-        if motion and coord is None:
-            raise ValueError(
-                "`motion` needs `coord`, because the kinematic term is part of "
-                "the Galactic prior."
-            )
         if dustfile is not None and apply_av_prior and coord is None:
             raise ValueError(
                 "`dustfile` (dust-map extinction prior) requires a sky "
@@ -2067,14 +2056,14 @@ class BruteForce:
                     if name in names
                 }
                 lnp_gal = _galactic_prior_at_draws(
-                    lngalprior, dist_mc, ln_dist, coord, per_model, motion or {}
+                    lngalprior, dist_mc, ln_dist, coord, per_model
                 )
             else:
                 # Custom prior: the structured labels tiled to match the
                 # flattened distances.
                 labels_flat = None if dlabels is None else np.tile(dlabels[sel], Nmc)
                 lnp_gal = lngalprior(
-                    dist_mc.ravel(), coord, labels=labels_flat, **(motion or {})
+                    dist_mc.ravel(), coord, labels=labels_flat
                 ).reshape(Nmc, Nsel)
             lnp_mc += lnp_gal
 
@@ -2646,7 +2635,13 @@ class BruteForce:
                         wt_thresh=wt_thresh,
                         cdf_thresh=cdf_thresh,
                         Ndraws=Ndraws,
-                        lngalprior=lngalprior_proc,
+                        # The kinematic term takes each object's motion as
+                        # keywords of the Galactic prior.
+                        lngalprior=(
+                            lngalprior_proc
+                            if motions[i] is None
+                            else partial(lngalprior_proc, **motions[i])
+                        ),
                         lndustprior=lndustprior_proc,
                         dustfile=(
                             _Sightline(profiles[0], profiles[1][k], profiles[2][k])
@@ -2664,7 +2659,6 @@ class BruteForce:
                         return_distreds=save_dar_draws,
                         R_solar=R_solar,
                         Z_solar=Z_solar,
-                        motion=motions[i],
                     )
                     row = dict(zip(fit_fields, results, strict=True))
 
@@ -2764,7 +2758,6 @@ class BruteForce:
         return_distreds=True,
         R_solar=R_SOLAR,
         Z_solar=Z_SOLAR,
-        motion=None,
     ):
         """
         Perform internal fitting for a single object.
@@ -2900,7 +2893,6 @@ class BruteForce:
             R_solar=R_solar,
             Z_solar=Z_solar,
             return_precision=True,
-            motion=motion,
         )
 
         sel, icov_sar_sel, lnp, dist_mc, a_mc, r_mc, lnp_mc, mc_ess_sel, ln_incl = (

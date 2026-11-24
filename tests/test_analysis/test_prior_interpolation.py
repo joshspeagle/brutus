@@ -1,5 +1,7 @@
 """Tests of the interpolation of the Galactic prior across a model's draws."""
 
+from functools import partial
+
 import numpy as np
 import pytest
 
@@ -71,7 +73,7 @@ def test_interpolated_prior_matches_the_exact_one_at_the_draws(
     labels = {"feh": rng.uniform(-1.5, 0.3, n), "loga": rng.uniform(9.0, 10.1, n)}
     exact = logp_galactic_structure(dists, coord, **labels, **motion)
     approx = _galactic_prior_at_draws(
-        logp_galactic_structure, dists, np.log(dists), coord, labels, motion
+        partial(logp_galactic_structure, **motion), dists, np.log(dists), coord, labels
     )
     finite = exact > LOG_ZERO / 2
     np.testing.assert_array_equal(approx[~finite], exact[~finite])
@@ -84,7 +86,7 @@ def test_few_draws_use_the_exact_prior():
     labels = {"feh": np.zeros(2), "loga": np.full(2, 9.5)}
     exact = logp_galactic_structure(dists, (90.0, 30.0), **labels)
     approx = _galactic_prior_at_draws(
-        logp_galactic_structure, dists, np.log(dists), (90.0, 30.0), labels, {}
+        logp_galactic_structure, dists, np.log(dists), (90.0, 30.0), labels
     )
     np.testing.assert_array_equal(approx, exact)
 
@@ -106,7 +108,7 @@ def test_each_model_stops_at_the_first_stage_that_passes_its_check():
         return np.array([shape[k](u[:, i]) for i, k in enumerate(kind)]).T
 
     out = _galactic_prior_at_draws(
-        prior, np.exp(eta), eta, None, {"kind": np.arange(3)}, {}
+        prior, np.exp(eta), eta, None, {"kind": np.arange(3)}
     )
     # 5 nodes for all, 4 more for the quartic and the step, then the step's
     # 50 draws.
