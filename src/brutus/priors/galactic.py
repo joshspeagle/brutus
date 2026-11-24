@@ -723,7 +723,7 @@ BAR_MASS = 1.8133e10
 # metal-rich population keeps the bar's shape. Fitted to the metal-poor
 # fractions of the 26 GIBS fields (Zoccali et al. 2017, Table 3; two
 # flagged fields and one without a position left out): slope and core in
-# kpc. The metal-poor share of the bulge mass is the default bar_feh[0].
+# kpc. The metal-poor share of the bulge mass is BAR_FEH[0].
 SPHEROID_SHAPE = (2.2, 0.2)
 # The bulge [Fe/H]: the metal-poor share of the bulge mass, then the mean
 # and standard deviation of the metal-poor and of the metal-rich population
@@ -2390,9 +2390,9 @@ def logp_galactic_structure(
         ``bar_mass`` in the metal-poor one, which has the spherical shape of
         ``SPHEROID_SHAPE`` while the metal-rich one keeps the bar's, then
         the mean and standard deviation of the metal-poor and of the
-        metal-rich population. Default is ``BAR_FEH``, (0.6, -0.31, 0.31, 0.26, 0.20):
-        the components of Gonzalez et al. (2015), with the share and shape
-        fitted to the metal-poor fractions of Zoccali et al. (2017).
+        metal-rich population. Default is ``BAR_FEH``: the components of
+        Gonzalez et al. (2015), with the share and shape fitted to the
+        metal-poor fractions of Zoccali et al. (2017).
     bar_age : tuple of 4 floats, optional
         Mean and standard deviation in Gyr of the age of the metal-poor and
         of the metal-rich population, each a normal truncated to 0 to 13.8
