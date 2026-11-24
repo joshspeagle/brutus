@@ -1,12 +1,14 @@
 """Tests of BruteForce in brutus.analysis.individual."""
 
+from functools import partial
+
 import h5py
 import numpy as np
 import pytest
 import scipy.stats
 from conftest import split_labels
 
-from brutus.analysis.individual import BruteForce
+from brutus.analysis.individual import PRIOR_INTERP_TOL, BruteForce
 from brutus.core.individual import StarGrid
 from brutus.priors.galactic import logp_galactic_structure
 from brutus.utils import inv_magnitude
@@ -1604,6 +1606,24 @@ def observation(mock_grid):
     return true_flux, flux_err, mask
 
 
+def test_loglike_grid_reuses_band_coefficients_across_band_masks(
+    mock_grid, observation
+):
+    # The fitter keeps the coefficients of the last band mask; switching
+    # masks back and forth must give what a fresh fitter gives.
+    flux, flux_err, full = observation
+    one_out = full.copy()
+    one_out[1] = False
+    reused = BruteForce(mock_grid, verbose=False)
+    for mask in (one_out, full, one_out, one_out):
+        got = reused.loglike_grid(flux, flux_err, mask, return_vals=True)
+        fresh = BruteForce(mock_grid, verbose=False).loglike_grid(
+            flux, flux_err, mask, return_vals=True
+        )
+        for a, b in zip(got, fresh):
+            np.testing.assert_array_equal(a, b)
+
+
 def _make_loglike_results(scales, cov_list, ndim=5):
     """Build a synthetic loglike_grid(return_vals=True) tuple."""
     n = len(scales)
@@ -1647,6 +1667,29 @@ def test_capped_fit_keeps_the_evidence_of_the_uncapped_fit(fitter, observation):
     full_ratio = np.exp(np.array(full) - np.mean(full))
     se = np.hypot(ratio.std() / np.sqrt(nseed), full_ratio.std() / np.sqrt(20))
     assert abs(ratio.mean() - full_ratio.mean()) < 4 * se
+
+
+@pytest.mark.parametrize("return_distreds", [True, False])
+def test_fit_with_a_seeded_generator_is_reproducible(
+    fitter, observation, return_distreds
+):
+    # The default rstate is a Generator, so every draw in _fit, including
+    # the max_models cap and the resampling, must take one.
+    flux, flux_err, mask = observation
+    kwargs = dict(Nmc_prior=5, Ndraws=20, max_models=6, wt_thresh=1e-12)
+    runs = [
+        fitter._fit(
+            flux,
+            flux_err,
+            mask,
+            rstate=np.random.default_rng(8),
+            return_distreds=return_distreds,
+            **kwargs,
+        )
+        for _ in range(2)
+    ]
+    for a, b in zip(*runs):
+        np.testing.assert_array_equal(a, b)
 
 
 @pytest.mark.parametrize("max_models", [0, -1, 2.5])
@@ -1801,7 +1844,9 @@ class TestParallaxSelectionGate:
         # The peak far from both starts, with a negative parallax.
         cases.append((np.log(0.0067), 0.5, -0.5, 0.1))
         for mu, sig, plx, err in cases:
-            got = _lnp_parallax_gate(np.array([mu]), np.array([sig]), plx, err)[0]
+            got = _lnp_parallax_gate(
+                np.array([mu]), np.array([sig]), plx, err, np.empty(0), 0.0
+            )[0]
             ref = reference(mu, sig, plx, err)
             # The selection threshold is ln(wt_thresh) = -6.9 below the best.
             if ref > -30:
@@ -2174,6 +2219,23 @@ class TestTruncatedDraws:
         assert mc_ess[1] == 0.0 and mc_ess[0] > 0.0
         assert np.all(d_mc <= 1e6) and np.all(a_mc >= 0.0) and np.all(r_mc <= 8.0)
 
+    def test_cdf_selection_with_a_parallax_and_many_models_runs(self, fitter):
+        # The parallax gate skips models by a bound on the wt_thresh rule;
+        # with cdf_thresh instead it must evaluate every model (> _GATE_TOP).
+        n = 100
+        scales = np.exp(np.linspace(-0.5, 0.5, n))
+        like = _make_loglike_results(scales, [np.diag([1e-4, 1e-4, 1e-4])] * n)
+        sel = fitter.logpost_grid(
+            like,
+            parallax=1.0,
+            parallax_err=0.1,
+            wt_thresh=None,
+            cdf_thresh=0.9,
+            Nmc_prior=10,
+            rstate=np.random.RandomState(5),
+        )[0]
+        assert 0 < len(sel) < n
+
     def test_model_with_zero_prior_everywhere_gets_zero_ess(self, fitter):
         cov = np.diag([1e-4, 1e-4, 1e-4])
         like = _make_loglike_results([1.0, 1.0], [cov, cov])
@@ -2377,7 +2439,8 @@ def test_galactic_prior_gets_each_draw_paired_with_its_model_labels(
 ):
     """Draws are flattened draw-major, so a custom prior gets the labels
     tiled, not repeated; the default prior, which gets one label per model
-    broadcast over the draws, must give the same weights."""
+    broadcast over the draws, must give the same weights: exactly with few
+    draws, and within the interpolation tolerance with many."""
     flux, flux_err, mask = observation
     like = fitter.loglike_grid(flux, flux_err, mask, return_vals=True)
     seen = {}
@@ -2400,7 +2463,38 @@ def test_galactic_prior_gets_each_draw_paired_with_its_model_labels(
     )
 
     default = fitter.logpost_grid(like, rstate=np.random.RandomState(5), **kwargs)
-    np.testing.assert_array_equal(default[6], lnp_mc)
+    if Nmc <= 5:
+        np.testing.assert_array_equal(default[6], lnp_mc)
+    else:
+        np.testing.assert_allclose(default[6], lnp_mc, rtol=0, atol=PRIOR_INTERP_TOL)
+
+
+def test_default_prior_with_a_bound_motion_is_interpolated(
+    fitter, observation, monkeypatch
+):
+    # fit() binds each object's motion into the default prior with
+    # functools.partial; the default must still take the interpolated path.
+    import brutus.analysis.individual as ind
+
+    calls = []
+    real = ind._galactic_prior_at_draws
+
+    def spy(*args):
+        calls.append(args[0])
+        return real(*args)
+
+    monkeypatch.setattr(ind, "_galactic_prior_at_draws", spy)
+    flux, flux_err, mask = observation
+    like = fitter.loglike_grid(flux, flux_err, mask, return_vals=True)
+    prior = partial(logp_galactic_structure, R_solar=8.2)
+    fitter.logpost_grid(
+        like,
+        coord=(120.0, 45.0),
+        lngalprior=partial(prior, pm=np.zeros(2), pm_cov=np.eye(2)),
+        dlabels=fitter.models_labels,
+        rstate=np.random.RandomState(5),
+    )
+    assert len(calls) == 1 and calls[0].keywords["pm_cov"].shape == (2, 2)
 
 
 def test_plain_dlabels_with_the_default_galactic_prior_raise(fitter, observation):
@@ -2520,3 +2614,236 @@ def test_fits_with_a_parallax_and_the_same_seed_are_identical(fitter, batch, tmp
             saved.append({key: f[key][()] for key in f.keys()})
     for key in saved[0]:
         np.testing.assert_array_equal(saved[0][key], saved[1][key], err_msg=key)
+
+
+class TestFitWithProperMotions:
+    """The kinematic term of the Galactic prior in fit()."""
+
+    NDATA = 3
+    COORDS = np.array([[120.0, 45.0], [130.0, 50.0], [140.0, 55.0]])
+    PM = dict(
+        pmra=np.array([-3.0, 5.0, np.nan]),
+        pmdec=np.array([-8.0, 2.0, 1.0]),
+        pmra_error=np.array([0.05, 0.1, 0.1]),
+        pmdec_error=np.array([0.04, 0.1, 0.1]),
+        pmra_pmdec_corr=np.array([0.2, 0.0, 0.0]),
+    )
+
+    def _fit(self, fitter, path, name, **kwargs):
+        rng = np.random.RandomState(42)
+        data = 10 ** (-0.4 * (15 + rng.randn(self.NDATA, 5) * 0.5))
+        labels = np.array([(i,) for i in range(self.NDATA)], dtype=[("id", "i4")])
+        out = fitter.fit(
+            data,
+            data * 0.05,
+            np.ones((self.NDATA, 5), dtype=bool),
+            labels,
+            str(path / name),
+            data_coords=self.COORDS,
+            Ndraws=10,
+            Nmc_prior=5,
+            wt_thresh=0.1,
+            running_io=False,
+            verbose=False,
+            rstate=np.random.RandomState(1231),
+            **kwargs,
+        )
+        with h5py.File(out, "r") as f:
+            return {k: f[k][()] for k in f}
+
+    def test_switched_off_proper_motions_give_the_fit_without_them(
+        self, mock_fitter, tmp_path
+    ):
+        plain = self._fit(mock_fitter, tmp_path, "plain")
+        off = self._fit(mock_fitter, tmp_path, "off", apply_pm_prior=False, **self.PM)
+        for k in plain:
+            np.testing.assert_array_equal(plain[k], off[k], err_msg=k)
+
+    def test_proper_motions_reweigh_the_draws_and_nan_rows_are_left_out(
+        self, mock_fitter, tmp_path
+    ):
+        plain = self._fit(mock_fitter, tmp_path, "plain")
+        pm = self._fit(mock_fitter, tmp_path, "pm", **self.PM)
+        assert not np.array_equal(plain["samps_dist"][0], pm["samps_dist"][0])
+        assert np.all(np.isfinite(pm["samps_dist"]))
+        # Objects whose proper motions hold a NaN are fitted without the
+        # term: with every pmra NaN, the fit is the one without motions.
+        nan_only = dict(self.PM)
+        nan_only["pmra"] = np.full(self.NDATA, np.nan)
+        none = self._fit(mock_fitter, tmp_path, "none", **nan_only)
+        for k in plain:
+            np.testing.assert_array_equal(plain[k], none[k], err_msg=k)
+
+    @pytest.mark.parametrize(
+        "drop, match",
+        [("pmdec", "go together"), ("pmra_pmdec_corr", "go together")],
+    )
+    def test_incomplete_proper_motion_columns_raise(
+        self, mock_fitter, tmp_path, drop, match
+    ):
+        kwargs = {k: v for k, v in self.PM.items() if k != drop}
+        with pytest.raises(ValueError, match=match):
+            self._fit(mock_fitter, tmp_path, "bad", **kwargs)
+
+    @pytest.mark.parametrize(
+        "column, value, match",
+        [
+            ("pmra_error", 0.0, "pmra_error"),
+            ("pmra_pmdec_corr", 1.0, "pmra_pmdec_corr"),
+            ("radial_velocity_error", 0.0, "radial_velocity_error"),
+        ],
+    )
+    def test_out_of_range_motion_rows_raise_before_any_fit(
+        self, mock_fitter, tmp_path, column, value, match
+    ):
+        kwargs = dict(
+            self.PM,
+            radial_velocity=np.zeros(self.NDATA),
+            radial_velocity_error=np.ones(self.NDATA),
+        )
+        kwargs[column] = kwargs[column].copy()
+        kwargs[column][1] = value
+        with pytest.raises(ValueError, match=match):
+            self._fit(mock_fitter, tmp_path, "bad", **kwargs)
+        assert not (tmp_path / "bad.h5").exists()
+
+    def test_proper_motions_and_motion_draws_need_the_model_labels(
+        self, mock_fitter, tmp_path
+    ):
+        with pytest.raises(ValueError, match="apply_dlabels"):
+            self._fit(mock_fitter, tmp_path, "bad", apply_dlabels=False, **self.PM)
+        with pytest.raises(ValueError, match="apply_dlabels"):
+            self._fit(
+                mock_fitter,
+                tmp_path,
+                "bad",
+                apply_dlabels=False,
+                save_motion_draws=True,
+            )
+
+    def test_radial_velocity_needs_proper_motions(self, mock_fitter, tmp_path):
+        with pytest.raises(ValueError, match="needs the proper motions"):
+            self._fit(
+                mock_fitter,
+                tmp_path,
+                "bad",
+                radial_velocity=np.zeros(self.NDATA),
+                radial_velocity_error=np.ones(self.NDATA),
+            )
+
+    def test_dust_map_is_queried_once_per_chunk_and_each_object_gets_its_sightline(
+        self, mock_fitter, tmp_path, monkeypatch
+    ):
+        import brutus.analysis.individual as ind
+        import brutus.dust as dust_mod
+
+        queries = []
+
+        class FakeMap(dust_mod.Bayestar):
+            def __init__(self):
+                pass
+
+            def query(self, coords):
+                coords = np.asarray(coords, dtype=float)
+                queries.append(coords.shape)
+                # Each sightline's A(V) profile is its longitude.
+                return (
+                    np.linspace(0.1, 10.0, 5),
+                    coords[:, :1] * np.ones(5),
+                    (np.ones((len(coords), 5))),
+                )
+
+        seen = []
+
+        def prior(avs, dustmap, coord, distance=None, avlim=None):
+            seen.append((coord[0], dustmap.query(coord)[1][0]))
+            return np.zeros(len(avs))
+
+        monkeypatch.setattr(ind, "logp_extinction", prior)
+        monkeypatch.setattr(ind, "_DUST_CHUNK", 2)
+        self._fit(mock_fitter, tmp_path, "dust", dustfile=FakeMap())
+        sizes = [min(2, self.NDATA - i) for i in range(0, self.NDATA, 2)]
+        assert queries == [(n, 2) for n in sizes]
+        assert len(seen) == self.NDATA
+        for ell, av in seen:
+            assert av == ell
+
+    def test_object_with_non_finite_coordinates_gets_no_kinematic_term(self):
+        from brutus.analysis.individual import _motions
+
+        n = 3
+        coords = np.array([[10.0, 20.0], [np.nan, np.nan], [200.0, -95.0]])
+        motions = _motions(
+            n,
+            coords,
+            np.ones(n),
+            np.ones(n),
+            np.full(n, 0.1),
+            np.full(n, 0.1),
+            np.zeros(n),
+            None,
+            None,
+            True,
+            0.01,
+            0.0,
+            None,
+        )
+        assert motions[0] is not None
+        assert motions[1] is None and motions[2] is None
+
+    def test_custom_galactic_prior_must_take_the_kinematic_keywords(
+        self, mock_fitter, tmp_path
+    ):
+        def prior(dists, coord, labels=None):
+            return np.zeros(np.shape(dists))
+
+        with pytest.raises(ValueError, match="keyword `pm`"):
+            self._fit(mock_fitter, tmp_path, "bad", lngalprior=prior, **self.PM)
+
+    def test_custom_galactic_prior_needs_rv_keywords_only_with_radial_velocities(
+        self, mock_fitter, tmp_path
+    ):
+        def prior(dists, coord, labels=None, pm=None, pm_cov=None, **motion):
+            return np.zeros(np.shape(dists))
+
+        def no_rv(
+            dists,
+            coord,
+            labels=None,
+            pm=None,
+            pm_cov=None,
+            pm_outlier=None,
+            pm_floor=None,
+        ):
+            return np.zeros(np.shape(dists))
+
+        self._fit(mock_fitter, tmp_path, "pm", lngalprior=no_rv, **self.PM)
+        rv = dict(
+            radial_velocity=np.zeros(self.NDATA),
+            radial_velocity_error=np.ones(self.NDATA),
+        )
+        self._fit(mock_fitter, tmp_path, "rv", lngalprior=prior, **self.PM, **rv)
+        with pytest.raises(ValueError, match="keyword `rv`"):
+            self._fit(mock_fitter, tmp_path, "bad", lngalprior=no_rv, **self.PM, **rv)
+
+    def test_motion_draws_follow_the_fit_without_changing_it(
+        self, mock_fitter, tmp_path
+    ):
+        plain = self._fit(mock_fitter, tmp_path, "plain", **self.PM)
+        drawn = self._fit(
+            mock_fitter, tmp_path, "drawn", save_motion_draws=True, **self.PM
+        )
+        for k in plain:
+            np.testing.assert_array_equal(plain[k], drawn[k], err_msg=k)
+        assert drawn["samps_motion"].shape == (self.NDATA, 10, 3)
+        assert np.all(np.isfinite(drawn["samps_motion"]))
+
+    def test_motion_draws_need_the_distance_draws(self, mock_fitter, tmp_path):
+        with pytest.raises(ValueError, match="save_dar_draws"):
+            self._fit(
+                mock_fitter,
+                tmp_path,
+                "bad",
+                save_motion_draws=True,
+                save_dar_draws=False,
+            )

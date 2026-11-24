@@ -134,6 +134,56 @@ class TestStatisticalDistributions:
                 atol=1e-11,
             )
 
+    def test_tabulated_ln_ndtr_matches_scipy(self):
+        from scipy.special import log_ndtr
+
+        from brutus.utils.math import _ln_ndtr
+
+        t = np.concatenate(
+            [np.linspace(-40.0, 9.0, 20001), np.linspace(-37.01, -36.99, 101)]
+        )
+        got = np.array([_ln_ndtr(v) for v in t])
+        np.testing.assert_allclose(got, log_ndtr(t), rtol=1e-12, atol=3e-9)
+
+    def test_tabulated_log_mass_matches_the_exact_one_on_wide_intervals(self):
+        """`_ln_ndtr_diff` is within 3e-9 over the fraction of Phi(b) in the
+        interval of `_truncnorm_lognorm_scalar`, in both tails."""
+        from scipy.special import log_ndtr
+
+        from brutus.utils.math import _ln_ndtr_diff, _truncnorm_lognorm_scalar
+
+        rng = np.random.default_rng(12)
+        lo = rng.uniform(-45.0, 45.0, 2000)
+        hi = lo + rng.uniform(0.5, 20.0, 2000)
+        for a, b in zip(lo, hi):
+            exact = _truncnorm_lognorm_scalar(a, b)
+            # Both mirror an interval above 0 to the lower tail.
+            top = -a if a > 0 else b
+            frac = np.exp(exact - log_ndtr(top))
+            assert abs(_ln_ndtr_diff(b, a) - exact) <= 4e-9 / frac
+
+    @pytest.mark.parametrize("ell, b", [(np.nan, 10.0), (10.0, 95.0)])
+    def test_galactic_to_icrs_rejects_bad_coordinates(self, ell, b):
+        from brutus.utils.math import galactic_to_icrs
+
+        with pytest.raises(ValueError, match="ell must be finite"):
+            galactic_to_icrs(ell, b)
+
+    def test_galactic_to_icrs_matches_astropy(self):
+        from astropy import units as u
+        from astropy.coordinates import SkyCoord
+
+        from brutus.utils.math import galactic_to_icrs
+
+        rng = np.random.default_rng(3)
+        ell = rng.uniform(0.0, 360.0, 200)
+        b = np.degrees(np.arcsin(rng.uniform(-1.0, 1.0, 200)))
+        ra, dec = galactic_to_icrs(ell, b)
+        ref = SkyCoord(l=ell * u.deg, b=b * u.deg, frame="galactic").icrs
+        sep = SkyCoord(ra=ra * u.deg, dec=dec * u.deg).separation(ref)
+        # Within 0.1 arcsec: the Hipparcos pole against astropy's frame.
+        assert sep.arcsec.max() < 0.1
+
     def test_truncnorm_pdf_basic(self):
         """Test truncated normal PDF computation."""
         from brutus.utils.math import truncnorm_pdf
