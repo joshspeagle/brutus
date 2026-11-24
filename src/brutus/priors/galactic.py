@@ -725,6 +725,10 @@ BAR_MASS = 1.8133e10
 # flagged fields and one without a position left out): slope and core in
 # kpc. The metal-poor share of the bulge mass is the default bar_feh[0].
 SPHEROID_SHAPE = (2.2, 0.2)
+# The bulge [Fe/H]: the metal-poor share of the bulge mass, then the mean
+# and standard deviation of the metal-poor and of the metal-rich population
+# (Gonzalez et al. 2015; the share fitted with SPHEROID_SHAPE).
+BAR_FEH = (0.6, -0.31, 0.31, 0.26, 0.20)
 # Kinematic term: the default share of stars whose motion follows a broad
 # outlier ellipsoid instead of their component's (unresolved binaries, bad
 # astrometry, streams), and that ellipsoid's dispersion in km/s on each
@@ -2269,7 +2273,7 @@ def logp_galactic_structure(
     thick_age=(13.0, -4.0, 0.8),
     halo_feh=(-1.18, 0.28, -0.67, -1.95, 1.0),
     halo_age=(12.0, 1.5),
-    bar_feh=(0.6, -0.31, 0.31, 0.26, 0.20),
+    bar_feh=BAR_FEH,
     bar_age=(11.0, 1.5, 8.0, 3.0),
     feh_systematic=(0.1, 0.15, 0.15),
     age_systematic=(0.1, 0.15, 0.15),
@@ -2386,7 +2390,7 @@ def logp_galactic_structure(
         ``bar_mass`` in the metal-poor one, which has the spherical shape of
         ``SPHEROID_SHAPE`` while the metal-rich one keeps the bar's, then
         the mean and standard deviation of the metal-poor and of the
-        metal-rich population. Default is (0.6, -0.31, 0.31, 0.26, 0.20):
+        metal-rich population. Default is ``BAR_FEH``, (0.6, -0.31, 0.31, 0.26, 0.20):
         the components of Gonzalez et al. (2015), with the share and shape
         fitted to the metal-poor fractions of Zoccali et al. (2017).
     bar_age : tuple of 4 floats, optional
