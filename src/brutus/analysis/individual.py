@@ -55,7 +55,7 @@ import sys
 import time
 import warnings
 from functools import partial
-from math import exp, log
+from math import exp, isfinite, log
 
 import h5py
 import numpy as np
@@ -943,7 +943,7 @@ def _mc_summary(lnp_mc):
     """Return, per model (column of lnp_mc, shape (Nmc, N)), the ln mean of
     exp(lnp_mc) over its draws and the weight concentration
     (sum w)**2 / sum w**2 of w = exp(lnp_mc). A model with no draw above
-    LOG_ZERO gets LOG_ZERO and 0."""
+    LOG_ZERO, or with a non-finite result, gets LOG_ZERO and 0."""
     Nmc, N = lnp_mc.shape
     lnp = np.empty(N)
     ess = np.empty(N)
@@ -960,17 +960,17 @@ def _mc_summary(lnp_mc):
                 top[n - lo] = max(top[n - lo], lnp_mc[m, n])
         for m in range(Nmc):
             for n in range(lo, hi):
-                w = exp(lnp_mc[m, n] - top[n - lo])
-                s1[n - lo] += w
-                s2[n - lo] += w * w
+                if LOG_ZERO < top[n - lo] < np.inf:
+                    w = exp(lnp_mc[m, n] - top[n - lo])
+                    s1[n - lo] += w
+                    s2[n - lo] += w * w
         for n in range(lo, hi):
-            t = top[n - lo]
-            if t > LOG_ZERO and t < np.inf:
-                lnp[n] = t + log(s1[n - lo]) - ln_nmc
+            lnp[n], ess[n] = LOG_ZERO, 0.0
+            # A NaN draw makes the sums NaN; such a model, like one with no
+            # draw above LOG_ZERO, gets zero weight.
+            if s1[n - lo] > 0.0 and isfinite(s1[n - lo]):
+                lnp[n] = top[n - lo] + log(s1[n - lo]) - ln_nmc
                 ess[n] = s1[n - lo] ** 2 / s2[n - lo]
-            else:
-                lnp[n] = LOG_ZERO
-                ess[n] = 0.0
     return lnp, ess
 
 

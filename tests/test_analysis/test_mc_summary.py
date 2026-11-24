@@ -20,3 +20,13 @@ def test_mc_summary_matches_logsumexp_and_weight_concentration():
     np.testing.assert_allclose(ess[ok], (w.sum(0) ** 2 / (w**2).sum(0))[ok], rtol=1e-12)
     assert lnp[5] == LOG_ZERO and ess[5] == 0.0
     assert 1.0 <= ess[6] <= 3.0
+
+
+def test_model_with_a_nan_draw_gets_zero_weight():
+    lnp_mc = np.zeros((4, 3))
+    lnp_mc[1, 1] = np.nan
+    lnp_mc[:, 2] = np.inf
+    lnp, ess = _mc_summary(lnp_mc)
+    assert lnp[0] == 0.0 and ess[0] == 4.0
+    assert lnp[1] == LOG_ZERO and ess[1] == 0.0
+    assert lnp[2] == LOG_ZERO and ess[2] == 0.0
