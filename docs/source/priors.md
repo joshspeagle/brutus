@@ -160,7 +160,7 @@ Each cell gives photometry only, then with the proper motion, then with the prop
 
 The default prior needs the star's coordinates: pass `data_coords`, an array of shape `(Nstars, 2)` with $(\ell, b)$ in degrees. `fit()` raises `ValueError` without them.
 
-{doc}`tutorials/tutorial_04_galactic_priors` draws the prior from every side. It shows each component edge-on and face-on, the distance prior on sightlines and across the sky, and the [Fe/H] and age at each place. It also shows how a star's labels move its distance prior, and fits of mock stars with components switched off.
+{doc}`tutorials/tutorial_04_galactic_priors` draws the prior from every side. It shows each component edge-on and face-on, the bulge's two populations, the distance prior on sightlines and across the sky, and the [Fe/H] and age at each place. It also shows how a star's labels and proper motion move its distance prior, and fits of mock stars with components switched off and with proper motions.
 
 ## Velocities
 

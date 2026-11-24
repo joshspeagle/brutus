@@ -48,10 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and their covariance to Galactic coordinates.
 - **Tutorial 4 is a guide to the Galactic prior.** It draws each
   component edge-on, face-on, along sightlines and across the sky; the
-  [Fe/H] and age at each place; how a star's labels move its distance
-  prior; the velocity ellipsoids; and the prior with components switched
-  off. It ends with fits of mock stars with and without the prior. The
-  documentation's priors page gains a section on the velocities (#329).
+  bulge's bar and spheroid; the [Fe/H] and age at each place; how a
+  star's labels and proper motion move its distance prior; the velocity
+  ellipsoids; and the prior with components switched off. It ends with
+  fits of mock stars with and without the prior, and with and without
+  proper motions. The documentation's priors page gains a section on the
+  velocities (#329).
 - **`brutus.utils.galactic_to_galactocentric`** converts distance and
   (l, b) to Galactocentric Cartesian positions;
   `galactic_to_galactocentric_cyl` now builds on it (#299).

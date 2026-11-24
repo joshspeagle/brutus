@@ -88,7 +88,7 @@ GALACTIC_COLORS = {
     "Thin disk": "#2a78d6",
     "Thick disk": "#eb6834",
     "Halo": "#1baf7a",
-    "Bar": "#a8262e",
+    "Bulge": "#a8262e",
 }
 
 #: Colour of text and reference marks in the Galactic-prior figures
