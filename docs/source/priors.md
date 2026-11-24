@@ -160,6 +160,19 @@ Each cell gives photometry only, then with the proper motion, then with the prop
 
 The default prior needs the star's coordinates: pass `data_coords`, an array of shape `(Nstars, 2)` with $(\ell, b)$ in degrees. `fit()` raises `ValueError` without them.
 
+{doc}`tutorials/tutorial_04_galactic_priors` draws the prior from every side. It shows each component edge-on and face-on, the bulge's two populations, the distance prior on sightlines and across the sky, and the [Fe/H] and age at each place. It also shows how a star's labels and proper motion move its distance prior, and fits of mock stars with components switched off and with proper motions.
+
+## Velocities
+
+{mod}`brutus.priors.kinematic` gives the velocity ellipsoid of each component at any position: the mean and covariance of $(v_R, v_\phi, v_z)$. The kinematic term above uses them.
+
+- **Thin disk.** The radial and vertical dispersions follow the relations of {cite:t}`sharma2021` in age, angular momentum, [Fe/H] and height, fitted at $3 < R < 20$ kpc and held at their edge values outside. The angular-momentum factor of $\sigma_z$ alone is held at the $L_z$ of a circular orbit at 14 kpc, as in the density above. The azimuthal dispersion follows from $\sigma_R$ by the epicyclic ratio.
+- **Thick disk.** The dispersions at the Sun are the high-[α/Fe] values of {cite:t}`anguiano2020`, with the radial profiles of the high-α disk of {cite:t}`binney2024`.
+- **Halo.** The halo is the mixture of {cite:t}`lancaster2019`: an isotropic component and two radial lobes, the debris of Gaia-Enceladus. Its net rotation is a few km/s.
+- **Bulge.** The bar and the spheroid share the axisymmetric bulge disc of {cite:t}`binney2024`, scaled with `R_solar` and `v_circ_solar`.
+
+The mean rotation of each disk solves the radial Jeans equation for its density, so older populations lag the circular speed more. {func}`~brutus.priors.solar_velocity` gives the Sun's velocity from the proper motion of Sgr A* {cite:p}`reid2020` and the solar motion of {cite:t}`schonrich2010`. {func}`~brutus.priors.velocity_to_observables` projects an ellipsoid onto the proper motions $(\mu_{\ell*}, \mu_b)$ in mas/yr and the radial velocity in km/s.
+
 ## Dust map
 
 With `dustfile`, the prior on $A_V$ comes from a 3D dust map. `fetch_dustmaps()` downloads the {term}`Bayestar` map {cite:p}`green2019`. `dustfile` takes its path or a loaded {class}`~brutus.dust.Bayestar`. At distance $d$ on the sightline, the map gives a mean $\mu_{A_V}(d)$ and a spread $\sigma_{A_V}(d)$, and {func}`~brutus.priors.logp_extinction` evaluates
@@ -187,7 +200,7 @@ These priors act in the Gauss-Newton fit of each model, so they also shape the G
 
 ## Changing the priors
 
-`lngalprior` replaces the Galactic prior. It applies only when `data_coords` is given; without coordinates, `fit()` uses no Galactic prior. `fit()` calls it as `lngalprior(dist, coord, labels=labels)`, where `dist` is an array of distances in kpc, `coord` is the star's $(\ell, b)$, and `labels` holds the grid labels of each point (`None` if `apply_dlabels=False`). It returns the log-prior with the shape of `dist`.
+`lngalprior` replaces the Galactic prior. It applies only when `data_coords` is given; without coordinates, `fit()` uses no Galactic prior. `fit()` calls it as `lngalprior(dist, coord, labels=labels)`, where `dist` is an array of distances in kpc, `coord` is the star's $(\ell, b)$, and `labels` holds the grid labels of each point (`None` if `apply_dlabels=False`). It returns the log-prior per unit distance, with the shape of `dist`, including the volume element: a uniform space density is $2 \ln d$, and 0 is flat in distance.
 
 A prior flat in distance, for example to see what the data alone say:
 
@@ -217,7 +230,9 @@ fitter.fit(
 )
 ```
 
-`lndustprior` replaces the dust prior. It applies only when `dustfile` is given. `fit()` calls it as `lndustprior(av, dustmap, coord, distance=dist)`.
+The same pattern switches a component off, for example `partial(logp_galactic_structure, bar_mass=0.0)`.
+
+`lndustprior` replaces the dust prior. It applies when it or `dustfile` is given, unless `apply_av_prior=False`. `fit()` calls it as `lndustprior(av, dustmap, coord, distance=dist)`. Without `dustfile`, `dustmap` is None, and without `data_coords`, `coord` is None. The default {func}`~brutus.priors.logp_extinction` reads a map, so `fit()` raises `ValueError` if it is given without `dustfile`.
 
 To check how much a result depends on the priors, fit the same stars twice, with the default and the flat prior, and compare the posterior distances. Stars whose distances change by more than their uncertainty are prior-dominated.
 

@@ -21,7 +21,7 @@ tutorial_00_data_setup
 | {doc}`tutorial_01_individual_stars` | predict stellar parameters and SEDs along evolutionary tracks, with binaries and extinction |
 | {doc}`tutorial_02_populations` | build isochrones and synthetic star clusters |
 | {doc}`tutorial_03_grids_performance` | generate, load and inspect model grids and their reddening coefficients |
-| {doc}`tutorial_04_galactic_priors` | evaluate and combine the Galactic, dust and parallax priors |
+| {doc}`tutorial_04_galactic_priors` | draw the Galactic prior in density, labels and velocities, and see its effect on fits |
 
 ```{toctree}
 :hidden:

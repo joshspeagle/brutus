@@ -45,8 +45,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the solar velocity from the Sgr A* proper motion and the projection of
   an ellipsoid to Galactic proper motions and radial velocity.
   `brutus.utils.pm_equatorial_to_galactic` converts Gaia proper motions
-  and their covariance to Galactic coordinates. The fit does not use them
-  yet (#275).
+  and their covariance to Galactic coordinates (#275).
+- **Tutorial 4 is a guide to the Galactic prior.** It draws each
+  component edge-on, face-on, along sightlines and across the sky; the
+  bulge's bar and spheroid; the [Fe/H] and age at each place; how a
+  star's labels and proper motion move its distance prior; the velocity
+  ellipsoids; and the prior with components switched off. It ends with
+  fits of mock stars with and without the prior, and with and without
+  proper motions. The documentation's priors page gains a section on the
+  velocities (#329).
 - **`brutus.utils.galactic_to_galactocentric`** converts distance and
   (l, b) to Galactocentric Cartesian positions;
   `galactic_to_galactocentric_cyl` now builds on it (#299).
@@ -263,6 +270,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   replaced by `eta_halo_inner`, `eta_halo_outer`, `r_break_halo` and
   `q_halo`, and `galactic_prior_summary` reports `halo_density_solar`
   and `f_halo_solar` (#290).
+
+### Fixed
+
+- **A custom A(V) prior no longer needs a dust map** *(output-changing)*.
+  `BruteForce.fit` and `logpost_grid` ignored `lndustprior` unless
+  `dustfile` was also given. They now apply it whenever it is given, with
+  `dustmap=None` when there is no `dustfile`. `lndustprior=logp_extinction`
+  without `dustfile` raises `ValueError` (#329).
 
 ## [2.0.0] - 2026-10-29
 
