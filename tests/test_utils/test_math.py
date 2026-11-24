@@ -162,6 +162,13 @@ class TestStatisticalDistributions:
             frac = np.exp(exact - log_ndtr(top))
             assert abs(_ln_ndtr_diff(b, a) - exact) <= 4e-9 / frac
 
+    @pytest.mark.parametrize("ell, b", [(np.nan, 10.0), (10.0, 95.0)])
+    def test_galactic_to_icrs_rejects_bad_coordinates(self, ell, b):
+        from brutus.utils.math import galactic_to_icrs
+
+        with pytest.raises(ValueError, match="ell must be finite"):
+            galactic_to_icrs(ell, b)
+
     def test_galactic_to_icrs_matches_astropy(self):
         from astropy import units as u
         from astropy.coordinates import SkyCoord

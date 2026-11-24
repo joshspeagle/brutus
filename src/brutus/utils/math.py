@@ -819,7 +819,14 @@ def galactic_to_icrs(ell, b):
     -------
     ra, dec : `~numpy.ndarray`
         ICRS right ascension in [0, 360) and declination in degrees.
+
+    Raises
+    ------
+    ValueError
+        If ``ell`` is not finite or ``b`` is outside [-90, 90].
     """
+    if not (np.all(np.isfinite(ell)) and np.all(np.abs(b) <= 90)):
+        raise ValueError("ell must be finite and b in [-90, 90]")
     ell, b = np.radians(ell), np.radians(b)
     dec_g, dl = np.radians(_DEC_NGP), np.radians(_L_NCP) - ell
     sin_dec = np.sin(dec_g) * np.sin(b) + np.cos(dec_g) * np.cos(b) * np.cos(dl)
