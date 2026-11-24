@@ -162,6 +162,28 @@ class TestStatisticalDistributions:
             frac = np.exp(exact - log_ndtr(top))
             assert abs(_ln_ndtr_diff(b, a) - exact) <= 4e-9 / frac
 
+    @pytest.mark.parametrize("ell, b", [(np.nan, 10.0), (10.0, 95.0)])
+    def test_galactic_to_icrs_rejects_bad_coordinates(self, ell, b):
+        from brutus.utils.math import galactic_to_icrs
+
+        with pytest.raises(ValueError, match="ell must be finite"):
+            galactic_to_icrs(ell, b)
+
+    def test_galactic_to_icrs_matches_astropy(self):
+        from astropy import units as u
+        from astropy.coordinates import SkyCoord
+
+        from brutus.utils.math import galactic_to_icrs
+
+        rng = np.random.default_rng(3)
+        ell = rng.uniform(0.0, 360.0, 200)
+        b = np.degrees(np.arcsin(rng.uniform(-1.0, 1.0, 200)))
+        ra, dec = galactic_to_icrs(ell, b)
+        ref = SkyCoord(l=ell * u.deg, b=b * u.deg, frame="galactic").icrs
+        sep = SkyCoord(ra=ra * u.deg, dec=dec * u.deg).separation(ref)
+        # Within 0.1 arcsec: the Hipparcos pole against astropy's frame.
+        assert sep.arcsec.max() < 0.1
+
     def test_truncnorm_pdf_basic(self):
         """Test truncated normal PDF computation."""
         from brutus.utils.math import truncnorm_pdf

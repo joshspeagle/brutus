@@ -17,7 +17,9 @@ The tables, with x = R / R0 (R0 = 8.27 kpc in BV24) and z in kpc:
 - kz[i, j] = K_z(R, z) = dPhi/dz in (km/s)^2/kpc,
 on x = 0, dx, ..., X_MAX and z = Z_SCALE sinh(u) on a uniform grid in u; and
 the midplane variances of the high-alpha disc, ln(sigma^2 / sigma^2(R0)) for
-(R, phi, z), on x_sigma. brutus.priors.kinematic computes the thin-disk
+(R, phi, z), on x_sigma; and bulge[i, j], the mean v_phi and the variances
+of (v_R, v_phi, v_z) of the bulge disc in km/s, at R = i bulge_step and
+z = j bulge_step kpc. brutus.priors.kinematic computes the thin-disk
 Jeans integral from dphi and kz. vc0 is the circular speed at R0, by which
 brutus scales the potential to its own v_c at the Sun.
 
@@ -40,6 +42,7 @@ R0 = 8.27
 X_MAX, DX = 4.0, 0.0125
 Z_MAX, Z_SCALE, NU = 100.0, 0.05, 223
 X_SIGMA = np.arange(0.05, X_MAX + 1e-9, 0.025)
+BULGE_STEP, BULGE_N = 0.1, 61
 OUT = os.path.join("src", "brutus", "priors", "bv24_tables.npz")
 
 agama.setUnits(mass=1, length=1, velocity=1)  # Msun, kpc, km/s
@@ -196,6 +199,18 @@ with agama.setNumThreads(4):
     _, mv, mv2 = gm.moments(at(Rs, 0 * Rs), dens=True, vel=True, vel2=True)
 var = np.column_stack((mv2[:, 0], mv2[:, 1] - mv[:, 1] ** 2, mv2[:, 2]))
 ln_var = np.log(var) - np.log([np.interp(1.0, X_SIGMA, v) for v in var.T])
+# Velocity moments of the bulge disc, for the bulge (bar and spheroid) of
+# the Galactic prior: mean v_phi and the variances of (v_R, v_phi, v_z) on
+# steps of BULGE_STEP kpc in R and z out to the bulge's taper. Its R-z
+# covariance, under 0.05 (km/s)^2 at R = 0.5-4 kpc and z = 0-1 kpc, is
+# left out.
+gm = agama.GalaxyModel(pot, discs["bulge"])
+Rb = np.arange(BULGE_N) * BULGE_STEP
+Rg, Zg = np.meshgrid(np.maximum(Rb, 1e-3), Rb, indexing="ij")
+with agama.setNumThreads(4):
+    _, mv, mv2 = gm.moments(at(Rg, Zg), dens=True, vel=True, vel2=True)
+bulge = np.column_stack((mv[:, 1], mv2[:, 0], mv2[:, 1] - mv[:, 1] ** 2, mv2[:, 2]))
+bulge = bulge.reshape(BULGE_N, BULGE_N, 4)
 
 np.savez(
     OUT,
@@ -207,5 +222,7 @@ np.savez(
     kz=kz,
     x_sigma=X_SIGMA,
     ln_var=ln_var,
+    bulge_step=BULGE_STEP,
+    bulge=bulge,
 )
-print("wrote", OUT, dphi.shape, ln_var.shape)
+print("wrote", OUT, dphi.shape, ln_var.shape, bulge.shape)
