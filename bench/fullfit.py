@@ -8,6 +8,7 @@ sequence anywhere in the pipeline shows up as a divergence here.
 
 Usage:
     python bench/fullfit.py run  <tag>     # run fit() -> bench/artifacts/fit_<tag>.h5
+    python bench/fullfit.py run  <tag> pm  # the same with mock proper motions
     python bench/fullfit.py cmp  <a> <b>   # compare two HDF5 outputs
 """
 
@@ -23,7 +24,20 @@ import harness as H  # noqa: E402
 NOBJ = 60  # number of Orion stars to fit end-to-end
 
 
-def run(tag):
+def mock_motions():
+    """Seeded proper motions of Gaia DR3 precision. The Orion file has
+    none, and the cost of the kinematic term does not depend on the values."""
+    rng = np.random.default_rng(2026)
+    return dict(
+        pmra=rng.normal(0.0, 5.0, NOBJ),
+        pmdec=rng.normal(0.0, 5.0, NOBJ),
+        pmra_error=np.full(NOBJ, 0.05),
+        pmdec_error=np.full(NOBJ, 0.05),
+        pmra_pmdec_corr=np.zeros(NOBJ),
+    )
+
+
+def run(tag, pm=False):
     s = H.load_setup()
     bf = s["bf"]
     # Use the first NOBJ stars (mixed quality, mirrors a real catalog slice).
@@ -52,6 +66,7 @@ def run(tag):
         running_io=True,
         verbose=False,
         rstate=np.random.RandomState(12345),
+        **(mock_motions() if pm else {}),
     )
     print(f"wrote {out}.h5")
 
@@ -76,7 +91,7 @@ def cmp(a, b):
 if __name__ == "__main__":
     if sys.argv[1] == "run":
         H.print_setup()
-        run(sys.argv[2])
+        run(sys.argv[2], pm=sys.argv[3:] == ["pm"])
     elif sys.argv[1] == "cmp":
         # Exit 1 on a shape or NaN mismatch, so that fullfit_ab.sh fails.
         sys.exit(not np.isfinite(cmp(sys.argv[2], sys.argv[3])))

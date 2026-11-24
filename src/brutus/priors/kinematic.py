@@ -23,7 +23,8 @@ age, angular-momentum, metallicity and height relations of Sharma et al.
 al. (2020) with the radial profiles of the high-[alpha/Fe] disk of Binney &
 Vasiliev (2024). The mean
 rotation of both disks is the radial Jeans solution for the density of
-`~brutus.priors.galactic.logn_disk`. The halo is the isotropic plus
+`~brutus.priors.galactic.logn_disk`, held inside DISK_INNER_RADIUS (4 kpc)
+as in the Galactic prior. The halo is the isotropic plus
 radially anisotropic mixture of Lancaster et al. (2019).
 
 See Also
@@ -45,22 +46,24 @@ Examples
 """
 
 import os
-from math import asinh, exp, isfinite, log, radians, sqrt
+from math import asinh, exp, isfinite, log, pi, radians, sqrt
 
 import numpy as np
 from numba import jit, prange
 from scipy.interpolate import BSpline
 
-from brutus.utils.math import R_SOLAR
+from brutus.utils.math import R_SOLAR, _catmull_rom, _catmull_rom_table, _ln_add
 
 __all__ = [
     "solar_velocity",
     "thin_disk_velocity_moments",
     "thick_disk_velocity_moments",
     "halo_velocity_moments",
+    "bulge_velocity_moments",
     "velocity_to_observables",
 ]
 
+_LOG_2PI = log(2.0 * pi)
 # km/s per (kpc * mas/yr): one astronomical unit per Julian year.
 K_KMS = 149597870.7 / (365.25 * 86400.0)
 
@@ -102,6 +105,12 @@ THIN_DISK_LAMBDA_L = (2300.0, 1130.0)
 THIN_DISK_ALPHA_L = (0.09, 0.58)
 THIN_DISK_GAMMA_FEH = (-0.19, -0.52)
 THIN_DISK_GAMMA_Z = (0.12, 0.20)
+# Floor in km/s of the thin-disk sigma_z at the Sun, joined as
+# (sigma^4 + floor^4)^(1/4): extrapolated to age 0 the relation above gives
+# 2.8 km/s, while stars younger than about 200 Myr toward the anticentre
+# have 8 km/s, like the gas (Gaia Collaboration, Antoja et al. 2021, 4.1).
+# The join raises sigma_z by 0.5% at 10 Gyr, 1.7% at 5 Gyr and 7.4% at 2 Gyr.
+THIN_DISK_SIGZ_FLOOR = 8.0
 # Radii in kpc and [Fe/H] in dex where the thin-disk relations were fitted
 # (Sharma et al. 2021, Fig. 1). Beyond the radii the dispersions keep their
 # values at the edges, reached through a quadratic blend within DISK_EDGE
@@ -114,6 +123,12 @@ THIN_DISK_R_RANGE = (3.0, 20.0)
 THIN_DISK_SIGZ_R_MAX = 14.0
 THIN_DISK_FEH_RANGE = (-1.0, 0.5)
 DISK_EDGE = 1.0
+# Radius in kpc inside which both disks keep the density they have there,
+# through a blend of half-width DISK_EDGE. The dispersions are held inside
+# about 3 kpc while K_z keeps rising toward the bulge, so the Jeans profiles
+# would pinch the disks threefold toward the centre; the bar fills the
+# inner Galaxy instead.
+DISK_INNER_RADIUS = 4.0
 # Greatest |z| in kpc of the Sharma et al. (2021) fit of the height term
 # (their Fig. 1), and the half-width in kpc of its quadratic blend: above
 # it, sigma_z keeps its value, so each population is isothermal there.
@@ -158,11 +173,16 @@ HALO_V_PHI_LOBE = (4.49, -11.54, -14.13, 27.39)
 # (km/s)^2/kpc, at x = 0, dx, ... and z = z_scale sinh(u) with
 # u = 0, du, ...; ``vc0`` is the model's v_c at R0 in km/s; ``ln_var`` is
 # ln(sigma^2 / sigma^2(R0)) of the high-alpha disk's midplane
-# (sigma_R, sigma_phi, sigma_z) on ``x_sigma``.
+# (sigma_R, sigma_phi, sigma_z) on ``x_sigma``; ``bulge`` holds the mean
+# v_phi and the variances of (v_R, v_phi, v_z) of their bulge disc, in km/s,
+# at R and z = 0, bulge_step, ... kpc.
 with np.load(os.path.join(os.path.dirname(__file__), "bv24_tables.npz")) as _f:
     _V_DX, _V_ZS, _V_DU, _V_VC0 = (float(_f[k]) for k in ("dx", "z_scale", "du", "vc0"))
     _V_DPHI, _V_KZ = _f["dphi"], _f["kz"]
     _SIG_X, _SIG_LNVAR = _f["x_sigma"], _f["ln_var"]
+    _BULGE_STEP, _BULGE = float(_f["bulge_step"]), _f["bulge"]
+# R0 of Binney & Vasiliev (2024), in kpc.
+_BV24_R0 = 8.27
 _SIG_SLOPE = np.gradient(_SIG_LNVAR, _SIG_X, axis=0)
 
 
@@ -279,27 +299,6 @@ def _hermite(w, p0, m0, p1, m1):
 
 
 @jit(nopython=True, cache=True)
-def _catmull_rom(p0, p1, p2, p3, t):
-    """Return the Catmull-Rom cubic between p1 (t = 0) and p2 (t = 1)."""
-    return p1 + 0.5 * t * (
-        p2
-        - p0
-        + t * (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3 + t * (3.0 * (p1 - p2) + p3 - p0))
-    )
-
-
-@jit(nopython=True, cache=True)
-def _catmull_rom_table(f, table):
-    """Return the Catmull-Rom interpolation of the uniform 1-D ``table`` at
-    the fractional index ``f`` >= 0, mirrored about index 0 and held
-    beyond index n - 2."""
-    n = len(table)
-    f = min(f, n - 2.0)
-    i = min(int(f), n - 3)
-    return _catmull_rom(table[abs(i - 1)], table[i], table[i + 1], table[i + 2], f - i)
-
-
-@jit(nopython=True, cache=True)
 def _circular_velocity(R, R_solar, vc_solar):
     """Return v_c(R) and d ln v_c / d ln R.
 
@@ -324,10 +323,13 @@ def _circular_velocity(R, R_solar, vc_solar):
 
 
 @jit(nopython=True, cache=True)
-def _logn_disk_dlnR(R, R_eff, R_scale):
-    """Return d ln(nu) / d ln(R) of `~brutus.priors.galactic.logn_disk`,
-    with the smoothed radius R_eff = sqrt(R^2 + R_smooth^2)."""
-    return -R * R / (R_scale * R_eff)
+def _logn_disk_dlnR(R, R_smooth, R_scale):
+    """Return d ln(nu) / d ln(R) of the disk density of
+    `~brutus.priors.galactic.logp_galactic_structure`: that of
+    `~brutus.priors.galactic.logn_disk` at the radius held inside
+    DISK_INNER_RADIUS, R_c, times dR_c / dR."""
+    R_c, dR_c = _soft_clamp(R, DISK_INNER_RADIUS, np.inf, DISK_EDGE)
+    return -R * R_c * dR_c / (R_scale * sqrt(R_c * R_c + R_smooth * R_smooth))
 
 
 @jit(nopython=True, cache=True)
@@ -357,16 +359,18 @@ def _thin_disk_feh_factor(feh):
 @jit(nopython=True, cache=True)
 def _thin_disk_sigma0(age, feh):
     """Return the Sharma et al. (2021) (sigma_R, sigma_z) of one stellar
-    model at solar L_z and z = 0: sigma_0 f_tau f_[Fe/H].
+    model at solar L_z and z = 0: sigma_0 f_tau f_[Fe/H], with sigma_z
+    joined to THIN_DISK_SIGZ_FLOOR.
 
     These factors depend only on the model, so a caller that evaluates many
     positions per model computes them once.
     """
     a = (age + 0.1) / 10.1
     f_R, f_z = _thin_disk_feh_factor(feh)
+    sig_z = THIN_DISK_SIGMA0[1] * a ** THIN_DISK_BETA[1] * f_z
     return (
         THIN_DISK_SIGMA0[0] * a ** THIN_DISK_BETA[0] * f_R,
-        THIN_DISK_SIGMA0[1] * a ** THIN_DISK_BETA[1] * f_z,
+        (sig_z**4 + THIN_DISK_SIGZ_FLOOR**4) ** 0.25,
     )
 
 
@@ -494,7 +498,7 @@ def _thin_disk_mean_L(R, abs_z, sig_R0, vc, dlnvc, L_solar, L_clamp, dlnnu_dlnR,
 
 @jit(nopython=True, cache=True)
 def _thin_disk_moments(
-    R, abs_z, sig_R0, sig_z0, vc, dlnvc, L_solar, L_clamp, dlnnu_dlnR
+    R, abs_z, sig_R0, sig_z0, vc, dlnvc, L_solar, L_clamp, dlnnu_dlnR, fade, fz
 ):
     """Return (v_phi, var_R, var_phi, var_z) of the thin disk.
 
@@ -502,12 +506,13 @@ def _thin_disk_moments(
     dispersions take f_L at the population's mean L_z from
     ``_thin_disk_mean_L``; ``L_solar`` is R_solar v_c(R_solar), the L_z of
     a circular orbit at the Sun, and ``L_clamp`` is as in ``_thin_disk_fL``.
+    ``fade`` and ``fz`` are ``_thin_disk_fade(R)`` and ``_thin_disk_fz(abs_z)``,
+    which callers summing many populations at one point compute once.
     """
-    fade = _thin_disk_fade(R)
     args = (L_solar, L_clamp, dlnnu_dlnR, fade)
     L = _thin_disk_mean_L(R, abs_z, sig_R0, vc, dlnvc, *args)
     vphi, var_R, var_phi, f_z = _thin_disk_radial(R, abs_z, sig_R0, vc, dlnvc, L, *args)
-    sig_z = sig_z0 * f_z * _thin_disk_fz(abs_z)
+    sig_z = sig_z0 * f_z * fz
     return vphi, var_R, var_phi, sig_z * sig_z
 
 
@@ -607,6 +612,34 @@ def _halo_moments(R, Z):
 
 
 @jit(nopython=True, cache=True)
+def _bulge_moments(R, abs_z, R_solar, v_scale):
+    """Return (v_phi, var_R, var_phi, var_z) of the bulge at (R, |z|): the
+    BV24 bulge disc, bilinear in its table, with radii scaled by
+    R_solar / _BV24_R0 and velocities by ``v_scale``, held at its edges."""
+    n = _BULGE.shape[0]
+    fi = min(R * _BV24_R0 / (R_solar * _BULGE_STEP), n - 1.0)
+    fj = min(abs_z / _BULGE_STEP, n - 1.0)
+    i, j = min(int(fi), n - 2), min(int(fj), n - 2)
+    t, w = fi - i, fj - j
+    v2 = v_scale * v_scale
+    return (
+        _bilinear(i, j, t, w, 0) * v_scale,
+        _bilinear(i, j, t, w, 1) * v2,
+        _bilinear(i, j, t, w, 2) * v2,
+        _bilinear(i, j, t, w, 3) * v2,
+    )
+
+
+@jit(nopython=True, cache=True)
+def _bilinear(i, j, t, w, k):
+    """Return entry k of `_BULGE` bilinear between (i, j) and (i + 1, j + 1),
+    without the temporary arrays of the vector form."""
+    return (1.0 - t) * ((1.0 - w) * _BULGE[i, j, k] + w * _BULGE[i, j + 1, k]) + t * (
+        (1.0 - w) * _BULGE[i + 1, j, k] + w * _BULGE[i + 1, j + 1, k]
+    )
+
+
+@jit(nopython=True, cache=True)
 def _store(mean, cov, m_R, m_phi, m_z, var_R, var_phi, var_z, cov_Rz):
     mean[0] = m_R
     mean[1] = m_phi
@@ -636,7 +669,9 @@ def _thin_disk_array(R, Z, age, feh, R_scale, R_smooth, R_solar, vc_solar):
             dlnvc,
             L_solar,
             L_clamp,
-            _logn_disk_dlnR(R[i], sqrt(R[i] * R[i] + R_smooth * R_smooth), R_scale),
+            _logn_disk_dlnR(R[i], R_smooth, R_scale),
+            _thin_disk_fade(R[i]),
+            _thin_disk_fz(abs(Z[i])),
         )
         _store(mean[i], cov[i], 0.0, vphi, 0.0, var_R, var_phi, var_z, 0.0)
     return mean, cov
@@ -665,7 +700,7 @@ def _thick_disk_array(
             var_phi0,
             var_z0,
             R_solar,
-            _logn_disk_dlnR(R[i], sqrt(R[i] * R[i] + R_smooth * R_smooth), R_scale),
+            _logn_disk_dlnR(R[i], R_smooth, R_scale),
         )
         _store(mean[i], cov[i], 0.0, vphi, 0.0, var_R, var_phi, var_z, 0.0)
     return mean, cov
@@ -755,7 +790,12 @@ def thin_disk_velocity_moments(
     :math:`\bar{v}_\phi` from the Jeans equation below (two steps of the
     fixed point from the circular :math:`L_z = R\,v_c`). The relations
     were fitted at 3 < R < 20 kpc, :math:`|z|` < 2 kpc and
-    -1 < [Fe/H] < 0.5.
+    -1 < [Fe/H] < 0.5. For :math:`\sigma_z` the product :math:`s` of
+    :math:`\sigma_{0,v}`, the age factor and the [Fe/H] factor is joined to
+    the 8 km/s of stars younger than
+    200 Myr (``THIN_DISK_SIGZ_FLOOR``; Gaia Collaboration 2021) as
+    :math:`(s^4 + 8^4)^{1/4}`, because extrapolated to age 0 it gives
+    2.8 km/s.
     In the height factor of :math:`\sigma_z`, :math:`|z|` is held at
     2 kpc (``THIN_DISK_Z_MAX``) with a quadratic blend from 1.5 kpc
     (``THIN_DISK_Z_EDGE`` = 0.5 kpc). Without the hold, the thin-disk
@@ -780,7 +820,8 @@ def thin_disk_velocity_moments(
 
     The mean rotation is the radial Jeans solution (Binney & Tremaine 2008,
     eq. 4.228) for a cylindrically aligned ellipsoid and the density
-    gradient of `~brutus.priors.galactic.logn_disk`:
+    gradient of `~brutus.priors.galactic.logn_disk`, held inside
+    DISK_INNER_RADIUS (4 kpc) as in the Galactic prior:
 
     .. math::
         \bar{v}_\phi^2 = v_c^2 - \sigma_\phi^2
@@ -997,6 +1038,66 @@ def halo_velocity_moments(R, Z):
     return _halo_array(R, _check_heights(Z, R))
 
 
+@jit(nopython=True, parallel=True, cache=True)
+def _bulge_array(R, Z, R_solar, v_scale):
+    N = len(R)
+    mean = np.zeros((N, 3))
+    cov = np.zeros((N, 3, 3))
+    for i in prange(N):
+        vphi, var_R, var_phi, var_z = _bulge_moments(R[i], abs(Z[i]), R_solar, v_scale)
+        _store(mean[i], cov[i], 0.0, vphi, 0.0, var_R, var_phi, var_z, 0.0)
+    return mean, cov
+
+
+def bulge_velocity_moments(R, Z, R_solar=R_SOLAR, v_circ_solar=None):
+    r"""
+    Return the velocity ellipsoid of the bulge.
+
+    The bar and the metal-poor spheroid of the Galactic prior share the
+    velocity distribution of the bulge disc of the Milky Way model of
+    Binney & Vasiliev (2024), rebuilt with AGAMA by
+    ``.github/scripts/make_bv24_tables.py``: its mean rotation and the
+    dispersions of :math:`(v_R, v_\phi, v_z)`, tabulated on 0.1 kpc steps
+    in R and z out to 6 kpc, interpolated bilinearly and held beyond. The
+    model is axisymmetric, so streaming along the bar is not described.
+    Radii scale by :math:`R_\odot / 8.27` kpc and velocities by
+    :math:`v_{c,\odot} / 235.7` km/s, as the potential does. The R-z
+    covariance, under 0.05 (km/s)^2 where it was measured, is left out.
+
+    Parameters
+    ----------
+    R, Z : array_like of shape `(N,)`
+        Galactocentric cylindrical radius and height above the midplane in
+        kpc.
+    R_solar : float, optional
+        Distance of the Sun from the Galactic centre in kpc. Default is
+        ``R_SOLAR``, 8.275 (GRAVITY Collaboration 2021).
+    v_circ_solar : float, optional
+        Circular speed at the Sun in km/s. Default is the solar V of
+        `solar_velocity` minus the peculiar 12.24 km/s of Schönrich et al.
+        (2010).
+
+    Returns
+    -------
+    mean : `~numpy.ndarray` of shape `(N, 3)`
+        Mean velocity ``(v_R, v_phi, v_z)`` in km/s.
+    cov : `~numpy.ndarray` of shape `(N, 3, 3)`
+        Velocity covariance in (km/s)^2.
+
+    Raises
+    ------
+    ValueError
+        If ``R`` and ``Z`` are not finite 1-D arrays of the same length,
+        ``R`` is negative, or ``R_solar`` or ``v_circ_solar`` is not
+        positive.
+    """
+    R = _check_radii(R)
+    Z = _check_heights(Z, R)
+    _check_positive(R_solar=R_solar)
+    v_scale = _vc_solar(v_circ_solar, R_solar) / _V_VC0
+    return _bulge_array(R, Z, float(R_solar), v_scale)
+
+
 @jit(nopython=True, cache=True)
 def _vertical_row(i, j, w):
     """Return (dphi, jeans) of table row ``i`` at u = (j + w) du, by cubic
@@ -1132,26 +1233,85 @@ def _project_moments(E, sun, inv_kd, eRx, eRy, m_R, m_phi, m_z, s_RR, s_pp, s_zz
     )
 
 
+@jit(nopython=True, cache=True)
+def _motion_geometry(d, E, sun, R_solar):
+    """Return (E, sun, 1 / (k d), eRx, eRy) of `_project_moments` for a star
+    at distance ``d`` kpc on the sightline of ``E``, with the Sun in the
+    midplane."""
+    px = d * E[2, 0] - R_solar
+    py = d * E[2, 1]
+    R = sqrt(px * px + py * py)
+    if R > 0.0:
+        return E, sun, 1.0 / (K_KMS * d), px / R, py / R
+    return E, sun, 1.0 / (K_KMS * d), -1.0, 0.0
+
+
+@jit(nopython=True, cache=True)
+def _ln_observed(obs, obs_cov, n_obs, m0, m1, m2, c00, c01, c02, c11, c12, c22):
+    """Return ln N(obs | m, C + obs_cov) for the first ``n_obs`` (2 or 3)
+    of (mu_l*, mu_b, v_r), with the projected mean and covariance entries
+    of `_project_moments`."""
+    a, b, d = c00 + obs_cov[0, 0], c01 + obs_cov[0, 1], c11 + obs_cov[1, 1]
+    r0, r1 = obs[0] - m0, obs[1] - m1
+    if n_obs == 2:
+        det = a * d - b * b
+        chi2 = (d * r0 * r0 - 2.0 * b * r0 * r1 + a * r1 * r1) / det
+        return -0.5 * (chi2 + log(det)) - _LOG_2PI
+    c, e, f = c02 + obs_cov[0, 2], c12 + obs_cov[1, 2], c22 + obs_cov[2, 2]
+    r2 = obs[2] - m2
+    # Cofactors of the symmetric matrix [[a, b, c], [b, d, e], [c, e, f]].
+    k00, k01, k02 = d * f - e * e, c * e - b * f, b * e - c * d
+    k11, k12, k22 = a * f - c * c, b * c - a * e, a * d - b * b
+    det = a * k00 + b * k01 + c * k02
+    chi2 = (
+        k00 * r0 * r0
+        + k11 * r1 * r1
+        + k22 * r2 * r2
+        + 2.0 * (k01 * r0 * r1 + k02 * r0 * r2 + k12 * r1 * r2)
+    ) / det
+    return -0.5 * (chi2 + log(det)) - 1.5 * _LOG_2PI
+
+
+@jit(nopython=True, cache=True)
+def _ln_motion(geometry, obs, obs_cov, n_obs, m_R, m_phi, m_z, s_RR, s_pp, s_zz, s_Rz):
+    """Return ln p of the observed motion under one cylindrical ellipsoid,
+    with ``geometry`` = (E, sun, inv_kd, eRx, eRy) of `_project_moments`."""
+    E, sun, inv_kd, eRx, eRy = geometry
+    return _ln_observed(
+        obs,
+        obs_cov,
+        n_obs,
+        *_project_moments(
+            E, sun, inv_kd, eRx, eRy, m_R, m_phi, m_z, s_RR, s_pp, s_zz, s_Rz
+        ),
+    )
+
+
+@jit(nopython=True, cache=True)
+def _ln_halo_motion(R, Z, geometry, obs, obs_cov, n_obs):
+    """Return ln p of the observed motion under the halo mixture of
+    `_halo_moments`."""
+    f_iso, iso, lobe = _halo_moments(R, Z)
+    m_R, m_phi, m_z = lobe[0], lobe[1], lobe[2]
+    out = log(f_iso) + _ln_motion(geometry, obs, obs_cov, n_obs, 0.0, 0.0, 0.0, *iso)
+    if f_iso < 1.0:
+        ln_lobe = log(0.5 * (1.0 - f_iso))
+        for sign in (1.0, -1.0):
+            v = _ln_motion(
+                geometry, obs, obs_cov, n_obs, sign * m_R, m_phi, sign * m_z, *lobe[3:]
+            )
+            out = _ln_add(out, ln_lobe + v)
+    return out
+
+
 @jit(nopython=True, parallel=True, cache=True)
 def _project_array(dists, E, sun, R_solar, mean, cov):
     N = len(dists)
     obs_mean = np.empty((N, 3))
     obs_cov = np.empty((N, 3, 3))
     for n in prange(N):
-        d = dists[n]
-        px = d * E[2, 0] - R_solar
-        py = d * E[2, 1]
-        R = sqrt(px * px + py * py)
-        if R > 0.0:
-            eRx, eRy = px / R, py / R
-        else:
-            eRx, eRy = -1.0, 0.0
         m0, m1, m2, c00, c01, c02, c11, c12, c22 = _project_moments(
-            E,
-            sun,
-            1.0 / (K_KMS * d),
-            eRx,
-            eRy,
+            *_motion_geometry(dists[n], E, sun, R_solar),
             mean[n, 0],
             mean[n, 1],
             mean[n, 2],

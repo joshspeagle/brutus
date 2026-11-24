@@ -99,6 +99,8 @@ $$
 
 $\Sigma_i$ is the covariance of the model's Gaussian, so $\mathcal{L}_{{\rm phot},i}\,|2\pi\Sigma_i|^{1/2}$ is the Laplace approximation of the likelihood integrated over $(\ln d, A_V, R_V)$. A model whose fit is less tightly constrained covers more of that space and weighs more. The factor $d_{ij}$ is the Jacobian of sampling in $\ln d$. Sampling in $s$ instead would bias distances by a factor $d^{-3}$.
 
+A model's points span only 0.01 to 0.03 in $\ln d$ for most stars, because its absolute magnitude fixes its distance, so the default $\pi_{\rm gal}$ is smooth across them. brutus evaluates it at 5 Chebyshev nodes over that range and interpolates it to the points. Where that interpolant differs by more than $10^{-3}$ in $\ln \pi_{\rm gal}$ from the one through 3 of the nodes, brutus uses 9 nodes, and where 9 fail the same check, it evaluates the prior at every point.
+
 The parallax is used three times. During step 1, models whose magnitude-space fit, with the parallax added at the best-fit $s$, is more than a factor $10^6$ worse than the best (`logl_initthresh`) keep that fit and are not refined. The averaged term in step 2 then sets the probability that each model is kept. Only the exact term here sets the weights.
 
 **4. Draw the posterior.** brutus draws 250 models (`Ndraws`) in proportion to the posterior weight $w_i$ of step 3, divided by $p_i$ for the models kept by `max_models`, and for each one draws a point $(d, A_V, R_V)$ from its weighted Monte Carlo points. These are the saved posterior draws.
