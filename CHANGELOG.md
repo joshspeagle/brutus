@@ -92,7 +92,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   On the bench cohort `loglike_grid` takes 171 instead of 248 ms per star
   and the gate 596 instead of 1525 ms over 12 stars with parallaxes;
   results are bitwise identical.
-- **`fit()` queries a Bayestar dust map once for all objects** with the
+- **`fit()` queries a Bayestar dust map once per 4096 objects** with the
   default dust prior, instead of once per object (5-15 ms each). Results
   are bitwise identical.
 - **The bulge's metal-poor population is a spheroid** *(output-changing)*.

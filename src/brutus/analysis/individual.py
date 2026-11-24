@@ -976,6 +976,11 @@ def _mc_summary(lnp_mc):
     return lnp, ess
 
 
+# Objects per Bayestar query in `fit`: one query for many objects is much
+# faster than one per object, and chunks bound its memory for large catalogues.
+_DUST_CHUNK = 4096
+
+
 class _Sightline:
     """One sightline of a dust map, queried for many objects at once:
     `query` returns its profile as the map's own query would."""
@@ -2554,15 +2559,8 @@ class BruteForce:
         if dustfile is not None and isinstance(dustfile, (str, os.PathLike)):
             dustfile = Bayestar(dustfile=dustfile)
         # The default dust prior reads one sightline of a Bayestar map per
-        # object; one query for all of them replaces a query per object.
-        sightlines = None
-        if isinstance(dustfile, Bayestar) and lndustprior is None:
-            distances, av_mean, av_std = dustfile.query(
-                np.asarray(data_coords, dtype=float)
-            )
-            sightlines = [
-                _Sightline(distances, av_mean[i], av_std[i]) for i in range(Ndata)
-            ]
+        # object; one query per _DUST_CHUNK objects replaces a query per object.
+        batched = isinstance(dustfile, Bayestar) and lndustprior is None
 
         # Initialize random state
         if rstate is None:
@@ -2624,6 +2622,11 @@ class BruteForce:
                 sys.stderr.flush()
 
             for i in range(Ndata):
+                k = i % _DUST_CHUNK
+                if batched and k == 0:
+                    profiles = dustfile.query(
+                        np.asarray(data_coords[i : i + _DUST_CHUNK], dtype=float)
+                    )
                 if nbands_valid[i] == 0:
                     row = unfitted
                 else:
@@ -2645,7 +2648,11 @@ class BruteForce:
                         Ndraws=Ndraws,
                         lngalprior=lngalprior_proc,
                         lndustprior=lndustprior_proc,
-                        dustfile=dustfile if sightlines is None else sightlines[i],
+                        dustfile=(
+                            _Sightline(profiles[0], profiles[1][k], profiles[2][k])
+                            if batched
+                            else dustfile
+                        ),
                         dlabels=dlabels,
                         logl_dim_prior=logl_dim_prior,
                         ltol=ltol,

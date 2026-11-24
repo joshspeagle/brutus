@@ -2678,7 +2678,7 @@ class TestFitWithProperMotions:
                 radial_velocity_error=np.ones(self.NDATA),
             )
 
-    def test_dust_map_is_queried_once_and_each_object_gets_its_sightline(
+    def test_dust_map_is_queried_once_per_chunk_and_each_object_gets_its_sightline(
         self, mock_fitter, tmp_path, monkeypatch
     ):
         import brutus.analysis.individual as ind
@@ -2707,8 +2707,11 @@ class TestFitWithProperMotions:
             return np.zeros(len(avs))
 
         monkeypatch.setattr(ind, "logp_extinction", prior)
+        monkeypatch.setattr(ind, "_DUST_CHUNK", 2)
         self._fit(mock_fitter, tmp_path, "dust", dustfile=FakeMap())
-        assert queries == [(self.NDATA, 2)]
+        sizes = [min(2, self.NDATA - i) for i in range(0, self.NDATA, 2)]
+        assert queries == [(n, 2) for n in sizes]
+        assert len(seen) == self.NDATA
         for ell, av in seen:
             assert av == ell
 
