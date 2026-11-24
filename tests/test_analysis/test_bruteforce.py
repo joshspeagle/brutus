@@ -1848,6 +1848,80 @@ class TestModelWeights:
         )
         np.testing.assert_array_equal(out[0], [0])
 
+    def test_nan_dust_prior_with_the_default_galactic_prior_gives_no_weight(
+        self, fitter
+    ):
+        """A NaN from another prior must not empty the span of the Galactic
+        table, which raised a ValueError."""
+        cov = np.diag([1e-4, 1e-4, 1e-4])
+        like = _make_loglike_results([1.0, 0.25], [cov, cov])
+
+        def lndustprior(avs, dustmap, coord, distance=None):
+            return np.where(distance > 1.5, np.nan, 0.0)
+
+        dlabels = np.array(
+            [(0.0, 9.5), (0.0, 9.5)], dtype=[("feh", "f8"), ("loga", "f8")]
+        )
+        out = fitter.logpost_grid(
+            like,
+            coord=(120.0, 45.0),
+            lndustprior=lndustprior,
+            dustfile=object(),
+            dlabels=dlabels,
+            Nmc_prior=4,
+            rstate=np.random.RandomState(0),
+        )
+        np.testing.assert_array_equal(out[0], [0])
+
+    def test_labels_older_than_the_universe_get_zero_weight(self, fitter):
+        """With every age above MAX_AGE the table had no age node and raised
+        an IndexError."""
+        cov = np.diag([1e-4, 1e-4, 1e-4])
+        like = _make_loglike_results([1.0, 0.25], [cov, cov])
+        dlabels = np.array(
+            [(0.0, 10.3), (0.0, 10.3)], dtype=[("feh", "f8"), ("loga", "f8")]
+        )
+        out = fitter.logpost_grid(
+            like,
+            coord=(120.0, 45.0),
+            dlabels=dlabels,
+            Nmc_prior=4,
+            rstate=np.random.RandomState(0),
+        )
+        assert np.all(out[2] <= LOG_ZERO)
+
+    def test_non_finite_labels_are_rejected(self, fitter):
+        cov = np.diag([1e-4, 1e-4, 1e-4])
+        like = _make_loglike_results([1.0, 0.25], [cov, cov])
+        dlabels = np.array(
+            [(0.0, 9.5), (0.0, np.nan)], dtype=[("feh", "f8"), ("loga", "f8")]
+        )
+        with pytest.raises(ValueError, match="'loga' must be finite"):
+            fitter.logpost_grid(like, coord=(120.0, 45.0), dlabels=dlabels)
+
+    def test_max_models_none_keeps_a_model_whose_prior_is_zero_at_its_fit(self, fitter):
+        """The selection weight evaluates the priors at the best fit only, so
+        with max_models=None a model whose prior is zero there, but not over
+        its draws, must still be kept."""
+        cov = np.diag([1e-4, 1e-4, 1e-4])
+        near = np.diag([0.3**2 * 4 * (1 / 1.1) ** 4, 1e-4, 1e-4])
+        like = _make_loglike_results([1.0, 1 / 1.1**2], [cov, near])
+
+        def lngalprior(dists, coord, labels=None):
+            return np.where(dists < 1.0 + 1e-9, 0.0, LOG_ZERO)
+
+        out = fitter.logpost_grid(
+            like,
+            coord=(120.0, 45.0),
+            lngalprior=lngalprior,
+            dlabels=None,
+            max_models=None,
+            Nmc_prior=20,
+            rstate=np.random.RandomState(0),
+        )
+        np.testing.assert_array_equal(out[0], [0, 1])
+        assert out[2][1] > LOG_ZERO
+
     def test_selection_follows_the_galactic_prior_without_parallax(self, fitter):
         """Regression (#307): the selection weight includes the distance
         priors, so a distant giant that the Galactic volume favours is kept

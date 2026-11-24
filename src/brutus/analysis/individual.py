@@ -778,9 +778,9 @@ def _eta_gaussians(scales, icovs_sar):
     Sigma is the inverse of the (scale, A(V), R(V)) precision mapped to
     ln(d), regularized as `~brutus.utils.math.inverse3` regularizes the
     Monte Carlo draws' matrix before inverting it. The last term is the
-    Laplace volume of the model's fit (#331): LOG_ZERO where the precision
-    is not positive definite, since the model has no finite volume. The
-    error of such a model is 1.
+    Laplace volume of the model's fit (#331). It is LOG_ZERO where the
+    precision is not positive definite, since the model has no finite
+    volume. The error of such a model is 1.
     """
     N = len(scales)
     eta, eta_err, half_logdet = np.empty(N), np.empty(N), np.empty(N)
@@ -1728,11 +1728,11 @@ class BruteForce:
 
         wt_thresh, cdf_thresh : float or None, optional
             Deprecated; will be removed. A hard cut applied to the selection
-            weight before the sampling: keep the models whose weight is above
-            `wt_thresh` times the largest, or, if `wt_thresh` is None, the
-            models of highest weight that hold ``1 - cdf_thresh`` of the
+            weight before the sampling. It keeps the models whose weight is
+            above `wt_thresh` times the largest, or, if `wt_thresh` is None,
+            the models of highest weight that hold ``1 - cdf_thresh`` of the
             total. A cut drops posterior weight that the sampling would keep
-            (#307). Default is None for both: no cut.
+            (#307). Default is None for both, which makes no cut.
 
         max_models : int or None, optional
             Number of models kept for the Monte Carlo step. Models are kept
@@ -1741,8 +1741,9 @@ class BruteForce:
             sum to `max_models`; ``ln_incl`` holds their logarithms. The
             selection weight is the model's weight with the Galactic, dust
             and log-distance terms at its best fit, and the parallax
-            likelihood averaged over its Gaussian in ln(d). None keeps every
-            model. Default is 5000.
+            likelihood averaged over its Gaussian in ln(d). A model whose
+            priors are zero at its best fit is never kept. None keeps every
+            model whose fit has a finite volume. Default is 5000.
 
         precision_shrinkage : float, optional
             Fraction by which the off-diagonal terms of each (scale, A(V),
@@ -1909,6 +1910,12 @@ class BruteForce:
                     for name in ("feh", "loga")
                     if name in names
                 }
+                for name, x in label_arrays.items():
+                    if not np.all(np.isfinite(x)):
+                        raise ValueError(
+                            f"`dlabels` field '{name}' must be finite for the "
+                            "default Galactic prior."
+                        )
         apply_dust = apply_av_prior and lndustprior is not None
         if apply_dust:
             if isinstance(dustfile, (str, os.PathLike)):
@@ -1948,6 +1955,8 @@ class BruteForce:
             lnprob_sel += _lnp_parallax_gate(
                 eta_hat, eta_err, float(parallax), float(parallax_err)
             )
+        # A prior that returns NaN or inf for some model gives it no weight.
+        lnprob_sel[~np.isfinite(lnprob_sel)] = LOG_ZERO
         if coord is not None:
             if gal_is_default:
                 # A table along the sightline, spanning the models within
@@ -1958,21 +1967,24 @@ class BruteForce:
                 )
             else:
                 lnprob_sel += lngalprior(np.exp(eta_fit), coord, labels=dlabels)
-        # A prior that returns NaN or inf for some model gives it no weight.
-        lnprob_sel[~np.isfinite(lnprob_sel)] = LOG_ZERO
+            lnprob_sel[~np.isfinite(lnprob_sel)] = LOG_ZERO
 
         # Keep max_models models by systematic sampling with probability
         # proportional to their selection weight (Horvitz-Thompson), and
         # divide their weights by that probability: the evidence and the
-        # draws stay unbiased for any selection weight. Models of zero weight
-        # are dropped.
+        # draws stay unbiased for any selection weight that is nonzero where
+        # the posterior is. A model whose priors are zero at its best fit
+        # therefore has no chance of being kept, unless max_models is None,
+        # which keeps every model of finite volume.
         w = np.exp(lnprob_sel - np.max(lnprob_sel))
-        sel = np.flatnonzero(w > 0)
+        sel = np.flatnonzero(
+            w > 0 if max_models is not None else lnprob_base > LOG_ZERO / 2
+        )
         if wt_thresh is not None or cdf_thresh is not None:
             warnings.warn(
                 "`wt_thresh` and `cdf_thresh` are deprecated and will be "
-                "removed: a cut drops posterior weight that the max_models "
-                "sampling keeps (#307).",
+                "removed, because a cut drops posterior weight that the "
+                "max_models sampling keeps (#307).",
                 FutureWarning,
                 stacklevel=2,
             )
@@ -2264,7 +2276,7 @@ class BruteForce:
 
         wt_thresh, cdf_thresh : float or None, optional
             Deprecated hard cuts on the selection weight; see `logpost_grid`.
-            Default is None for both: no cut.
+            Default is None for both, which makes no cut.
 
         Ndraws : int, optional
             Number of posterior draws to save per object. Default is 250.
@@ -2379,8 +2391,8 @@ class BruteForce:
             random, each with a probability proportional to its selection
             weight (at most 1); see `logpost_grid`. The evidence and the
             posterior draws divide each kept model's weight by that
-            probability, so they stay unbiased. None keeps every model.
-            Default is 5000.
+            probability, so they stay unbiased. None keeps every model whose
+            fit has a finite volume. Default is 5000.
 
         precision_shrinkage : float, optional
             Fractional shrinkage applied to the off-diagonal terms of the 3x3

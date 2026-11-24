@@ -196,7 +196,7 @@ The per-model fit has Gaussian priors on $R_V$ and $A_V$:
 | `av_gauss` | `None` | mean and standard deviation of $A_V$; `None` is flat |
 | `avlim` | `(0.0, 20.0)` | allowed range of $A_V$ |
 
-These priors act in the Gauss-Newton fit of each model, so they also shape the Gaussian that the Monte Carlo step draws from. `av_gauss` adds to the dust-map prior: an informative `av_gauss` together with `dustfile` counts the $A_V$ information twice.
+These priors act in the Gauss-Newton fit of each model, so they also shape the Gaussian that the Monte Carlo step draws from, and their height at the fit enters each model's weight. `av_gauss` adds to the dust-map prior: an informative `av_gauss` together with `dustfile` counts the $A_V$ information twice.
 
 ## Changing the priors
 

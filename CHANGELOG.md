@@ -293,8 +293,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Model weights include the volume of each model's fit**
   *(output-changing)*. A model's posterior weight is now its likelihood
   times `|2 pi Sigma|^(1/2)`, the volume of its Gaussian in (ln d, A(V),
-  R(V)), times the average of the priors over its draws: the Laplace
-  approximation of the integral over distance and dust. The factor was
+  R(V)), times the average of the priors over its draws. This is the
+  Laplace approximation of the integral over distance and dust. The factor was
   missing, so models with less constrained fits weighed too little. In
   the tutorial 4 mock, it moves 1.7% of the model weight (median). A model
   whose precision matrix is not positive definite now gets zero weight.
