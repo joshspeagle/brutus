@@ -74,7 +74,16 @@ from ..priors.galactic import (
     sample_motions,
 )
 from ..priors.stellar import logp_imf, logp_ps1_luminosity_function
-from ..utils.math import AVLIM, LOG_ZERO, R_SOLAR, RVLIM, Z_SOLAR, galactic_to_icrs
+from ..utils.math import (
+    AVLIM,
+    LOG_ZERO,
+    R_SOLAR,
+    RVLIM,
+    SINGULAR_DET,
+    SINGULAR_SHIFT,
+    Z_SOLAR,
+    galactic_to_icrs,
+)
 from ..utils.math import inverse3 as _inverse3
 from ..utils.math import pm_equatorial_to_galactic
 from ..utils.photometry import magnitude
@@ -94,6 +103,8 @@ _MAX_DAMPING = 1e6
 
 # Minimum allowed scale factor to prevent division by zero or log(0).
 MIN_SCALE = 1e-20
+#: Support of the distance, in kpc. Draws outside it get zero weight.
+_DIST_LIM = (0.001, 1e6)
 
 
 class _GridLabels:
@@ -759,45 +770,49 @@ def _lnp_parallax_gate(eta, eta_err, parallax, parallax_err):
     return out
 
 
+@jit(nopython=True, cache=True, parallel=True)
 def _eta_gaussians(scales, icovs_sar):
     """Return the ln(d) mean, marginal ln(d) error and ``0.5 ln|2 pi Sigma|``
     of each model's Gaussian in (ln d, A(V), R(V)).
 
     Sigma is the inverse of the (scale, A(V), R(V)) precision mapped to
-    ln(d), regularized as the Monte Carlo draws are (`~brutus.utils.math.inverse3`).
-    The last term is the Laplace volume of the model's fit (#331):
-    LOG_ZERO where the precision is not positive definite, since the model
-    has no finite volume. The error of such a model is 1.
+    ln(d), regularized as `~brutus.utils.math.inverse3` regularizes the
+    Monte Carlo draws' matrix before inverting it. The last term is the
+    Laplace volume of the model's fit (#331): LOG_ZERO where the precision
+    is not positive definite, since the model has no finite volume. The
+    error of such a model is 1.
     """
-    i00, i11, i22 = icovs_sar[:, 0, 0], icovs_sar[:, 1, 1], icovs_sar[:, 2, 2]
-    diag = i00 > 0, i11 > 0, i22 > 0
-    with np.errstate(divide="ignore", invalid="ignore"):
-        c01 = icovs_sar[:, 0, 1] / np.sqrt(i00 * i11)
-        c02 = icovs_sar[:, 0, 2] / np.sqrt(i00 * i22)
-        c12 = icovs_sar[:, 1, 2] / np.sqrt(i11 * i22)
-        # The determinant of the correlation form, with 1e-3 added to its
-        # diagonal where it is below 1e-10, as inverse3 does.
+    N = len(scales)
+    eta, eta_err, half_logdet = np.empty(N), np.empty(N), np.empty(N)
+    for i in prange(N):
+        i00, i11, i22 = icovs_sar[i, 0, 0], icovs_sar[i, 1, 1], icovs_sar[i, 2, 2]
+        log_s = np.log(max(scales[i], MIN_SCALE))
+        eta[i], eta_err[i], half_logdet[i] = -0.5 * log_s, 1.0, LOG_ZERO
+        if not (i00 > 0 and i11 > 0 and i22 > 0):
+            continue
+        c01 = icovs_sar[i, 0, 1] / np.sqrt(i00 * i11)
+        c02 = icovs_sar[i, 0, 2] / np.sqrt(i00 * i22)
+        c12 = icovs_sar[i, 1, 2] / np.sqrt(i11 * i22)
+        # The determinant of the correlation form, with the diagonal shift
+        # of inverse3 where it is singular.
         cross = 2.0 * c01 * c02 * c12
         squares = c01**2 + c02**2 + c12**2
-        one = np.where(np.abs(1.0 + cross - squares) < 1e-10, 1.0 + 1e-3, 1.0)
+        one = 1.0
+        if abs(1.0 + cross - squares) < SINGULAR_DET:
+            one += SINGULAR_SHIFT
         det = one**3 + cross - one * squares
         # Sylvester's criterion.
-        positive = diag[0] & diag[1] & diag[2] & (one**2 - c01**2 > 0) & (det > 0)
-
+        if not (one**2 - c01**2 > 0 and det > 0):
+            continue
         # eta = ln(d) = -0.5 ln(s), so sigma_eta = sigma_s / (2 s) and
         # |Sigma_eta| = |Sigma_sar| / (2 s)^2. The marginal scale variance is
         # cov[0,0] = minor00 / det: distance and extinction both dim a star,
         # so the conditional error is 3-16x too small for reddened stars.
-        log_s = np.log(np.maximum(scales, MIN_SCALE))
         var00 = (one**2 - c12**2) / (det * i00)
-        eta_err = np.where(positive, 0.5 * np.sqrt(var00) * np.exp(-log_s), 1.0)
+        eta_err[i] = 0.5 * np.sqrt(var00) * np.exp(-log_s)
         logdet = np.log(i00) + np.log(i11) + np.log(i22) + np.log(det)
-        half_logdet = np.where(
-            positive,
-            1.5 * np.log(2.0 * np.pi) - 0.5 * logdet - np.log(2.0) - log_s,
-            LOG_ZERO,
-        )
-    return -0.5 * log_s, eta_err, half_logdet
+        half_logdet[i] = 1.5 * np.log(2.0 * np.pi) - 0.5 * logdet - np.log(2.0) - log_s
+    return eta, eta_err, half_logdet
 
 
 # The 9 Chebyshev-Lobatto nodes of the Galactic prior across a model's draws.
@@ -1663,9 +1678,9 @@ class BruteForce:
         coord=None,
         Nmc_prior=100,
         lnprior=None,
-        max_models=5000,
         wt_thresh=None,
         cdf_thresh=None,
+        max_models=5000,
         precision_shrinkage=0.0,
         lngalprior=None,
         lndustprior=None,
@@ -1711,6 +1726,14 @@ class BruteForce:
         lnprior : `~numpy.ndarray` of shape `(Nmodels,)`, optional
             Log-prior of each model. Default is 0 for every model.
 
+        wt_thresh, cdf_thresh : float or None, optional
+            Deprecated; will be removed. A hard cut applied to the selection
+            weight before the sampling: keep the models whose weight is above
+            `wt_thresh` times the largest, or, if `wt_thresh` is None, the
+            models of highest weight that hold ``1 - cdf_thresh`` of the
+            total. A cut drops posterior weight that the sampling would keep
+            (#307). Default is None for both: no cut.
+
         max_models : int or None, optional
             Number of models kept for the Monte Carlo step. Models are kept
             by systematic sampling with probability ``min(1, c w)``, where
@@ -1720,14 +1743,6 @@ class BruteForce:
             and log-distance terms at its best fit, and the parallax
             likelihood averaged over its Gaussian in ln(d). None keeps every
             model. Default is 5000.
-
-        wt_thresh, cdf_thresh : float or None, optional
-            Deprecated; will be removed. A hard cut applied to the selection
-            weight before the sampling: keep the models whose weight is above
-            `wt_thresh` times the largest, or, if `wt_thresh` is None, the
-            models of highest weight that hold ``1 - cdf_thresh`` of the
-            total. A cut drops posterior weight that the sampling would keep
-            (#307). Default is None for both: no cut.
 
         precision_shrinkage : float, optional
             Fraction by which the off-diagonal terms of each (scale, A(V),
@@ -1887,8 +1902,8 @@ class BruteForce:
                         "Galactic prior, which reads its 'feh' and 'loga' fields."
                     )
                 names = () if dlabels is None else dlabels.dtype.names
-                # Per-model float labels; the prior computes each model's
-                # label terms once over its draws.
+                # Per-model float labels for the table and for the draws,
+                # whose prior computes each model's label terms once.
                 label_arrays = {
                     name: dlabels[name].astype(np.float64, copy=False)
                     for name in ("feh", "loga")
@@ -1917,7 +1932,7 @@ class BruteForce:
         # the model's best fit (#307). Without them the model prior, which
         # favours near dwarfs, drops distant giants that the Galactic volume
         # favours.
-        eta_fit = np.clip(eta_hat, np.log(0.001), np.log(1e6))
+        eta_fit = np.clip(eta_hat, *np.log(_DIST_LIM))
         lnprob_sel = lnprob_base + eta_fit
         if apply_dust:
             lnprob_sel += lndustprior(
@@ -2061,7 +2076,7 @@ class BruteForce:
         # clamped to MIN_SCALE gives ln(d) draws that overflow to inf here.
         with np.errstate(over="ignore"):
             dist_raw = np.exp(eta_samples)
-        dist_mc = np.clip(dist_raw, 0.001, 1e6)
+        dist_mc = np.clip(dist_raw, *_DIST_LIM)
         outside = dist_mc != dist_raw
         a_clip = np.clip(a_mc, avlim[0], avlim[1])
         outside |= a_clip != a_mc
@@ -2069,7 +2084,7 @@ class BruteForce:
         outside |= r_clip != r_mc
         a_mc, r_mc = a_clip, r_clip
 
-        # Initialize log-posterior from base (without parallax scale approx).
+        # Each draw starts from the model's weight before the distance priors.
         # The exact parallax likelihood is added below via logp_parallax.
         lnp_mc = np.tile(lnprob_base[sel], (Nmc, 1))  # Shape: (Nmc, Nsel)
 
@@ -2148,6 +2163,8 @@ class BruteForce:
         rvlim=RVLIM,
         rv_gauss=(3.32, 0.18),
         lnprior=None,
+        wt_thresh=None,
+        cdf_thresh=None,
         Ndraws=250,
         apply_agewt=True,
         apply_grad=True,
@@ -2166,8 +2183,6 @@ class BruteForce:
         running_io=True,
         mem_lim=8000.0,
         max_models=5000,
-        wt_thresh=None,
-        cdf_thresh=None,
         precision_shrinkage=0.0,
         verbose=True,
         R_solar=R_SOLAR,
@@ -2246,6 +2261,10 @@ class BruteForce:
             Log-prior for each model. If not provided, defaults to Kroupa IMF
             prior on initial mass (for MIST models) or PS1 luminosity function
             prior (for Bayestar models).
+
+        wt_thresh, cdf_thresh : float or None, optional
+            Deprecated hard cuts on the selection weight; see `logpost_grid`.
+            Default is None for both: no cut.
 
         Ndraws : int, optional
             Number of posterior draws to save per object. Default is 250.
@@ -2362,10 +2381,6 @@ class BruteForce:
             posterior draws divide each kept model's weight by that
             probability, so they stay unbiased. None keeps every model.
             Default is 5000.
-
-        wt_thresh, cdf_thresh : float or None, optional
-            Deprecated hard cuts on the selection weight; see `logpost_grid`.
-            Default is None for both: no cut.
 
         precision_shrinkage : float, optional
             Fractional shrinkage applied to the off-diagonal terms of the 3x3
@@ -2751,6 +2766,8 @@ class BruteForce:
         rvlim=RVLIM,
         rv_gauss=(3.32, 0.18),
         lnprior=None,
+        wt_thresh=None,
+        cdf_thresh=None,
         Ndraws=250,
         lngalprior=None,
         lndustprior=None,
@@ -2761,8 +2778,6 @@ class BruteForce:
         logl_initthresh=1e-6,
         mem_lim=8000.0,
         max_models=5000,
-        wt_thresh=None,
-        cdf_thresh=None,
         precision_shrinkage=0.0,
         rstate=None,
         return_distreds=True,

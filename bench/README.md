@@ -34,7 +34,7 @@ set `NUMBA_DISABLE_JIT=1`) so the real parallel codegen is exercised.
 | file | purpose |
 |------|---------|
 | `harness.py` | shared setup (loads grid + Orion data); per-object stage timings (`bench`); freeze/compare deterministic loglike outputs + posterior draws (`capture`/`compare`) |
-| `disteq.py` | distributional-equivalence tester: multi-seed posterior summaries vs the procedure's own Monte-Carlo scatter; defines the `COHORT` (Nsel = 4 … 50000-cap) |
+| `disteq.py` | distributional-equivalence tester: multi-seed posterior summaries vs the procedure's own Monte-Carlo scatter; defines the 12-object Orion `COHORT` |
 | `fullfit.py` | end-to-end `fit()` → HDF5, then bitwise-compare two runs (the strongest regression check; threads one RNG across objects); `run <tag> pm` adds mock proper motions |
 | `broad.py` | accuracy and speed of `fit()` on 108 fits over a broad star set: the Orion cohort plus Gaia DR3, GeDR3mock and prior-mock stars on 4 sightlines each, with and without proper motions and the dust prior; summaries compared in units of the seed-to-seed standard error |
 | `mcvar.py` | direct measurement of MC-integration variance, antithetic vs plain |

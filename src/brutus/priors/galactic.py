@@ -2823,6 +2823,7 @@ def _tabulated_galactic_prior(prior, eta, coord, labels, span):
     ages above MAX_AGE get LOG_ZERO, as in the prior, and so do labels that
     are not finite, which the prior rejects.
     """
+    max_loga = np.log10(MAX_AGE * 1e9)
     lo, hi = eta[span].min(), eta[span].max()
     step = max(hi - lo, 1e-6) / (_TABLE_NODES - 1)
     # Per axis: its nodes, and each entry's lower node and fraction (None
@@ -2832,7 +2833,7 @@ def _tabulated_galactic_prior(prior, eta, coord, labels, span):
         nodes = np.unique(x[np.isfinite(x)])
         if name == "loga":
             # A node above MAX_AGE would blur the zero into the oldest ages.
-            nodes = nodes[nodes <= np.log10(MAX_AGE * 1e9)]
+            nodes = nodes[nodes <= max_loga]
         if nodes.size <= _TABLE_MAX_UNIQUE:
             axes.append(
                 (nodes, np.minimum(np.searchsorted(nodes, x), nodes.size - 1), None)
@@ -2857,7 +2858,7 @@ def _tabulated_galactic_prior(prior, eta, coord, labels, span):
             offset += c * k
         out += weight * table.take(base + offset)
     if "loga" in labels:
-        out[labels["loga"] > np.log10(MAX_AGE * 1e9)] = LOG_ZERO
+        out[labels["loga"] > max_loga] = LOG_ZERO
     for x in labels.values():
         out[~np.isfinite(x)] = LOG_ZERO
     return out

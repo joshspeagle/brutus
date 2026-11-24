@@ -46,6 +46,10 @@ AVLIM = (0.0, 20.0)
 RVLIM = (1.0, 8.0)
 
 _SQRT2 = sqrt(2.0)
+#: inverse3 adds SINGULAR_SHIFT to the diagonal of a correlation-form matrix
+#: whose determinant is below SINGULAR_DET.
+SINGULAR_DET, SINGULAR_SHIFT = 1e-10, 1e-3
+
 _DBL_MIN = 2.2250738585072014e-308  # smallest normal float64
 
 __all__ = [
@@ -243,10 +247,10 @@ def _invert_3x3_preconditioned(P, min_eigenval_threshold=1e-12):
     # In normalized space, a small additive shift is well-scaled since
     # all diagonals are 1.0.
     det_norm = _matrix_det_3x3(P_norm)
-    if abs(det_norm) < 1e-10:
-        P_norm[0, 0] += 1e-3
-        P_norm[1, 1] += 1e-3
-        P_norm[2, 2] += 1e-3
+    if abs(det_norm) < SINGULAR_DET:
+        P_norm[0, 0] += SINGULAR_SHIFT
+        P_norm[1, 1] += SINGULAR_SHIFT
+        P_norm[2, 2] += SINGULAR_SHIFT
 
     # Invert the normalized matrix analytically
     C_norm = _invert_3x3_analytical(P_norm)
@@ -309,11 +313,11 @@ def _batch_invert_3x3_preconditioned(P_batch, min_eigenval_threshold=1e-12):
         + P_norm[:, 0, 2]
         * (P_norm[:, 1, 0] * P_norm[:, 2, 1] - P_norm[:, 1, 1] * P_norm[:, 2, 0])
     )  # (N,)
-    singular = np.abs(dets) < 1e-10
+    singular = np.abs(dets) < SINGULAR_DET
     if np.any(singular):
-        P_norm[singular, 0, 0] += 1e-3
-        P_norm[singular, 1, 1] += 1e-3
-        P_norm[singular, 2, 2] += 1e-3
+        P_norm[singular, 0, 0] += SINGULAR_SHIFT
+        P_norm[singular, 1, 1] += SINGULAR_SHIFT
+        P_norm[singular, 2, 2] += SINGULAR_SHIFT
 
     # Step 4: Batch analytical inversion
     C_norm = _batch_invert_3x3(P_norm)

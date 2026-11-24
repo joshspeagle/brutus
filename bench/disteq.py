@@ -67,11 +67,8 @@ def _summarize(dists, reds, dreds, levid, chi2min):
     )
 
 
-# Cohort chosen when a weight cut set the number of selected models (Nsel), to
-# span its range from Nsel < Ndraws to the max_models subsampling path. Since
-# #307 every object samples up to max_models models, so the cohort no longer
-# spans Nsel. Indices are into the
-# full-coverage+parallax object set of the Orion field.
+# Twelve objects of the full-coverage+parallax object set of the Orion
+# field, by index.
 COHORT = [13, 14, 25, 60, 0, 2, 3, 5, 9, 29, 39, 52]
 
 
