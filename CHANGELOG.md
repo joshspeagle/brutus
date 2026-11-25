@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-11-24
+
+This release replaces the Galactic prior (phase #275, #278). The disks
+follow the vertical Jeans equation in the potential of Binney & Vasiliev
+(2024), the halo is a broken power law normalized by its mass, the bulge
+is a bar with a metal-poor spheroid, and each component's [Fe/H] and
+ages come from measured distributions. The prior can also use a star's
+proper motion and radial velocity, which `fit` takes from Gaia columns.
+The model weights now include the Laplace volume of each fit, and the
+model selection includes the distance priors. Fit results change for
+every star, and the entries marked *(output-changing)* list each change.
+Some functions and keywords of the Galactic prior are removed, so this
+is a major release. The [migration
+guide](https://brutus.readthedocs.io/en/latest/migration_3.html) maps
+each one to its replacement.
+
 ### Added
 
 - **The Galactic prior can use a star's proper motion and radial
@@ -148,18 +164,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not change; above it, the age-averaged thin disk falls by e in
   0.33 kpc and the thick disk in 0.99 kpc. `Z_thin` and `Z_thick` are
   removed. The new keyword `thick_sigma_z` sets the thick disk, and
-  `v_circ_solar` scales the rotation curve. To change the thick disk height, pass a smaller `thick_sigma_z`
-  instead of `Z_thick`. The thin-disk dispersions, here and in
-  `thin_disk_velocity_moments`, hold [Fe/H] at -1 or 0.5 outside that
-  range, where Sharma et al. (2021) fitted them. A non-finite `feh` or
-  `loga` now raises `ValueError` (#283).
+  `v_circ_solar` scales the rotation curve. To change the thick disk
+  height, pass a smaller `thick_sigma_z` instead of `Z_thick`. The
+  thin-disk dispersions, here and in `thin_disk_velocity_moments`, hold
+  [Fe/H] at -1 or 0.5 outside that range, where Sharma et al. (2021)
+  fitted them. A non-finite `feh` or `loga` now raises `ValueError`
+  (#283).
 - **The thick disk is normalized by its surface density**
   *(output-changing)*. `logp_galactic_structure` replaces `f_thick`, the
   thick- to thin-disk density ratio at the Sun (0.04), with
   `f_thick_surface`, their surface density ratio, 0.18 by default
   (Mackereth et al. 2017). It derives the ratio at the Sun from the
   column heights of the two vertical profiles, 0.054 with the defaults,
-  so a change to `thick_sigma_z` or `feh_thin` keeps the surface ratio.
+  so a change to `thick_sigma_z` keeps the surface ratio.
   Passing `f_thick` raises `TypeError`. `f_thick_surface=0` removes the
   thick disk, as `halo_mass=0` removes the halo and `bar_mass=0` the bar,
   and a component that is off is not evaluated (#326). The new
@@ -288,16 +305,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `max_models` sampling and raises a `FutureWarning`; a cut drops
   posterior weight that the sampling keeps. They will be removed (#307).
 
+### Removed
+
+- **`brutus.priors.logp_feh` and `logp_age_from_feh`.** With
+  `return_components=True`, `logp_galactic_structure` returns each
+  component's label term under `'labels'` (#294).
+- **Keywords of `logp_galactic_structure`:**
+  - `f_thick`, replaced by `f_thick_surface` (#288);
+  - `Z_thin` and `Z_thick`, replaced by the vertical Jeans profiles and
+    `thick_sigma_z` (#283);
+  - `f_halo`, replaced by `halo_mass` and `rho_thin_solar` (#290);
+  - `eta_halo`, `q_halo_ctr`, `q_halo_inf` and `r_q_halo`, replaced by
+    `eta_halo_inner`, `eta_halo_outer`, `r_break_halo` and `q_halo`
+    (#290);
+  - `feh_thin`, `feh_thin_sigma`, `feh_thick`, `feh_thick_sigma`,
+    `feh_halo`, `feh_halo_sigma`, `max_age`, `min_age`, `feh_age_ctr`,
+    `feh_age_scale`, `nsigma_from_max_age`, `max_sigma` and `min_sigma`,
+    replaced by `thick_feh`, `thick_age`, `halo_feh`, `halo_age`,
+    `bar_feh`, `bar_age`, `feh_systematic`, `age_systematic` and
+    `age_floor` (#294, #299).
+- **Keywords of `logn_halo`:** `eta`, `q_ctr`, `q_inf` and `r_q`, replaced
+  by `eta_inner`, `eta_outer`, `r_break` and `q` (#290).
+
 ### Fixed
 
 - **Model weights include the volume of each model's fit**
   *(output-changing)*. A model's posterior weight is now its likelihood
   times `|2 pi Sigma|^(1/2)`, the volume of its Gaussian in (ln d, A(V),
   R(V)), times the average of the priors over its draws. This is the
-  Laplace approximation of the integral over distance and dust. The factor was
-  missing, so models with less constrained fits weighed too little. In
-  the tutorial 4 mock, it moves 1.7% of the model weight (median). A model
-  whose precision matrix is not positive definite now gets zero weight.
+  Laplace approximation of the integral over distance and dust. The
+  factor was missing, so models with less constrained fits weighed too
+  little. In the tutorial 4 mock, it moves 1.7% of the model weight
+  (median). A model whose precision matrix is not positive definite now
+  gets zero weight.
   Since the precision matrices include the `av_gauss` and `rv_gauss`
   priors, the `lnl` of `loglike_grid` now adds their normalized
   log-density at the fit, so the R(V) prior enters the model weights

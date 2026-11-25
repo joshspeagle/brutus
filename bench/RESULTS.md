@@ -236,6 +236,41 @@ The figures above this section come from an earlier setup with no record of
 its commit, threads or library versions, and use minima, not medians. They
 are not comparable with these.
 
+## Release 3.0.0 (2026-11-24)
+
+`python bench/harness.py bench` on the source of the 3.0.0 release.
+
+| Setting | Value |
+|---|---|
+| Commit | `bfefdc5` (`src/` of the release) |
+| Machine | Linux x86_64, 4 CPUs (`cpu_count=4`), cloud container |
+| Threads | `numba_threads=4`, `NUMBA_NUM_THREADS` and `OMP_NUM_THREADS` unset |
+| Libraries | Python 3.13, numpy 2.5.3, scipy 1.18.1, numba 0.68.1 |
+| Data | `grid_mist_v9.h5` (613,530 models), 8 bands, Orion field, offsets applied |
+| Sample | First 30 objects with every band and a parallax; `Nmc_prior=50`, `Ndraws=250`, default `max_models=5000` |
+
+Each figure is the mean, over the 30 objects, of the median of 5 repeats.
+
+| Stage | Time per object |
+|---|---:|
+| `loglike_grid` | 144 ms |
+| `logpost_grid` | 376 ms |
+| `_fit` | 540 ms |
+
+`BASE_REF=v2.0.0 bash bench/ab.sh` on the same machine compared the
+release with 2.0.0, each with its own defaults (2.0.0 cuts the models at
+`wt_thresh=1e-3`). The figures are medians over 3 interleaved rounds of
+12 objects.
+
+| Stage | 2.0.0 | 3.0.0 | Ratio |
+|---|---:|---:|---:|
+| `loglike_grid` | 340 ms | 150 ms | 0.44 |
+| `logpost_grid` | 443 ms | 383 ms | 0.87 |
+| `_fit` | 747 ms | 575 ms | 0.77 |
+
+The fits differ between the two versions (see `CHANGELOG.md`), so this
+compares the cost of each version's default fit.
+
 ## Reproduce
 
 Requires the real grid + data locally (`fetch_grids()`, `fetch_offsets('mist_v9')`;
