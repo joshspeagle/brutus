@@ -7,7 +7,7 @@ neighborhood. The ``*_velocity_moments`` functions give the velocity
 ellipsoids of the Galactic components.
 """
 
-from .astrometric import convert_parallax_to_scale, logp_parallax, logp_parallax_scale
+from .astrometric import logp_parallax
 from .extinction import logp_extinction
 from .galactic import (
     galactic_prior_summary,
@@ -30,8 +30,6 @@ __all__ = [
     "logp_imf",
     "logp_ps1_luminosity_function",
     "logp_parallax",
-    "logp_parallax_scale",
-    "convert_parallax_to_scale",
     "logp_galactic_structure",
     "galactic_prior_summary",
     "sample_motions",

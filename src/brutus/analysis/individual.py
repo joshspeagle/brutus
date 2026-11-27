@@ -118,7 +118,7 @@ _GRID_LABELS = _GridLabels()
 
 
 def _has_parallax(parallax, parallax_err):
-    """Return True for a usable parallax, as the parallax priors define it."""
+    """Return True for a usable parallax, as `logp_parallax` defines it."""
     return (
         parallax is not None
         and np.isfinite(parallax)

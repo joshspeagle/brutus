@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **`brutus.priors.logp_parallax_scale` and `convert_parallax_to_scale`.**
+  Since #306, `BruteForce` selects models by the parallax likelihood
+  averaged over each model's Gaussian in ln(d), and nothing in brutus
+  called them. Their Gaussian in the flux scale, zero below a parallax
+  SNR of 4, differs from the fit's parallax likelihood in ln(d). Use
+  `logp_parallax` for the parallax likelihood at a distance (#308).
+
 ## [3.0.0] - 2026-11-24
 
 This release replaces the Galactic prior (phase #275, #278). The disks
