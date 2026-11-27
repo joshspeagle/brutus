@@ -7,10 +7,11 @@
 Because broadband photometry alone often permits both a nearby cool dwarf and a distant reddened giant, `brutus` incorporates prior distributions over:
 
 - **Stellar Mass and Luminosity:** Kroupa initial mass function (`logp_imf`) and Pan-STARRS $r$-band luminosity function (`logp_ps1_luminosity_function`).
-- **Astrometry:** Gaussian parallax likelihood (`logp_parallax`) and scale-factor marginalization (`logp_parallax_scale`).
 - **Galactic Structure:** Thin-disk, thick-disk, halo, and bar number density, metallicity, and age distributions (`logp_galactic_structure`, `galactic_prior_summary`, `logn_disk`, `logn_halo`).
 - **Kinematics:** Velocity moments of the Galactic components, projected to proper motions and radial velocity (`thin_disk_velocity_moments`, `velocity_to_observables`).
 - **Interstellar Extinction:** Truncated Gaussian $A_V$ prior from 3D dust maps (`logp_extinction`).
+
+It also provides the Gaussian likelihood of a measured parallax (`logp_parallax`).
 
 **Typical Usage:**
 
@@ -78,18 +79,10 @@ fitter.fit(
 .. autofunction:: logp_ps1_luminosity_function
 ```
 
-## Astrometric Priors
+## Parallax Likelihood
 
 ```{eval-rst}
 .. autofunction:: logp_parallax
-```
-
-```{eval-rst}
-.. autofunction:: logp_parallax_scale
-```
-
-```{eval-rst}
-.. autofunction:: convert_parallax_to_scale
 ```
 
 ## Galactic Structure Priors
