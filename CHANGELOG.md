@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The tutorials pass seeded random generators** to every function that
+  draws random numbers: `fit`, the plotting functions, `draw_sar`,
+  `sample_multivariate_normal`, emcee and dynesty. Running a tutorial
+  again on the same code reproduces its stored outputs, apart from
+  timings (#325).
+
 ### Removed
 
 - **`brutus.priors.logp_parallax_scale` and `convert_parallax_to_scale`.**
